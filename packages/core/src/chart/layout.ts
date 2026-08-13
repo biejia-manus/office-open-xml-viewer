@@ -135,12 +135,27 @@ export interface ChartFrame {
  *  Chart Style both omit a size. OOXML does not define an automatic size. */
 const DEFAULT_CHART_TITLE_SIZE_PT = 14;
 
+/** Validate DrawingML `ST_TextFontSize` at the public-model boundary and
+ * convert hundredths of a point to CSS pixels. Parsers apply the same
+ * 100..400000 schema bound, but renderers also accept hand-authored models. */
+export function chartTextFontSizePx(
+  sizeHpt: number | null | undefined,
+  ptToPx: number,
+): number | null {
+  return typeof sizeHpt === 'number'
+    && Number.isFinite(sizeHpt)
+    && sizeHpt >= 100
+    && sizeHpt <= 400_000
+    ? (sizeHpt / 100) * ptToPx
+    : null;
+}
+
 /** Chart title font size (px). Honor the parser-resolved size first (authored
  *  rich text, then linked Chart Style); otherwise use one deterministic 14pt
  *  fallback across classic and ChartEx chart families. */
 export function chartTitleFontPx(chart: ChartModel, _h: number, ptToPx: number): number {
-  if (chart.titleFontSizeHpt) return (chart.titleFontSizeHpt / 100) * ptToPx;
-  return DEFAULT_CHART_TITLE_SIZE_PT * ptToPx;
+  return chartTextFontSizePx(chart.titleFontSizeHpt, ptToPx)
+    ?? DEFAULT_CHART_TITLE_SIZE_PT * ptToPx;
 }
 
 /** Fraction of the title font size used as the band's TOP pad — the gap from
@@ -275,15 +290,7 @@ export function axisTitleFontPx(
   // parser output and direct public-model inputs from creating negative or
   // unbounded layout bands; invalid values use the same product fallback as
   // omission. `ptToPx` is a host scale and is validated by the host renderer.
-  if (
-    typeof sizeHpt === 'number' &&
-    Number.isFinite(sizeHpt) &&
-    sizeHpt >= 100 &&
-    sizeHpt <= 400_000
-  ) {
-    return (sizeHpt / 100) * ptToPx;
-  }
-  return AXIS_TITLE_FALLBACK_PT * ptToPx;
+  return chartTextFontSizePx(sizeHpt, ptToPx) ?? AXIS_TITLE_FALLBACK_PT * ptToPx;
 }
 
 export type ChartAxisTitleSide = 'left' | 'right' | 'horizontal';
