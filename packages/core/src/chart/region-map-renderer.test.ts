@@ -89,6 +89,7 @@ describe('offline ChartEx Region Map renderer', () => {
     }
     expect(new Set(coordinates.map(({ x, y }) => `${x.toFixed(6)},${y.toFixed(6)}`)).size).toBe(4);
     expect(projectRegionMapPoint(point, 'unknown')).toEqual(projectRegionMapPoint(point, 'robinson'));
+    expect(projectRegionMapPoint(point, undefined)).toEqual(projectRegionMapPoint(point, 'robinson'));
   });
 
   it('keeps two- and three-stop scales finite at equal and opposite finite extremes', () => {
@@ -139,6 +140,25 @@ describe('offline ChartEx Region Map renderer', () => {
     expect(rec.texts).toContain('United States');
     expect(rec.texts).not.toContain('Atlantis');
     expect(rec.nonFiniteArguments).toEqual([]);
+  });
+
+  it('derives the rendered automatic ramp from the workbook accent instead of fixed blue', () => {
+    const rec = recordingContext();
+    const model = chart({
+      rows: [
+        { label: 'Canada', value: 0 },
+        { label: 'United States', value: 1 },
+      ],
+      geography: { projectionType: 'robinson', cachePresent: false },
+    });
+    model.chartexAccents = ['C00000'];
+
+    renderRegionMapChart(rec.ctx, model, { x: 0, y: 0, w: 640, h: 360 }, 1);
+
+    expect(rec.fills).toContain('#FFBFBF');
+    expect(rec.fills).toContain('#900000');
+    expect(rec.fills).not.toContain('#C1E5F5');
+    expect(rec.fills).not.toContain('#104862');
   });
 
   it('rejects oversized public-model rows before allocating paths or resolving geometry', () => {
