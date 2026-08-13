@@ -10,8 +10,36 @@ import {
   buildThreeDPieSectorMesh,
   buildThreeDShapeMesh,
 } from './three-d-mesh.js';
+import { bucketThreeDStackItems } from './three-d-renderer.js';
 
 const PLOT = { x: 20, y: 10, w: 360, h: 180 };
+
+describe('bucketThreeDStackItems', () => {
+  it('groups a maximum-size public model with one category read per item', () => {
+    let categoryReads = 0;
+    const items = Array.from({ length: 10_000 }, (_, index) => ({
+      get categoryIndex() {
+        categoryReads++;
+        return index % 257;
+      },
+      index,
+    }));
+    const buckets = bucketThreeDStackItems(items, 257);
+    expect(buckets.reduce((sum, bucket) => sum + bucket.length, 0)).toBe(10_000);
+    expect(categoryReads).toBe(10_000);
+    expect(buckets[0][0].index).toBe(0);
+    expect(buckets[256][0].index).toBe(256);
+  });
+
+  it('ignores invalid caller-constructed category indexes', () => {
+    expect(bucketThreeDStackItems([
+      { categoryIndex: -1 },
+      { categoryIndex: 0 },
+      { categoryIndex: 2 },
+      { categoryIndex: Number.NaN },
+    ], 2).map(bucket => bucket.length)).toEqual([1, 0]);
+  });
+});
 
 describe('buildThreeDShapeMesh', () => {
   const mesh = (shape: string, toMaxBaseScale = 1, toMaxEndScale = 0) =>

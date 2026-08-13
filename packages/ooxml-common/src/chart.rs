@@ -6,9 +6,8 @@
 //! historically did so with two near-identical bodies sitting in
 //! `packages/xlsx/parser/src/lib.rs` and `packages/pptx/parser/src/lib.rs`.
 //! The result was that fields added on one side stayed missing on the other
-//! until somebody noticed (e.g. PowerPoint sample-2 slide-7 displaying its
-//! legend on the right because the pptx adapter had a hard-coded
-//! `legendPos: null` while xlsx already passed it through).
+//! until a host-specific regression exposed the drift (for example, one
+//! adapter once discarded `legendPos` while another preserved it).
 //!
 //! This module hosts the helpers that don't need any crate-private state:
 //! they're pure XML probes that take a roxmltree node and return the parsed
@@ -896,10 +895,10 @@ pub struct ChartDataLabelOverride {
     /// `CT_DLbl` show-flag group: §21.2.2.189 `<c:showVal>`, §21.2.2.177
     /// `<c:showCatName>`, §21.2.2.180 `<c:showSerName>`, §21.2.2.187
     /// `<c:showPercent>`). When a `<c:dLbl>` sets these they OVERRIDE the
-    /// series-level `<c:dLbls>` defaults (§21.2.2.49) for that one point — e.g.
-    /// sample-14 slide-7's pie sets `showCatName=0 showPercent=1` per slice even
-    /// though the series default is `showCatName=1`, so each label is percent
-    /// only. `None` = the point declared no such flag, so the series default
+    /// series-level `<c:dLbls>` defaults (§21.2.2.49) for that one point. A
+    /// point can therefore disable `showCatName` and enable `showPercent` even
+    /// when the series does the reverse. `None` means the point declared no
+    /// such flag, so the series default
     /// governs (byte-stable for points that carry none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_val: Option<bool>,
@@ -7089,8 +7088,8 @@ pub fn parse_chart_part_with_references(
             // AND for a SINGLE-series bar/column chart (Word/Excel/PowerPoint
             // draw a lone series' bars in the rotating theme palette and keep an
             // explicit `<c:varyColors val="0"/>` when the user forces one color
-            // — verified against the sample-17/18 decks, whose single-series
-            // columns render four accent-colored bars with the element ABSENT).
+            // — verified against Office-produced single-series columns whose
+            // points use successive accents while the element is absent).
             // A multi-series plot keeps per-series colors, so it never varies by
             // point even with `val="1"`. When ON, each data point takes the
             // accent for its POINT index (i); `dPt` fills already sit in
@@ -7128,7 +7127,7 @@ pub fn parse_chart_part_with_references(
             // model the pptx path established), so we only emit an override when
             // it carries a marker or explosion — a color-only dPt yields no
             // override and stays clean on the wire. This makes the shared parser
-            // populate xlsx's marker overrides (e.g. sample-26 scatter) without
+            // populate indexed scatter-marker overrides without
             // double-representing pie slice fills.
             let data_point_overrides: Vec<ChartDataPointOverride> =
                 parse_data_point_overrides(*ser, color_resolver)
@@ -7285,7 +7284,7 @@ pub fn parse_chart_part_with_references(
                 },
                 // Legacy `<c:chart>` per-point label colors are extracted via
                 // `<c:dLbls><c:dLbl idx>` — not yet wired here; chartEx is the only
-                // path that needs it for sample-2's waterfall.
+                // path that currently consumes this separate color array.
                 data_label_colors: None,
                 categories: series_categories,
                 bubble_sizes,
@@ -7345,10 +7344,8 @@ pub fn parse_chart_part_with_references(
     // governs WHETHER an auto title may be shown ("val=0/false ⇒ the chart title
     // SHALL be shown" when otherwise absent; "val=1/true ⇒ it SHALL NOT be
     // shown"); the spec leaves the auto title's TEXT implementation-defined.
-    // Word's observed rule — the ground truth here is sample-25.docx / .pdf,
-    // whose `<c:title>` carries a `<c:txPr>` (fonts, `cap="all"`) but NO `<c:tx>`
-    // text, `<c:autoTitleDeleted val="0"/>`, and exactly one series named
-    // "Production in 2017" — is:
+    // Word's observed rule for a title frame that carries `<c:txPr>` but no
+    // `<c:tx>` text, with `<c:autoTitleDeleted val="0"/>`, is:
     //   * exactly ONE series  → the auto title is that single series' name
     //   * two or more series   → NO auto title (a lone series name would be
     //                            misleading, so Word shows none)
@@ -7375,8 +7372,7 @@ pub fn parse_chart_part_with_references(
 
     // Data labels are on when `<c:dLbls>` enables `<c:showVal>` OR
     // `<c:showPercent>` (ECMA-376 §21.2.2.189 / §21.2.2.187) — at chart level
-    // or in any series. Pie/doughnut decks commonly use showPercent only (e.g.
-    // sample-14 slide-7's "54%/27%/…" slice labels); the renderer draws the
+    // or in any series. Pie/doughnut charts commonly use showPercent only; the renderer draws the
     // slice percentage for pie/doughnut and the raw value for bar/line.
     let show_data_labels = root
         .descendants()
@@ -7460,7 +7456,7 @@ pub fn parse_chart_part_with_references(
 
     // Bar gap / overlap, dLblPos and numFmt — all shared helpers so any new
     // chart property added to the xlsx side stays applied to pptx without
-    // a manual port (the slide-7 / sample-2 issue this PR avoids).
+    // a manual host-specific port.
     let (bar_gap_width, bar_overlap) = extract_bar_gap_overlap(root);
     let data_label_position = extract_data_label_position(root);
     let data_label_format_code = extract_data_label_format_code(root);
@@ -7473,8 +7469,8 @@ pub fn parse_chart_part_with_references(
     // Axis tick-label text color + axis-line style (color / width / noFill).
     // ECMA-376 §21.2.2.* — `<c:catAx|valAx><c:txPr>…<a:solidFill>` colors the
     // tick labels and `<c:spPr><a:ln>` styles the axis rule. Shared helpers so
-    // the gray "2025年3月期" category labels and the light-gray category-axis
-    // line in sample-2 slide-16's horizontal bar chart resolve the same way.
+    // category-label paint and the category-axis line resolve the same way in
+    // all three hosts.
     // `CT_ChartSpace.style` is optional. PowerPoint treats its omission as the
     // legacy default chart style: black 0.75 pt axes/gridlines and black chart
     // text. This form is common in charts produced by non-Office generators.
@@ -7769,7 +7765,7 @@ pub fn parse_chart_part_with_references(
     let val_axis_major_gridlines = val_ax.map(axis_major_gridlines_visible);
     let cat_axis_major_gridlines = cat_ax.map(axis_major_gridlines_visible);
     // `<c:majorGridlines><c:spPr><a:ln>` colour/width — the explicit gridline
-    // style (e.g. sample-1 slide 5's `accent3` 0.25 pt value-axis gridlines).
+    // style (for example `accent3` with a 0.25 pt value-axis line).
     // `(None, None)` when absent, so the renderer keeps its faint default.
     let (mut val_axis_gridline_color, mut val_axis_gridline_width_emu, val_axis_gridline_dash) =
         val_ax
@@ -8709,7 +8705,7 @@ mod tests {
 
     #[test]
     fn gridline_style_solid_scheme_with_width() {
-        // sample-1 slide 5: `<c:majorGridlines><c:spPr><a:ln w="3175">
+        // `<c:majorGridlines><c:spPr><a:ln w="3175">
         // <a:solidFill><a:schemeClr val="accent3"/>` → the explicit gridline
         // colour + 0.25 pt width (3175 EMU) the renderer must honor.
         let xml = r#"<c:valAx xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
@@ -10296,8 +10292,7 @@ mod tests {
     /// §21.2.2.198: a scatter series whose `<c:spPr><a:ln>` is `<a:noFill/>`
     /// has its connecting line turned OFF, overriding the group-level
     /// `<c:scatterStyle val="lineMarker">` (§21.2.2.42). The parser must set
-    /// `line_hidden = Some(true)` so the renderer draws markers only — the
-    /// sample-30 sheet-1 scatter shape. A series with a paintable line leaves
+    /// `line_hidden = Some(true)` so the renderer draws markers only. A series with a paintable line leaves
     /// `line_hidden = None`.
     #[test]
     fn parse_chart_part_scatter_series_line_nofill_sets_line_hidden() {
@@ -10350,8 +10345,8 @@ mod tests {
 
     /// §21.2.2.47: a per-point `<c:dLbl>` carries its own show-flag group and
     /// text style, overriding the series-level `<c:dLbls>` (§21.2.2.49) for that
-    /// point. sample-14 slide-7's pie sets `showCatName=0 showPercent=1` + white
-    /// per slice while the series default is `showCatName=1` black. The parser
+    /// point. Office can set `showCatName=0 showPercent=1` plus white text per
+    /// slice while the series default is `showCatName=1` black. The parser
     /// must surface both the series default AND the per-point flag / color
     /// overrides, and mark a genuine `<c:delete>` distinctly from a style-only
     /// `<c:dLbl>` (which has an empty `text`).
@@ -10846,8 +10841,8 @@ mod tests {
 
     #[test]
     fn parse_series_data_labels_callout_box_and_leader_lines() {
-        // Mirror of sample-25 (Word pie callout labels): the series `<c:dLbls>`
-        // carries a `<c:spPr>` box (white fill + coloured border), a per-point
+        // A Word-style pie-callout series `<c:dLbls>` carries a `<c:spPr>` box
+        // (white fill + coloured border), a per-point
         // `<c:dLbl>` with its own box, and `<c:showLeaderLines>` +
         // `<c:leaderLines>` style. All must round-trip into the model.
         let cache = std::collections::HashMap::new();
@@ -11110,8 +11105,7 @@ mod tests {
     /// dimension with negatives, `<cx:subtotals>` (idx 0 is implicit, idx 5 is
     /// explicit), a series `<cx:spPr>` fill, per-idx `<cx:dataLabel>` colours
     /// (positives → tx1, negatives → accent1), a hidden value axis, and a
-    /// `<cx:catScaling gapWidth="0.8">` fraction (→ legacy 80%). Mirrors the
-    /// sample-2 waterfall the golden JSON was captured from.
+    /// `<cx:catScaling gapWidth="0.8">` fraction (→ legacy 80%).
     #[test]
     fn parse_chartex_part_waterfall_full_contract() {
         let xml = format!(
@@ -12264,7 +12258,7 @@ mod tests {
 
     /// (d) Newlines inside a category `<cx:pt>` are flattened to spaces (Office
     /// writes multi-line axis labels this way; the renderer wants a single
-    /// line). Mirrors the sample-2 "FY2024\n1Q営業利益" categories.
+    /// line).
     #[test]
     fn parse_chartex_part_category_newline_flattened() {
         let xml = format!(
@@ -13131,9 +13125,8 @@ mod tests {
 
     /// A SINGLE-series bar chart with `<c:varyColors>` ABSENT varies by point by
     /// default (issue #931): each data point takes the accent for its index and
-    /// the chart-level flag is set. This is the sample-17/18 shape — a lone
-    /// column series whose four bars render in the rotating theme palette even
-    /// though the file carries no `<c:varyColors>` element.
+    /// the chart-level flag is set. Office-produced lone column series rotate
+    /// through the theme palette even without a `<c:varyColors>` element.
     #[test]
     fn parse_chart_part_bar_single_series_varies_by_default() {
         let group = format!(
@@ -13153,7 +13146,7 @@ mod tests {
 
     /// A SINGLE-series bar chart with an explicit `<c:varyColors val="0"/>`
     /// keeps its one per-series color (Office records the forced-single-color
-    /// choice this way — sample-1.xlsx / sample-14 chart8/9). No per-point fill,
+    /// choice this way). No per-point fill,
     /// no chart-level flag.
     #[test]
     fn parse_chart_part_bar_single_series_vary_off_keeps_series_color() {
@@ -13238,8 +13231,8 @@ mod tests {
 
     /// A `<c:chart>` with an optional `<c:autoTitleDeleted val=…>`, NO explicit
     /// `<c:title>` text, and the given series in a bar plot area. Models the
-    /// sample-25 shape (auto-title chart: title frame present but empty, so the
-    /// synthesized title comes from the series name).
+    /// observed auto-title shape: title frame present but empty, so the
+    /// synthesized title comes from the sole series name.
     fn chart_space_auto_title(auto_title_deleted: Option<&str>, sers: &str) -> String {
         let atd = auto_title_deleted
             .map(|v| format!(r#"<c:autoTitleDeleted val="{v}"/>"#))
@@ -13260,9 +13253,9 @@ mod tests {
 
     /// ECMA-376 §21.2.2.7 auto-title: a chart with NO explicit title text,
     /// `autoTitleDeleted` absent (⇒ auto title may show), and EXACTLY ONE named
-    /// series adopts that series' name as the chart title. Ground truth:
-    /// sample-25.docx — pie3D with a lone "Production in 2017" series and an
-    /// empty title frame — where Word shows "Production in 2017" as the title.
+    /// series adopts that series' name as the chart title. Word-produced output
+    /// with a lone named series and an empty title frame provides the
+    /// compatibility evidence.
     #[test]
     fn parse_chart_part_auto_title_single_series() {
         let xml = chart_space_auto_title(None, &named_ser(0, "Production in 2017"));

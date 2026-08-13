@@ -169,7 +169,7 @@ export function chartTitleFontPx(chart: ChartModel, _h: number, ptToPx: number):
  *  `textBaseline='top'` the glyph cap-top sits ~0.19×font below the draw origin
  *  (the box-top → cap-top gap intrinsic to the face), so a top pad of ~0.62×font
  *  places the cap-top at ~0.81×font from the band top, matching PowerPoint's
- *  rendered chart titles (measured against the demo sample-1 line chart PDF).
+ *  rendered chart titles in the bounded Office vector corpus.
  *
  *  For an already-resolved `fontPx`, the band's TOTAL height (`bandH`) is
  *  unchanged by this top/bottom-pad redistribution — see
@@ -370,8 +370,8 @@ export function chartAxisTitleBands(
 // with no `<c:manualLayout>`). ECMA-376 does not specify the auto-layout geometry
 // — it only says the plot area is positioned automatically — so these constants
 // model the RUNTIME behavior PowerPoint applies, pinned to the rendered ground
-// truth. The load-bearing pin is the PLOT/frame ratio: the demo sample-1 slide-5
-// line chart PDF places the plot rect at 0.611 of the frame height. The remaining
+// truth. The load-bearing pin is the observed PLOT/frame ratio: a classic line
+// chart places the plot rect at 0.611 of the frame height. The remaining
 // 0.389 splits into the top reserve above the plot (title band + the gap down to
 // the first gridline ≈ 0.236) and the bottom reserve (category-label band ≈
 // 0.154). The title BAND itself is ≈ 0.200 of the frame — 0.236 is the top pad,
@@ -387,7 +387,7 @@ export function chartAxisTitleBands(
 /** Total vertical band a chart TITLE reserves, as a multiple of the title font
  *  size. PowerPoint centers the title text in a slot with air above and below;
  *  `2.25 × fontPx` reserves that slot. The reserve is pinned via the plot/frame
- *  ratio (0.611 on the demo slide-5 line chart PDF, see the block comment above);
+ *  ratio (0.611 in the measured classic-line case, see the block comment above);
  *  at that frame size the title BAND works out to ≈ 0.200 of the frame. (The
  *  0.236 figure sometimes quoted is the TOP PAD — band plus the gap down to the
  *  first gridline — not the band itself.) Replaces the old `fontPx + h·(top+bottom)`

@@ -233,7 +233,9 @@ The Region Map addon is deterministic and network-free. It uses a pinned
 Natural Earth country dataset, supports authored world projections and
 two/three-stop value ramps, and fails closed for cached identities or
 sub-country/view-specific layouts that the bounded offline model cannot yet
-represent safely.
+represent safely. The specification/Office evidence boundary for automatic
+chart behavior is documented in
+[Chart compatibility evidence and scope](docs/chart-compatibility-evidence.md).
 
 ### Off-main-thread rendering
 
