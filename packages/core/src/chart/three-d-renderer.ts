@@ -59,6 +59,7 @@ import {
   type ProjectedStrokePoint,
   type ProjectedStrokePrimitive,
 } from './three-d-stroke.js';
+import { buildThreeDOutlinePaths } from './three-d-outline.js';
 
 const PALETTE = ['4472C4', 'ED7D31', '70AD47', 'A5A5A5', 'FFC000', '5B9BD5'] as const;
 const SUPPORTED_CARTESIAN_THREE_D_TYPES = new Set([
@@ -386,30 +387,9 @@ function projectThreeDMesh(
       addOutlineEdge(startIndex, endIndex);
     }
   }
-  const sameScenePoint = (left: ThreeDScenePoint, right: ThreeDScenePoint): boolean =>
-    Math.hypot(left.x - right.x, left.y - right.y, left.depth - right.depth) <= 1e-9;
-  const remaining = [...outlineEdges.values()].map(([startIndex, endIndex]) => [
+  const paths = buildThreeDOutlinePaths([...outlineEdges.values()].map(([startIndex, endIndex]) => [
     mesh.vertices[startIndex], mesh.vertices[endIndex],
-  ] as ThreeDScenePoint[]);
-  const paths: ThreeDScenePoint[][] = [];
-  while (remaining.length > 0) {
-    const path = remaining.pop()!;
-    let extended = true;
-    while (extended) {
-      extended = false;
-      for (let index = remaining.length - 1; index >= 0; index--) {
-        const segment = remaining[index];
-        if (sameScenePoint(path.at(-1)!, segment[0])) path.push(segment[1]);
-        else if (sameScenePoint(path.at(-1)!, segment[1])) path.push(segment[0]);
-        else if (sameScenePoint(path[0], segment[1])) path.unshift(segment[0]);
-        else if (sameScenePoint(path[0], segment[0])) path.unshift(segment[1]);
-        else continue;
-        remaining.splice(index, 1);
-        extended = true;
-      }
-    }
-    paths.push(path);
-  }
+  ]));
   if (!outlineStyle) return visibleFaces;
   for (const scenePath of paths) {
     const projectedPath = scenePath.map(point => projection.project(point.x, point.y, point.depth));
