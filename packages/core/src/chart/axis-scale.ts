@@ -36,53 +36,6 @@ export function niceStep(range: number, targetSteps = 5): number {
   return nice * mag;
 }
 
-/** Excel / PowerPoint automatic value-axis maximum. Microsoft's documented
- *  algorithm (per Peltier Tech) is "the first major unit above
- *  `Ymax + (Ymax − Ymin)/20`": ~5% of the data range is added as headroom so the
- *  tallest series sits just below the top gridline rather than flush against it,
- *  then the result is rounded up to the next major unit. `dataMin` is the axis
- *  minimum (0 for bar/column charts; the data minimum otherwise).
- *
- *  The major unit itself is Excel-proprietary (it varies with plot size, tick
- *  font, etc. and is not documented), so we approximate it with `niceStep`; the
- *  computed max can therefore differ from PowerPoint by one major unit on some
- *  charts. */
-export function niceAxisMax(dataMax: number, step: number, dataMin = 0): number {
-  if (dataMax <= 0) return step;
-  const withHeadroom = dataMax + (dataMax - dataMin) / 20;
-  return Math.ceil(withHeadroom / step) * step;
-}
-
-/** Axis minimum for data that dips below zero: the largest major-unit multiple
- *  <= dataMin, dropping one extra step when the data sits exactly on a
- *  gridline so the lowest point isn't flush against the axis. Non-negative data
- *  anchors the axis at 0. */
-export function niceAxisMin(dataMin: number, step: number): number {
-  if (dataMin >= 0) return 0;
-  const ax = Math.floor(dataMin / step) * step;
-  return Math.abs(ax - dataMin) < step * 1e-9 ? ax - step : ax;
-}
-
-/** Target gridline spacing in POINTS. Excel's auto major unit is not a fixed
- *  gridline count — it targets a roughly constant on-screen spacing, so a long
- *  axis (e.g. a horizontal bar chart's wide value axis) gets MORE, finer
- *  gridlines than a short one of the same data range. This density is a
- *  compatibility approximation, because OOXML does not define it. */
-const GRIDLINE_SPACING_PT = 42;
-
-/** Pick the target-gridline count for an axis of `axisLenPt` points. Unknown
- *  lengths use five intervals; the four-interval floor keeps short axes
- *  readable and the ceiling bounds paint work on unusually long axes. */
-function targetStepsForAxis(axisLenPt?: number): number {
-  if (axisLenPt == null || !isFinite(axisLenPt) || axisLenPt <= 0) return 5;
-  return Math.min(15, Math.max(4, Math.round(axisLenPt / GRIDLINE_SPACING_PT)));
-}
-
-/** Existing nearest-ladder density used by specialized percent axes. */
-export function axisLengthNiceStep(range: number, axisLenPt?: number): number {
-  return niceStep(range, targetStepsForAxis(axisLenPt));
-}
-
 /**
  * Automatic percent-stacked major unit in percentage-point data space.
  * OOXML does not define the omitted unit.  The 48-case boundary corpus found

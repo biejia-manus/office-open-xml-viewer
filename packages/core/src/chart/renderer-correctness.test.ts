@@ -10467,8 +10467,8 @@ describe('CH — combo bar+line primary value axis spans BOTH the bars and the p
     // Excel draws $0..$200 for this data. The axis top must at minimum cover the
     // line's 180 (the bug capped it at 160, hiding the tallest line point).
     expect(axisMax).toBeGreaterThanOrEqual(180);
-    // And it must be the next nice unit above 180 — 200 — not an over-scaled
-    // value. (niceAxisMax(180, step=50) with headroom = 200.)
+    // And it must be the observed automatic bound above 180 — 200 — not an
+    // over-scaled value.
     expect(axisMax).toBe(200);
   });
 

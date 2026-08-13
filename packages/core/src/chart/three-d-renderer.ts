@@ -72,6 +72,28 @@ const SUPPORTED_CARTESIAN_THREE_D_TYPES = new Set([
  * the renderer preflight so higher fidelity never expands unbounded work. */
 export const THREE_D_ROUND_MESH_FACE_WEIGHT = DEFAULT_THREE_D_ROUND_SEGMENTS + 4;
 
+/** Group stack geometry in one pass before resolving shared internal caps.
+ * The parser/render preflight bounds the item count, but rescanning the whole
+ * primitive array once per category still turns a valid wide chart into
+ * quadratic CPU work. Invalid public-model category indexes are ignored. */
+export function bucketThreeDStackItems<T extends { readonly categoryIndex: number }>(
+  items: readonly T[],
+  categoryCount: number,
+): T[][] {
+  const boundedCount = Number.isSafeInteger(categoryCount) && categoryCount > 0
+    ? categoryCount : 0;
+  const buckets = Array.from({ length: boundedCount }, () => [] as T[]);
+  for (const item of items) {
+    const categoryIndex = item.categoryIndex;
+    if (Number.isSafeInteger(categoryIndex)
+      && categoryIndex >= 0
+      && categoryIndex < boundedCount) {
+      buckets[categoryIndex].push(item);
+    }
+  }
+  return buckets;
+}
+
 interface Point { x: number; y: number }
 
 interface SceneFace {
@@ -607,8 +629,10 @@ function drawThreeDDataLabel(
   defaultPosition = 't',
   leaderAnchor: Point = anchor,
 ): void {
-  const override = resolvedOverride
-    ?? series.dataLabelOverrides?.find(item => item.idx === categoryIndex);
+  // Callers resolve indexed overrides through their per-series Map before the
+  // paint loop. Falling back to Array.find here would quietly reintroduce
+  // quadratic work for a fully-authored maximum-size public model.
+  const override = resolvedOverride;
   if (override?.deleted) return;
   const defaults = series.seriesDataLabels;
   const showVal = override?.showVal ?? defaults?.showVal ?? chart.showDataLabels;
@@ -1790,11 +1814,12 @@ function renderCartesian(
       // Remove only genuinely shared internal cross-sections. This converts a
       // compatible stack into one continuous mesh while preserving caps when
       // shapes/scales differ or an authored axis clips away the neighbour.
+      const primitivesByCategory = bucketThreeDStackItems(primitives, categoryCount);
       for (let categoryIndex = 0; categoryIndex < categoryCount; categoryIndex++) {
+        const categoryPrimitives = primitivesByCategory[categoryIndex];
         for (const sign of [-1, 1] as const) {
-          const segments = primitives
-            .filter(item => item.categoryIndex === categoryIndex
-              && Math.sign(item.labelValue) === sign
+          const segments = categoryPrimitives
+            .filter(item => Math.sign(item.labelValue) === sign
               && !isTransparentPaint(item.color)
               && Math.abs(item.endCoord - item.baseCoord) > 1e-9)
             .sort((a, b) => a.seriesIndex - b.seriesIndex);
@@ -1818,10 +1843,10 @@ function renderCartesian(
         // one continuous signed stack, so neither solid may paint a cap there.
         // A noFill neighbour is deliberately excluded: it cannot occlude the
         // opaque slab's exposed cap.
-        const positive = primitives.find(item => item.categoryIndex === categoryIndex
-          && item.labelValue > 0 && !isTransparentPaint(item.color));
-        const negative = primitives.find(item => item.categoryIndex === categoryIndex
-          && item.labelValue < 0 && !isTransparentPaint(item.color));
+        const positive = categoryPrimitives.find(item =>
+          item.labelValue > 0 && !isTransparentPaint(item.color));
+        const negative = categoryPrimitives.find(item =>
+          item.labelValue < 0 && !isTransparentPaint(item.color));
         if (positive && negative) {
           const tolerance = 1e-8 * Math.max(
             1, Math.abs(positive.baseCoord), Math.abs(negative.baseCoord),

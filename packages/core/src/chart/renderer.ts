@@ -1588,11 +1588,10 @@ const FIXED_ANGLE_LIMIT_60K = 5_400_000;
  *  {@link FIXED_ANGLE_LIMIT_60K}). Office writes `rot="-60000000"` (-1000°,
  *  ≈2.8 full turns) as a sentinel for "auto / horizontal" axis text and renders
  *  those labels horizontal; the identical value even appears on the numeric
- *  value axis in sample-1/sample-24, whose labels are indisputably horizontal
- *  in the Word/Excel PDF ground truth. So a rot whose magnitude exceeds ±90°
+ *  value axes whose Office-rendered labels are horizontal. So a rot whose magnitude exceeds ±90°
  *  is outside the valid text-rotation domain and is treated as no rotation
  *  (0°) rather than reduced mod 360 (which would map -1000° → +80°,
- *  near-vertical — wrong per sample-24.pdf). Genuine rotations within the
+ *  near-vertical). Genuine rotations within the
  *  closed range (-45° = -2700000, -90° = -5400000) are honored unchanged. */
 function catLabelRotationRad(chart: ChartModel): number {
   const rot = chart.catAxisLabelRotation;
@@ -2026,8 +2025,8 @@ function renderBarChart(
   const valAxLabelFontPx = axisLabelPx(chart.valAxisFontSizeHpt, h, ptToPx);
   const leg = measuredLegendReserve(ctx, legendChart, w, h, 0.22, ptToPx);
   const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(leg);
-  // Axis-title bands sized from the *actual* title font (honoring XML @sz, e.g.
-  // sample-30's 18pt) plus a small gap, so big titles get a wide enough gutter
+  // Axis-title bands sized from the *actual* title font (honoring XML @sz)
+  // plus a small gap, so big titles get a wide enough gutter
   // and never collide with the tick labels.
   const axBands = chartAxisTitleBands(chart, w, h, ptToPx);
   const catTitlePx = axBands.catFontPx;
@@ -2131,10 +2130,8 @@ function renderBarChart(
   // line rides the same `<c:valAx>` as the bars — no secondary axis, or one the
   // line doesn't opt into) must expand the primary axis extent just like the
   // bars do. Excel scales a shared value axis to encompass EVERY series on it,
-  // regardless of chart type; a tall line point can exceed the bar stack (xlsx
-  // sample-9 "MONTHLY OVERVIEW": bars sum to 150 but the line reaches 180, so
-  // Excel draws $0..$200 — sizing to the bars alone would clip the line into the
-  // title). The line is an unstacked overlay, so each raw datum widens the range
+  // regardless of chart type; a tall line point can exceed the bar stack, so
+  // sizing to the bars alone would clip the line. The line is an unstacked overlay, so each raw datum widens the range
   // directly. Secondary-axis line series are excluded (they own an independent
   // scale, mirrored by the `yOf` split below). Skipped for percentStacked, whose
   // axis is definitionally ±100% (§21.2.2.76). `sec` matches the draw-time gate.
@@ -2267,9 +2264,8 @@ function renderBarChart(
 
   // Plot-area placement: honor `<c:plotArea><c:layout><c:manualLayout>` when
   // present (ECMA-376 §21.2.2.32). Templates use this to keep bars from
-  // overflowing into side annotations — sample-2 slide-16's horizontal bar
-  // chart has the chart frame extending into the right-hand text column,
-  // and the explicit `x=0.184, w=0.797` keeps the actual bars on the left.
+  // overflowing into side annotations; an explicit inner rectangle keeps the
+  // data region separate from adjacent authored content.
   // `layoutTarget="inner"` (default) means the rectangle covers the inner
   // data region; "outer" includes axes/labels. We treat both identically
   // because the inner padding stays the same either way. computeChartFrame
@@ -2460,7 +2456,7 @@ function renderBarChart(
   // (horizontal) for a column chart, left (vertical) for a horizontal bar
   // chart — and the VALUE axis is perpendicular to it. The previous code
   // assumed the left rule was always the value axis, so a horizontal bar
-  // chart whose value axis is `<c:delete val="1">` (sample-2 slide-16) drew
+  // chart whose value axis is `<c:delete val="1">` drew
   // no axis line at all even though its category axis carries an explicit
   // `<c:spPr><a:ln>`. `<a:noFill>` on a line suppresses just the rule (labels
   // stay) → `*AxisLineHidden`; an `<a:solidFill>` gives `*AxisLineColor`/Width
@@ -2792,8 +2788,7 @@ function renderBarChart(
   }
 
   if (!chart.catAxisHidden && catLabelsVisible(chart)) {
-    // `<c:catAx><c:txPr>…<a:solidFill>` colors the category tick labels (e.g.
-    // sample-2 slide-16's "2025年3月期" labels are `bg1 lumMod 75%` gray).
+    // `<c:catAx><c:txPr>…<a:solidFill>` colors the category tick labels.
     ctx.fillStyle = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#555';
     const drawnCatTickFontPx = chart.catAxisFontSizeHpt != null
       ? catAxFontPx
@@ -4046,9 +4041,8 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
 
   // Value-axis MAJOR gridlines are drawn UNDER the series (before the fills), so
   // an opaque/translucent area occludes the gridlines inside its region —
-  // matching PowerPoint (verified against private/sample-14.pdf slide-6, where
-  // every gridline inside the teal ARR fill reads solid teal and only the
-  // gridlines above the fill top stay visible). This mirrors the bar/line/stock/
+  // matching Office vector observations in which opaque area fill occludes
+  // gridlines below its top edge. This mirrors the bar/line/stock/
   // scatter/waterfall/box renderers, which already stroke gridlines first. The
   // axis rules, tick marks and value/category labels stay AFTER the series (drawn
   // further below) so they sit atop the plot. `<c:valAx><c:majorGridlines>` is on
@@ -4403,8 +4397,8 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
 
 /** Inside-radius fraction (of the outer radius) for a SOLID pie's `ctr` / `inEnd`
  *  / `bestFit` data labels (§21.2.2.48). PowerPoint places these near the rim,
- *  not at the disc mid-radius: measured from sample-14.pdf, the 54/27/14/5%
- *  slice labels sit at 0.878 / 0.888 / 0.887 / 0.912·outerR — a flat near-rim
+ *  not at the disc mid-radius: four observed slice sizes place labels at
+ *  0.878 / 0.888 / 0.887 / 0.912·outerR — a flat near-rim
  *  constant independent of slice angle (see the `labelR` comment in
  *  {@link drawPieRichLabels}). 0.88 is the empirical fit; it is an approximation
  *  of an undocumented PowerPoint layout, not a spec-defined geometry. Doughnut
@@ -4824,14 +4818,14 @@ function drawPieRichLabels(
     // A per-point `<c:dLbl idx>` (§21.2.2.47) overrides the series-level
     // `<c:dLbls>` (§21.2.2.49) for this one slice. Its show-flags, font color /
     // size / bold, and position each fall back to the series default when the
-    // point declares none. sample-14 slide-7's pie sets `showCatName=0
-    // showPercent=1` + white text per slice while the series default is
+    // point declares none. A point may set `showCatName=0 showPercent=1` plus
+    // white text while the series default is
     // `showCatName=1` black — so honoring the per-point flags is what makes the
     // labels render as white percent-only (matching PowerPoint / the PDF).
     const ov = overridesByIndex.get(i);
     // A genuinely deleted label (`<c:delete val="1">`, §21.2.2.43) is skipped.
-    // A style/flag-only `<c:dLbl>` (no `<c:tx>`) is NOT a delete — sample-14's
-    // pie slices carry `text: ""` with white/percent-only flag overrides, so we
+    // A style/flag-only `<c:dLbl>` (no `<c:tx>`) is NOT a delete. Such slices
+    // can carry `text: ""` with white/percent-only flag overrides, so we
     // key off the explicit `deleted` flag, never the empty text.
     if (ov?.deleted) continue;
     const showCatName = ov?.showCatName ?? def.showCatName;
@@ -4917,8 +4911,8 @@ function drawPieRichLabels(
     }
     // §21.2.2.48 ST_DLblPos radial placement. The spec enumerates the positions
     // (bestFit / ctr / inEnd / outEnd …) but gives no geometry, so the inside
-    // radii below reproduce PowerPoint's own layout, measured from sample-14.pdf
-    // (PowerPoint's render of slide-7's pie + doughnut):
+    // radii below reproduce the bounded Office vector observations for solid
+    // pie and doughnut labels:
     //
     //   • DOUGHNUT (innerR > 0), ctr / inEnd / bestFit → the RING midpoint
     //     (innerR + outerR)/2. Verified on the 55%-hole doughnut: labels sit at
@@ -5236,13 +5230,13 @@ function drawPieCalloutLabels(
 
     const ov = findOverride(i);
     // A genuine `<c:delete val="1"/>` (§21.2.2.43) skips the label; a per-point
-    // *styling / flag* override (sample-25's idx 0) is NOT a delete even though
+    // *styling / flag* override is NOT a delete even though
     // it also has `text === ""` — key off the explicit `deleted` flag.
     if (ov?.deleted) continue;
 
     // §21.2.2.35 composition, with per-point `<c:dLbl>` show-flags (§21.2.2.47)
     // overriding the series defaults for this slice. Word stacks category name
-    // and percent on SEPARATE lines (see sample-25.pdf), so each `show*` part is
+    // and percent on separate lines, so each `show*` part is
     // its own line rather than space-joined.
     const showCatName = ov?.showCatName ?? def.showCatName;
     const showSerName = ov?.showSerName ?? def.showSerName;
@@ -5761,8 +5755,8 @@ function renderRadarChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: C
   // translucent area fill; "standard" / "marker" (and default) draw the
   // line only. Markers come from per-series `<c:marker>` (which can
   // override the chart-type style by setting `<c:symbol val="none"/>`);
-  // sample-1 "Biodiversity Index" sets radarStyle="marker" but every
-  // series carries `<c:marker><c:symbol val="none"/>`, so Excel draws
+  // A chart may set radarStyle="marker" while every series carries
+  // `<c:marker><c:symbol val="none"/>`, in which case Office draws
   // lines only — no dots.
   const filled = chart.radarStyle === 'filled';
   const markerRadius = Math.max(2, rd * 0.025);
@@ -5770,8 +5764,7 @@ function renderRadarChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: C
     const s = chart.series[si];
     const color = chartColor(si, s);
     // Build the per-spoke point list, leaving holes where the series has
-    // no value (`<c:val>` ptCount > pts implies missing indices — sample-1
-    // "Biodiversity Index" omits idx 0, so Excel draws an open polyline
+    // no value (`<c:val>` ptCount > pts implies missing indices), so Office draws an open polyline
     // from idx 1 to idx 10 without bridging back through the top spoke).
     const pts: Array<[number, number] | null> = [];
     for (let i = 0; i < n; i++) {
