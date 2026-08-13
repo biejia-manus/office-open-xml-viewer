@@ -31,6 +31,9 @@ export interface ChartSeries {
   lineColor?: string | null;
   /** Explicit series outline/stroke width from `<a:ln@w>` (EMU). */
   lineWidthEmu?: number | null;
+  /** Per-series 3-D bar shape (`CT_BarSer/c:shape`). Overrides the chart-group
+   * `bar3DChart/c:shape`; omission inherits the group/schema default `box`. */
+  threeDShape?: 'box' | 'cylinder' | 'cone' | 'coneToMax' | 'pyramid' | 'pyramidToMax' | string | null;
   /** Numeric values; null = missing data point. */
   values: (number | null)[];
   /**
@@ -176,8 +179,7 @@ export interface ChartTrendline {
   /**
    * `<c:trendlineType val>` (§21.2.2.213, `ST_TrendlineType` §21.2.3.50):
    * "linear" | "exp" | "log" | "power" | "poly" | "movingAvg". The renderer
-   * currently draws "linear" (least squares) and "movingAvg"; other types parse
-   * but are not yet plotted (tracked as a follow-up).
+   * draws all six forms through a bounded data-space fitter.
    */
   trendlineType: string;
   /** `<c:order val>` — polynomial order (`poly`, default 2). */
@@ -418,9 +420,8 @@ export interface ChartModel {
   /**
    * §21.2.2.227 `<c:varyColors val="1"/>` on a SINGLE-series bar/column chart:
    * color each data point (bar) from the theme/palette sequence and list one
-   * legend entry per point, matching Office. Set by the shared parser ONLY for
-   * that non-pie, single-series case (pie/doughnut already vary by point via
-   * `chartType` + `dataPointColors`); absent/false otherwise.
+   * legend entry per point, matching Office. Pie/doughnut also preserve their
+   * effective authored value so explicit false inherits the single series fill.
    */
   varyColors?: boolean | null;
   /** Show data labels on bars / points / slices. */
@@ -824,6 +825,8 @@ export interface ChartModel {
    * (byte-stable).
    */
   valAxisLogBase?: number | null;
+  /** Numeric horizontal-axis logarithmic base (scatter/bubble second valAx). */
+  catAxisLogBase?: number | null;
   /**
    * `<c:valAx><c:scaling><c:orientation val>` (§21.2.2.130, `ST_Orientation`
    * §21.2.3.30) — "minMax" (normal) | "maxMin" (reversed, so the value axis runs
@@ -866,10 +869,16 @@ export interface ChartModel {
   stockHiLowLineColor?: string | null;
   /**
    * `<c:stockChart><c:upDownBars>` presence (ECMA-376 §21.2.2.227). Parsed so a
-   * stock file carrying open-close up/down bars is recognized; the renderer does
-   * NOT yet draw them (tracked follow-up). null/undefined when absent.
+   * stock file carrying open-close up/down bars draws them between the Open and
+   * Close values. null/undefined when absent.
    */
   stockUpDownBars?: boolean | null;
+  /** Parsed `<c:upDownBars>` geometry and direct up/down bar paint. */
+  stockUpDownBarStyle?: ChartStockUpDownBarStyle | null;
+  /** Pie-of-pie / bar-of-pie secondary-plot contract (§21.2.2.126). */
+  ofPie?: ChartOfPie | null;
+  /** Authored 3D chart-space view and group depth controls. */
+  threeD?: ChartThreeD | null;
   // ── chartEx structured layouts (CH15, MS 2014 chartex ext) ────────────────
   /**
    * Structured box-and-whisker data (`chartType === 'boxWhisker'`). Present
@@ -888,6 +897,8 @@ export interface ChartModel {
    * for treemap charts; null/absent otherwise.
    */
   chartexTreemap?: ChartexTreemap | null;
+  /** Structured geospatial rows (`chartType === 'regionMap'`). */
+  chartexRegionMap?: ChartexRegionMap | null;
   /** ChartEx histogram controls; raw observations remain in `series[0]`. */
   chartexHistogramBinning?: ChartexHistogramBinning | null;
   /**
@@ -916,6 +927,44 @@ export interface ChartModel {
   chartexMarkerSymbol?: string | null;
   /** `<cx:series><cx:layoutPr><cx:visibility connectorLines>` for waterfall. */
   chartexConnectorLines?: boolean | null;
+}
+
+export interface ChartStockBarPaint {
+  fillColor?: string | null;
+  fillHidden?: boolean | null;
+  lineColor?: string | null;
+  lineWidthEmu?: number | null;
+  lineHidden?: boolean | null;
+}
+
+export interface ChartStockUpDownBarStyle {
+  /** `<c:gapWidth val>`, percent of one bar width; omission defaults to 150. */
+  gapWidthPercent: number;
+  up: ChartStockBarPaint;
+  down: ChartStockBarPaint;
+}
+
+export interface ChartOfPie {
+  type: 'pie' | 'bar';
+  splitType: 'auto' | 'cust' | 'percent' | 'pos' | 'val';
+  splitPos?: number | null;
+  customSplitIndices?: number[] | null;
+  /** Secondary pie diameter relative to the primary pie, 5–200%. */
+  secondPieSizePercent: number;
+  /** Gap between the primary and secondary plots, as a percent. */
+  gapWidthPercent: number;
+  seriesLines: boolean;
+}
+
+export interface ChartThreeD {
+  rotationX?: number | null;
+  rotationY?: number | null;
+  heightPercent?: number | null;
+  depthPercent?: number | null;
+  perspective?: number | null;
+  rightAngleAxes?: boolean | null;
+  gapDepthPercent?: number | null;
+  shape?: string | null;
 }
 
 /** A formatted DrawingML run inside a chart-relative text box. */
@@ -990,6 +1039,10 @@ export interface ChartexBoxSeries {
 
 /** A chartEx box-and-whisker chart: unique categories + one series per column. */
 export interface ChartexBoxWhisker {
+  /** True when the source omits a category dimension and each ChartEx series
+   * is itself one category/box. Such diagonal data must not be clustered a
+   * second time by the total series count. */
+  oneBoxPerSeries?: boolean;
   /** Unique category labels in first-seen order. */
   categories: string[];
   /** One entry per `<cx:series>`. */
@@ -1017,6 +1070,53 @@ export interface ChartexTreemap {
   rows: ChartexSunburstRow[];
   /** `<cx:parentLabelLayout val>`: `banner`, `overlapping`, or `none`. */
   parentLabelLayout?: string | null;
+}
+
+/** One source row of a ChartEx geospatial series. */
+export interface ChartexRegionMapRow {
+  /** Authored category text; no parser-side geocoding or alias rewriting. */
+  label: string;
+  /** Optional stable geography identity from `strDim@type="entityId"`. */
+  entityId?: string | null;
+  /** `numDim@type="colorVal"`. */
+  value?: number | null;
+}
+
+/** Authored ChartEx geography metadata. Opaque provider cache bytes are not
+ * exposed; only their presence/provider are retained. */
+export interface ChartexGeography {
+  projectionType?: 'mercator' | 'miller' | 'robinson' | 'albers' | string | null;
+  viewedRegionType?: string | null;
+  cultureLanguage?: string | null;
+  cultureRegion?: string | null;
+  attribution?: string | null;
+  cacheProvider?: string | null;
+  cachePresent: boolean;
+}
+
+export interface ChartexValueColorStop {
+  kind: 'extremeValue' | 'number' | 'percent' | string;
+  value?: number | null;
+}
+
+export interface ChartexRegionMapColors {
+  /** CT_ValueColorPositions@count; omitted is the schema default 2. */
+  stopCount?: 2 | 3 | null;
+  minColor?: string | null;
+  midColor?: string | null;
+  maxColor?: string | null;
+  minPosition?: ChartexValueColorStop | null;
+  midPosition?: ChartexValueColorStop | null;
+  maxPosition?: ChartexValueColorStop | null;
+}
+
+/** Data-only ChartEx Region Map model. Geography lookup and finite offline
+ * geometry are owned by the core renderer, never by a parser host. */
+export interface ChartexRegionMap {
+  rows: ChartexRegionMapRow[];
+  regionLabelLayout?: 'none' | 'bestFitOnly' | 'showAll' | null;
+  geography?: ChartexGeography | null;
+  colors?: ChartexRegionMapColors | null;
 }
 
 /** ChartEx `CT_Binning` controls retained for histogram aggregation. */
@@ -1051,6 +1151,8 @@ export interface SecondaryValueAxis {
   fontSizeHpt?: number | null;
   /** `<c:txPr>` tick-label italic flag. */
   fontItalic?: boolean | null;
+  /** `<c:txPr>` tick-label bold flag. */
+  fontBold?: boolean | null;
   /** `<c:txPr>…<a:latin typeface>` tick-label font face. */
   fontFace?: string | null;
   /** `<c:spPr><a:ln><a:solidFill>` axis-line color (hex without '#'). */
@@ -1069,6 +1171,11 @@ export interface SecondaryValueAxis {
   minorGridlineColor?: string | null;
   minorGridlineWidthEmu?: number | null;
   minorGridlineDash?: string | null;
+  /** `<c:majorGridlines>` presence and authored line paint. */
+  majorGridlines?: boolean;
+  majorGridlineColor?: string | null;
+  majorGridlineWidthEmu?: number | null;
+  majorGridlineDash?: string | null;
   /**
    * `<c:valAx><c:majorUnit val>` (§21.2.2.103) — explicit distance between
    * major ticks/gridlines on THIS secondary axis, overriding the Excel-style
@@ -1079,6 +1186,15 @@ export interface SecondaryValueAxis {
   /** `<c:valAx><c:minorUnit val>` explicit minor-tick step; omitted minor ticks
    *  use this axis's automatic major unit divided by five. */
   minorUnit?: number | null;
+  /** `<c:scaling><c:logBase>`; null means linear. */
+  logBase?: number | null;
+  /** `<c:scaling><c:orientation>`. */
+  orientation?: 'minMax' | 'maxMin' | string | null;
+  /** `<c:tickLblPos>`; `none` hides tick labels without hiding gridlines. */
+  tickLabelPos?: string | null;
+  /** `<c:crosses>` / `<c:crossesAt>` retained for axis placement. */
+  crosses?: string | null;
+  crossesAt?: number | null;
   /** `<c:title>` run-prop font size (hpt). */
   titleFontSizeHpt?: number | null;
   /** `<c:title>` run-prop bold flag. */

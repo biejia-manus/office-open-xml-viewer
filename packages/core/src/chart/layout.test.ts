@@ -108,6 +108,13 @@ describe('chartTitleFontPx', () => {
     expect(chartTitleFontPx(model({}), 80, PTPX)).toBe(14 * PTPX);
     expect(chartTitleFontPx(model({}), 720, PTPX)).toBe(14 * PTPX);
   });
+  it('rejects non-finite and out-of-schema public-model sizes', () => {
+    for (const size of [Number.NEGATIVE_INFINITY, 99, 400_001, Number.POSITIVE_INFINITY, Number.NaN]) {
+      expect(chartTitleFontPx(model({ titleFontSizeHpt: size }), H, PTPX)).toBe(14 * PTPX);
+    }
+    expect(chartTitleFontPx(model({ titleFontSizeHpt: 100 }), H, PTPX)).toBe(PTPX);
+    expect(chartTitleFontPx(model({ titleFontSizeHpt: 400_000 }), H, 1)).toBe(4000);
+  });
   it('shares the fallback across classic and ChartEx chart families', () => {
     expect(chartTitleFontPx(model({ chartType: 'line' }), H, PTPX)).toBe(14 * PTPX);
     expect(chartTitleFontPx(model({ chartType: 'boxWhisker' }), H, PTPX)).toBe(14 * PTPX);

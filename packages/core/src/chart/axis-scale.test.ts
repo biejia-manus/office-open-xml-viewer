@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
+  automaticPercentMajorUnit,
+  automaticRadarMajorUnit,
   niceStep,
   niceAxisMax,
   niceAxisMin,
@@ -11,6 +13,8 @@ import {
   planLinearValueAxis,
   MAX_AXIS_TICKS,
   ceilingNiceStep,
+  finiteDataExtent,
+  planNumericValueAxis,
 } from './axis-scale.js';
 
 const nextUp = (value: number): number => {
@@ -41,6 +45,86 @@ describe('ceilingNiceStep', () => {
     expect(ceilingNiceStep(nextUp(2))).toBe(5);
     expect(ceilingNiceStep(5)).toBe(5);
     expect(ceilingNiceStep(nextUp(5))).toBe(10);
+  });
+});
+
+describe('finiteDataExtent', () => {
+  it('reduces large iterables without argument spreading and ignores non-finite values', () => {
+    const values = Array.from({ length: 200_000 }, (_, index) => index - 100_000);
+    values[10] = Number.NaN;
+    values[20] = Number.POSITIVE_INFINITY;
+    expect(finiteDataExtent(values)).toEqual({ min: -100_000, max: 99_999 });
+  });
+
+  it('uses the caller fallback when no finite values exist', () => {
+    expect(finiteDataExtent([null, Number.NaN, Number.NEGATIVE_INFINITY], { min: 4, max: 8 }))
+      .toEqual({ min: 4, max: 8 });
+  });
+});
+
+describe('planNumericValueAxis', () => {
+  it('shares logarithmic ticks and reversal with the linear planner contract', () => {
+    const plan = planNumericValueAxis({
+      dataMin: 1,
+      dataMax: 1000,
+      explicitMin: 1,
+      explicitMax: 1000,
+      logBase: 10,
+      reversed: true,
+    });
+    expect(plan.majorTicks).toEqual([1, 10, 100, 1000]);
+    expect(plan.fraction(1)).toBe(1);
+    expect(plan.fraction(10)).toBeCloseTo(2 / 3, 12);
+    expect(plan.fraction(1000)).toBe(0);
+  });
+
+  it('keeps linear minor planning bounded through the same entry point', () => {
+    const plan = planNumericValueAxis({
+      dataMin: 0,
+      dataMax: 100,
+      needMinor: true,
+    });
+    expect(plan.majorTicks.length).toBeLessThanOrEqual(MAX_AXIS_TICKS);
+    expect(plan.minorTicks.length).toBeLessThanOrEqual(MAX_AXIS_TICKS);
+    expect(plan.fraction(plan.min)).toBe(0);
+    expect(plan.fraction(plan.max)).toBe(1);
+  });
+});
+
+describe('automaticPercentMajorUnit', () => {
+  it('uses the observed compact density for horizontal axes at every size', () => {
+    expect(automaticPercentMajorUnit(0, 100, 'horizontal', 60)).toBe(20);
+    expect(automaticPercentMajorUnit(0, 100, 'horizontal', 240)).toBe(20);
+    expect(automaticPercentMajorUnit(-100, 100, 'horizontal', 240)).toBe(50);
+  });
+
+  it('switches vertical axes from compact to ordinary density at 120pt', () => {
+    expect(automaticPercentMajorUnit(0, 100, 'vertical', 119.999)).toBe(20);
+    expect(automaticPercentMajorUnit(0, 100, 'vertical', 120)).toBe(10);
+    expect(automaticPercentMajorUnit(-100, 100, 'vertical', 119.999)).toBe(50);
+    expect(automaticPercentMajorUnit(-100, 100, 'vertical', 120)).toBe(20);
+  });
+
+  it('keeps invalid and degenerate public inputs finite', () => {
+    expect(automaticPercentMajorUnit(Number.NaN, Number.POSITIVE_INFINITY, 'vertical'))
+      .toBe(20);
+    expect(automaticPercentMajorUnit(5, 5, 'vertical', 200)).toBe(10);
+  });
+});
+
+describe('automaticRadarMajorUnit', () => {
+  it('matches the observed small, ordinary and large explicit-range rings', () => {
+    expect(automaticRadarMajorUnit(0, 5, 44.999)).toBe(2);
+    expect(automaticRadarMajorUnit(0, 5, 45)).toBe(1);
+    expect(automaticRadarMajorUnit(0, 5, 90)).toBe(0.5);
+    expect(automaticRadarMajorUnit(1, 3, 44.999)).toBe(0.5);
+    expect(automaticRadarMajorUnit(1, 3, 90)).toBe(0.2);
+  });
+
+  it('uses 10/5/5 for the observed 0..30 automatic-range family', () => {
+    expect(automaticRadarMajorUnit(0, 30, 44.999)).toBe(10);
+    expect(automaticRadarMajorUnit(0, 30, 45)).toBe(5);
+    expect(automaticRadarMajorUnit(0, 30, 90)).toBe(5);
   });
 });
 
@@ -199,16 +283,40 @@ describe('planLinearValueAxis (bounded automatic value-axis policy)', () => {
       expect(vertical(0, 450, 108).majorUnit).toBe(100);
     });
 
-    it('does not alter horizontal axes or authored units', () => {
-      const horizontal = planLinearValueAxis({
-        dataMin: 0.5, dataMax: 4.5, explicitMin: 0, explicitMax: 5,
-        axisLenPt: 194, axisOrientation: 'horizontal', needMinor: true,
+    it('uses the measured horizontal density class across numeric boundaries', () => {
+      const horizontal = (min: number, max: number, axisLenPt = 302) => planLinearValueAxis({
+        dataMin: min + (max - min) * 0.1,
+        dataMax: min + (max - min) * 0.9,
+        explicitMin: min,
+        explicitMax: max,
+        axisLenPt,
+        axisOrientation: 'horizontal',
+        needMinor: true,
       });
-      const legacy = planLinearValueAxis({
-        dataMin: 0.5, dataMax: 4.5, explicitMin: 0, explicitMax: 5,
-        axisLenPt: 194, needMinor: true,
+      expect(horizontal(0, 3.5)).toMatchObject({ majorUnit: 0.5, minorUnit: 0.1 });
+      expect(horizontal(0, 5)).toMatchObject({ majorUnit: 1, minorUnit: 0.2 });
+      expect(horizontal(0, 450)).toMatchObject({ majorUnit: 100, minorUnit: 20 });
+      expect(horizontal(0, nextDown(1600))).toMatchObject({ majorUnit: 200, minorUnit: 40 });
+      expect(horizontal(0, 1600)).toMatchObject({ majorUnit: 200, minorUnit: 40 });
+      expect(horizontal(0, nextUp(1600))).toMatchObject({ majorUnit: 500, minorUnit: 100 });
+      expect(horizontal(1, 3)).toMatchObject({ majorUnit: 0.5, minorUnit: 0.1 });
+      expect(horizontal(-3.5, 3.5)).toMatchObject({ majorUnit: 1, minorUnit: 0.2 });
+      expect(horizontal(0, 0.35)).toMatchObject({ majorUnit: 0.05, minorUnit: 0.01 });
+    });
+
+    it('coarsens compact horizontal axes and preserves authored units', () => {
+      const compact = (min: number, max: number) => planLinearValueAxis({
+        dataMin: min + (max - min) * 0.1,
+        dataMax: min + (max - min) * 0.9,
+        explicitMin: min,
+        explicitMax: max,
+        axisLenPt: 202,
+        axisOrientation: 'horizontal',
+        needMinor: true,
       });
-      expect(horizontal).toEqual(legacy);
+      expect(compact(0, 3.5).majorUnit).toBe(1);
+      expect(compact(0, 450).majorUnit).toBe(100);
+      expect(compact(-3.5, 3.5).majorUnit).toBe(2);
       expect(planLinearValueAxis({
         dataMin: 0.5, dataMax: 4.5, explicitMin: 0, explicitMax: 5,
         axisLenPt: 194, axisOrientation: 'vertical', majorUnit: 2, minorUnit: 0.25,
@@ -419,6 +527,11 @@ describe('axisFraction (value → 0..1 position along an axis)', () => {
   it('degenerate zero range returns 0 (no NaN)', () => {
     expect(axisFraction(5, 5, 5)).toBe(0);
   });
+  it('normalizes finite opposite-sign bounds before subtraction overflows', () => {
+    expect(axisFraction(-Number.MAX_VALUE, -Number.MAX_VALUE, Number.MAX_VALUE)).toBe(0);
+    expect(axisFraction(0, -Number.MAX_VALUE, Number.MAX_VALUE)).toBe(0.5);
+    expect(axisFraction(Number.MAX_VALUE, -Number.MAX_VALUE, Number.MAX_VALUE)).toBe(1);
+  });
 });
 
 describe('logAxisScale (power-of-base bounds + gridline exponents)', () => {
@@ -493,9 +606,35 @@ describe('fitTrendline', () => {
     expect(t.xs).toEqual([1, 2, 3]);
     expect(t.ys).toEqual([15, 25, 35]);
   });
-  it('unsupported types return empty (parse-only for now)', () => {
-    expect(fitTrendline([0, 1, 2], [1, 2, 4], 'exp')).toEqual({ xs: [], ys: [] });
-    expect(fitTrendline([0, 1, 2], [1, 2, 4], 'poly')).toEqual({ xs: [], ys: [] });
+  it('fits exponential, logarithmic and power curves on their valid domains', () => {
+    const exp = fitTrendline([0, 1, 2], [2, 2 * Math.E, 2 * Math.E ** 2], 'exp');
+    expect(exp.ys[0]).toBeCloseTo(2, 8);
+    expect(exp.ys.at(-1)).toBeCloseTo(2 * Math.E ** 2, 8);
+
+    const log = fitTrendline([1, Math.E, Math.E ** 2], [3, 5, 7], 'log');
+    expect(log.ys[0]).toBeCloseTo(3, 8);
+    expect(log.ys.at(-1)).toBeCloseTo(7, 8);
+
+    const power = fitTrendline([1, 2, 4], [3, 12, 48], 'power');
+    expect(power.ys[0]).toBeCloseTo(3, 8);
+    expect(power.ys.at(-1)).toBeCloseTo(48, 8);
+    expect(exp.xs).toHaveLength(65);
+    expect(log.xs).toHaveLength(65);
+    expect(power.xs).toHaveLength(65);
+  });
+
+  it('fits an order-bounded polynomial without extrapolating non-finite points', () => {
+    const poly = fitTrendline([0, 1, 2, 3], [1, 4, 9, 16], 'poly', { order: 2 });
+    expect(poly.xs).toHaveLength(65);
+    expect(poly.ys[0]).toBeCloseTo(1, 8);
+    expect(poly.ys.at(-1)).toBeCloseTo(16, 8);
+    expect(poly.ys.every(Number.isFinite)).toBe(true);
+  });
+
+  it('filters values outside a transformed trendline domain', () => {
+    const power = fitTrendline([-1, 0, 1, 2, 4], [1, 2, 3, 12, 48], 'power');
+    expect(power.xs[0]).toBe(1);
+    expect(power.xs.at(-1)).toBe(4);
   });
   it('too few points returns empty', () => {
     expect(fitTrendline([0], [1], 'linear')).toEqual({ xs: [], ys: [] });
