@@ -107,6 +107,8 @@ export interface ChartSeries {
   markerFill?: string | null;
   /** `<c:marker><c:spPr><a:ln><a:solidFill>` resolved hex (no `#`). */
   markerLine?: string | null;
+  /** `<c:marker><c:spPr><a:ln w>` marker-outline width in EMU. */
+  markerLineWidthEmu?: number | null;
   /**
    * Per-data-point overrides (ECMA-376 §21.2.2.39 `<c:dPt>`). Keyed by point
    * index. Any unset field falls back to the series-level value.
@@ -232,6 +234,8 @@ export interface ChartDataPointOverride {
   markerSize?: number;
   markerFill?: string;
   markerLine?: string;
+  /** Direct point marker-outline width in EMU. */
+  markerLineWidthEmu?: number;
   /**
    * `<c:dPt><c:explosion val>` (ECMA-376 §21.2.2.61) — the amount this
    * pie/doughnut slice is moved out from the center. The schema type is
@@ -250,6 +254,15 @@ export interface ChartDataLabelOverride {
   idx: number;
   /** Empty string = label deleted (skip drawing). */
   text: string;
+  /** Bounded DrawingML runs from a custom `<c:dLbl><c:tx><c:rich>` body.
+   * Runs in one paragraph remain inline; a dedicated run containing `\n`
+   * marks an authored paragraph break. The parser caps this payload at 4096
+   * Unicode scalars and four lines.
+   * Inline run paint is consumed by the shared bounded label path for classic
+   * line/area/scatter/bubble, bar/column, and pie/doughnut (including callouts).
+   * Family-specific layout still owns each label's anchor, capacity and clip.
+   * undefined keeps the established plain-label path. */
+  richRuns?: ChartTextRun[];
   /** "l"|"r"|"t"|"b"|"ctr"|"outEnd"|"bestFit". undefined = inherit. */
   position?: string;
   fontColor?: string;
@@ -508,13 +521,19 @@ export interface ChartModel {
   titleFontBold?: boolean | null;
   /** `<c:catAx><c:txPr>...defRPr@b>` X-axis tick label bold flag. */
   catAxisFontBold?: boolean | null;
+  /** `<c:catAx><c:txPr>...defRPr@i>` X-axis tick label italic flag. */
+  catAxisFontItalic?: boolean | null;
   /** `<c:valAx><c:txPr>...defRPr@b>` Y-axis tick label bold flag. */
   valAxisFontBold?: boolean | null;
+  /** `<c:valAx><c:txPr>...defRPr@i>` Y-axis tick label italic flag. */
+  valAxisFontItalic?: boolean | null;
   /** `<c:catAx><c:title>` run-prop font size (hpt). Distinct from
    *  `catAxisFontSizeHpt` (tick labels). null = renderer default. */
   catAxisTitleFontSizeHpt?: number | null;
   /** `<c:catAx><c:title>` run-prop bold flag. null = not bold. */
   catAxisTitleFontBold?: boolean | null;
+  /** `<c:catAx><c:title>` run-prop italic flag. */
+  catAxisTitleFontItalic?: boolean | null;
   /** `<c:catAx><c:title>` run-prop color (hex without '#'). null = default. */
   catAxisTitleFontColor?: string | null;
   /** Authored `<c:catAx><c:title>` DrawingML `bodyPr@rot` in raw `ST_Angle`
@@ -537,6 +556,8 @@ export interface ChartModel {
   valAxisTitleFontSizeHpt?: number | null;
   /** `<c:valAx><c:title>` run-prop bold flag. null = not bold. */
   valAxisTitleFontBold?: boolean | null;
+  /** `<c:valAx><c:title>` run-prop italic flag. */
+  valAxisTitleFontItalic?: boolean | null;
   /** `<c:valAx><c:title>` run-prop color (hex without '#'). null = default. */
   valAxisTitleFontColor?: string | null;
   /** Authored `<c:valAx><c:title>` DrawingML `bodyPr@rot` in raw `ST_Angle`
@@ -885,6 +906,8 @@ export interface ChartModel {
   chartexDataPointStyle?: ChartExElementStyle | null;
   /** Effective `<cs:dataPointLine>` style for whiskers/median/connectors. */
   chartexDataPointLineStyle?: ChartExElementStyle | null;
+  /** Effective `<cs:seriesLine>` style for waterfall connector lines. */
+  chartexSeriesLineStyle?: ChartExElementStyle | null;
   /** Effective `<cs:dataPointMarker>` style for raw/outlier/mean markers. */
   chartexDataPointMarkerStyle?: ChartExElementStyle | null;
   /** Chart Style `dataPointMarkerLayout@size`, in points (2..72). */
@@ -1026,6 +1049,8 @@ export interface SecondaryValueAxis {
   fontColor?: string | null;
   /** `<c:txPr>` tick-label font size (hpt). */
   fontSizeHpt?: number | null;
+  /** `<c:txPr>` tick-label italic flag. */
+  fontItalic?: boolean | null;
   /** `<c:txPr>…<a:latin typeface>` tick-label font face. */
   fontFace?: string | null;
   /** `<c:spPr><a:ln><a:solidFill>` axis-line color (hex without '#'). */
@@ -1058,6 +1083,8 @@ export interface SecondaryValueAxis {
   titleFontSizeHpt?: number | null;
   /** `<c:title>` run-prop bold flag. */
   titleFontBold?: boolean | null;
+  /** `<c:title>` run-prop italic flag. */
+  titleFontItalic?: boolean | null;
   /** `<c:title>` run-prop color (hex without '#'). */
   titleFontColor?: string | null;
   titleFontFace?: string | null;

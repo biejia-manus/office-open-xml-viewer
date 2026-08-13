@@ -23,6 +23,16 @@ const nextUp = (value: number): number => {
   return view.getFloat64(0, false);
 };
 
+const nextDown = (value: number): number => {
+  const buffer = new ArrayBuffer(8);
+  const view = new DataView(buffer);
+  view.setFloat64(0, value, false);
+  let bits = view.getBigUint64(0, false);
+  bits += value > 0 ? -1n : 1n;
+  view.setBigUint64(0, bits, false);
+  return view.getFloat64(0, false);
+};
+
 describe('ceilingNiceStep', () => {
   it('advances to the next ladder step immediately above exact 1/2/5 boundaries', () => {
     expect(ceilingNiceStep(1)).toBe(1);
@@ -80,37 +90,37 @@ describe('niceAxisMin', () => {
 
 describe('valueAxisScale (shared linear compatibility policy)', () => {
   it('positive data anchored at 0 (bar/area/radar style)', () => {
-    expect(valueAxisScale(0, 41)).toEqual({ min: 0, max: 50, step: 10 });
+    expect(valueAxisScale(0, 41)).toEqual({ min: 0, max: 45, step: 5 });
   });
   it('negative data floors the min and widens the max with the niced min', () => {
-    expect(valueAxisScale(-15, 100)).toEqual({ min: -50, max: 150, step: 50 });
+    expect(valueAxisScale(-15, 100)).toEqual({ min: -40, max: 120, step: 20 });
   });
   it('explicit min/max override the computed bounds (step still from data range)', () => {
-    expect(valueAxisScale(0, 41, -5, 60)).toEqual({ min: -5, max: 60, step: 10 });
+    expect(valueAxisScale(0, 41, -5, 60)).toEqual({ min: -5, max: 60, step: 5 });
   });
   it('a null explicit bound falls back to the auto value', () => {
-    expect(valueAxisScale(0, 41, null, 60)).toEqual({ min: 0, max: 60, step: 10 });
-    expect(valueAxisScale(0, 41, -5, null)).toEqual({ min: -5, max: 50, step: 10 });
+    expect(valueAxisScale(0, 41, null, 60)).toEqual({ min: 0, max: 60, step: 5 });
+    expect(valueAxisScale(0, 41, -5, null)).toEqual({ min: -5, max: 45, step: 5 });
   });
-  it('a longer value axis gets a finer major unit (Excel axis-length model)', () => {
-    expect(valueAxisScale(0, 40)).toEqual({ min: 0, max: 50, step: 10 });
+  it('keeps fully automatic axes on the measured ten-interval policy regardless of length', () => {
+    expect(valueAxisScale(0, 40)).toEqual({ min: 0, max: 45, step: 5 });
     expect(valueAxisScale(0, 40, undefined, undefined, 380)).toEqual({ min: 0, max: 45, step: 5 });
   });
-  it('a short axis uses the target floor of four', () => {
-    expect(valueAxisScale(60, 72, 60, 72, 124.1)).toEqual({ min: 60, max: 72, step: 5 });
+  it('does not coarsen a fully automatic unit merely because the axis is short', () => {
+    expect(valueAxisScale(60, 72, 60, 72, 124.1)).toEqual({ min: 60, max: 72, step: 2 });
   });
-  it('a medium axis is not over-refined (42pt/gridline density)', () => {
+  it('keeps the same automatic unit on a medium axis', () => {
     const { step } = valueAxisScale(0, 48.6, undefined, undefined, 263.2);
     expect(step).toBe(10);
   });
   it('rounds a fine-grained positive range with a ceiling ladder step', () => {
-    expect(valueAxisScale(0, 3.5)).toEqual({ min: 0, max: 4, step: 1 });
+    expect(valueAxisScale(0, 3.5)).toEqual({ min: 0, max: 4, step: 0.5 });
   });
   it('keeps the 1/2/5 ladder below one', () => {
     const { min, max, step } = valueAxisScale(0, 0.1129);
     expect(min).toBe(0);
-    expect(step).toBeCloseTo(0.05, 12);
-    expect(max).toBeCloseTo(0.15, 12);
+    expect(step).toBeCloseTo(0.02, 12);
+    expect(max).toBeCloseTo(0.12, 12);
   });
 
   it('an explicit majorUnit overrides the auto step (min/max still auto)', () => {
@@ -140,6 +150,138 @@ describe('valueAxisScale (shared linear compatibility policy)', () => {
 });
 
 describe('planLinearValueAxis (bounded automatic value-axis policy)', () => {
+  it('matches the observed ordinary auto units used by column, stacked, combo and scatter axes', () => {
+    expect(planLinearValueAxis({ dataMin: 0, dataMax: 420, axisLenPt: 180 }).majorUnit).toBe(50);
+    expect(planLinearValueAxis({ dataMin: 0, dataMax: 1440, axisLenPt: 180 }).majorUnit).toBe(200);
+    expect(planLinearValueAxis({ dataMin: 0, dataMax: 520, axisLenPt: 180 }).majorUnit).toBe(100);
+    expect(planLinearValueAxis({ dataMin: 0, dataMax: 45, axisLenPt: 300 }).majorUnit).toBe(5);
+  });
+
+  it('keeps an authored major unit authoritative over the automatic ten-interval rule', () => {
+    expect(planLinearValueAxis({
+      dataMin: 18,
+      dataMax: 63,
+      explicitMin: 0,
+      explicitMax: 80,
+      majorUnit: 20,
+      axisLenPt: 180,
+      axisOrientation: 'vertical',
+    }).majorUnit).toBe(20);
+  });
+
+  describe('explicit vertical bounds with an omitted major unit', () => {
+    const vertical = (min: number, max: number, axisLenPt = 194) => planLinearValueAxis({
+      dataMin: min + (max - min) * 0.1,
+      dataMax: min + (max - min) * 0.9,
+      explicitMin: min,
+      explicitMax: max,
+      axisLenPt,
+      axisOrientation: 'vertical',
+      needMinor: true,
+    });
+
+    it('follows the measured boundary immediately around an authored max of 5', () => {
+      expect(vertical(0, nextDown(5))).toMatchObject({ majorUnit: 0.5, minorUnit: 0.1 });
+      expect(vertical(0, 5)).toMatchObject({ majorUnit: 0.5, minorUnit: 0.1 });
+      expect(vertical(0, nextUp(5))).toMatchObject({ majorUnit: 1, minorUnit: 0.2 });
+    });
+
+    it('uses the authored span for decimal, non-zero and cross-zero bounds', () => {
+      expect(vertical(0, 0.35)).toMatchObject({ min: 0, max: 0.35, majorUnit: 0.05, minorUnit: 0.01 });
+      expect(vertical(1, 3)).toMatchObject({ min: 1, max: 3, majorUnit: 0.2, minorUnit: 0.04 });
+      expect(vertical(-3.5, 3.5)).toMatchObject({ min: -3.5, max: 3.5, majorUnit: 1, minorUnit: 0.2 });
+    });
+
+    it('is stable across the measured ordinary-height ±1pt boundary', () => {
+      for (const axisLenPt of [193, 194, 195]) {
+        expect(vertical(0, 450, axisLenPt).majorUnit).toBe(50);
+      }
+      expect(vertical(0, 450, 108).majorUnit).toBe(100);
+    });
+
+    it('does not alter horizontal axes or authored units', () => {
+      const horizontal = planLinearValueAxis({
+        dataMin: 0.5, dataMax: 4.5, explicitMin: 0, explicitMax: 5,
+        axisLenPt: 194, axisOrientation: 'horizontal', needMinor: true,
+      });
+      const legacy = planLinearValueAxis({
+        dataMin: 0.5, dataMax: 4.5, explicitMin: 0, explicitMax: 5,
+        axisLenPt: 194, needMinor: true,
+      });
+      expect(horizontal).toEqual(legacy);
+      expect(planLinearValueAxis({
+        dataMin: 0.5, dataMax: 4.5, explicitMin: 0, explicitMax: 5,
+        axisLenPt: 194, axisOrientation: 'vertical', majorUnit: 2, minorUnit: 0.25,
+        needMinor: true,
+      })).toMatchObject({ majorUnit: 2, minorUnit: 0.25 });
+    });
+
+    it('keeps overlay X/Y authored major and minor units independent', () => {
+      const x = planLinearValueAxis({
+        dataMin: 0.25, dataMax: 1.75, explicitMin: 0, explicitMax: 2,
+        axisLenPt: 300, axisOrientation: 'horizontal', majorUnit: 0.25,
+        minorUnit: 0.05, needMinor: true,
+      });
+      const y = planLinearValueAxis({
+        dataMin: 2, dataMax: 8, explicitMin: 0, explicitMax: 10,
+        axisLenPt: 194, axisOrientation: 'vertical', majorUnit: 2,
+        minorUnit: 0.5, needMinor: true,
+      });
+      expect(x).toMatchObject({ majorUnit: 0.25, minorUnit: 0.05 });
+      expect(y).toMatchObject({ majorUnit: 2, minorUnit: 0.5 });
+      expect(x.minorTicks).not.toEqual(y.minorTicks);
+    });
+
+    it('retains the global tick cap for automatic major and minor positions', () => {
+      const bounded = vertical(0, 1e12, 194);
+      expect(bounded.majorTicks.length).toBeLessThanOrEqual(MAX_AXIS_TICKS);
+      expect(bounded.minorTicks.length).toBeLessThanOrEqual(MAX_AXIS_TICKS);
+    });
+
+    it('keeps opposite-sign near-limit explicit bounds finite and progressing', () => {
+      const bounded = planLinearValueAxis({
+        dataMin: -1e307,
+        dataMax: 1e307,
+        explicitMin: -1e308,
+        explicitMax: 1e308,
+        axisLenPt: 194,
+        axisOrientation: 'vertical',
+        needMinor: true,
+      });
+      expect([bounded.min, bounded.max, bounded.majorUnit, bounded.minorUnit]
+        .every(value => value != null && Number.isFinite(value))).toBe(true);
+      expect(bounded.majorUnit).toBeGreaterThan(0);
+      expect(bounded.majorTicks.length).toBeLessThanOrEqual(MAX_AXIS_TICKS);
+      expect(bounded.minorTicks.length).toBeLessThanOrEqual(MAX_AXIS_TICKS);
+      for (const ticks of [bounded.majorTicks, bounded.minorTicks]) {
+        expect(ticks.every(Number.isFinite)).toBe(true);
+        expect(ticks.every((value, index) => index === 0 || value > ticks[index - 1])).toBe(true);
+      }
+      expect(bounded.majorTicks.at(-1)).toBe(1e308);
+      expect(bounded.minorTicks.at(-1) as number).toBeGreaterThan(9e307);
+    });
+
+    it('keeps the smallest positive explicit span finite and representable', () => {
+      const bounded = planLinearValueAxis({
+        dataMin: 0,
+        dataMax: Number.MIN_VALUE,
+        explicitMin: 0,
+        explicitMax: Number.MIN_VALUE,
+        axisLenPt: 194,
+        axisOrientation: 'vertical',
+        needMinor: true,
+      });
+      expect(bounded).toMatchObject({
+        min: 0,
+        max: Number.MIN_VALUE,
+        majorUnit: Number.MIN_VALUE,
+        minorUnit: Number.MIN_VALUE,
+      });
+      expect(bounded.majorTicks).toEqual([0, Number.MIN_VALUE]);
+      expect(bounded.minorTicks).toEqual([]);
+    });
+  });
+
   it('keeps automatic major units on the 1/2/5 × 10ⁿ ladder', () => {
     for (const dataMax of [1.1e-12, 3.7e-6, 8.4, 173, 9.9e11]) {
       const { majorUnit } = planLinearValueAxis({ dataMin: 0, dataMax });

@@ -68,6 +68,8 @@ export interface LinearValueAxisOptions {
   explicitMin?: number | null;
   explicitMax?: number | null;
   axisLenPt?: number;
+  /** Physical direction of the numeric axis. Omitted keeps the legacy policy. */
+  axisOrientation?: 'vertical' | 'horizontal';
   majorUnit?: number | null;
   minorUnit?: number | null;
   /** Minor positions are needed by either minor ticks or minor gridlines. */
@@ -104,6 +106,22 @@ function positiveUnit(value: number | null | undefined): number | null {
   return value != null && isFinite(value) && value > 0 ? value : null;
 }
 
+/** Compute `(max - min) / divisor` without first materializing an overflowing
+ * span. Dividing the endpoints before subtraction keeps opposite-sign finite
+ * bounds usable all the way through Number.MAX_VALUE. */
+function spanQuotient(min: number, max: number, divisor: number): number {
+  const directSpan = max - min;
+  const quotient = isFinite(directSpan)
+    ? directSpan / divisor
+    : max / divisor - min / divisor;
+  if (quotient > 0 && isFinite(quotient)) return quotient;
+  // A positive subnormal span may underflow when divided. The smallest
+  // representable positive step is the only meaningful density input; using a
+  // huge fallback would invert the scale (unit much larger than its range).
+  if (directSpan > 0 && isFinite(directSpan)) return Number.MIN_VALUE;
+  return Number.MAX_VALUE;
+}
+
 function tickCount(min: number, max: number, unit: number): number {
   if (!isFinite(min) || !isFinite(max) || !(max >= min) || !(unit > 0) || !isFinite(unit)) return 0;
   const span = max - min;
@@ -135,7 +153,14 @@ function indexedTicks(
   ) * 1e-9;
   let previousValue = Number.NEGATIVE_INFINITY;
   for (let index = 0; index < count; index++) {
-    const value = min + index * unit;
+    const offset = index * unit;
+    let value = min + offset;
+    // On an opposite-sign near-limit axis, `index * unit` can overflow even
+    // though the final translated tick is finite. Retry only that exceptional
+    // path in unit coordinates; ordinary values retain their exact old math.
+    if (!isFinite(offset) || !isFinite(value) || (index > 0 && !(value > previousValue))) {
+      value = (min / unit + index) * unit;
+    }
     if (!isFinite(value) || value > max + epsilon) break;
     if (index > 0 && !(value > previousValue)) break;
     previousValue = value;
@@ -186,8 +211,14 @@ export function planLinearValueAxis(options: LinearValueAxisOptions): LinearValu
     if (dataMin >= 0 && (dataMin === 0 || dataMax > 1.2 * dataMin)) lo = 0;
     if (dataMax <= 0 && (dataMax === 0
       || Math.abs(dataMin) > 1.2 * Math.abs(dataMax))) hi = 0;
-    const target = targetStepsForAxis(options.axisLenPt);
-    autoMajor = ceilingNiceStep(hi / target - lo / target);
+    // The broad automatic-axis corpus (6,354 finite line-axis cases) selected
+    // the 1/2/5 ladder from roughly ten intervals.  Using the plot length here
+    // made ordinary vertical charts collapse to only three or four labelled
+    // intervals (for example 0..600 by 200 instead of 0..600 by 100).  Physical
+    // size remains relevant only for the separately observed explicit-bounds
+    // rule below; the fully automatic compact policy is intentionally one
+    // shared ten-interval rule across chart families.
+    autoMajor = ceilingNiceStep(hi / 10 - lo / 10);
     autoMin = Math.floor(lo / autoMajor) * autoMajor;
     autoMax = Math.ceil(hi / autoMajor) * autoMajor;
     // Large offsets can erase sub-ULP padding/rounding. Keep a finite range
@@ -200,10 +231,45 @@ export function planLinearValueAxis(options: LinearValueAxisOptions): LinearValu
 
   const explicitMin = finiteBound(options.explicitMin);
   const explicitMax = finiteBound(options.explicitMax);
-  const min = explicitMin ?? autoMin;
-  const max = explicitMax ?? autoMax;
   const authoredMajor = positiveUnit(options.majorUnit);
-  let majorUnit = authoredMajor ?? autoMajor;
+  // When only a major unit is authored, Excel keeps automatic bounds aligned
+  // to that unit.  The previous coarser automatic unit happened to mask this
+  // rule for common values; make it explicit now that auto density is finer.
+  const min = explicitMin ?? (authoredMajor == null
+    ? autoMin
+    : Math.floor(autoMin / authoredMajor) * authoredMajor);
+  const max = explicitMax ?? (authoredMajor == null
+    ? autoMax
+    : Math.ceil(autoMax / authoredMajor) * authoredMajor);
+  let automaticMajor = autoMajor;
+  // OOXML defines authored min/max and majorUnit, but not the unit chosen when
+  // both bounds are present and majorUnit is omitted. A bounded corpus across
+  // column, stacked-column, line, area, scatter-Y, and combo axes found that
+  // vertical axes choose from the authored span, not the interior data range.
+  // The compact 1/2/5-ladder fit below matched all 231 measured vertical rows,
+  // including ±1pt ordinary-height probes and a small-chart control. Horizontal
+  // axes retain the legacy density policy (63/66 measured rows already match).
+  if (
+    authoredMajor == null
+    && options.axisOrientation === 'vertical'
+    && explicitMin != null
+    && explicitMax != null
+    && explicitMax > explicitMin
+  ) {
+    const axisTarget = options.axisLenPt != null
+      && isFinite(options.axisLenPt)
+      && options.axisLenPt > 0
+      ? Math.max(5, Math.round(options.axisLenPt / 28))
+      : 7;
+    automaticMajor = Math.max(
+      ceilingNiceStep(spanQuotient(explicitMin, explicitMax, 10)),
+      Math.min(
+        Number.MAX_VALUE,
+        niceStep(spanQuotient(explicitMin, explicitMax, axisTarget), 1),
+      ),
+    );
+  }
+  let majorUnit = authoredMajor ?? automaticMajor;
   // An automatic unit may be coarsened to keep explicit wide bounds safe.
   if (authoredMajor == null && tickCount(min, max, majorUnit) > MAX_AXIS_TICKS) {
     majorUnit = ceilingNiceStep(max / (MAX_AXIS_TICKS - 1) - min / (MAX_AXIS_TICKS - 1));
@@ -218,7 +284,10 @@ export function planLinearValueAxis(options: LinearValueAxisOptions): LinearValu
       majorUnit = ceilingNiceStep(max / maxMajorIntervals - min / maxMajorIntervals);
     }
   }
-  const minorUnit = options.needMinor ? (authoredMinor ?? majorUnit / 5) : null;
+  const automaticMinor = majorUnit / 5;
+  const minorUnit = options.needMinor
+    ? (authoredMinor ?? (automaticMinor > 0 && isFinite(automaticMinor) ? automaticMinor : majorUnit))
+    : null;
 
   const majorTicks = indexedTicks(min, max, majorUnit, authoredMajor == null ? 'skip' : 'truncate');
   const minorTicks = minorUnit == null
