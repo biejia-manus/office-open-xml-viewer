@@ -1408,6 +1408,38 @@ describe('classic 3-D compatibility projection', () => {
     expect(rec.texts.map(item => item.text)).not.toContain('Second');
   });
 
+  it('draws pie leader lines only for labels placed outside the slice', () => {
+    const inside = recordingCtx(() => 8);
+    renderChart(inside.ctx, baseModel({
+      chartType: 'pie', threeD: { rotationX: 15, rotationY: 20 },
+      series: [series({
+        values: [1, 1],
+        seriesDataLabels: {
+          showVal: true, showCatName: false, showSerName: false, showPercent: false,
+          showLeaderLines: true, leaderLineColor: '00FF00', position: 'ctr',
+        },
+      })],
+    }), RECT, 1);
+    expect(inside.paintEvents.some(event =>
+      event.kind === 'stroke' && event.strokeStyle === '#00FF00'
+    )).toBe(false);
+
+    const outside = recordingCtx(() => 200);
+    renderChart(outside.ctx, baseModel({
+      chartType: 'pie', threeD: { rotationX: 15, rotationY: 20 },
+      series: [series({
+        values: [99, 1],
+        seriesDataLabels: {
+          showVal: true, showCatName: false, showSerName: false, showPercent: false,
+          showLeaderLines: true, leaderLineColor: '00FF00',
+        },
+      })],
+    }), RECT, 1);
+    expect(outside.paintEvents.some(event =>
+      event.kind === 'stroke' && event.strokeStyle === '#00FF00'
+    )).toBe(true);
+  });
+
   it('keeps non-finite firstSliceAngle out of 3-D pie geometry', () => {
     for (const firstSliceAngle of [Number.NaN, Number.POSITIVE_INFINITY]) {
       const rec = recordingCtx();
