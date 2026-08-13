@@ -628,6 +628,7 @@ function drawThreeDDataLabel(
   resolvedOverride?: ChartDataLabelOverride,
   defaultPosition = 't',
   leaderAnchor: Point = anchor,
+  leaderLineEligible = true,
 ): void {
   // Callers resolve indexed overrides through their per-series Map before the
   // paint loop. Falling back to Array.find here would quietly reintroduce
@@ -701,7 +702,7 @@ function drawThreeDDataLabel(
   );
   if (!placement) return;
   const labelBox = override?.labelBox ?? defaults?.labelBox;
-  if (defaults?.showLeaderLines) {
+  if (defaults?.showLeaderLines && leaderLineEligible) {
     ctx.beginPath();
     ctx.moveTo(leaderAnchor.x, leaderAnchor.y);
     ctx.lineTo(
@@ -2839,10 +2840,11 @@ function renderPie(
         );
         previousArcPoint = current;
       }
-      const outside = authoredPosition == null
+      const outside = (authoredPosition == null || authoredPosition === 'bestFit')
         && (slice.percentValue === 0 || arcCapacity < (richMeasure?.width
           ?? ctx.measureText(labelText).width));
-      const labelRadius = radius * (outside ? 1.12 : 0.64);
+      const labelOutside = outside || authoredPosition === 'outEnd';
+      const labelRadius = radius * (labelOutside ? 1.12 : 0.64);
       const label = projection.project(
         slice.centerX + Math.cos(middle) * labelRadius,
         surfaceY,
@@ -2856,6 +2858,7 @@ function renderPie(
       deferredLabels.push(() => drawThreeDDataLabel(
         ctx, chart, series, 0, slice.index, slice.value, label, plot, ptToPx,
         0, slice.percentValue, labelOverride, 'ctr', leader,
+        labelOutside,
       ));
     }
   }
