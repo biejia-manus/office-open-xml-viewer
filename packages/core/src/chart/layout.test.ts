@@ -211,7 +211,7 @@ describe('chartLegendReserve + bands', () => {
     // 300 + 12 + 322 = 634: it fits W - 4 but not the painted W - 8.
     expect(leg).toEqual({ side: 't', reserveW: 0, reserveH: 36 });
   });
-  it('bounds a measured side reserve while leaving room for the plot', () => {
+  it('lets a measured side reserve grow to the 30% plot-safety bound', () => {
     const leg = chartLegendReserve(
       model({ showLegend: true, legendPos: 'r' }),
       W,
@@ -225,7 +225,23 @@ describe('chartLegendReserve + bands', () => {
         verticalPadding: 4,
       },
     );
-    expect(leg).toEqual({ side: 'r', reserveW: W * 0.22, reserveH: 0 });
+    expect(leg).toEqual({ side: 'r', reserveW: W * 0.3, reserveH: 0 });
+  });
+  it('keeps a short measured side reserve at the 80px compatibility minimum', () => {
+    const leg = chartLegendReserve(
+      model({ showLegend: true, legendPos: 'r' }),
+      W,
+      H,
+      0.22,
+      {
+        itemWidths: [40],
+        rowHeight: 16,
+        itemGap: 12,
+        horizontalPadding: 8,
+        verticalPadding: 4,
+      },
+    );
+    expect(leg).toEqual({ side: 'r', reserveW: 80, reserveH: 0 });
   });
 });
 

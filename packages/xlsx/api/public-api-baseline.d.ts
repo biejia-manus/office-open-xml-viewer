@@ -167,6 +167,7 @@ export interface ChartAnchor {
 export interface ChartDataLabelOverride {
     idx: number;
     text: string;
+    richRuns?: ChartTextRun[];
     position?: string;
     fontColor?: string;
     fontSizeHpt?: number;
@@ -193,6 +194,7 @@ export interface ChartDataPointOverride {
     markerSize?: number;
     markerFill?: string;
     markerLine?: string;
+    markerLineWidthEmu?: number;
     explosion?: number;
 }
 export interface ChartErrBars {
@@ -317,15 +319,19 @@ export interface ChartModel {
     dataLabelFormatCode?: string | null;
     titleFontBold?: boolean | null;
     catAxisFontBold?: boolean | null;
+    catAxisFontItalic?: boolean | null;
     valAxisFontBold?: boolean | null;
+    valAxisFontItalic?: boolean | null;
     catAxisTitleFontSizeHpt?: number | null;
     catAxisTitleFontBold?: boolean | null;
+    catAxisTitleFontItalic?: boolean | null;
     catAxisTitleFontColor?: string | null;
     catAxisTitleRotation?: number | null;
     catAxisTitleVerticalMode?: 'horz' | 'vert' | 'vert270' | 'wordArtVert' | 'eaVert' | 'mongolianVert' | 'wordArtVertRtl' | null;
     catAxisTitleManualLayout?: ChartManualLayout | null;
     valAxisTitleFontSizeHpt?: number | null;
     valAxisTitleFontBold?: boolean | null;
+    valAxisTitleFontItalic?: boolean | null;
     valAxisTitleFontColor?: string | null;
     valAxisTitleRotation?: number | null;
     valAxisTitleVerticalMode?: 'horz' | 'vert' | 'vert270' | 'wordArtVert' | 'eaVert' | 'mongolianVert' | 'wordArtVertRtl' | null;
@@ -407,6 +413,7 @@ export interface ChartModel {
     chartexColorStyleMethod?: string | null;
     chartexDataPointStyle?: ChartExElementStyle | null;
     chartexDataPointLineStyle?: ChartExElementStyle | null;
+    chartexSeriesLineStyle?: ChartExElementStyle | null;
     chartexDataPointMarkerStyle?: ChartExElementStyle | null;
     chartexMarkerSizePt?: number | null;
     chartexMarkerSymbol?: string | null;
@@ -441,6 +448,7 @@ export interface ChartSeries {
     markerSize?: number | null;
     markerFill?: string | null;
     markerLine?: string | null;
+    markerLineWidthEmu?: number | null;
     dataPointOverrides?: ChartDataPointOverride[] | null;
     dataLabelOverrides?: ChartDataLabelOverride[] | null;
     seriesDataLabels?: ChartSeriesDataLabels | null;
@@ -1081,6 +1089,7 @@ export interface SecondaryValueAxis {
     formatCode?: string | null;
     fontColor?: string | null;
     fontSizeHpt?: number | null;
+    fontItalic?: boolean | null;
     fontFace?: string | null;
     lineColor?: string | null;
     lineWidthEmu?: number | null;
@@ -1095,6 +1104,7 @@ export interface SecondaryValueAxis {
     minorUnit?: number | null;
     titleFontSizeHpt?: number | null;
     titleFontBold?: boolean | null;
+    titleFontItalic?: boolean | null;
     titleFontColor?: string | null;
     titleFontFace?: string | null;
     titleRotation?: number | null;

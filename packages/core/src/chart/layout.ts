@@ -216,7 +216,11 @@ export function chartLegendReserve(
   if (side === 'r' || side === 'l') {
     if (metrics) {
       const minWidth = Math.min(80, w * 0.3);
-      const maxWidth = Math.max(minWidth, Math.min(w * 0.3, Math.max(80, w * sideReserveFrac)));
+      // Once Canvas metrics are available, size the band from the content
+      // rather than reusing the legacy family fraction as an upper bound. The
+      // 30% safety cap still leaves the majority of the frame to the plot, but
+      // permits a long authored series name to wrap into complete words.
+      const maxWidth = w * 0.3;
       const measuredWidth = Math.max(0, ...metrics.itemWidths) + metrics.horizontalPadding;
       return {
         side,

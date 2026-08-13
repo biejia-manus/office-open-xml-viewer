@@ -226,11 +226,17 @@ pub struct ChartModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cat_axis_font_bold: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cat_axis_font_italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub val_axis_font_bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub val_axis_font_italic: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cat_axis_title_font_size_hpt: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cat_axis_title_font_bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cat_axis_title_font_italic: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cat_axis_title_font_color: Option<String>,
     /// Authored `<c:catAx><c:title>` `bodyPr@rot` in raw `ST_Angle` units.
@@ -245,6 +251,8 @@ pub struct ChartModel {
     pub val_axis_title_font_size_hpt: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub val_axis_title_font_bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub val_axis_title_font_italic: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub val_axis_title_font_color: Option<String>,
     /// Authored `<c:valAx><c:title>` `bodyPr@rot` in raw `ST_Angle` units.
@@ -518,6 +526,8 @@ pub struct ChartModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chartex_data_point_line_style: Option<ChartExElementStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chartex_series_line_style: Option<ChartExElementStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chartex_data_point_marker_style: Option<ChartExElementStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chartex_marker_size_pt: Option<u8>,
@@ -655,6 +665,8 @@ pub struct ChartSeries {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marker_line: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker_line_width_emu: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_point_overrides: Option<Vec<ChartDataPointOverride>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_label_overrides: Option<Vec<ChartDataLabelOverride>>,
@@ -754,6 +766,8 @@ pub struct ChartDataPointOverride {
     pub marker_fill: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marker_line: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker_line_width_emu: Option<u32>,
     /// `<c:dPt><c:explosion val>` (§21.2.2.61) — pie/doughnut slice pull-out
     /// amount. The schema type is `CT_UnsignedInt` (unbounded `xsd:unsignedInt`);
     /// the spec text itself doesn't define a 0–100 range or "percentage" unit,
@@ -771,6 +785,11 @@ pub struct ChartDataPointOverride {
 pub struct ChartDataLabelOverride {
     pub idx: u32,
     pub text: String,
+    /// Effective DrawingML runs from a custom `<c:dLbl><c:tx><c:rich>` body.
+    /// Paragraph breaks are stored as `\n` runs. The parser bounds the payload
+    /// to 4096 Unicode scalars and four lines before it crosses the WASM wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rich_runs: Option<Vec<ChartTextRun>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -923,6 +942,8 @@ pub struct SecondaryValueAxis {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_hpt: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_face: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_color: Option<String>,
@@ -952,6 +973,8 @@ pub struct SecondaryValueAxis {
     pub title_font_size_hpt: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_font_bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_font_italic: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_font_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1387,20 +1410,29 @@ fn chart_text_bool_attr(node: Node, name: &str) -> Option<bool> {
 fn chart_text_run_from_node(
     run: Node,
     paragraph_default: Option<Node>,
+    text_body_default: Option<Node>,
     resolver: &dyn ColorResolver,
 ) -> Option<ChartTextRun> {
     let text = child(run, "t")?.text().unwrap_or_default().to_string();
     let run_props = child(run, "rPr");
-    let prop = |name: &str| {
-        run_props
-            .and_then(|node| node.attribute(name))
-            .or_else(|| paragraph_default.and_then(|node| node.attribute(name)))
-    };
+    // ST_TextFontSize is 100..400000 hundredths of a point. Resolve size
+    // property-by-property: an invalid direct value is ignored and the next
+    // paragraph/text-body default remains eligible, just like the other text
+    // properties' independent cascade.
+    let font_size_hpt = [run_props, paragraph_default, text_body_default]
+        .into_iter()
+        .flatten()
+        .find_map(|node| node.attribute("sz").and_then(parse_text_font_size_hpt));
     let color = run_props
         .and_then(|node| child(node, "solidFill"))
         .and_then(|fill| resolver.resolve_solid_fill(fill))
         .or_else(|| {
             paragraph_default
+                .and_then(|node| child(node, "solidFill"))
+                .and_then(|fill| resolver.resolve_solid_fill(fill))
+        })
+        .or_else(|| {
+            text_body_default
                 .and_then(|node| child(node, "solidFill"))
                 .and_then(|fill| resolver.resolve_solid_fill(fill))
         });
@@ -1412,15 +1444,21 @@ fn chart_text_run_from_node(
                 .and_then(|node| child(node, "latin"))
                 .and_then(|latin| latin.attribute("typeface"))
         })
+        .or_else(|| {
+            text_body_default
+                .and_then(|node| child(node, "latin"))
+                .and_then(|latin| latin.attribute("typeface"))
+        })
         .map(str::to_string)
         .filter(|face| !face.is_empty());
 
     Some(ChartTextRun {
         text,
-        font_size_hpt: prop("sz").and_then(|value| value.parse::<i32>().ok()),
+        font_size_hpt,
         bold: run_props
             .and_then(|node| chart_text_bool_attr(node, "b"))
-            .or_else(|| paragraph_default.and_then(|node| chart_text_bool_attr(node, "b"))),
+            .or_else(|| paragraph_default.and_then(|node| chart_text_bool_attr(node, "b")))
+            .or_else(|| text_body_default.and_then(|node| chart_text_bool_attr(node, "b"))),
         color,
         font_face,
     })
@@ -1488,7 +1526,7 @@ pub fn parse_chart_user_shapes(root: Node, resolver: &dyn ColorResolver) -> Vec<
                             node.is_element() && matches!(node.tag_name().name(), "r" | "fld")
                         })
                         .filter_map(|run| {
-                            chart_text_run_from_node(run, paragraph_default, resolver)
+                            chart_text_run_from_node(run, paragraph_default, None, resolver)
                         })
                         .collect();
                     ChartTextParagraph { runs, align }
@@ -1803,6 +1841,24 @@ pub fn extract_axis_tick_label_bold(axis_node: Node) -> Option<bool> {
     })
 }
 
+/// First `<a:defRPr@i>` / `<a:rPr@i>` italic flag inside the axis's
+/// `<c:txPr>`. DrawingML character properties keep italic independent from
+/// bold, so preserve it separately through the chart model.
+pub fn extract_axis_tick_label_italic(axis_node: Node) -> Option<bool> {
+    let txpr = child(axis_node, "txPr")?;
+    txpr.descendants().find_map(|n| {
+        if !n.is_element() {
+            return None;
+        }
+        let tag = n.tag_name().name();
+        if tag != "defRPr" && tag != "rPr" {
+            return None;
+        }
+        n.attribute("i")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    })
+}
+
 /// Plain text of `node`'s direct-child `<c:title>` (ECMA-376 §21.2.2.6
 /// `CT_Title`). Works for the `<c:chart>` element (chart title) or a
 /// `<c:catAx>` / `<c:valAx>` (axis title). Walks `<a:t>` (rich text runs) and
@@ -2037,6 +2093,17 @@ fn extract_axis_title_bold(axis_node: Node) -> Option<bool> {
         .find_map(|props| {
             props
                 .attribute("b")
+                .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        })
+}
+
+fn extract_axis_title_italic(axis_node: Node) -> Option<bool> {
+    let title = child(axis_node, "title")?;
+    title_text_property_nodes(title)
+        .into_iter()
+        .find_map(|props| {
+            props
+                .attribute("i")
                 .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
         })
 }
@@ -3489,6 +3556,10 @@ fn extract_chartex_style_text_props(
     (size, bold, color, face)
 }
 
+fn extract_chartex_style_text_italic(style_node: Option<Node>) -> Option<bool> {
+    child(style_node?, "defRPr").and_then(|props| chart_text_bool_attr(props, "i"))
+}
+
 /// Parse chartEx with a package-supplied resolver for formula-only dimensions.
 /// Excel frequently omits `<cx:lvl>` caches in XLSX and points `<cx:f>` at a
 /// hidden workbook defined name instead; authored levels still take priority.
@@ -3530,6 +3601,7 @@ fn parse_chartex_data_point_overrides(
                 marker_size: None,
                 marker_fill: None,
                 marker_line: None,
+                marker_line_width_emu: None,
                 explosion: None,
             })
         })
@@ -3663,6 +3735,7 @@ fn parse_chartex_series_labels(
             text: tx_pr
                 .map(|node| flatten_rich_text(node, None))
                 .unwrap_or_default(),
+            rich_runs: None,
             position: attr(&label, "pos"),
             font_color,
             font_size_hpt: extract_axis_tick_label_size(label),
@@ -3695,6 +3768,7 @@ fn parse_chartex_series_labels(
             overrides.push(ChartDataLabelOverride {
                 idx,
                 text: String::new(),
+                rich_runs: None,
                 position: None,
                 font_color: None,
                 font_size_hpt: None,
@@ -3886,6 +3960,14 @@ pub fn parse_chartex_part_with_references_and_style_parts(
             chartex_color_style_method.as_deref(),
         )
     });
+    let chartex_series_line_style = style_element("seriesLine").map(|node| {
+        parse_chartex_element_style(
+            node,
+            resolver,
+            style_palette,
+            chartex_color_style_method.as_deref(),
+        )
+    });
     let chartex_data_point_marker_style = style_element("dataPointMarker").map(|node| {
         parse_chartex_element_style(
             node,
@@ -4059,6 +4141,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         marker_size: None,
         marker_fill: None,
         marker_line: None,
+        marker_line_width_emu: None,
         data_point_overrides: {
             let overrides = parse_chartex_data_point_overrides(series_node, resolver);
             (!overrides.is_empty()).then_some(overrides)
@@ -4223,6 +4306,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         .and_then(chartex_text);
     let inline_cat_title_size = cat_axis.and_then(extract_axis_title_size);
     let inline_cat_title_bold = cat_axis.and_then(extract_axis_title_bold);
+    let inline_cat_title_italic = cat_axis.and_then(extract_axis_title_italic);
     let inline_cat_title_color = cat_axis.and_then(|axis| extract_axis_title_color(axis, resolver));
     let inline_cat_title_face = cat_axis.and_then(extract_axis_title_face);
     let cat_axis_title_rotation = cat_axis.and_then(extract_axis_title_rotation);
@@ -4230,6 +4314,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
     let cat_axis_title_manual_layout = cat_axis.and_then(extract_axis_title_manual_layout);
     let inline_val_title_size = val_axis.and_then(extract_axis_title_size);
     let inline_val_title_bold = val_axis.and_then(extract_axis_title_bold);
+    let inline_val_title_italic = val_axis.and_then(extract_axis_title_italic);
     let inline_val_title_color = val_axis.and_then(|axis| extract_axis_title_color(axis, resolver));
     let inline_val_title_face = val_axis.and_then(extract_axis_title_face);
     let val_axis_title_rotation = val_axis.and_then(extract_axis_title_rotation);
@@ -4243,19 +4328,32 @@ pub fn parse_chartex_part_with_references_and_style_parts(
     ) = extract_chartex_style_text_props(style_element("axisTitle"), resolver);
     let style_axis_title_size =
         raw_style_axis_title_size.filter(|size| (100..=400_000).contains(size));
+    let style_axis_title_italic = extract_chartex_style_text_italic(style_element("axisTitle"));
     let (style_cat_size, style_cat_bold, style_cat_color, style_cat_face) =
         extract_chartex_style_text_props(style_element("categoryAxis"), resolver);
     let (style_val_size, style_val_bold, style_val_color, style_val_face) =
         extract_chartex_style_text_props(style_element("valueAxis"), resolver);
+    let style_cat_italic = extract_chartex_style_text_italic(style_element("categoryAxis"));
+    let style_val_italic = extract_chartex_style_text_italic(style_element("valueAxis"));
     // Axis-local title runs are authored values and win property-by-property;
     // the associated Chart Style is only the omitted-property fallback.
     let cat_axis_title_font_size_hpt = inline_cat_title_size.or(style_axis_title_size);
-    let cat_axis_title_font_bold = inline_cat_title_bold.or(style_axis_title_bold);
+    let cat_axis_title_font_bold = cat_axis_title.as_ref().map(|_| {
+        inline_cat_title_bold
+            .or(style_axis_title_bold)
+            .unwrap_or(false)
+    });
+    let cat_axis_title_font_italic = inline_cat_title_italic.or(style_axis_title_italic);
     let cat_axis_title_font_color =
         inline_cat_title_color.or_else(|| style_axis_title_color.clone());
     let cat_axis_title_font_face = inline_cat_title_face.or_else(|| style_axis_title_face.clone());
     let val_axis_title_font_size_hpt = inline_val_title_size.or(style_axis_title_size);
-    let val_axis_title_font_bold = inline_val_title_bold.or(style_axis_title_bold);
+    let val_axis_title_font_bold = val_axis_title.as_ref().map(|_| {
+        inline_val_title_bold
+            .or(style_axis_title_bold)
+            .unwrap_or(false)
+    });
+    let val_axis_title_font_italic = inline_val_title_italic.or(style_axis_title_italic);
     let val_axis_title_font_color =
         inline_val_title_color.or_else(|| style_axis_title_color.clone());
     let val_axis_title_font_face = inline_val_title_face.or_else(|| style_axis_title_face.clone());
@@ -4268,6 +4366,8 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         style_cat_size.or_else(|| cat_axis.and_then(extract_axis_tick_label_size));
     let cat_axis_font_bold =
         style_cat_bold.or_else(|| cat_axis.and_then(extract_axis_tick_label_bold));
+    let cat_axis_font_italic =
+        style_cat_italic.or_else(|| cat_axis.and_then(extract_axis_tick_label_italic));
     let cat_axis_font_color = style_cat_color
         .or_else(|| cat_axis.and_then(|axis| extract_axis_tick_label_color(axis, resolver)));
     let cat_axis_font_face =
@@ -4276,6 +4376,8 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         style_val_size.or_else(|| val_axis.and_then(extract_axis_tick_label_size));
     let val_axis_font_bold =
         style_val_bold.or_else(|| val_axis.and_then(extract_axis_tick_label_bold));
+    let val_axis_font_italic =
+        style_val_italic.or_else(|| val_axis.and_then(extract_axis_tick_label_italic));
     let val_axis_font_color = style_val_color
         .or_else(|| val_axis.and_then(|axis| extract_axis_tick_label_color(axis, resolver)));
     let val_axis_font_face =
@@ -4482,19 +4584,23 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         val_axis_title,
         cat_axis_title_font_size_hpt,
         cat_axis_title_font_bold,
+        cat_axis_title_font_italic,
         cat_axis_title_font_color,
         cat_axis_title_rotation,
         cat_axis_title_vertical_mode,
         cat_axis_title_manual_layout,
         val_axis_title_font_size_hpt,
         val_axis_title_font_bold,
+        val_axis_title_font_italic,
         val_axis_title_font_color,
         val_axis_title_rotation,
         val_axis_title_vertical_mode,
         val_axis_title_manual_layout,
         title_font_bold: chartex_title_font_bold,
         cat_axis_font_bold,
+        cat_axis_font_italic,
         val_axis_font_bold,
+        val_axis_font_italic,
         chart_border_color,
         chart_border_width_emu,
         secondary_val_axis: None,
@@ -4576,6 +4682,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         chartex_color_style_method,
         chartex_data_point_style,
         chartex_data_point_line_style,
+        chartex_series_line_style,
         chartex_data_point_marker_style,
         chartex_marker_size_pt,
         chartex_marker_symbol,
@@ -5006,18 +5113,26 @@ fn parse_chartex_treemap(
 // the rich per-series fields for both pptx and xlsx.
 // ============================================================================
 
-/// Parse `<c:marker>` into `(symbol, size, fill, line)` — colors are hex without
+/// Parse `<c:marker>` into `(symbol, size, fill, line, line_width_emu)` — colors are hex without
 /// `#`. ECMA-376 §21.2.2.32 / §21.2.2.34. Fill and line come from `<c:spPr>`
 /// nested inside the marker, resolved via the full DrawingML color grammar
 /// ([`ColorResolver::resolve_shape_fill`]). `size` is the point value parsed as
 /// an integer (matching Excel's `<c:size val>` unsignedByte) then widened to
 /// `f64` for the shared model.
+pub type ParsedMarkerBlock = (
+    Option<String>,
+    Option<f64>,
+    Option<String>,
+    Option<String>,
+    Option<u32>,
+);
+
 pub fn parse_marker_block(
     marker_node: Option<Node>,
     resolver: &dyn ColorResolver,
-) -> (Option<String>, Option<f64>, Option<String>, Option<String>) {
+) -> ParsedMarkerBlock {
     let Some(mk) = marker_node else {
-        return (None, None, None, None);
+        return (None, None, None, None, None);
     };
     let symbol = child(mk, "symbol")
         .and_then(|n| n.attribute("val"))
@@ -5040,7 +5155,11 @@ pub fn parse_marker_block(
     let line = sp_pr
         .and_then(|p| child(p, "ln"))
         .and_then(|ln| resolver.resolve_shape_fill(ln));
-    (symbol, size, fill, line)
+    let line_width_emu = sp_pr
+        .and_then(|p| child(p, "ln"))
+        .and_then(|ln| ln.attribute("w"))
+        .and_then(|value| value.parse::<u32>().ok());
+    (symbol, size, fill, line, line_width_emu)
 }
 
 fn parse_series_pattern_fill(
@@ -5078,7 +5197,7 @@ pub fn parse_data_point_overrides(
         let (color, fill_hidden, line_color, line_width_emu, line_dash, line_hidden) =
             parse_data_point_shape(dpt, resolver);
         let mk = child(dpt, "marker");
-        let (marker_symbol, marker_size, marker_fill, marker_line) =
+        let (marker_symbol, marker_size, marker_fill, marker_line, marker_line_width_emu) =
             parse_marker_block(mk, resolver);
         let explosion = extract_dpt_explosion(dpt);
         result.push(ChartDataPointOverride {
@@ -5093,6 +5212,7 @@ pub fn parse_data_point_overrides(
             marker_size,
             marker_fill,
             marker_line,
+            marker_line_width_emu,
             explosion,
         });
     }
@@ -5179,6 +5299,76 @@ pub fn flatten_rich_text(rich_root: Node, cellrange_cache: Option<&str>) -> Stri
         }
     }
     out
+}
+
+const MAX_DATA_LABEL_RICH_SCALARS: usize = 4096;
+const MAX_DATA_LABEL_RICH_LINES: usize = 4;
+
+/// Preserve the effective DrawingML character properties of a custom chart
+/// data label without allowing an untrusted rich-text body to grow the public
+/// model without bound. Runs in the same paragraph stay inline; paragraph
+/// boundaries become a newline run so the canvas renderer can keep authored
+/// line breaks while measuring the complete label as one object.
+fn parse_data_label_rich_runs(
+    label: Node,
+    resolver: &dyn ColorResolver,
+    cellrange_cache: Option<&str>,
+) -> Option<Vec<ChartTextRun>> {
+    let rich = child(label, "tx").and_then(|tx| child(tx, "rich"))?;
+    let txpr_default = child(label, "txPr").and_then(|tx| {
+        tx.descendants()
+            .find(|node| node.is_element() && matches!(node.tag_name().name(), "rPr" | "defRPr"))
+    });
+    let mut runs = Vec::new();
+    let mut scalar_count = 0usize;
+
+    for (paragraph_index, paragraph) in rich
+        .children()
+        .filter(|node| node.is_element() && node.tag_name().name() == "p")
+        .take(MAX_DATA_LABEL_RICH_LINES)
+        .enumerate()
+    {
+        if paragraph_index > 0 {
+            if scalar_count >= MAX_DATA_LABEL_RICH_SCALARS {
+                break;
+            }
+            runs.push(ChartTextRun {
+                text: "\n".to_string(),
+                font_size_hpt: None,
+                bold: None,
+                color: None,
+                font_face: None,
+            });
+            scalar_count += 1;
+        }
+        let paragraph_default = child(paragraph, "pPr").and_then(|props| child(props, "defRPr"));
+        for run_node in paragraph
+            .children()
+            .filter(|node| node.is_element() && matches!(node.tag_name().name(), "r" | "fld"))
+        {
+            if scalar_count >= MAX_DATA_LABEL_RICH_SCALARS {
+                break;
+            }
+            let Some(mut run) =
+                chart_text_run_from_node(run_node, paragraph_default, txpr_default, resolver)
+            else {
+                continue;
+            };
+            if run_node.tag_name().name() == "fld"
+                && run_node.attribute("type") == Some("CELLRANGE")
+            {
+                run.text = cellrange_cache.unwrap_or_default().to_string();
+            }
+            let remaining = MAX_DATA_LABEL_RICH_SCALARS - scalar_count;
+            let bounded = run.text.chars().take(remaining).collect::<String>();
+            scalar_count += bounded.chars().count();
+            if !bounded.is_empty() {
+                run.text = bounded;
+                runs.push(run);
+            }
+        }
+    }
+    (!runs.is_empty()).then_some(runs)
 }
 
 /// Parse a data-label `<c:spPr>` (§21.2.2.197) into a callout [`ChartLabelBox`]
@@ -5329,8 +5519,15 @@ pub fn parse_series_data_labels(
             .and_then(|n| n.attribute("val"))
             .map(|s| s.to_string());
         let cache_for_idx = cellrange_cache.get(&idx).map(|s| s.as_str());
+        let rich_runs = if deleted {
+            None
+        } else {
+            parse_data_label_rich_runs(dl, resolver, cache_for_idx)
+        };
         let text = if deleted {
             String::new()
+        } else if let Some(runs) = rich_runs.as_ref() {
+            runs.iter().map(|run| run.text.as_str()).collect()
         } else {
             match child(dl, "tx") {
                 Some(tx_node) => flatten_rich_text(tx_node, cache_for_idx),
@@ -5348,20 +5545,31 @@ pub fn parse_series_data_labels(
                 .find(|n| n.is_element() && n.tag_name().name() == "rPr")
         });
         let default_run_props = child(dl, "txPr").and_then(|tx| {
-            tx.descendants()
-                .find(|n| n.is_element() && n.tag_name().name() == "defRPr")
+            tx.descendants().find(|node| {
+                node.is_element() && matches!(node.tag_name().name(), "rPr" | "defRPr")
+            })
         });
-        let font_color = rich_run_props
-            .and_then(|run| resolver.resolve_shape_fill(run))
+        let first_rich_run = rich_runs
+            .as_ref()
+            .and_then(|runs| runs.iter().find(|run| run.text != "\n"));
+        let font_color = first_rich_run
+            .and_then(|run| run.color.clone())
+            .or_else(|| rich_run_props.and_then(|run| resolver.resolve_shape_fill(run)))
             .or_else(|| default_run_props.and_then(|run| resolver.resolve_shape_fill(run)));
-        let font_size_hpt = rich_run_props
-            .and_then(|run| run.attribute("sz"))
-            .or_else(|| default_run_props.and_then(|run| run.attribute("sz")))
-            .and_then(|v| v.parse::<i32>().ok());
-        let font_bold = rich_run_props
-            .and_then(|run| run.attribute("b"))
-            .or_else(|| default_run_props.and_then(|run| run.attribute("b")))
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+        let font_size_hpt = first_rich_run
+            .and_then(|run| run.font_size_hpt)
+            .or_else(|| {
+                rich_run_props
+                    .and_then(|run| run.attribute("sz"))
+                    .or_else(|| default_run_props.and_then(|run| run.attribute("sz")))
+                    .and_then(|v| v.parse::<i32>().ok())
+            });
+        let font_bold = first_rich_run.and_then(|run| run.bold).or_else(|| {
+            rich_run_props
+                .and_then(|run| run.attribute("b"))
+                .or_else(|| default_run_props.and_then(|run| run.attribute("b")))
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        });
         // Per-point callout box (`<c:dLbl>` §21.2.2.47 `<c:spPr>` §21.2.2.197):
         // direct child spPr overrides the series-default box for this one point.
         let label_box = parse_label_box(
@@ -5377,6 +5585,7 @@ pub fn parse_series_data_labels(
         overrides.push(ChartDataLabelOverride {
             idx,
             text,
+            rich_runs,
             position: pos,
             font_color,
             font_size_hpt,
@@ -6368,27 +6577,30 @@ pub fn parse_chart_part_with_references(
                                 .find(|n| n.is_element() && n.tag_name().name() == "spPr")
                         })
                         .and_then(|sp| {
-                            sp.children()
-                                .find(|n| n.is_element() && n.tag_name().name() == "solidFill")
+                            if child(sp, "noFill").is_some() {
+                                // A direct point noFill is more specific than
+                                // both series formatting and varyColors.
+                                Some("00000000".to_string())
+                            } else {
+                                sp.children()
+                                    .find(|n| n.is_element() && n.tag_name().name() == "solidFill")
+                                    .and_then(|fill| color_resolver.resolve_solid_fill(fill))
+                            }
                         })
-                        .and_then(|fill| color_resolver.resolve_solid_fill(fill))
                 })
                 .collect();
 
-            // §21.2.2.227 `<c:varyColors>`: a pie/doughnut varies each DATA POINT
-            // by the theme accent palette (`accent[(i % 6) + 1]`), rather than
-            // giving the whole series one fill. It defaults to ON for the pie
-            // family, so an absent element still cycles the accents. When on, fill
-            // every slice that lacks an explicit `<c:dPt>` fill from the resolver's
-            // accent for that point index — this is the same palette Office draws,
-            // so a docx/xlsx pie matches Word/Excel instead of falling back to the
-            // renderer's built-in default colors. Resolvers that own their own
-            // palette (pptx `resolve_series_accent` → None) contribute nothing here
-            // and stay byte-stable. Non-pie families are unaffected: only the pie
-            // renderer consumes `data_point_colors`, and a multi-series pie (rare)
-            // still varies by point within series[0].
+            // §21.2.2.227 `<c:varyColors>`: Office varies each DATA POINT in the
+            // pie family and in a lone bar/column or bubble series by the theme
+            // accent palette (`accent[(i % 6) + 1]`). The omitted element is
+            // observed as ON for these families; explicit false remains
+            // authoritative. Fill every point that lacks an explicit `<c:dPt>`
+            // fill from the resolver's accent for that point index. Resolvers
+            // that own their own palette (pptx `resolve_series_accent` → None)
+            // contribute nothing here and stay byte-stable.
             let is_pie_family = chart_type == "pie" || chart_type == "doughnut";
             let is_bar_family = chart_type.contains("Bar");
+            let is_bubble_family = chart_type == "bubble";
             // §21.2.2.227 `<c:varyColors>` — CT_Boolean (bare element ⇒ true).
             // "Vary colors by point" is the effective default for the pie family
             // AND for a SINGLE-series bar/column chart (Word/Excel/PowerPoint
@@ -6401,13 +6613,19 @@ pub fn parse_chart_part_with_references(
             // accent for its POINT index (i); `dPt` fills already sit in
             // `data_point_colors` and are never overwritten (explicit per-point
             // color keeps priority, §21.2.2.52).
-            let qualifies_for_vary = is_pie_family || (is_bar_family && series_count == 1);
+            let qualifies_for_vary =
+                is_pie_family || ((is_bar_family || is_bubble_family) && series_count == 1);
             let vary = group
                 .and_then(|g| bool_child(g, "varyColors"))
                 .unwrap_or(true);
             let vary_by_point = qualifies_for_vary && vary;
             let mut data_point_colors = data_point_colors;
-            if vary_by_point {
+            // Direct series noFill is authored DrawingML shape formatting and
+            // remains authoritative over the automatic varyColors palette.
+            // A direct dPt fill/noFill already occupies its slot and therefore
+            // still wins as the more specific point-level formatting.
+            let series_fill_hidden = color.as_deref() == Some("00000000");
+            if vary_by_point && !series_fill_hidden {
                 for (i, slot) in data_point_colors.iter_mut().enumerate() {
                     if slot.is_none() {
                         *slot = color_resolver.resolve_series_accent(i);
@@ -6417,7 +6635,7 @@ pub fn parse_chart_part_with_references(
             let has_dpt_colors = data_point_colors.iter().any(|c| c.is_some());
 
             // Per-point `<c:dPt>` overrides (§21.2.2.39): marker (symbol/size/
-            // fill/line) and `<c:explosion>` (pie/doughnut pull-out). Plain
+            // fill/line/line width) and `<c:explosion>` (pie/doughnut pull-out). Plain
             // per-point FILL flows through `data_point_colors` above (the pie
             // model the pptx path established), so we only emit an override when
             // it carries a marker or explosion — a color-only dPt yields no
@@ -6432,6 +6650,7 @@ pub fn parse_chart_part_with_references(
                             || o.marker_size.is_some()
                             || o.marker_fill.is_some()
                             || o.marker_line.is_some()
+                            || o.marker_line_width_emu.is_some()
                             || o.explosion.is_some()
                     })
                     .collect();
@@ -6527,7 +6746,7 @@ pub fn parse_chart_part_with_references(
             // ⇒ false (line series draw no markers unless opted in).
             let chart_marker_default = group.and_then(|g| bool_child(g, "marker")).unwrap_or(false);
             let marker_node = child(*ser, "marker");
-            let (marker_symbol, marker_size, marker_fill, marker_line) =
+            let (marker_symbol, marker_size, marker_fill, marker_line, marker_line_width_emu) =
                 parse_marker_block(marker_node, color_resolver);
             let show_marker = match (&marker_symbol, series_is_scatter_like) {
                 (Some(sym), _) => sym != "none",
@@ -6580,6 +6799,7 @@ pub fn parse_chart_part_with_references(
                 marker_size,
                 marker_fill,
                 marker_line,
+                marker_line_width_emu,
                 data_point_overrides: if data_point_overrides.is_empty() {
                     None
                 } else {
@@ -6717,6 +6937,7 @@ pub fn parse_chart_part_with_references(
     let chart_text_font_size_hpt = extract_axis_tick_label_size(root);
     let chart_text_font_color = extract_axis_tick_label_color(root, color_resolver);
     let chart_text_font_bold = extract_axis_tick_label_bold(root);
+    let chart_text_font_italic = extract_axis_tick_label_italic(root);
     let chart_text_font_face = extract_axis_tick_label_face(root);
     let cat_axis_font_size_hpt = cat_ax
         .and_then(extract_axis_tick_label_size)
@@ -6791,6 +7012,7 @@ pub fn parse_chart_part_with_references(
         let (min, max) = extract_axis_min_max(ax);
         let (t, title_size, title_bold, title_color) =
             extract_axis_title_with_props_resolved(ax, color_resolver);
+        let resolved_title_bold = t.as_ref().map(|_| title_bold.unwrap_or(false));
         let (line_color, line_width_emu, line_hidden) = extract_axis_line_style(ax, color_resolver);
         let (minor_gridline_color, minor_gridline_width_emu, minor_gridline_dash) =
             extract_minor_gridline_style(ax, color_resolver);
@@ -6803,6 +7025,7 @@ pub fn parse_chart_part_with_references(
             font_color: extract_axis_tick_label_color(ax, color_resolver)
                 .or_else(|| chart_text_font_color.clone()),
             font_size_hpt: extract_axis_tick_label_size(ax).or(chart_text_font_size_hpt),
+            font_italic: extract_axis_tick_label_italic(ax).or(chart_text_font_italic),
             font_face: extract_axis_tick_label_face(ax),
             line_color,
             line_width_emu,
@@ -6816,7 +7039,8 @@ pub fn parse_chart_part_with_references(
             major_unit: extract_axis_major_unit(ax),
             minor_unit: extract_axis_minor_unit(ax),
             title_font_size_hpt: title_size,
-            title_font_bold: title_bold,
+            title_font_bold: resolved_title_bold,
+            title_font_italic: extract_axis_title_italic(ax),
             title_font_color: title_color,
             title_font_face: extract_axis_title_face(ax),
             title_rotation: extract_axis_title_rotation(ax),
@@ -6882,6 +7106,7 @@ pub fn parse_chart_part_with_references(
     let mut cat_axis_title: Option<String> = None;
     let mut cat_axis_title_size: Option<i32> = None;
     let mut cat_axis_title_bold: Option<bool> = None;
+    let mut cat_axis_title_italic: Option<bool> = None;
     let mut cat_axis_title_color: Option<String> = None;
     let mut cat_axis_title_face: Option<String> = None;
     let mut cat_axis_title_rotation: Option<i32> = None;
@@ -6890,6 +7115,7 @@ pub fn parse_chart_part_with_references(
     let mut val_axis_title: Option<String> = None;
     let mut val_axis_title_size: Option<i32> = None;
     let mut val_axis_title_bold: Option<bool> = None;
+    let mut val_axis_title_italic: Option<bool> = None;
     let mut val_axis_title_color: Option<String> = None;
     let mut val_axis_title_face: Option<String> = None;
     let mut val_axis_title_rotation: Option<i32> = None;
@@ -6916,7 +7142,8 @@ pub fn parse_chart_part_with_references(
                 if t.is_some() {
                     cat_axis_title = t;
                     cat_axis_title_size = sz;
-                    cat_axis_title_bold = b;
+                    cat_axis_title_bold = Some(b.unwrap_or(false));
+                    cat_axis_title_italic = extract_axis_title_italic(ax);
                     cat_axis_title_color = col;
                     cat_axis_title_face = extract_axis_title_face(ax);
                     cat_axis_title_rotation = extract_axis_title_rotation(ax);
@@ -6929,7 +7156,8 @@ pub fn parse_chart_part_with_references(
             if t.is_some() {
                 val_axis_title = t;
                 val_axis_title_size = sz;
-                val_axis_title_bold = b;
+                val_axis_title_bold = Some(b.unwrap_or(false));
+                val_axis_title_italic = extract_axis_title_italic(ax);
                 val_axis_title_color = col;
                 val_axis_title_face = extract_axis_title_face(ax);
                 val_axis_title_rotation = extract_axis_title_rotation(ax);
@@ -6949,9 +7177,15 @@ pub fn parse_chart_part_with_references(
     let cat_axis_font_bold = cat_ax
         .and_then(extract_axis_tick_label_bold)
         .or(chart_text_font_bold);
+    let cat_axis_font_italic = cat_ax
+        .and_then(extract_axis_tick_label_italic)
+        .or(chart_text_font_italic);
     let val_axis_font_bold = val_ax
         .and_then(extract_axis_tick_label_bold)
         .or(chart_text_font_bold);
+    let val_axis_font_italic = val_ax
+        .and_then(extract_axis_tick_label_italic)
+        .or(chart_text_font_italic);
     let title_font_bold = title_node_opt
         .and_then(|t| t.parent())
         .and_then(extract_chart_title_bold);
@@ -7185,19 +7419,23 @@ pub fn parse_chart_part_with_references(
         // parser locals keep the shorter legacy names.
         cat_axis_title_font_size_hpt: cat_axis_title_size,
         cat_axis_title_font_bold: cat_axis_title_bold,
+        cat_axis_title_font_italic: cat_axis_title_italic,
         cat_axis_title_font_color: cat_axis_title_color,
         cat_axis_title_rotation,
         cat_axis_title_vertical_mode,
         cat_axis_title_manual_layout,
         val_axis_title_font_size_hpt: val_axis_title_size,
         val_axis_title_font_bold: val_axis_title_bold,
+        val_axis_title_font_italic: val_axis_title_italic,
         val_axis_title_font_color: val_axis_title_color,
         val_axis_title_rotation,
         val_axis_title_vertical_mode,
         val_axis_title_manual_layout,
         title_font_bold,
         cat_axis_font_bold,
+        cat_axis_font_italic,
         val_axis_font_bold,
+        val_axis_font_italic,
         chart_border_color,
         chart_border_width_emu,
         secondary_val_axis,
@@ -7275,6 +7513,7 @@ pub fn parse_chart_part_with_references(
         chartex_color_style_method: None,
         chartex_data_point_style: None,
         chartex_data_point_line_style: None,
+        chartex_series_line_style: None,
         chartex_data_point_marker_style: None,
         chartex_marker_size_pt: None,
         chartex_marker_symbol: None,
@@ -7381,6 +7620,7 @@ mod tests {
                 marker_size: None,
                 marker_fill: None,
                 marker_line: None,
+                marker_line_width_emu: None,
                 data_point_overrides: None,
                 data_label_overrides: None,
                 series_data_labels: None,
@@ -7429,15 +7669,19 @@ mod tests {
             data_label_font_bold: None,
             title_font_bold: None,
             cat_axis_font_bold: None,
+            cat_axis_font_italic: None,
             val_axis_font_bold: None,
+            val_axis_font_italic: None,
             cat_axis_title_font_size_hpt: None,
             cat_axis_title_font_bold: None,
+            cat_axis_title_font_italic: None,
             cat_axis_title_font_color: None,
             cat_axis_title_rotation: None,
             cat_axis_title_vertical_mode: None,
             cat_axis_title_manual_layout: None,
             val_axis_title_font_size_hpt: None,
             val_axis_title_font_bold: None,
+            val_axis_title_font_italic: None,
             val_axis_title_font_color: None,
             val_axis_title_rotation: None,
             val_axis_title_vertical_mode: None,
@@ -7519,6 +7763,7 @@ mod tests {
             chartex_color_style_method: None,
             chartex_data_point_style: None,
             chartex_data_point_line_style: None,
+            chartex_series_line_style: None,
             chartex_data_point_marker_style: None,
             chartex_marker_size_pt: None,
             chartex_marker_symbol: None,
@@ -9013,6 +9258,37 @@ mod tests {
         assert_eq!(val_title_layout.y, 0.1);
     }
 
+    #[test]
+    fn parse_chart_part_preserves_custom_data_label_run_styles() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart><c:plotArea>
+              <c:lineChart><c:grouping val="standard"/><c:ser>
+                <c:idx val="0"/><c:tx><c:v>Employer</c:v></c:tx>
+                <c:dLbls><c:dLbl><c:idx val="0"/><c:tx><c:rich><a:p>
+                  <a:pPr><a:defRPr sz="800" b="1"/></a:pPr>
+                  <a:r><a:rPr sz="1200" b="1"/><a:t>Employer</a:t></a:r>
+                  <a:r><a:rPr sz="1100" b="0"/><a:t> 36.0%</a:t></a:r>
+                </a:p></c:rich></c:tx><c:dLblPos val="l"/>
+                <c:showVal val="1"/><c:showSerName val="1"/>
+                </c:dLbl></c:dLbls>
+                <c:cat><c:strCache><c:pt idx="0"><c:v>Start</c:v></c:pt></c:strCache></c:cat>
+                <c:val><c:numCache><c:pt idx="0"><c:v>36</c:v></c:pt></c:numCache></c:val>
+              </c:ser></c:lineChart>
+            </c:plotArea></c:chart></c:chartSpace>"#
+        );
+        let document = chart_space_of(&xml);
+        let model =
+            parse_chart_part(document.root_element(), &FixtureResolver).expect("line chart parses");
+        let label = &model.series[0].data_label_overrides.as_ref().unwrap()[0];
+        assert_eq!(label.text, "Employer 36.0%");
+        assert_eq!(label.position.as_deref(), Some("l"));
+        let runs = label.rich_runs.as_ref().expect("rich runs on public model");
+        assert_eq!(runs[0].font_size_hpt, Some(1200));
+        assert_eq!(runs[0].bold, Some(true));
+        assert_eq!(runs[1].font_size_hpt, Some(1100));
+        assert_eq!(runs[1].bold, Some(false));
+    }
+
     /// A chart title may be a string reference cache rather than DrawingML
     /// rich text (§21.2.2.6 CT_Title → §21.2.2.198 CT_Tx). The cached `<c:v>`
     /// is the authored title and must win over the single-series auto title.
@@ -9551,24 +9827,25 @@ mod tests {
               <c:size val="6"/>
               <c:spPr>
                 <a:solidFill><a:srgbClr val="ff0000"/></a:solidFill>
-                <a:ln><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></a:ln>
+                <a:ln w="25400"><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></a:ln>
               </c:spPr>
             </c:marker>"#
         );
         let d = root_of(&xml);
-        let (symbol, size, fill, line) =
+        let (symbol, size, fill, line, line_width_emu) =
             parse_marker_block(Some(d.root_element()), &FixtureResolver);
         assert_eq!(symbol.as_deref(), Some("circle"));
         assert_eq!(size, Some(6.0));
         assert_eq!(fill.as_deref(), Some("FF0000"));
         assert_eq!(line.as_deref(), Some("4472C4"));
+        assert_eq!(line_width_emu, Some(25400));
     }
 
     #[test]
     fn parse_marker_block_none_node_returns_all_none() {
         assert_eq!(
             parse_marker_block(None, &FixtureResolver),
-            (None, None, None, None)
+            (None, None, None, None, None)
         );
     }
 
@@ -9576,12 +9853,13 @@ mod tests {
     fn parse_marker_block_symbol_none_no_sppr() {
         let xml = format!(r#"<c:marker xmlns:c="{C_NS}"><c:symbol val="none"/></c:marker>"#);
         let d = root_of(&xml);
-        let (symbol, size, fill, line) =
+        let (symbol, size, fill, line, line_width_emu) =
             parse_marker_block(Some(d.root_element()), &FixtureResolver);
         assert_eq!(symbol.as_deref(), Some("none"));
         assert_eq!(size, None);
         assert_eq!(fill, None);
         assert_eq!(line, None);
+        assert_eq!(line_width_emu, None);
     }
 
     #[test]
@@ -9593,9 +9871,11 @@ mod tests {
             </c:marker>"#
         );
         let d = root_of(&xml);
-        let (_, _, fill, line) = parse_marker_block(Some(d.root_element()), &FixtureResolver);
+        let (_, _, fill, line, line_width_emu) =
+            parse_marker_block(Some(d.root_element()), &FixtureResolver);
         assert_eq!(fill.as_deref(), Some("00000000"));
         assert_eq!(line.as_deref(), Some("777777"));
+        assert_eq!(line_width_emu, None);
     }
 
     #[test]
@@ -9744,11 +10024,11 @@ mod tests {
               <c:dLbls>
                 <c:dLbl>
                   <c:idx val="13"/>
-                  <c:tx><c:rich><a:p><a:r>
-                    <a:rPr sz="1100" b="1"><a:solidFill><a:srgbClr val="EC008B"/></a:solidFill></a:rPr>
-                    <a:t>Idaho</a:t>
-                  </a:r></a:p></c:rich></c:tx>
-                  <c:txPr><a:p><a:pPr><a:defRPr sz="900"><a:solidFill><a:srgbClr val="333333"/></a:solidFill></a:defRPr></a:pPr></a:p></c:txPr>
+                  <c:tx><c:rich><a:p><a:pPr><a:defRPr sz="800" b="1"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:defRPr></a:pPr>
+                    <a:r><a:rPr sz="1200"><a:solidFill><a:srgbClr val="EC008B"/></a:solidFill></a:rPr><a:t>Employer</a:t></a:r>
+                    <a:r><a:rPr sz="1100" b="0"/><a:t> 36.0%</a:t></a:r>
+                  </a:p></c:rich></c:tx>
+                  <c:txPr><a:p><a:pPr><a:defRPr sz="900" b="0"><a:solidFill><a:srgbClr val="333333"/></a:solidFill><a:latin typeface="Tx Face"/></a:defRPr></a:pPr></a:p></c:txPr>
                 </c:dLbl>
               </c:dLbls>
             </c:ser>"#
@@ -9756,10 +10036,72 @@ mod tests {
         let d = root_of(&xml);
         let (_, overrides) = parse_series_data_labels(d.root_element(), &FixtureResolver, &cache);
         let label = &overrides[0];
-        assert_eq!(label.text, "Idaho");
+        assert_eq!(label.text, "Employer 36.0%");
         assert_eq!(label.font_color.as_deref(), Some("EC008B"));
-        assert_eq!(label.font_size_hpt, Some(1100));
+        assert_eq!(label.font_size_hpt, Some(1200));
         assert_eq!(label.font_bold, Some(true));
+        let runs = label.rich_runs.as_ref().expect("rich runs");
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "Employer");
+        assert_eq!(runs[0].font_size_hpt, Some(1200));
+        assert_eq!(runs[0].bold, Some(true));
+        assert_eq!(runs[0].color.as_deref(), Some("EC008B"));
+        assert_eq!(runs[0].font_face.as_deref(), Some("Tx Face"));
+        assert_eq!(runs[1].text, " 36.0%");
+        assert_eq!(runs[1].font_size_hpt, Some(1100));
+        assert_eq!(runs[1].bold, Some(false));
+        assert_eq!(runs[1].color.as_deref(), Some("445566"));
+        assert_eq!(runs[1].font_face.as_deref(), Some("Tx Face"));
+    }
+
+    #[test]
+    fn parse_series_data_labels_bounds_rich_runs_by_scalars_and_paragraphs() {
+        let cache = std::collections::HashMap::new();
+        let paragraph_text = "x".repeat(1100);
+        let paragraphs = (0..5)
+            .map(|_| format!("<a:p><a:r><a:t>{paragraph_text}</a:t></a:r></a:p>"))
+            .collect::<String>();
+        let xml = format!(
+            r#"<c:ser xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:dLbls><c:dLbl>
+              <c:idx val="0"/><c:tx><c:rich>{paragraphs}</c:rich></c:tx>
+            </c:dLbl></c:dLbls></c:ser>"#
+        );
+        let document = root_of(&xml);
+        let (_, overrides) =
+            parse_series_data_labels(document.root_element(), &FixtureResolver, &cache);
+        let label = &overrides[0];
+        let runs = label.rich_runs.as_ref().expect("bounded rich runs");
+        let text = runs.iter().map(|run| run.text.as_str()).collect::<String>();
+        assert_eq!(text, label.text);
+        assert!(text.chars().count() <= MAX_DATA_LABEL_RICH_SCALARS);
+        assert!(text.split('\n').count() <= MAX_DATA_LABEL_RICH_LINES);
+    }
+
+    #[test]
+    fn parse_data_label_rich_run_size_obeys_st_text_font_size_and_cascades() {
+        let cache = std::collections::HashMap::new();
+        for (direct, fallback, expected) in [
+            ("99", "1200", 1200),
+            ("100", "1200", 100),
+            ("400000", "1200", 400_000),
+            ("400001", "1200", 1200),
+        ] {
+            let xml = format!(
+                r#"<c:ser xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:dLbls><c:dLbl>
+                  <c:idx val="0"/><c:tx><c:rich><a:p><a:pPr><a:defRPr sz="{fallback}"/></a:pPr>
+                    <a:r><a:rPr sz="{direct}"/><a:t>Label</a:t></a:r>
+                  </a:p></c:rich></c:tx>
+                </c:dLbl></c:dLbls></c:ser>"#
+            );
+            let document = root_of(&xml);
+            let (_, overrides) =
+                parse_series_data_labels(document.root_element(), &FixtureResolver, &cache);
+            assert_eq!(
+                overrides[0].rich_runs.as_ref().unwrap()[0].font_size_hpt,
+                Some(expected),
+                "direct size {direct}",
+            );
+        }
     }
 
     // ── CT_Boolean bare-element defaults (issue #806) ───────────────────────
@@ -10298,19 +10640,19 @@ mod tests {
               <cx:chart><cx:plotArea>
                 <cx:plotAreaRegion><cx:series layoutId="waterfall"/></cx:plotAreaRegion>
                 <cx:axis id="0"><cx:catScaling/><cx:title><cx:tx><cx:rich>
-                  <a:bodyPr/><a:p><a:r><a:t>Category</a:t></a:r></a:p>
+                  <a:bodyPr/><a:p><a:r><a:rPr i="1"/><a:t>Category</a:t></a:r></a:p>
                 </cx:rich></cx:tx></cx:title></cx:axis>
                 <cx:axis id="1"><cx:valScaling/><cx:title><cx:tx><cx:rich>
-                  <a:bodyPr/><a:p><a:pPr><a:defRPr><a:solidFill><a:srgbClr val="778899"/></a:solidFill></a:defRPr></a:pPr><a:r><a:rPr sz="1200" b="0"><a:latin typeface="Inline Val"/></a:rPr><a:t>Value</a:t></a:r></a:p>
-                </cx:rich></cx:tx></cx:title></cx:axis>
+                  <a:bodyPr/><a:p><a:pPr><a:defRPr><a:solidFill><a:srgbClr val="778899"/></a:solidFill></a:defRPr></a:pPr><a:r><a:rPr sz="1200" b="0" i="1"><a:latin typeface="Inline Val"/></a:rPr><a:t>Value</a:t></a:r></a:p>
+                </cx:rich></cx:tx></cx:title><cx:txPr><a:p><a:pPr><a:defRPr sz="900" i="1"><a:latin typeface="Inline Tick Val"/></a:defRPr></a:pPr></a:p></cx:txPr></cx:axis>
               </cx:plotArea></cx:chart>
             </cx:chartSpace>"#
         );
         let style = format!(
             r#"<cs:chartStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}">
-              <cs:axisTitle><cs:defRPr sz="1000" b="1"><a:solidFill><a:srgbClr val="445566"/></a:solidFill><a:latin typeface="Style Axis"/></cs:defRPr></cs:axisTitle>
-              <cs:categoryAxis><cs:defRPr sz="700" b="0"><a:latin typeface="Tick Cat"/></cs:defRPr></cs:categoryAxis>
-              <cs:valueAxis><cs:defRPr sz="800" b="0"><a:latin typeface="Tick Val"/></cs:defRPr></cs:valueAxis>
+              <cs:axisTitle><cs:defRPr sz="1000" b="1" i="0"><a:solidFill><a:srgbClr val="445566"/></a:solidFill><a:latin typeface="Style Axis"/></cs:defRPr></cs:axisTitle>
+              <cs:categoryAxis><cs:defRPr sz="700" b="0" i="0"><a:latin typeface="Tick Cat"/></cs:defRPr></cs:categoryAxis>
+              <cs:valueAxis><cs:defRPr sz="800" b="0" i="0"><a:latin typeface="Tick Val"/></cs:defRPr></cs:valueAxis>
             </cs:chartStyle>"#
         );
         let document = chart_space_of(&xml);
@@ -10319,6 +10661,7 @@ mod tests {
 
         assert_eq!(model.cat_axis_title_font_size_hpt, Some(1000));
         assert_eq!(model.cat_axis_title_font_bold, Some(true));
+        assert_eq!(model.cat_axis_title_font_italic, Some(true));
         assert_eq!(model.cat_axis_title_font_color.as_deref(), Some("445566"));
         assert_eq!(
             model.cat_axis_title_font_face.as_deref(),
@@ -10327,14 +10670,21 @@ mod tests {
         // Inline run and default-run properties win independently over style.
         assert_eq!(model.val_axis_title_font_size_hpt, Some(1200));
         assert_eq!(model.val_axis_title_font_bold, Some(false));
+        assert_eq!(model.val_axis_title_font_italic, Some(true));
         assert_eq!(model.val_axis_title_font_color.as_deref(), Some("778899"));
         assert_eq!(
             model.val_axis_title_font_face.as_deref(),
             Some("Inline Val")
         );
         // Axis tick labels retain their separate category/value style roles.
+        // Unlike axis titles, Excel treats those role properties as the
+        // effective tick-label recipe; axis-local txPr only fills properties
+        // the linked role leaves unspecified.
         assert_eq!(model.cat_axis_font_size_hpt, Some(700));
+        assert_eq!(model.cat_axis_font_italic, Some(false));
         assert_eq!(model.val_axis_font_size_hpt, Some(800));
+        assert_eq!(model.val_axis_font_italic, Some(false));
+        assert_eq!(model.val_axis_font_face.as_deref(), Some("Tick Val"));
     }
 
     #[test]
@@ -10446,6 +10796,7 @@ mod tests {
             r#"<cs:chartStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}">
               <cs:dataPoint><cs:spPr><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></cs:spPr></cs:dataPoint>
               <cs:dataPointLine><cs:spPr><a:ln w="28575" cap="rnd"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="dash"/><a:round/></a:ln></cs:spPr></cs:dataPointLine>
+              <cs:seriesLine><cs:spPr><a:ln w="38100"><a:solidFill><a:schemeClr val="accent2"/></a:solidFill></a:ln></cs:spPr></cs:seriesLine>
               <cs:dataPointMarker><cs:spPr><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:ln w="9525"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill></a:ln></cs:spPr></cs:dataPointMarker>
             </cs:chartStyle>"#
         );
@@ -10484,6 +10835,12 @@ mod tests {
         assert_eq!(line.line_cap.as_deref(), Some("rnd"));
         assert_eq!(line.line_dash.as_deref(), Some("dash"));
         assert_eq!(line.line_join.as_deref(), Some("round"));
+        let series_line = model.chartex_series_line_style.expect("seriesLine role");
+        assert_eq!(series_line.line_width_emu, Some(38100));
+        assert_eq!(
+            series_line.line_colors,
+            Some(vec![Some("ED7D31".to_string()); 4])
+        );
         let marker = model.chartex_data_point_marker_style.expect("marker role");
         assert_eq!(marker.line_width_emu, Some(9525));
         assert_eq!(
@@ -11477,9 +11834,9 @@ mod tests {
         assert_eq!(m.val_axis_title_font_face.as_deref(), Some("Calibri"));
         assert_eq!(m.val_axis_format_code.as_deref(), Some("0.0"));
         assert_eq!(m.val_axis_major_gridlines, Some(true));
-        // The associated chartStyle's valueAxis entry supplies the effective
-        // ChartEx tick-label defaults. Its 9pt/gray properties therefore win
-        // over the otherwise-fallback axis txPr (12pt/112233).
+        // ChartEx tick-label appearance is supplied by the associated Chart
+        // Style valueAxis role. The axis-local txPr remains the fallback for a
+        // property the role does not provide.
         assert_eq!(m.val_axis_font_size_hpt, Some(900));
         assert_eq!(m.val_axis_font_bold, Some(false));
         assert_eq!(m.val_axis_font_color.as_deref(), Some("595959"));
@@ -12254,6 +12611,84 @@ mod tests {
         )
         .expect("explicit false showNegBubbles parses");
         assert_eq!(disabled_chart.show_negative_bubbles, Some(false));
+    }
+
+    /// Office varies a lone bubble series by point when `<c:varyColors>` is
+    /// omitted, just as it does for a lone bar series.  An authored false value
+    /// remains authoritative and keeps the series fill for every bubble.
+    #[test]
+    fn parse_chart_part_bubble_vary_colors_defaults_on_and_honors_false() {
+        let ser = r#"<c:ser><c:idx val="0"/><c:order val="0"/>
+            <c:xVal><c:numLit><c:ptCount val="3"/>
+              <c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt>
+            </c:numLit></c:xVal>
+            <c:yVal><c:numLit><c:ptCount val="3"/>
+              <c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt>
+            </c:numLit></c:yVal>
+            <c:bubbleSize><c:numLit><c:ptCount val="3"/>
+              <c:pt idx="0"><c:v>100</c:v></c:pt><c:pt idx="1"><c:v>400</c:v></c:pt><c:pt idx="2"><c:v>900</c:v></c:pt>
+            </c:numLit></c:bubbleSize>
+          </c:ser>"#;
+        let default_xml = chart_space_with_group(&format!("<c:bubbleChart>{ser}</c:bubbleChart>"));
+        let default_doc = chart_space_of(&default_xml);
+        let default_chart = parse_chart_part(default_doc.root_element(), &AccentResolver)
+            .expect("bubble chart parses");
+        let colors = default_chart.series[0]
+            .data_point_colors
+            .as_ref()
+            .expect("default point palette");
+        assert_eq!(colors[0].as_deref(), Some("4472C4"));
+        assert_eq!(colors[1].as_deref(), Some("ED7D31"));
+        assert_eq!(colors[2].as_deref(), Some("A5A5A5"));
+
+        let off_xml = chart_space_with_group(&format!(
+            "<c:bubbleChart><c:varyColors val=\"0\"/>{ser}</c:bubbleChart>"
+        ));
+        let off_doc = chart_space_of(&off_xml);
+        let off_chart =
+            parse_chart_part(off_doc.root_element(), &AccentResolver).expect("bubble chart parses");
+        assert!(off_chart.series[0].data_point_colors.is_none());
+
+        let point_formats = r#"<c:dPt><c:idx val="1"/><c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr></c:dPt>
+            <c:dPt><c:idx val="2"/><c:spPr><a:noFill/></c:spPr></c:dPt>"#;
+        let no_fill_ser = ser.replace(
+            "<c:xVal>",
+            &format!(r#"<c:spPr><a:noFill/></c:spPr>{point_formats}<c:xVal>"#),
+        );
+        let no_fill_xml = chart_space_with_group(&format!(
+            "<c:bubbleChart><c:varyColors/>{no_fill_ser}</c:bubbleChart>"
+        ));
+        let no_fill_doc = chart_space_of(&no_fill_xml);
+        let no_fill_chart = parse_chart_part(no_fill_doc.root_element(), &AccentResolver)
+            .expect("noFill bubble parses");
+        assert_eq!(no_fill_chart.series[0].color.as_deref(), Some("00000000"));
+        assert_eq!(
+            no_fill_chart.series[0].data_point_colors,
+            Some(vec![
+                None,
+                Some("FF0000".to_string()),
+                Some("00000000".to_string())
+            ]),
+        );
+
+        let solid_ser = ser.replace(
+            "<c:xVal>",
+            &format!(r#"<c:spPr><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></c:spPr>{point_formats}<c:xVal>"#),
+        );
+        let solid_xml = chart_space_with_group(&format!(
+            "<c:bubbleChart><c:varyColors/>{solid_ser}</c:bubbleChart>"
+        ));
+        let solid_doc = chart_space_of(&solid_xml);
+        let solid_chart = parse_chart_part(solid_doc.root_element(), &AccentResolver)
+            .expect("solid bubble parses");
+        assert_eq!(
+            solid_chart.series[0].data_point_colors,
+            Some(vec![
+                Some("4472C4".to_string()),
+                Some("FF0000".to_string()),
+                Some("00000000".to_string()),
+            ]),
+        );
     }
 
     #[test]

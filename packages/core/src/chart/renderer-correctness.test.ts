@@ -13,7 +13,10 @@ import { renderChart } from './renderer.js';
 import { formatChartValWithCode } from './chart-number-format.js';
 
 interface RectCall { x: number; y: number; w: number; h: number; fs: string }
-interface StrokeRectCall { x: number; y: number; w: number; h: number; ss: string; lw: number }
+interface StrokeRectCall {
+  x: number; y: number; w: number; h: number; ss: string; lw: number;
+  dash: number[]; cap: string; join: string;
+}
 interface TextCall {
   text: string;
   x: number;
@@ -33,17 +36,23 @@ interface Recorded {
   clips: Array<{ x: number; y: number; w: number; h: number }>;
   gradients: Array<{ args: number[]; stops: Array<{ position: number; color: string }> }>;
   arcs: Array<{ x: number; y: number; r: number }>;
+  paintEvents: Array<
+    | { kind: 'stroke'; strokeStyle: string }
+    | { kind: 'text'; text: string }
+  >;
 }
 
 /** Minimal recording 2D context: captures fillRect + fillText, tracks the
  *  handful of state props the renderer reads, and models text width. */
-function recordingCtx(): Recorded {
+function recordingCtx(measureOverride?: (text: string, fontPx: number) => number | null): Recorded {
   const rects: RectCall[] = [];
   const strokeRects: StrokeRectCall[] = [];
   const texts: TextCall[] = [];
   const clips: Array<{ x: number; y: number; w: number; h: number }> = [];
   const gradients: Recorded['gradients'] = [];
   const arcs: Recorded['arcs'] = [];
+  const paintEvents: Recorded['paintEvents'] = [];
+  let dash: number[] = [];
   let pathRect: { x: number; y: number; w: number; h: number } | null = null;
   const state: Record<string, unknown> = {
     font: '10px sans-serif',
@@ -62,6 +71,8 @@ function recordingCtx(): Recorded {
   };
   const textWidth = (text: string): number => {
     const px = fontPx(String(state.font));
+    const overridden = measureOverride?.(String(text), px);
+    if (overridden != null) return overridden;
     let w = 0;
     for (const ch of String(text)) w += ch.charCodeAt(0) > 0x2e7f ? px : px * 0.6;
     return w;
@@ -76,7 +87,8 @@ function recordingCtx(): Recorded {
           return (x: number, y: number, w: number, h: number) =>
             rects.push({ x, y, w, h, fs: String(state.fillStyle) });
         case 'fillText':
-          return (text: string, x: number, y: number) =>
+          return (text: string, x: number, y: number) => {
+            paintEvents.push({ kind: 'text', text: String(text) });
             texts.push({
               text,
               x,
@@ -87,9 +99,13 @@ function recordingCtx(): Recorded {
               width: textWidth(text),
               fillStyle: String(state.fillStyle),
             });
+          };
         case 'strokeRect':
           return (x: number, y: number, w: number, h: number) =>
-            strokeRects.push({ x, y, w, h, ss: String(state.strokeStyle), lw: Number(state.lineWidth) });
+            strokeRects.push({
+              x, y, w, h, ss: String(state.strokeStyle), lw: Number(state.lineWidth),
+              dash: [...dash], cap: String(state.lineCap), join: String(state.lineJoin),
+            });
         case 'createLinearGradient':
         case 'createRadialGradient':
           return (...args: number[]) => {
@@ -110,9 +126,16 @@ function recordingCtx(): Recorded {
         case 'arc':
           return (x: number, y: number, r: number) => { arcs.push({ x, y, r }); };
         case 'save': case 'restore': case 'closePath':
-        case 'fill': case 'stroke': case 'moveTo': case 'lineTo':
+        case 'stroke':
+          return () => paintEvents.push({ kind: 'stroke', strokeStyle: String(state.strokeStyle) });
+        case 'fill': case 'moveTo': case 'lineTo':
         case 'bezierCurveTo': case 'quadraticCurveTo':
-        case 'clearRect': case 'strokeText': case 'setLineDash':
+          return () => undefined;
+        case 'setLineDash':
+          return (value: number[] = []) => { dash = [...value]; };
+        case 'getLineDash':
+          return () => [...dash];
+        case 'clearRect': case 'strokeText':
         case 'translate': case 'rotate': case 'scale':
         case 'setTransform': case 'resetTransform': case 'getTransform':
           return () => undefined;
@@ -130,6 +153,7 @@ function recordingCtx(): Recorded {
     clips,
     gradients,
     arcs,
+    paintEvents,
   };
 }
 
@@ -356,6 +380,59 @@ describe('bar chart authored layout and fills', () => {
     expect(rec.strokeRects.filter(rect => rect.ss === '#595959' && rect.lw === 1)).toHaveLength(2);
   });
 
+  it('keeps a filled legend key at the Office-observed 7pt square and preserves its outline', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A'],
+      series: [series({
+        name: 'Outlined',
+        color: 'FF00FF',
+        values: [1],
+        lineColor: '000000',
+        lineWidthEmu: 12700,
+      })],
+      showLegend: true,
+      legendPos: 'r',
+      legendFontSizeHpt: 1500,
+    }), RECT, 1);
+
+    const key = rec.rects.find(rect =>
+      rect.fs === '#FF00FF' && Math.abs(rect.w - rect.h) < 0.01 && rect.w < 10
+    );
+    expect(key).toMatchObject({ w: 7, h: 7 });
+    expect(rec.strokeRects.some(rect =>
+      rect.ss === '#000000'
+      && rect.lw === 1
+      && Math.abs(rect.w - 6) < 0.01
+      && Math.abs(rect.h - 6) < 0.01
+    )).toBe(true);
+  });
+
+  it('keeps a short top-legend label intact at fractional display metrics', () => {
+    // Aptos Narrow at 13.3333px produces this fractional width in Chromium.
+    // Adding a 7pt key and then subtracting it again loses one ULP; without a
+    // bounded measurement epsilon that false overflow turns `disp` into `di…`.
+    const rec = recordingCtx((text, fontPx) => {
+      if (Math.abs(fontPx - 13.3333) > 0.001) return null;
+      if (text === 'disp') return 24.453475952148438;
+      if (text === 'di…') return 23.704971313476562;
+      if (text === 'dis…') return 30.369964599609375;
+      return null;
+    });
+    renderChart(rec.ctx, baseModel({
+      chartType: 'funnel',
+      title: 'Sales Funnel',
+      categories: ['1', '2', '3', '4', '5'],
+      series: [series({ name: 'disp', values: [3, 3, 2, 4, 5] })],
+      showLegend: true,
+      legendPos: 't',
+    }), { x: 0, y: 0, w: 457.2, h: 292.608 }, 4 / 3);
+
+    expect(rec.texts.some(text => text.text === 'disp')).toBe(true);
+    expect(rec.texts.some(text => text.text.includes('…'))).toBe(false);
+  });
+
   it('wraps a measured top legend into centered in-bounds rows without changing authored text style', () => {
     const names = Array.from({ length: 12 }, (_, index) =>
       `Series ${String(index + 1).padStart(2, '0')} alpha`
@@ -398,10 +475,10 @@ describe('bar chart authored layout and fills', () => {
       showLegend: true,
       legendPos: 't',
       legendFontSizeHpt: 1000,
-    }), { x: 0, y: 0, w: 106, h: 200 }, 1);
+    }), { x: 0, y: 0, w: 96, h: 200 }, 1);
 
-    // At this width the two entries fit inside w - 4 but not the actual
-    // w - 8 content rectangle, so both rows must be reserved and painted.
+    // The fixed 7pt keys leave the pair wider than the actual w - 8 content
+    // rectangle, so both rows must be reserved and painted from the same plan.
     const labels = rec.texts.filter(text => text.text === 'AAAAA' || text.text === 'BBBBB');
     expect(labels.map(label => label.text)).toEqual(['AAAAA', 'BBBBB']);
     expect(labels[1].y).toBeGreaterThan(labels[0].y);
@@ -562,6 +639,92 @@ describe('bar chart authored layout and fills', () => {
     expect(left?.x).toBeLessThan(right?.x ?? 0);
   });
 
+  it('maps a bar/scatter overlay through its independent authored X/Y axes', () => {
+    const rec = recordingCtx();
+    const axis = {
+      title: null,
+      hidden: true,
+      lineHidden: true,
+      majorTickMark: 'none',
+      minorTickMark: 'in',
+    } as const;
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBarH',
+      categories: ['A', 'B'],
+      series: [
+        series({ seriesType: 'bar', values: [0, 0] }),
+        series({
+          seriesType: 'scatter', categories: ['0.5', '1.5'], values: [2, 8],
+          markerSymbol: 'circle', markerFill: '1696D2', showMarker: true,
+        }),
+      ],
+      secondaryCatAxis: {
+        ...axis, min: 0, max: 2, majorUnit: 0.25, minorUnit: 0.05,
+      },
+      secondaryValAxis: {
+        ...axis, min: 0, max: 10, majorUnit: 2, minorUnit: 0.5,
+      },
+    }), RECT, 1);
+
+    const points = rec.arcs.filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+    expect(points).toHaveLength(2);
+    expect(points[0].x).toBeLessThan(points[1].x);
+    expect(points[0].y).toBeGreaterThan(points[1].y);
+  });
+
+  it.each(['clusteredBar', 'clusteredBarH'] as const)(
+    '%s: custom rich bar labels paint bounded inline runs with theme faces',
+    chartType => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType,
+        categories: ['A'],
+        themeMajorFontLatin: 'Major Theme',
+        themeMinorFontLatin: 'Minor Theme',
+        series: [series({
+          values: [10],
+          dataLabelOverrides: [{
+            idx: 0,
+            text: 'Major Minor',
+            position: 'ctr',
+            richRuns: [
+              { text: 'Major', fontFace: '+mj-lt', color: '112233' },
+              { text: ' Minor', fontFace: '+mn-lt', color: '445566' },
+            ],
+          }],
+        })],
+      }), RECT, 1);
+
+      expect(rec.texts.find(call => call.text === 'Major'))
+        .toMatchObject({ fillStyle: '#112233' });
+      expect(rec.texts.find(call => call.text === 'Major')?.font)
+        .toContain('"Major Theme"');
+      expect(rec.texts.find(call => call.text === ' Minor'))
+        .toMatchObject({ fillStyle: '#445566' });
+      expect(rec.texts.find(call => call.text === ' Minor')?.font)
+        .toContain('"Minor Theme"');
+    },
+  );
+
+  it('bar: richRuns do not replace a label composed from show/format flags', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'stackedBarPct',
+      categories: ['A'],
+      series: [series({
+        values: [1],
+        seriesDataLabels: {
+          showVal: false, showCatName: false, showSerName: false, showPercent: true,
+          formatCode: '0.0%',
+        },
+        dataLabelOverrides: [{ idx: 0, text: '', richRuns: [{ text: 'stale custom' }] }],
+      })],
+    }), RECT, 1);
+
+    expect(rec.texts.map(call => call.text)).toContain('100.0%');
+    expect(rec.texts.map(call => call.text)).not.toContain('stale custom');
+  });
+
   it('measures the automatic horizontal category-label gutter instead of eliding long labels', () => {
     const rec = recordingCtx();
     const category = 'San Francisco County, California';
@@ -701,7 +864,7 @@ describe('CH1 — negative bar/column values extend from the zero line', () => {
     const bars = rec.rects;
     expect(bars).toHaveLength(2);
     const totalLength = bars[0].w + bars[1].w;
-    expect(totalLength).toBeCloseTo(RECT.w * 0.8 * (97 / 150), 4);
+    expect(totalLength).toBeCloseTo(RECT.w * 0.8 * (97 / 120), 4);
   });
 
   it('positive-only data keeps the axis anchored at 0 (pre-fix behavior)', () => {
@@ -1667,7 +1830,7 @@ describe('CH3 — labels are locale-independent (§18.8.30)', () => {
     expect(rec.texts.some(text => text.text === 'costs')).toBe(true);
   });
 
-  it('uses the ChartEx dataPointLine role for waterfall connectors', () => {
+  it('uses the ChartEx seriesLine role for waterfall connectors', () => {
     const rec = segRecordingCtx();
     renderChart(rec.ctx, baseModel({
       chartType: 'waterfall',
@@ -1675,11 +1838,87 @@ describe('CH3 — labels are locale-independent (§18.8.30)', () => {
       series: [series({ name: 'W', values: [10, -2, 8] })],
       subtotalIndices: [2],
       chartexDataPointStyle: { lineColors: ['C00000'] },
-      chartexDataPointLineStyle: { lineColors: ['0070C0'], lineWidthEmu: 25400 },
+      chartexDataPointLineStyle: { lineColors: ['70AD47'], lineWidthEmu: 12700 },
+      chartexSeriesLineStyle: { lineColors: ['0070C0'], lineWidthEmu: 25400 },
     }), RECT, 1);
     const connectors = rec.segs.filter(segment => segment.ss.toLowerCase() === '#0070c0');
     expect(connectors).toHaveLength(2);
     expect(connectors.every(segment => segment.lw === 2)).toBe(true);
+  });
+
+  it('uses the linked seriesLine color and 0.75pt width for waterfall connectors', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'waterfall',
+      categories: ['Start', 'Change', 'End'],
+      series: [series({ name: 'W', values: [10, -2, 8] })],
+      subtotalIndices: [2],
+      chartexSeriesLineStyle: {
+        lineColors: ['D9D9D9'],
+        lineWidthEmu: 9525,
+        lineCap: 'flat',
+        lineJoin: 'round',
+      },
+    }), RECT, 1);
+
+    const connectors = rec.segs.filter(segment => segment.ss.toLowerCase() === '#d9d9d9');
+    expect(connectors).toHaveLength(2);
+    expect(connectors.every(segment => segment.lw === 0.75)).toBe(true);
+  });
+
+  it('keeps a direct Waterfall connector stroke authoritative over linked NoStyle', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'waterfall',
+      categories: ['Start', 'Change', 'End'],
+      series: [series({
+        name: 'W', values: [10, -2, 8],
+        chartexStyle: {
+          lineColors: ['123456'], lineWidthEmu: 25400,
+          lineDash: 'dash', lineCap: 'rnd', lineJoin: 'bevel',
+        },
+      })],
+      subtotalIndices: [2],
+      chartexSeriesLineStyle: { lineHidden: true, lineNoStyle: true },
+    }), RECT, 1);
+
+    const connectors = rec.strokes.filter(segment => segment.ss.toLowerCase() === '#123456');
+    expect(connectors).toHaveLength(2);
+    expect(connectors.every(segment =>
+      segment.lw === 2 && segment.dash.length > 0
+      && segment.cap === 'round' && segment.join === 'bevel'
+    )).toBe(true);
+  });
+
+  it('keeps direct Waterfall connector noFill authoritative over a linked stroke', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'waterfall',
+      categories: ['Start', 'Change', 'End'],
+      series: [series({
+        name: 'W', values: [10, -2, 8],
+        chartexStyle: { lineHidden: true, lineWidthEmu: 25400, lineDash: 'dash' },
+      })],
+      subtotalIndices: [2],
+      chartexSeriesLineStyle: { lineColors: ['0070C0'], lineWidthEmu: 12700 },
+    }), RECT, 1);
+
+    expect(rec.segs.filter(segment => segment.ss.toLowerCase() === '#0070c0'))
+      .toHaveLength(0);
+  });
+
+  it('uses the Office-observed semantic connector stroke for linked NoStyle', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'waterfall',
+      categories: ['1', '2', '3'],
+      series: [series({ name: 'W', values: [1, 1, 1] })],
+      chartexSeriesLineStyle: { lineHidden: true, lineNoStyle: true },
+    }), RECT, 1);
+
+    const connectors = rec.segs.filter(segment => segment.ss.toLowerCase() === '#000000');
+    expect(connectors).toHaveLength(2);
+    expect(connectors.every(segment => segment.lw === 0.75)).toBe(true);
   });
 
   it('keeps semantic data-point fills when the ChartEx series shape has noFill', () => {
@@ -1709,9 +1948,54 @@ describe('CH3 — labels are locale-independent (§18.8.30)', () => {
       series: [series({ name: 'W', values: [10, -2, 8] })],
       subtotalIndices: [2],
       chartexConnectorLines: false,
-      chartexDataPointLineStyle: { lineColors: ['0070C0'], lineWidthEmu: 25400 },
+      chartexSeriesLineStyle: { lineColors: ['0070C0'], lineWidthEmu: 25400 },
     }), RECT, 1);
     expect(rec.segs.filter(segment => segment.ss.toLowerCase() === '#0070c0')).toHaveLength(0);
+  });
+
+  it('does not invent waterfall value labels when no data-label definition exists', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'waterfall',
+      categories: ['Start', 'Change', 'End'],
+      series: [series({ name: 'W', values: [10, -2, 8] })],
+      subtotalIndices: [2],
+      valAxisHidden: true,
+      catAxisHidden: true,
+    }), RECT, 1);
+
+    expect(rec.texts.map(text => text.text)).not.toEqual(
+      expect.arrayContaining(['10', '-2', '8']),
+    );
+  });
+
+  it('omits automatic value-axis labels for an all-increase bridge without totals', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'waterfall',
+      categories: ['A', 'B', 'C'],
+      series: [series({ values: [10, 20, 30] })],
+      subtotalIndices: [],
+      valAxisMajorGridlines: true,
+      valAxisGridlineColor: 'D9D9D9',
+      valAxisLineColor: '000000',
+    }), RECT, 1);
+
+    expect(rec.texts.map(text => text.text)).toEqual(['A', 'B', 'C']);
+    expect(rec.segs.some(segment =>
+      segment.ss.toLowerCase() === '#d9d9d9'
+      && Math.abs(segment.y1 - segment.y0) < 0.01
+      && Math.abs(segment.x1 - segment.x0) > 100
+    )).toBe(true);
+    const gridline = rec.segs.find(segment =>
+      Math.abs(segment.y1 - segment.y0) < 0.01
+      && Math.abs(segment.x1 - segment.x0) > 100
+      && segment.ss.toLowerCase() === '#d9d9d9'
+      && segment.y0 > RECT.y
+    );
+    // Office keeps a visible axis rule off the chart-object edge even when its
+    // implicit numeric labels are suppressed for this Waterfall layout.
+    expect(gridline?.x0).toBeGreaterThanOrEqual(RECT.w * 0.03 - 0.01);
   });
 
   it('draws authored waterfall minor ticks', () => {
@@ -1897,6 +2181,22 @@ describe('ChartEx flat layouts dispatch to semantic renderers', () => {
     expect(rec.rects).toHaveLength(2);
   });
 
+  it('keeps dense one- and two-digit category labels on one line across fallback font metrics', () => {
+    const categories = Array.from({ length: 29 }, (_, index) => String(index + 1));
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredColumn',
+      categories,
+      catAxisFontSizeHpt: 1000,
+      series: [series({ name: 'cyl', values: categories.map(() => 6) })],
+    }), { x: 0, y: 0, w: 494, h: 288 }, 4 / 3);
+
+    const categoryTexts = rec.texts
+      .filter(text => text.baseline === 'top')
+      .map(text => text.text);
+    expect(categoryTexts).toEqual(expect.arrayContaining(categories));
+  });
+
   it('rejects histogram input beyond the ChartEx cache ceiling', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
@@ -2039,6 +2339,19 @@ describe('ChartEx flat layouts dispatch to semantic renderers', () => {
     )).toBe(true);
   });
 
+  it('uses the ordinary linear value axis for a standalone Pareto line', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'paretoLine',
+      categories: [],
+      series: [series({ values: [5, 3, 2] })],
+    }), { x: 0, y: 0, w: 371, h: 198 }, 1);
+
+    const texts = rec.texts.map(text => text.text);
+    expect(texts).toEqual(expect.arrayContaining(['0', '0.2', '0.4', '0.6', '0.8', '1', '1.2']));
+    expect(texts.some(text => text.includes('%'))).toBe(false);
+  });
+
   it('renders owner-backed Pareto bars in sorted source identity order with a 0-100% line axis', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
@@ -2075,6 +2388,54 @@ describe('ChartEx flat layouts dispatch to semantic renderers', () => {
     }), RECT, 1);
     expect(rec.texts.map(text => text.text)).toContain('(too many data points)');
     expect(rec.rects).toHaveLength(0);
+  });
+
+  it('standalone Pareto line resolves direct and linked ChartEx strokes', () => {
+    const model = (
+      direct: ChartSeries['chartexStyle'],
+      linked: ChartModel['chartexDataPointLineStyle'],
+    ) => baseModel({
+      chartType: 'paretoLine',
+      categories: ['A', 'B', 'C'],
+      chartexDataPointLineStyle: linked,
+      series: [series({ values: [3, 2, 1], chartexStyle: direct })],
+    });
+    const cumulativeStroke = (rec: ReturnType<typeof strokedPolylineCtx>) =>
+      rec.strokes.find(stroke => stroke.points.some((point, index) =>
+        index > 0
+        && point.x !== stroke.points[index - 1].x
+        && point.y !== stroke.points[index - 1].y
+      ));
+
+    const direct = strokedPolylineCtx();
+    renderChart(direct.ctx, model(
+      {
+        lineColors: ['123456'], lineWidthEmu: 25400, lineDash: 'dash',
+        lineCap: 'rnd', lineJoin: 'bevel',
+      },
+      { lineColors: ['AA0000'], lineWidthEmu: 12700 },
+    ), RECT, 1);
+    expect(cumulativeStroke(direct)).toMatchObject({
+      ss: '#123456', lw: 2, cap: 'round', join: 'bevel',
+    });
+    expect(cumulativeStroke(direct)?.dash.length).toBeGreaterThan(0);
+
+    const linkedNoFill = strokedPolylineCtx();
+    renderChart(linkedNoFill.ctx, model(null, { lineHidden: true }), RECT, 1);
+    expect(cumulativeStroke(linkedNoFill)).toBeUndefined();
+
+    const directNoFill = strokedPolylineCtx();
+    renderChart(
+      directNoFill.ctx,
+      model({ lineHidden: true }, { lineHidden: true, lineNoStyle: true }),
+      RECT,
+      1,
+    );
+    expect(cumulativeStroke(directNoFill)).toBeUndefined();
+
+    const linkedNoStyle = strokedPolylineCtx();
+    renderChart(linkedNoStyle.ctx, model(null, { lineHidden: true, lineNoStyle: true }), RECT, 1);
+    expect(cumulativeStroke(linkedNoStyle)).toBeDefined();
   });
 
   it('honors direct Pareto cumulative-line width/color and noFill', () => {
@@ -2271,6 +2632,120 @@ describe('ChartEx flat layouts dispatch to semantic renderers', () => {
       .map(text => text.text)
       .filter(text => ['Increase', 'Decrease', 'Total'].includes(text));
     expect(semanticLabels).toEqual(['Increase', 'Decrease', 'Total']);
+  });
+
+  const chartExLegendModel = (
+    chartType: string,
+    localStyle: ChartSeries['chartexStyle'],
+    linkedStyle: ChartModel['chartexDataPointStyle'] = {
+      lineColors: ['AA0000'], lineWidthEmu: 12700,
+    },
+  ): ChartModel => {
+    const owner = series({
+      name: 'Authored', values: [3, 2, 1], chartexStyle: localStyle,
+    });
+    const common = {
+      showLegend: true,
+      legendPos: 'r' as const,
+      chartexDataPointStyle: linkedStyle,
+    };
+    switch (chartType) {
+      case 'histogram':
+        return baseModel({
+          ...common, chartType, series: [owner], chartexHistogramBinning: { binCount: 2 },
+        });
+      case 'waterfall':
+        return baseModel({
+          ...common, chartType, categories: ['A', 'B', 'C'], series: [owner], subtotalIndices: [2],
+        });
+      case 'funnel':
+        return baseModel({
+          ...common, chartType, categories: ['A', 'B', 'C'], series: [owner],
+        });
+      case 'boxWhisker':
+        return baseModel({
+          ...common,
+          chartType,
+          series: [series({ name: 'Authored', values: [] })],
+          chartexBox: {
+            categories: ['A'],
+            series: [{
+              name: 'Authored', color: '4472C4', chartexStyle: localStyle,
+              valuesByCategory: [[1, 2, 3]], meanMarker: false, meanLine: false,
+              showOutliers: false, showNonoutliers: false, quartileMethod: 'inclusive',
+            }],
+          },
+        });
+      case 'sunburst':
+        return baseModel({
+          ...common,
+          chartType,
+          series: [owner],
+          chartexSunburst: { rows: [{ path: ['Branch', 'Leaf'], size: 3 }] },
+        });
+      case 'treemap':
+        return baseModel({
+          ...common,
+          chartType,
+          series: [owner],
+          chartexTreemap: {
+            parentLabelLayout: 'none', rows: [{ path: ['Branch', 'Leaf'], size: 3 }],
+          },
+        });
+      default:
+        return baseModel({
+          ...common, chartType: 'clusteredColumn', categories: ['A'], series: [owner],
+        });
+    }
+  };
+
+  it.each([
+    'clusteredColumn', 'histogram', 'waterfall', 'funnel',
+    'boxWhisker', 'sunburst', 'treemap',
+  ])('%s legend uses the same direct ChartEx outline as its plotted mark', chartType => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, chartExLegendModel(chartType, {
+      lineColors: ['123456'], lineWidthEmu: 25400, lineDash: 'dash',
+      lineCap: 'rnd', lineJoin: 'bevel',
+    }), RECT, 1);
+
+    const keys = rec.strokeRects.filter(rect => rect.w <= 7 && rect.h <= 7);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.every(rect =>
+      rect.ss.toLowerCase() === '#123456'
+      && rect.lw === 2
+      && rect.dash.length > 0
+      && rect.cap === 'round'
+      && rect.join === 'bevel'
+    )).toBe(true);
+  });
+
+  it.each([
+    'clusteredColumn', 'histogram', 'waterfall', 'funnel',
+    'boxWhisker', 'sunburst', 'treemap',
+  ])('%s legend keeps a direct ChartEx outline noFill authoritative', chartType => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, chartExLegendModel(chartType, { lineHidden: true }), RECT, 1);
+    expect(rec.strokeRects.filter(rect => rect.w <= 7 && rect.h <= 7)).toHaveLength(0);
+  });
+
+  it.each([
+    ['clusteredColumn', false],
+    ['histogram', false],
+    ['waterfall', false],
+    ['funnel', false],
+    ['boxWhisker', true],
+    ['sunburst', false],
+    ['treemap', true],
+  ] as const)('%s legend preserves its semantic rule for linked NoStyle: %s', (chartType, expected) => {
+    const rec = recordingCtx();
+    renderChart(
+      rec.ctx,
+      chartExLegendModel(chartType, null, { lineHidden: true, lineNoStyle: true }),
+      RECT,
+      1,
+    );
+    expect(rec.strokeRects.some(rect => rect.w <= 7 && rect.h <= 7)).toBe(expected);
   });
 });
 
@@ -2541,7 +3016,7 @@ describe('CH7 — line/area series honor a secondary value axis (§21.2.2.*)', (
 // smooth (`<c:ser><c:smooth>`), and honors the chartSpace `dispBlanksAs` value
 // when deciding how null cells break/span/zero the plotted line.
 
-interface ArcCall { x: number; y: number; r: number }
+interface ArcCall { x: number; y: number; r: number; fillStyle: string }
 interface FillRectCall { x: number; y: number; w: number; h: number }
 
 /** Recording context that captures the primitives markers / smooth / error
@@ -2602,7 +3077,10 @@ function markerRecordingCtx(): {
         case 'lineTo':
           return (x: number, y: number) => push(x, y);
         case 'arc':
-          return (x: number, y: number, rad: number) => { arcs.push({ x, y, r: rad }); push(x, y); };
+          return (x: number, y: number, rad: number) => {
+            arcs.push({ x, y, r: rad, fillStyle: String(state.fillStyle) });
+            push(x, y);
+          };
         case 'fillRect':
           return (x: number, y: number, w: number, h: number) => fillRects.push({ x, y, w, h });
         case 'fill':
@@ -2677,6 +3155,63 @@ describe('CH9 — line/area consume marker detail (§21.2.2.32)', () => {
       expect(markerArcs.length).toBe(3);
     });
   }
+
+  it('uses the authored marker-outline width independently from marker size', () => {
+    const rec = ringRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      catAxisHidden: true,
+      valAxisHidden: true,
+      series: [series({
+        values: [3, 5],
+        showMarker: true,
+        markerSymbol: 'circle',
+        markerSize: 7,
+        markerFill: 'FFFFFF',
+        markerLine: '1696D2',
+        markerLineWidthEmu: 25400,
+        lineColor: '1696D2',
+        lineWidthEmu: 25400,
+      })],
+    }), RECT, 1);
+
+    const blueStrokes = rec.strokes.filter(stroke =>
+      stroke.strokeStyle.toLowerCase() === '#1696d2'
+    );
+    // The series path and both marker outlines share the authored 2pt stroke.
+    expect(blueStrokes.length).toBe(3);
+    expect(blueStrokes.every(stroke => stroke.lineWidth === 2)).toBe(true);
+  });
+
+  it('does not revive a noFill series line in the legend from its width or dash', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      showLegend: true,
+      legendPos: 'r',
+      catAxisHidden: true,
+      valAxisHidden: true,
+      catAxisLineHidden: true,
+      valAxisLineHidden: true,
+      series: [series({
+        name: 'Hidden stroke',
+        values: [3, 5],
+        lineHidden: true,
+        lineWidthEmu: 25400,
+        chartexStyle: {
+          lineHidden: true,
+          lineWidthEmu: 25400,
+          lineDash: 'dash',
+          lineCap: 'rnd',
+          lineJoin: 'bevel',
+        },
+      })],
+    }), RECT, 1);
+
+    expect(rec.strokes).toHaveLength(0);
+  });
 });
 
 describe('CH9 — stacked-area markers/labels sit on the fill\'s band top (§21.2.2.32)', () => {
@@ -2831,6 +3366,67 @@ describe('CH9 — scatter axis crossing and tick-label position (§21.2.2.207)',
 });
 
 describe('CH9 — bubble scale and numeric-X trendlines', () => {
+  it('uses the parsed per-point palette for a single bubble series', () => {
+    const rec = markerRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble',
+      categories: ['1', '2', '3'],
+      series: [series({
+        values: [1, 2, 3],
+        bubbleSizes: [100, 400, 900],
+        dataPointColors: ['4472C4', 'ED7D31', 'A5A5A5'],
+      })],
+      catAxisMin: 0,
+      catAxisMax: 4,
+      valMin: 0,
+      valMax: 4,
+    }), RECT, 1);
+
+    expect(rec.arcs.map(arc => arc.fillStyle)).toEqual(['#4472C4', '#ED7D31', '#A5A5A5']);
+  });
+
+  it('keeps series noFill over varyColors while point formatting stays more specific', () => {
+    const rec = markerRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble',
+      categories: ['1', '2', '3'],
+      series: [series({
+        name: 'Hidden fill',
+        color: '00000000',
+        values: [1, 2, 3],
+        bubbleSizes: [100, 400, 900],
+        dataPointColors: [null, 'FF0000', '00000000'],
+      })],
+      showLegend: true,
+      legendPos: 'r',
+      catAxisMin: 0,
+      catAxisMax: 4,
+      valMin: 0,
+      valMax: 4,
+    }), RECT, 1);
+
+    expect(rec.arcs.slice(0, 3).map(arc => arc.fillStyle))
+      .toEqual(['#00000000', '#FF0000', '#00000000']);
+    // The one-series legend key uses the same authored transparent series fill;
+    // varyColors does not silently revive it with a theme accent.
+    expect(rec.arcs.at(-1)?.fillStyle).toBe('#00000000');
+  });
+
+  it('uses one automatic numeric-axis density for equal X and Y bubble ranges', () => {
+    const rec = markerRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble',
+      categories: ['1', '2', '3'],
+      series: [series({ values: [1, 2, 3], bubbleSizes: [100, 400, 900] })],
+    }), { x: 0, y: 0, w: 600, h: 360 }, 1);
+
+    // Both automatic numeric axes use 0..3.5 at 0.5 intervals. Previously the
+    // horizontal axis ended at 3.5 while the vertical axis independently chose
+    // 0..4, despite having the same source range.
+    expect(rec.texts.filter(text => text.text === '3.5')).toHaveLength(2);
+    expect(rec.texts.some(text => text.text === '4')).toBe(false);
+  });
+
   it('applies bubbleScale to the default maximum bubble diameter', () => {
     const render = (bubbleScale: number) => {
       const rec = markerRecordingCtx();
@@ -3240,6 +3836,267 @@ describe('CH11 — line/area/scatter data labels honor <c:dLblPos> (§21.2.2.48)
     const lbl = valLabel(rec);
     expect(lbl.align).toBe('center');  // 't' wins over series 'r'
     expect(lbl.baseline).toBe('bottom');
+  });
+
+  it('line: endpoint labels stay outside the plot and clear authored markers', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['Start', 'End'],
+      catAxisCrossBetween: 'midCat',
+      plotAreaManualLayout: {
+        layoutTarget: 'inner', xMode: 'edge', yMode: 'edge',
+        x: 0.2, y: 0.2, w: 0.6, h: 0.6,
+      },
+      series: [series({
+        name: 'Slope', values: [40, 60], showMarker: true,
+        markerSymbol: 'circle', markerSize: 7,
+        dataLabelOverrides: [
+          { idx: 0, text: 'Left endpoint', position: 'l', fontSizeHpt: 1200 },
+          { idx: 1, text: 'Right endpoint', position: 'r', fontSizeHpt: 1200 },
+        ],
+      })],
+    }), RECT, 1);
+
+    const markers = rec.arcs.filter(arc => Math.abs(arc.r - 3.5) < 1e-6);
+    expect(markers).toHaveLength(2);
+    const left = rec.texts.find(call => call.text === 'Left endpoint');
+    const right = rec.texts.find(call => call.text === 'Right endpoint');
+    expect(left).toBeDefined();
+    expect(right).toBeDefined();
+    // fillText x is the text's right edge for `l`, left edge for `r`.
+    // Office separates each label from the marker center by marker radius +
+    // half an em: 3.5pt + 6pt at the authored 12pt label size.
+    expect(left?.x).toBeCloseTo(markers[0].x - 9.5, 4);
+    expect(right?.x).toBeCloseTo(markers[1].x + 9.5, 4);
+    expect(left?.x).toBeLessThan(RECT.w * 0.2);
+    expect(right?.x).toBeGreaterThan(RECT.w * 0.8);
+  });
+
+  it('line: custom rich label runs stay inline with per-run size and weight', () => {
+    const rich = recordingCtx();
+    const model = baseModel({
+      chartType: 'line',
+      categories: ['Start'],
+      series: [series({
+        name: 'Employer', values: [36], showMarker: true,
+        markerSymbol: 'circle', markerSize: 7,
+        dataLabelOverrides: [{
+          idx: 0,
+          text: 'Employer 36.0%',
+          position: 'l',
+          fontColor: '111111',
+          fontSizeHpt: 1200,
+          fontBold: true,
+          richRuns: [
+            {
+              text: 'Employer', fontSizeHpt: 1200, bold: true,
+              color: '1696D2', fontFace: 'Lato',
+            },
+            { text: ' 36.0%', fontSizeHpt: 1100, bold: false, color: '333333' },
+          ],
+        }],
+      })],
+    });
+    renderChart(rich.ctx, model, RECT, 1);
+
+    const employer = rich.texts.find(text => text.text === 'Employer');
+    const value = rich.texts.find(text => text.text === ' 36.0%');
+    expect(employer).toMatchObject({ fillStyle: '#1696D2', align: 'left', baseline: 'middle' });
+    expect(value).toMatchObject({ fillStyle: '#333333', align: 'left', baseline: 'middle' });
+    expect(employer?.font).toContain('bold 12px "Lato"');
+    expect(value?.font).toContain('11px sans-serif');
+    expect(value?.font).not.toContain('bold ');
+    expect(value?.x).toBeCloseTo((employer?.x ?? 0) + (employer?.width ?? 0), 6);
+
+    // The rich line is measured as one object. Its final right edge stays at
+    // the exact point-label anchor used by the established flattened path.
+    const plain = recordingCtx();
+    const plainModel = structuredClone(model);
+    delete plainModel.series[0].dataLabelOverrides?.[0].richRuns;
+    renderChart(plain.ctx, plainModel, RECT, 1);
+    const flattened = plain.texts.find(text => text.text === 'Employer 36.0%');
+    expect((value?.x ?? 0) + (value?.width ?? 0)).toBeCloseTo(flattened?.x ?? 0, 6);
+  });
+
+  it('line: custom rich labels are bounded to 4096 scalars and four lines', () => {
+    const paragraph = 'x'.repeat(1100);
+    const text = Array.from({ length: 5 }, () => paragraph).join('\n');
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A'],
+      series: [series({
+        values: [1],
+        dataLabelOverrides: [{
+          idx: 0, text, position: 'ctr',
+          richRuns: [{ text, fontSizeHpt: 1000 }],
+        }],
+      })],
+    }), RECT, 1);
+
+    const painted = rec.texts.filter(call => /^x+$/.test(call.text));
+    expect(painted).toHaveLength(4);
+    expect(painted.reduce((count, call) => count + Array.from(call.text).length, 0))
+      .toBeLessThanOrEqual(4096);
+  });
+
+  it('line: bounds a public rich label before whole-string normalization', () => {
+    const guarded = new String('x'.repeat(5000));
+    Object.defineProperty(guarded, 'replace', {
+      value: () => { throw new Error('must not normalize the unbounded source'); },
+    });
+    const rec = recordingCtx();
+    expect(() => renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A'],
+      series: [series({
+        values: [1],
+        dataLabelOverrides: [{
+          idx: 0, text: 'bounded', position: 'ctr',
+          richRuns: [{ text: guarded as unknown as string, fontSizeHpt: 1000 }],
+        }],
+      })],
+    }), RECT, 1)).not.toThrow();
+
+    expect(rec.texts.filter(call => /^x+$/.test(call.text)))
+      .toHaveLength(1);
+    expect(rec.texts.find(call => /^x+$/.test(call.text))?.text)
+      .toHaveLength(4096);
+  });
+
+  it('line: caps an adversarial public rich-run array before scanning empty runs', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A'],
+      series: [series({
+        values: [1],
+        dataLabelOverrides: [{
+          idx: 0, text: 'bounded', position: 'ctr',
+          richRuns: [
+            ...Array.from({ length: 4096 }, () => ({ text: '' })),
+            { text: 'must-not-be-scanned' },
+          ],
+        }],
+      })],
+    }), RECT, 1);
+
+    expect(rec.texts.map(call => call.text)).not.toContain('must-not-be-scanned');
+  });
+
+  it.each([
+    [99, '10px'],
+    [100, '1px'],
+    [400001, '10px'],
+  ] as const)('line: safely resolves public rich-run font size %i', (fontSizeHpt, expectedFont) => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A'],
+      series: [series({
+        values: [1],
+        dataLabelOverrides: [{
+          idx: 0, text: 'Safe', position: 'ctr', fontSizeHpt: 1000,
+          richRuns: [{ text: 'Safe', fontSizeHpt }],
+        }],
+      })],
+    }), RECT, 1);
+
+    expect(rec.texts.find(call => call.text === 'Safe')?.font).toContain(expectedFont);
+  });
+
+  it('line: accepts the ST_TextFontSize upper bound exactly', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A'],
+      series: [series({
+        values: [1],
+        dataLabelOverrides: [{
+          idx: 0, text: 'Huge', position: 'ctr', fontSizeHpt: 1000,
+          richRuns: [{ text: 'Huge', fontSizeHpt: 400000 }],
+        }],
+      })],
+    }), RECT, 1);
+
+    expect(rec.texts.find(call => call.text === 'Huge')?.font).toContain('4000px');
+  });
+
+  it('scatter: custom rich label runs use the shared bounded point-label path', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'scatter', categories: ['2'],
+      series: [series({
+        values: [3],
+        dataLabelOverrides: [{
+          idx: 0, text: 'A 3', position: 'r',
+          richRuns: [
+            { text: 'A', fontSizeHpt: 1200, bold: true },
+            { text: ' 3', fontSizeHpt: 1100, bold: false },
+          ],
+        }],
+      })],
+    }), RECT, 1);
+
+    expect(rec.texts.find(call => call.text === 'A')?.font).toContain('bold 12px');
+    expect(rec.texts.find(call => call.text === ' 3')?.font).toContain('11px');
+  });
+
+  it.each(['line', 'area', 'scatter'] as const)(
+    '%s: rich label run faces resolve major/minor theme references and concrete faces',
+    (chartType) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType,
+        categories: ['1'],
+        themeMajorFontLatin: 'Major Theme',
+        themeMinorFontLatin: 'Minor Theme',
+        dataLabelFontFace: '+mn-lt',
+        series: [series({
+          values: [1],
+          dataLabelOverrides: [{
+            idx: 0,
+            text: 'Major Minor Concrete',
+            position: 'ctr',
+            richRuns: [
+              { text: 'Major', fontFace: '+mj-lt' },
+              { text: ' Minor', fontFace: '+mn-lt' },
+              { text: ' Concrete', fontFace: 'Direct Face' },
+            ],
+          }],
+        })],
+      }), RECT, 1);
+
+      expect(rec.texts.find(call => call.text === 'Major')?.font)
+        .toContain('"Major Theme"');
+      expect(rec.texts.find(call => call.text === ' Minor')?.font)
+        .toContain('"Minor Theme"');
+      expect(rec.texts.find(call => call.text === ' Concrete')?.font)
+        .toContain('"Direct Face"');
+    },
+  );
+
+  it('line: all series geometry is painted before the chart-wide label layer', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      series: [
+        series({
+          name: 'Earlier', values: [40, 60], lineColor: 'FF0000',
+          dataLabelOverrides: [{ idx: 0, text: 'Earlier label', position: 'l' }],
+        }),
+        series({
+          name: 'Later', values: [60, 40], lineColor: '0000FF',
+          dataLabelOverrides: [{ idx: 0, text: 'Later label', position: 'l' }],
+        }),
+      ],
+    }), RECT, 1);
+
+    const blueSeriesStroke = rec.paintEvents.findIndex(
+      event => event.kind === 'stroke' && event.strokeStyle === '#0000FF',
+    );
+    const firstDataLabel = rec.paintEvents.findIndex(
+      event => event.kind === 'text' && event.text.endsWith('label'),
+    );
+    expect(blueSeriesStroke).toBeGreaterThanOrEqual(0);
+    expect(firstDataLabel).toBeGreaterThan(blueSeriesStroke);
   });
 
   it('area: the default position is ctr (centered on the point) per the areaChart group', () => {
@@ -3746,6 +4603,40 @@ describe('CH8 — pie / doughnut geometry', () => {
       .toBe(true);
   });
 
+  it.each(['pie', 'doughnut'] as const)(
+    '%s custom rich labels paint inline runs with theme-resolved faces',
+    chartType => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType,
+        categories: ['A'],
+        themeMajorFontLatin: 'Major Theme',
+        themeMinorFontLatin: 'Minor Theme',
+        series: [series({
+          values: [1],
+          dataLabelOverrides: [{
+            idx: 0,
+            text: 'Major Minor',
+            position: 'ctr',
+            richRuns: [
+              { text: 'Major', fontFace: '+mj-lt', color: '112233' },
+              { text: ' Minor', fontFace: '+mn-lt', color: '445566' },
+            ],
+          }],
+        })],
+      }), RECT, 1);
+
+      expect(rec.texts.find(call => call.text === 'Major'))
+        .toMatchObject({ fillStyle: '#112233' });
+      expect(rec.texts.find(call => call.text === 'Major')?.font)
+        .toContain('"Major Theme"');
+      expect(rec.texts.find(call => call.text === ' Minor'))
+        .toMatchObject({ fillStyle: '#445566' });
+      expect(rec.texts.find(call => call.text === ' Minor')?.font)
+        .toContain('"Minor Theme"');
+    },
+  );
+
   it('inside pie labels respect tiny-slice capacity', () => {
     const rec = ringRecordingCtx();
     renderChart(rec.ctx, pieModel({
@@ -3857,13 +4748,21 @@ interface SegRecorded { ctx: CanvasRenderingContext2D; segs: Seg[]; texts: TextC
 
 function strokedPolylineCtx(): {
   ctx: CanvasRenderingContext2D;
-  strokes: Array<{ points: Array<{ x: number; y: number }>; ss: string; lw: number }>;
+  strokes: Array<{
+    points: Array<{ x: number; y: number }>; ss: string; lw: number; dash: number[];
+    cap: string; join: string;
+  }>;
 } {
-  const strokes: Array<{ points: Array<{ x: number; y: number }>; ss: string; lw: number }> = [];
+  const strokes: Array<{
+    points: Array<{ x: number; y: number }>; ss: string; lw: number; dash: number[];
+    cap: string; join: string;
+  }> = [];
   let path: Array<{ x: number; y: number }> = [];
+  let dash: number[] = [];
   const state: Record<string, unknown> = {
     font: '10px sans-serif', fillStyle: '#000', strokeStyle: '#000', lineWidth: 1,
     textAlign: 'start', textBaseline: 'alphabetic', globalAlpha: 1,
+    lineCap: 'butt', lineJoin: 'miter',
   };
   const handler: ProxyHandler<Record<string, unknown>> = {
     get(_target, prop: string) {
@@ -3879,9 +4778,14 @@ function strokedPolylineCtx(): {
               points: path.map(point => ({ ...point })),
               ss: String(state.strokeStyle),
               lw: Number(state.lineWidth),
+              dash: [...dash],
+              cap: String(state.lineCap),
+              join: String(state.lineJoin),
             });
           }
         };
+        case 'setLineDash': return (value: number[]) => { dash = [...value]; };
+        case 'getLineDash': return () => [...dash];
         case 'createLinearGradient': case 'createRadialGradient':
           return () => ({ addColorStop() {} });
         default: return () => undefined;
@@ -4298,6 +5202,19 @@ describe('automatic linear-axis bounds reach the shared planner', () => {
   it('keeps an exact 1.2 positive line range offset and pins just above it to zero', () => {
     expect(Math.min(...numericLabels([10, 12]))).toBeGreaterThan(0);
     expect(numericLabels([10, 12.000_001])).toContain(0);
+  });
+
+  it('line charts use the shared explicit-span unit when vertical bounds omit majorUnit', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A', 'B'],
+      series: [series({ values: [0.5, 4.5] })],
+      valMin: 0, valMax: 5, valAxisMajorUnit: null,
+      valAxisMajorGridlines: false,
+    }), RECT, 1);
+    const numeric = rec.texts.map(item => Number(item.text)).filter(Number.isFinite);
+    expect(numeric).toContain(0.5);
+    expect(numeric).toContain(4.5);
   });
 
   it('area geometry uses an authored non-zero minimum', () => {
@@ -5194,6 +6111,38 @@ function pieCalloutModel(over: Partial<ChartModel> = {}): ChartModel {
 }
 
 describe('CH14 — pie callout data labels', () => {
+  it('paints a custom rich callout from the same measured inline block', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'pie',
+      categories: ['Only'],
+      themeMajorFontLatin: 'Major Theme',
+      themeMinorFontLatin: 'Minor Theme',
+      series: [series({
+        values: [1],
+        dataLabelOverrides: [{
+          idx: 0,
+          text: 'Rich Callout',
+          richRuns: [
+            { text: 'Rich', fontFace: '+mj-lt', color: '112233' },
+            { text: ' Callout', fontFace: '+mn-lt', color: '445566' },
+          ],
+          manualLayout: { xMode: 'edge', yMode: 'edge', x: 0.25, y: 0.25, w: 0.2, h: 0.1 },
+          labelBox: { fill: 'ABCDEF', borderColor: '123456' },
+        }],
+      })],
+    }), RECT, 1);
+
+    expect(rec.rects.some(box => box.fs === '#ABCDEF' && box.w === 128 && box.h === 36))
+      .toBe(true);
+    expect(rec.texts.find(call => call.text === 'Rich'))
+      .toMatchObject({ fillStyle: '#112233' });
+    expect(rec.texts.find(call => call.text === 'Rich')?.font)
+      .toContain('"Major Theme"');
+    expect(rec.texts.find(call => call.text === ' Callout'))
+      .toMatchObject({ fillStyle: '#445566' });
+  });
+
   it('enters rich pie label layout for a per-point label without series defaults', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
@@ -5620,6 +6569,93 @@ describe('CH15 — chartEx box-and-whisker', () => {
     });
   }
 
+  it('preserves the authored box-series outline on the filled legend key', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, boxModel({
+      showLegend: true,
+      legendPos: 'r',
+      legendFontSizeHpt: 1500,
+      chartexBox: {
+        categories: ['6'],
+        series: [{
+          name: 'Super Duper MPG',
+          color: 'FF00FF',
+          lineColor: '000000',
+          lineWidthEmu: 12700,
+          valuesByCategory: [[10, 20, 30]],
+          meanMarker: true,
+          meanLine: false,
+          showOutliers: true,
+          showNonoutliers: false,
+          quartileMethod: 'exclusive',
+        }],
+      },
+    }), RECT, 1);
+
+    const key = rec.rects.find(rect =>
+      rect.fs === '#FF00FF' && Math.abs(rect.w - 7) < 0.01 && Math.abs(rect.h - 7) < 0.01
+    );
+    expect(key).toBeDefined();
+    expect(rec.strokeRects.some(rect =>
+      rect.ss === '#000000'
+      && rect.lw === 1
+      && Math.abs(rect.w - 6) < 0.01
+      && Math.abs(rect.h - 6) < 0.01
+    )).toBe(true);
+  });
+
+  it('wraps a long side-legend series name into the measured two-line band', () => {
+    // Approximate a narrow Office theme face: the first two words fit the
+    // bounded side column while the complete quoted name does not.
+    const rec = recordingCtx((text, fontPx) => Array.from(text).length * fontPx * 0.48);
+    renderChart(rec.ctx, boxModel({
+      showLegend: true,
+      legendPos: 'r',
+      legendFontSizeHpt: 1500,
+      chartexBox: {
+        categories: ['6'],
+        series: [{
+          name: '"Super Duper MPG"',
+          color: 'FF00FF',
+          valuesByCategory: [[10, 20, 30]],
+          meanMarker: true,
+          meanLine: false,
+          showOutliers: true,
+          showNonoutliers: false,
+          quartileMethod: 'exclusive',
+        }],
+      },
+    }), { x: 0, y: 0, w: 494, h: 288 }, 4 / 3);
+
+    const legendText = rec.texts
+      .filter(text => text.text.includes('Super') || text.text.includes('MPG'))
+      .map(text => text.text);
+    expect(legendText).toEqual(['"Super Duper', 'MPG"']);
+    expect(legendText.some(text => text.includes('…'))).toBe(false);
+  });
+
+  it('keeps Chart Style NoStyle distinct from an explicit noFill on the box legend key', () => {
+    const noStyle = recordingCtx();
+    renderChart(noStyle.ctx, boxModel({
+      showLegend: true,
+      legendPos: 'r',
+      chartexDataPointStyle: { lineHidden: true, lineNoStyle: true },
+    }), RECT, 1);
+    expect(noStyle.strokeRects.some(rect =>
+      Math.abs(rect.w - 6) < 0.01 && Math.abs(rect.h - 6) < 0.01
+    )).toBe(true);
+
+    const explicitNoFill = recordingCtx();
+    renderChart(explicitNoFill.ctx, boxModel({
+      showLegend: true,
+      legendPos: 'r',
+      chartexDataPointStyle: { lineHidden: true },
+    }), RECT, 1);
+    expect(explicitNoFill.strokeRects.some(rect =>
+      Math.abs(rect.w - 6) < 0.01 && Math.abs(rect.h - 6) < 0.01
+    )).toBe(false);
+  });
+
   it('labels the value axis with Excel nice-rounded gridline values including a negative bound', () => {
     const rec = markerRecordingCtx();
     renderChart(rec.ctx, boxModel(), RECT, 1);
@@ -5631,6 +6667,39 @@ describe('CH15 — chartEx box-and-whisker', () => {
     expect(labels).toContain('0');
     expect(labels.some(l => l.startsWith('-'))).toBe(true);
     expect(labels.some(l => Number(l) >= 130)).toBe(true);
+  });
+
+  it.each([
+    { name: 'wide range', values: [10, 466], rect: { x: 0, y: 0, w: 371, h: 216 }, step: 50, max: 500 },
+    { name: 'ordinary range', values: [0, 27], rect: { x: 0, y: 0, w: 530, h: 396 }, step: 5, max: 30 },
+    { name: 'fence boundary', values: [0, 12.0001], rect: { x: 0, y: 0, w: 530, h: 396 }, step: 2, max: 14 },
+  ])('uses the compact Office-observed automatic box axis for $name', ({ values, rect, step, max }) => {
+    const rec = markerRecordingCtx();
+    const model = boxModel({
+      title: null,
+      chartexBox: {
+        categories: ['A'],
+        series: [{
+          name: 'S1',
+          color: 'ED7D31',
+          valuesByCategory: [values],
+          meanMarker: false,
+          meanLine: false,
+          showOutliers: false,
+          showNonoutliers: false,
+          quartileMethod: 'exclusive',
+        }],
+      },
+    });
+    renderChart(rec.ctx, model, rect, 1);
+
+    const ticks = rec.texts
+      .map(text => Number(text.text))
+      .filter(Number.isFinite)
+      .sort((left, right) => left - right);
+    expect(ticks[0]).toBe(0);
+    expect(ticks.at(-1)).toBe(max);
+    expect(ticks[1] - ticks[0]).toBeCloseTo(step, 8);
   });
 
   it('draws the authored value-axis title, rule, gridline style, and explicit 0.2 major unit', () => {
@@ -5668,6 +6737,20 @@ describe('CH15 — chartEx box-and-whisker', () => {
     ).length).toBeGreaterThanOrEqual(10);
   });
 
+  it('derives the omitted box-axis major unit from authored min/max bounds', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, boxModel({
+      valMin: 1,
+      valMax: 3,
+      valAxisMajorUnit: null,
+      valAxisFormatCode: '0.0',
+    }), RECT, 1);
+
+    expect(rec.texts.map(text => text.text)).toEqual(
+      expect.arrayContaining(['1.0', '1.2', '1.4', '1.6', '1.8', '2.0', '2.2', '2.4', '2.6', '2.8', '3.0']),
+    );
+  });
+
   it('uses the authored ChartEx value-axis font size for numeric tick labels', () => {
     const rec = ringRecordingCtx();
     renderChart(rec.ctx, boxModel({
@@ -5677,12 +6760,69 @@ describe('CH15 — chartEx box-and-whisker', () => {
       valAxisFormatCode: '0.0',
       valAxisFontSizeHpt: 900,
       valAxisFontFace: 'Calibri',
+      valAxisFontItalic: true,
+      valAxisTitle: 'Miles per Gallon',
+      valAxisTitleFontSizeHpt: 1200,
+      valAxisTitleFontBold: false,
+      valAxisTitleFontItalic: true,
     }), RECT, 1);
 
     const tick = rec.fontTexts.find(text => text.text === '1.0');
     expect(tick).toBeDefined();
     expect(tick?.font).toContain('9px');
     expect(tick?.font).toContain('Calibri');
+    expect(tick?.font).toContain('italic');
+    const title = rec.fontTexts.find(text => text.text === 'Miles per Gallon');
+    expect(title?.font).toContain('italic');
+    expect(title?.font).not.toContain('bold');
+  });
+
+  it('uses the authored category-axis rule and keeps both axis labels clear of cross ticks', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, boxModel({
+      valMin: 0,
+      valMax: 500,
+      valAxisMajorUnit: 50,
+      valAxisFormatCode: '0.0',
+      valAxisFontSizeHpt: 1200,
+      valAxisLineColor: '000000',
+      valAxisLineWidthEmu: 12700,
+      valAxisMajorTickMark: 'cross',
+      catAxisFontSizeHpt: 1000,
+      catAxisLineColor: '000000',
+      catAxisLineWidthEmu: 12700,
+      catAxisMajorTickMark: 'cross',
+    }), RECT, 1);
+
+    const horizontalAxis = rec.segs.find(segment =>
+      Math.abs(segment.y0 - segment.y1) < 0.5 &&
+      Math.abs(segment.x1 - segment.x0) > 100 &&
+      segment.ss.toLowerCase() === '#000000'
+    );
+    const verticalAxis = rec.segs.find(segment =>
+      Math.abs(segment.x0 - segment.x1) < 0.5 &&
+      Math.abs(segment.y1 - segment.y0) > 100 &&
+      segment.ss.toLowerCase() === '#000000'
+    );
+    expect(horizontalAxis).toBeDefined();
+    expect(verticalAxis).toBeDefined();
+    expect(horizontalAxis?.lw).toBe(1);
+
+    const categoryTicks = rec.segs.filter(segment =>
+      Math.abs(segment.x0 - segment.x1) < 0.5 &&
+      Math.abs(segment.y1 - segment.y0) >= 11.5 &&
+      Math.abs((segment.y0 + segment.y1) / 2 - (horizontalAxis?.y0 ?? 0)) < 0.5 &&
+      segment.ss.toLowerCase() === '#000000'
+    );
+    expect(categoryTicks.length).toBeGreaterThanOrEqual(1);
+
+    const categoryLabel = rec.texts.find(text => text.text === 'Category 1');
+    expect(categoryLabel).toBeDefined();
+    expect((categoryLabel?.y ?? 0) - (horizontalAxis?.y0 ?? 0)).toBeGreaterThanOrEqual(8);
+
+    const zeroLabel = rec.texts.find(text => text.text === '0.0');
+    expect(zeroLabel).toBeDefined();
+    expect((verticalAxis?.x0 ?? 0) - (zeroLabel?.x ?? 0)).toBeCloseTo(12);
   });
 
   it('places the value axis from measured tick-label width instead of a fixed chart-width gutter', () => {
@@ -5837,7 +6977,33 @@ describe('CH15 — chartEx box-and-whisker', () => {
     expect(count('cross') - count('none')).toBe(4);
   });
 
-  it('uses the Chart Style marker size in points for box sample dots', () => {
+  it('draws 6pt major ticks and shorter 4pt minor ticks', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, boxModel({
+      valMin: 3,
+      valMax: 23,
+      valAxisMajorUnit: 10,
+      valAxisMinorUnit: 4,
+      valAxisMajorGridlines: false,
+      valAxisMinorGridlines: false,
+      valAxisMajorTickMark: 'out',
+      valAxisMinorTickMark: 'out',
+      valAxisLineColor: 'FF00FF',
+      valAxisLineWidthEmu: 9525,
+    }), RECT, 2);
+
+    const tickLengths = rec.segs
+      .filter(segment =>
+        segment.ss.toLowerCase() === '#ff00ff'
+        && Math.abs(segment.y1 - segment.y0) < 0.01
+        && Math.abs(segment.x1 - segment.x0) <= 20
+      )
+      .map(segment => Math.abs(segment.x1 - segment.x0));
+    expect(tickLengths).toContain(12);
+    expect(tickLengths).toContain(8);
+  });
+
+  it('uses Excel box-and-whisker semantic sizes for sample dots and the mean marker', () => {
     const rec = markerRecordingCtx();
     renderChart(rec.ctx, boxModel({
       chartexMarkerSizePt: 6,
@@ -5845,14 +7011,28 @@ describe('CH15 — chartEx box-and-whisker', () => {
         categories: ['Category 1'],
         series: [{
           name: 'S1', color: 'ED7D31', valuesByCategory: [[1, 2, 3]],
-          meanMarker: false, meanLine: false, showOutliers: true, showNonoutliers: true,
+          meanMarker: true, meanLine: false, showOutliers: true, showNonoutliers: true,
           quartileMethod: 'exclusive',
         }],
       },
     }), RECT, 2);
 
     expect(rec.arcs).toHaveLength(3);
-    expect(rec.arcs.every(arc => arc.r === 6)).toBe(true);
+    // Office's vector output uses 3pt-diameter observation dots even though
+    // the linked Chart Style's generic marker layout says size=6 here.
+    expect(rec.arcs.every(arc => arc.r === 3)).toBe(true);
+    const meanCross = rec.segments.find(segment =>
+      segment.length === 4
+      && segment.every((point, index) => index === 0
+        || Math.abs(point.x - segment[0].x) > 0
+        || Math.abs(point.y - segment[0].y) > 0)
+    );
+    expect(meanCross).toBeDefined();
+    // The semantic mean marker is a fixed 6pt square (12px at 2px/pt).
+    expect(Math.abs((meanCross as Array<{ x: number; y: number }>)[1].x - (meanCross as Array<{ x: number; y: number }>)[0].x)).toBe(12);
+    expect(Math.abs((meanCross as Array<{ x: number; y: number }>)[1].y - (meanCross as Array<{ x: number; y: number }>)[0].y)).toBe(12);
+    expect(Math.abs((meanCross as Array<{ x: number; y: number }>)[3].x - (meanCross as Array<{ x: number; y: number }>)[2].x)).toBe(12);
+    expect(Math.abs((meanCross as Array<{ x: number; y: number }>)[3].y - (meanCross as Array<{ x: number; y: number }>)[2].y)).toBe(12);
   });
 
   it('uses the authored Chart Style marker symbol for box sample points', () => {
@@ -6408,6 +7588,29 @@ describe('CH15 — chartEx sunburst', () => {
     });
   }
 
+  it('rejects oversized hierarchy rows and paths before allocating the tree', () => {
+    for (const rows of [
+      Array.from({ length: 10_001 }, (_, index) => ({ path: [`N${index}`], size: 1 })),
+      [{ path: Array.from({ length: 10_001 }, (_, index) => `D${index}`), size: 1 }],
+      [{ path: Array.from({ length: 513 }, (_, index) => `D${index}`), size: 1 }],
+    ]) {
+      const rec = ringRecordingCtx();
+      expect(() => renderChart(rec.ctx, sunburstModel({ chartexSunburst: { rows } }), RECT, 1))
+        .not.toThrow();
+      expect(rec.fontTexts.map(text => text.text)).toContain('(too many data points)');
+      expect(rec.arcs).toEqual([]);
+    }
+  });
+
+  it('handles the bounded wide-tree limit without argument or recursion overflow', () => {
+    const rec = ringRecordingCtx();
+    const rows = Array.from({ length: 10_000 }, (_, index) => ({ path: [`N${index}`], size: 1 }));
+    expect(() => renderChart(rec.ctx, sunburstModel({ chartexSunburst: { rows } }), RECT, 1))
+      .not.toThrow();
+    expect(rec.fontTexts.map(text => text.text)).not.toContain('(too many data points)');
+    expect(rec.arcs.length).toBeGreaterThan(0);
+  });
+
   it('draws three concentric rings (Branch / Stem / Leaf) with distinct radii', () => {
     const rec = ringRecordingCtx();
     renderChart(rec.ctx, sunburstModel(), RECT, 1);
@@ -6655,6 +7858,20 @@ describe('CH15 — chartEx treemap', () => {
       },
     });
   }
+
+  it('atomically rejects a hierarchy whose total path segments exceed the paint cap', () => {
+    const rec = recordingCtx();
+    const model = treemapModel();
+    model.chartexTreemap = {
+      ...model.chartexTreemap,
+      rows: Array.from({ length: 5_001 }, (_, index) => ({
+        path: [`P${index}`, `L${index}`], size: 1,
+      })),
+    };
+    expect(() => renderChart(rec.ctx, model, RECT, 1)).not.toThrow();
+    expect(rec.texts.map(text => text.text)).toContain('(too many data points)');
+    expect(rec.rects).toEqual([]);
+  });
 
   it('draws nested branch and leaf rectangles instead of the unsupported-chart placeholder', () => {
     const rec = recordingCtx();
@@ -6912,6 +8129,106 @@ describe('CH15 — chartEx treemap', () => {
     const labels = rec.texts.map(text => text.text);
     expect(labels).toEqual(expect.arrayContaining(['Group A', 'Group B']));
     expect(labels).not.toEqual(expect.arrayContaining(['Subgroup A1', 'Subgroup B1']));
+  });
+
+  it('separates overlapping parent captions from authored inEnd leaves in a two-level treemap', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'treemap',
+      series: [series({
+        seriesDataLabels: {
+          showVal: false,
+          showCatName: true,
+          showSerName: false,
+          showPercent: false,
+          position: 'inEnd',
+          fontSizeHpt: 900,
+        },
+      })],
+      chartexTreemap: {
+        parentLabelLayout: 'overlapping',
+        rows: [
+          { path: ['Female', 'California'], size: 81_400 },
+          { path: ['Female', 'Indiana'], size: 62_000 },
+          { path: ['Female', 'Pennsylvania'], size: 59_900 },
+          { path: ['Male', 'California'], size: 97_500 },
+          { path: ['Male', 'Indiana'], size: 45_200 },
+          { path: ['Male', 'Pennsylvania'], size: 45_900 },
+        ],
+      },
+    }), RECT, 1);
+
+    const parents = rec.texts.filter(text => text.text === 'Female' || text.text === 'Male');
+    const leaves = rec.texts.filter(text =>
+      text.text === 'California' || text.text === 'Indiana' || text.text === 'Pennsylvania'
+    );
+    expect(parents).toHaveLength(2);
+    expect(leaves).toHaveLength(6);
+    expect(parents.every(text => text.align === 'left' && text.baseline === 'top')).toBe(true);
+    expect(leaves.every(text => text.align === 'left' && text.baseline === 'bottom')).toBe(true);
+    expect([...parents, ...leaves].every(text => text.font?.includes('9px '))).toBe(true);
+    // The top caption band and the lowest available leaf edge are disjoint;
+    // this locks the hierarchy-role split that prevents two labels occupying
+    // the same lower-left anchor.
+    expect(Math.max(...parents.map(text => text.y + 9)))
+      .toBeLessThanOrEqual(Math.min(...leaves.map(text => text.y - 9)));
+  });
+
+  it('maps a treemap outEnd value label to the Office-observed lower-left tile anchor', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'treemap',
+      series: [series({
+        seriesDataLabels: {
+          showVal: true,
+          showCatName: false,
+          showSerName: false,
+          showPercent: false,
+          position: 'outEnd',
+          fontSizeHpt: 1000,
+        },
+      })],
+      chartexTreemap: {
+        parentLabelLayout: 'none',
+        rows: [{ path: ['472'], size: 472 }],
+      },
+    }), RECT, 1);
+
+    const value = rec.texts.find(text => text.text === '472');
+    expect(value).toBeDefined();
+    expect(value).toMatchObject({ align: 'left', baseline: 'bottom' });
+    expect((value as TextCall).x).toBeLessThan(RECT.w / 4);
+    expect((value as TextCall).y).toBeGreaterThan(RECT.h * 0.7);
+  });
+
+  it('keeps an authored 10pt bold treemap leaf label at the DrawingML point-to-pixel size', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'treemap',
+      dataLabelFontFace: 'Aptos Narrow',
+      series: [series({
+        seriesDataLabels: {
+          showVal: true,
+          showCatName: false,
+          showSerName: false,
+          showPercent: false,
+          position: 'outEnd',
+          fontSizeHpt: 1000,
+          fontBold: true,
+        },
+      })],
+      chartexTreemap: {
+        parentLabelLayout: 'none',
+        rows: [{ path: ['42'], size: 42 }],
+      },
+    }), RECT, 4 / 3);
+
+    const label = rec.texts.find(text => text.text === '42');
+    expect(label).toBeDefined();
+    expect(label?.font).toContain('bold ');
+    expect(label?.font).toContain('"Aptos Narrow", Calibri, Arial, sans-serif');
+    const px = Number.parseFloat(/(\d+(?:\.\d+)?)px/.exec(label?.font ?? '')?.[1] ?? '0');
+    expect(px).toBeCloseTo(1000 / 100 * 4 / 3, 6);
   });
 
   it('uses the ChartEx data-point outline on the exact tile boundary', () => {
@@ -7356,9 +8673,9 @@ describe('CH — combo bar+line primary value axis spans BOTH the bars and the p
       ],
     }), RECT, 1);
     const axisMax = Math.max(...numericValLabels(rec));
-    // Bars alone: max category sum 150 → symmetric padding and the ceiling
-    // 1/2/5 ladder produce an axis top of 200.
-    expect(axisMax).toBe(200);
+    // Bars alone: max category sum 150 → the measured ten-interval policy
+    // chooses 20-unit steps and an axis top of 160.
+    expect(axisMax).toBe(160);
   });
 
   it('a negative primary-axis line pulls the axis minimum below the bars', () => {
