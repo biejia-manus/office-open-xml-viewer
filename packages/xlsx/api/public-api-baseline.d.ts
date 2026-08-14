@@ -197,6 +197,22 @@ export interface ChartDataPointOverride {
     markerLineWidthEmu?: number;
     explosion?: number;
 }
+export interface ChartDisplayUnits {
+    divisor: number;
+    builtInUnit?: string | null;
+    label?: ChartDisplayUnitsLabel | null;
+}
+export interface ChartDisplayUnitsLabel {
+    text?: string | null;
+    manualLayout?: ChartManualLayout | null;
+    fontSizeHpt?: number | null;
+    fontBold?: boolean | null;
+    fontItalic?: boolean | null;
+    fontColor?: string | null;
+    fontFace?: string | null;
+    rotation?: number | null;
+    boxStyle?: ChartLabelBox | null;
+}
 export interface ChartErrBars {
     dir: string;
     barType: string;
@@ -346,6 +362,8 @@ export interface ChartModel {
     subtotalIndices: number[];
     legendManualLayout?: LegendManualLayout | null;
     valAxisFormatCode?: string | null;
+    valAxisDisplayUnits?: ChartDisplayUnits | null;
+    catAxisDisplayUnits?: ChartDisplayUnits | null;
     barGapWidth?: number | null;
     barOverlap?: number | null;
     dataLabelPosition?: string | null;
@@ -562,6 +580,17 @@ export interface ChartTextRun {
     color?: string | null;
     fontFace?: string | null;
 }
+/** DrawingML paint authored on a 3-D chart surface (`floor`, `sideWall`, or
+ * `backWall`). Each surface is a real face of the shared projected scene, not
+ * a renderer decoration. */
+export interface ChartThreeDSurface {
+    fillColor?: string | null;
+    fillHidden?: boolean | null;
+    lineColor?: string | null;
+    lineWidthEmu?: number | null;
+    lineDash?: string | null;
+    lineHidden?: boolean | null;
+}
 export interface ChartThreeD {
     rotationX?: number | null;
     rotationY?: number | null;
@@ -571,6 +600,38 @@ export interface ChartThreeD {
     rightAngleAxes?: boolean | null;
     gapDepthPercent?: number | null;
     shape?: string | null;
+    /** `<c:bar3DChart><c:grouping val>` (§21.2.2.77). `standard` uses the
+     *  series/depth axis; `clustered` uses adjacent category-axis slots. */
+    barGrouping?: 'standard' | 'clustered' | 'stacked' | 'percentStacked' | string | null;
+    seriesAxis?: ChartThreeDSeriesAxis | null;
+    floor?: ChartThreeDSurface | null;
+    sideWall?: ChartThreeDSurface | null;
+    backWall?: ChartThreeDSurface | null;
+}
+export interface ChartThreeDSeriesAxis {
+    title?: string | null;
+    hidden: boolean;
+    orientation?: 'minMax' | 'maxMin' | string | null;
+    tickLabelPos?: string | null;
+    tickLabelSkip?: number | null;
+    tickMarkSkip?: number | null;
+    majorTickMark: string;
+    fontColor?: string | null;
+    fontSizeHpt?: number | null;
+    fontBold?: boolean | null;
+    fontItalic?: boolean | null;
+    fontFace?: string | null;
+    lineColor?: string | null;
+    lineWidthEmu?: number | null;
+    lineHidden: boolean;
+    titleFontSizeHpt?: number | null;
+    titleFontBold?: boolean | null;
+    titleFontItalic?: boolean | null;
+    titleFontColor?: string | null;
+    titleFontFace?: string | null;
+    titleRotation?: number | null;
+    titleVerticalMode?: ChartModel['catAxisTitleVerticalMode'];
+    titleManualLayout?: ChartManualLayout | null;
 }
 export interface ChartThreeDRenderer {
     render(ctx: CanvasRenderingContext2D, chart: ChartModel, rect: ChartRect, ptToPx: number): boolean;
@@ -588,8 +649,10 @@ export interface ChartTrendline {
     labelText?: string | null;
     labelFontSizeHpt?: number | null;
     labelFontBold?: boolean | null;
+    labelFontItalic?: boolean | null;
     labelFontColor?: string | null;
     labelFontFace?: string | null;
+    labelBox?: ChartLabelBox | null;
     labelTextAlign?: string | null;
     lineColor?: string | null;
     lineWidthEmu?: number | null;
@@ -1166,6 +1229,7 @@ export interface SecondaryValueAxis {
     title: string | null;
     hidden: boolean;
     formatCode?: string | null;
+    displayUnits?: ChartDisplayUnits | null;
     fontColor?: string | null;
     fontSizeHpt?: number | null;
     fontItalic?: boolean | null;
@@ -1189,6 +1253,8 @@ export interface SecondaryValueAxis {
     logBase?: number | null;
     orientation?: 'minMax' | 'maxMin' | string | null;
     tickLabelPos?: string | null;
+    tickLabelSkip?: number | null;
+    tickMarkSkip?: number | null;
     crosses?: string | null;
     crossesAt?: number | null;
     titleFontSizeHpt?: number | null;
