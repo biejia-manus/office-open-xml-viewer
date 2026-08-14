@@ -46,10 +46,6 @@ const cols = [
     </div>
   ))}
 </div>
-<p class="selection-guide">
-  Building “explain this”, “evaluate these cells”, or a similar read-only integration?
-  <a href="/selection-context">See how selection context works across all three formats →</a>
-</p>
 
 <style>
   .caps-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 0; margin-top: 48px; border-top: 1px solid var(--border-bright); }
@@ -85,8 +81,6 @@ const cols = [
     transition: opacity 0.15s;
   }
   .caps-link:hover { opacity: 0.75; }
-  .selection-guide { margin: 28px 0 0; color: var(--text-dim); font-size: 14px; }
-  .selection-guide a { color: var(--accent); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
   @media (max-width: 860px) {
     .caps-col { grid-column: span 12; border-right: 0; padding: 28px 0 !important; }
   }
