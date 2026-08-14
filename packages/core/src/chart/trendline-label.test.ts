@@ -29,6 +29,13 @@ describe('automatic trendline label placement', () => {
     })).toEqual({ x: 40, y: 60, w: 100, h: 30, automatic: false });
   });
 
+  it('follows a fitted-curve endpoint while remaining inside the plot', () => {
+    expect(placeTrendlineLabel(CHART, PLOT, 90, 30, 10, null, { x: 220, y: 180 }))
+      .toEqual({ x: 130, y: 145, w: 90, h: 30, automatic: true });
+    expect(placeTrendlineLabel(CHART, PLOT, 90, 30, 10, null, { x: 999, y: -10 }))
+      .toEqual({ x: 260, y: 40, w: 90, h: 30, automatic: true });
+  });
+
   it.each([
     { x: 10, y: 20, w: 600, h: 120 },
     { x: 10, y: 20, w: 120, h: 600 },
