@@ -79,7 +79,7 @@ pnpm add @silurus/ooxml
 > **Bundle size note**: the package is ESM-only (`.mjs`). npm's *Unpacked
 > Size* sums every entry bundle **and** the standalone MathJax + STIX Two Math
 > asset, so the reported figure is much larger than any single app build. For
-> v0.78.1, the complete npm package is approximately 12.0 MB unpacked (4.0 MB
+> v0.79.0, the complete npm package is approximately 13.0 MB unpacked (4.3 MB
 > as the downloaded tarball), while a format-specific application graph is
 > approximately:
 >
@@ -89,7 +89,7 @@ pnpm add @silurus/ooxml
 > | `@silurus/ooxml/xlsx` | 2.6 MB | 0.82 MB | XLSX renderer, parser WASM, and lazy worker |
 > | `@silurus/ooxml/pptx` | 2.5 MB | 0.78 MB | PPTX renderer, parser WASM, and lazy worker |
 > | `@silurus/ooxml/math` | 3.1 MB | 1.1 MB | Optional MathJax + STIX Two Math engine |
-> | `@silurus/ooxml/three-d` | 79 KB | 23 KB | Optional model-space 3-D chart mesh and camera |
+> | `@silurus/ooxml/three-d` | 81 KB | 23 KB | Optional model-space 3-D chart mesh and camera |
 > | `@silurus/ooxml/region-map` | 236 KB | 66 KB | Optional offline Region Map renderer and fixed country geometry |
 >
 > These are production-artifact estimates, not initial-load figures: each row
