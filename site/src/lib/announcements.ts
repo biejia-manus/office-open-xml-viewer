@@ -42,7 +42,7 @@ export const announcements: readonly Announcement[] = [
     version: 'v0.79.0',
     title: '3-D charts, Region Maps and chart fidelity in v0.79.0',
     summary: 'v0.79.0 adds opt-in 3-D and offline Region Map renderers while improving shared chart axes, labels, legends and modern chart families across DOCX, XLSX and PPTX.',
-    audience: 'Applications that display Office charts. Existing applications keep the 2-D fallback without source changes; import the optional add-ons only when authored 3-D charts or country-level Region Maps are required.',
+    audience: 'Applications that display Office charts. Existing applications keep the established chart fallback without source changes; import the optional add-ons only when authored 3-D charts or country-level Region Maps are required.',
     image: {
       src: '/announcements/chart-rendering-v079.webp',
       alt: 'A grid of eight synthetic chart renderings: 3-D columns, 3-D pie, an offline country Region Map, a combo chart with minor ticks, waterfall, treemap, bubble and box-and-whisker charts.',
@@ -56,7 +56,7 @@ export const announcements: readonly Announcement[] = [
         rationale: '3-D camera and map geometry stay out of the default bundles unless an application enables them.',
         paragraphs: [
           'v0.79.0 keeps ordinary chart rendering in the format entries and provides 3-D and Region Map rendering as explicit add-ons. The same injected renderer works for charts hosted by Word, Excel and PowerPoint.',
-          'Existing viewers continue to use the 2-D fallback without configuration changes. No migration is required.',
+          'Existing viewers continue to use the established chart fallback without configuration changes. No migration is required.',
         ],
         bullets: [
           'Authored 3-D chart views render through one model-space camera and projected mesh pipeline.',
@@ -89,7 +89,7 @@ export const announcements: readonly Announcement[] = [
         modules: ['@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx', '@silurus/ooxml/three-d', '@silurus/ooxml/region-map'],
         rationale: 'Dependency injection keeps the base entries small and gives every host format the same renderer contract.',
         paragraphs: [
-          'Import each renderer from its separate package entry and pass it to a Viewer or headless engine at construction/load time. Both add-ons render on the main thread; worker rendering continues to use the 2-D fallback.',
+          'Import each renderer from its separate package entry and pass it to a Viewer or headless engine at construction/load time. Both add-ons render on the main thread. Worker rendering keeps the 2-D fallback for 3-D charts; Region Maps require main-thread rendering.',
         ],
         examples: [
           {
@@ -114,7 +114,7 @@ await viewer.load(source);`,
         rationale: 'Office chart fidelity must not reintroduce unbounded tick, text, hierarchy or mesh expansion.',
         paragraphs: [
           'Classic and ChartEx charts now share more of the same value-axis planner, title defaults, data-label layout, rich text, legend paint and explicit-property precedence. This improves waterfall, funnel, box-and-whisker, histogram, Pareto, treemap, sunburst, bubble, line, area and combo charts without family-specific copies of the same policy.',
-          'Tick generation, data-label text, hierarchy depth, Region Map rows and expanded 3-D primitives are checked before allocation or painting. The optional entries keep 3-D and map geometry out of the base format bundles.',
+          'Parser/model inputs and painting work are bounded for ticks, data-label text, hierarchies, Region Map rows and expanded 3-D primitives. The optional entries keep 3-D and map geometry out of the base format bundles.',
         ],
       },
       {
