@@ -65,7 +65,7 @@ import {
   XlsxWorksheetPullClient,
 } from './worksheet-pull-client.js';
 import { GridGeometry } from './internal/grid-geometry.js';
-import { inheritSheetRenderCache } from './renderer.js';
+import { applyAutoRowHeights, inheritSheetRenderCache } from './renderer.js';
 
 /** Public options for {@link XlsxWorkbook.renderViewportToBitmap}. Viewer-only
  * worksheet projection state is intentionally not part of this contract. */
@@ -76,6 +76,8 @@ export type RenderViewportToBitmapOptions = Omit<
 
 /** @internal Viewer-only hook for retaining web fonts in the canvas document. */
 export const retainXlsxViewerFonts = Symbol('retain-xlsx-viewer-fonts');
+/** @internal Resolve display-time row auto-fit on a viewer-owned projection. */
+export const prepareXlsxViewerRowHeights = Symbol('prepare-xlsx-viewer-row-heights');
 /** @internal Release worker-side viewer projection cache entries. */
 export const releaseXlsxViewerProjection = Symbol('release-xlsx-viewer-projection');
 
@@ -386,6 +388,13 @@ export class XlsxWorkbook {
   /** @internal Retain required faces in the document that owns a viewer canvas. */
   async [retainXlsxViewerFonts](targetDocument: Document): Promise<() => void> {
     return await this.retainFontsInSet(targetDocument.fonts);
+  }
+
+  /** @internal Fonts are retained before this hook runs, so Canvas text
+   * measurement observes the same faces that the subsequent paint uses. */
+  [prepareXlsxViewerRowHeights](worksheet: Worksheet, ctx: CanvasRenderingContext2D): void {
+    if (!this.parsedWorkbook) return;
+    applyAutoRowHeights(ctx, worksheet, this.parsedWorkbook.styles);
   }
 
   get sheetNames(): string[] {

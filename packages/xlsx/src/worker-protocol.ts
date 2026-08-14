@@ -87,6 +87,9 @@ export function createSizeOverriddenWorksheet(
 export interface WireViewProjection {
   readonly id: number;
   readonly revision: number;
+  /** The owning viewer supplied every display-derived automatic row height in
+   * `sizeOverrides.rows`; the worker must not rescan cells for this revision. */
+  readonly autoRowHeightsPrepared?: boolean;
 }
 
 /** Worker-local cache for one shallow worksheet projection per viewer/sheet.

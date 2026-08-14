@@ -2249,6 +2249,34 @@ describe('bar chart authored layout and fills', () => {
     )).toBe(true);
   });
 
+  it('paints an authored legend-frame fill and outline behind its manual content box', () => {
+    const rec = recordingCtx();
+    const chart = baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A'],
+      series: [series({ name: 'Framed', values: [1] })],
+      showLegend: true,
+      legendPos: 'r',
+      legendManualLayout: {
+        xMode: 'edge', yMode: 'edge', wMode: 'factor', hMode: 'factor',
+        x: 0.1, y: 0.2, w: 0.5, h: 0.3,
+      },
+    });
+    Object.assign(chart, {
+      legendFillColor: 'FFFFFF',
+      legendLineColor: '808080',
+      legendLineWidthEmu: 3175,
+    });
+
+    renderChart(rec.ctx, chart, RECT, 1);
+
+    expect(rec.rects).toContainEqual({ x: 64, y: 72, w: 320, h: 108, fs: '#FFFFFF' });
+    expect(rec.strokeRects).toContainEqual({
+      x: 64.25, y: 72.25, w: 319.5, h: 107.5,
+      ss: '#808080', lw: 0.5, dash: [], cap: 'butt', join: 'miter',
+    });
+  });
+
   it('renders scatter-series markers and labels over a reversed horizontal category axis', () => {
     const rec = recordingCtx();
     const hiddenAxis = {
@@ -2807,6 +2835,7 @@ describe('bar point styles, clustered order, and stacked labels', () => {
             showSerName: false,
             showPercent: false,
             fontColor: 'FFFFFF',
+            fontFace: 'Meiryo UI',
           },
         }),
         series({ color: '000000', values: [0.6] }),
@@ -2824,6 +2853,7 @@ describe('bar point styles, clustered order, and stacked labels', () => {
     expect(label?.y).toBeCloseTo(firstSegment.y + firstSegment.h / 2);
     expect(label?.align).toBe('center');
     expect(label?.baseline).toBe('middle');
+    expect(label?.font).toContain('"Meiryo UI"');
   });
 
   it('clips stacked geometry to an explicit value-axis maximum', () => {
@@ -3321,6 +3351,137 @@ describe('axis display units', () => {
     expect(text).toEqual(expect.arrayContaining(['0', '2', '4', '6', '8']));
     expect(text).not.toContain('200');
     expect(text).not.toContain('800');
+  });
+
+  it.each(['scatter', 'line', 'clusteredBar'] as const)(
+    '%s applies the associated value-axis display unit to showVal data labels',
+    chartType => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType,
+        categories: chartType === 'scatter' ? [] : ['A'],
+        series: [series({
+          values: [8],
+          categories: chartType === 'scatter' ? ['1000'] : undefined,
+          showMarker: true,
+          seriesDataLabels: {
+            showVal: true,
+            showCatName: false,
+            showSerName: false,
+            showPercent: false,
+            fontColor: 'FF0000',
+            formatCode: '0.00',
+          },
+        })],
+        catAxisMin: chartType === 'scatter' ? 0 : undefined,
+        catAxisMax: chartType === 'scatter' ? 2_000 : undefined,
+        valMin: 0,
+        valMax: 100,
+        valAxisDisplayUnits: {
+          divisor: 100,
+          builtInUnit: 'hundreds',
+          label: null,
+        },
+      }), RECT, 1);
+
+      expect(rec.texts.find(text => text.fillStyle === '#FF0000')?.text).toBe('0.08');
+    },
+  );
+
+  it('applies value-axis display units to chart-group showVal labels', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A'],
+      series: [series({ values: [8], showMarker: true })],
+      showDataLabels: true,
+      dataLabelFormatCode: '0.00',
+      dataLabelFontColor: 'FF0000',
+      valMin: 0,
+      valMax: 100,
+      valAxisDisplayUnits: {
+        divisor: 100,
+        builtInUnit: 'hundreds',
+        label: null,
+      },
+    }), RECT, 1);
+
+    expect(rec.texts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: '0.08', fillStyle: '#FF0000' }),
+    ]));
+  });
+
+  it('uses the secondary scatter Y-axis display unit for that group only', () => {
+    const rec = recordingCtx();
+    const hiddenAxis = {
+      min: 0,
+      max: 20,
+      title: null,
+      hidden: true,
+      lineHidden: true,
+      majorTickMark: 'none',
+    };
+    renderChart(rec.ctx, baseModel({
+      chartType: 'scatter',
+      categories: [],
+      series: [
+        series({ categories: ['1'], values: [8] }),
+        series({
+          categories: ['1000'],
+          values: [8],
+          useSecondaryAxis: true,
+          seriesDataLabels: {
+            showVal: true,
+            showCatName: false,
+            showSerName: false,
+            showPercent: false,
+            fontColor: 'FF0000',
+            formatCode: '0.0',
+          },
+        }),
+      ],
+      catAxisMin: 0,
+      catAxisMax: 2,
+      valMin: 0,
+      valMax: 10,
+      valAxisDisplayUnits: { divisor: 100, builtInUnit: 'hundreds', label: null },
+      secondaryCatAxis: { ...hiddenAxis, max: 2_000 },
+      secondaryValAxis: {
+        ...hiddenAxis,
+        displayUnits: { divisor: 10, builtInUnit: null, label: null },
+      },
+    }), RECT, 1);
+
+    expect(rec.texts.find(text => text.fillStyle === '#FF0000')?.text).toBe('0.8');
+  });
+
+  it('applies value-axis display units to cartesian 3-D showVal labels', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A'],
+      series: [series({
+        values: [8],
+        seriesDataLabels: {
+          showVal: true,
+          showCatName: false,
+          showSerName: false,
+          showPercent: false,
+          fontColor: 'FF0000',
+          formatCode: '0.00',
+        },
+      })],
+      valMin: 0,
+      valMax: 100,
+      valAxisDisplayUnits: {
+        divisor: 100,
+        builtInUnit: 'hundreds',
+        label: null,
+      },
+      threeD: { rotationX: 15, rotationY: 20 },
+    }), RECT, 1);
+
+    expect(rec.texts.find(text => text.fillStyle === '#FF0000')?.text).toBe('0.08');
   });
 });
 
@@ -4064,6 +4225,29 @@ describe('ChartEx flat layouts dispatch to semantic renderers', () => {
 
     expect(rec.texts.find(text => text.text === 'not bold')?.font).not.toMatch(/^bold /);
   });
+
+  it.each(['waterfall', 'funnel'] as const)(
+    '%s honors a series-local data-label font face',
+    chartType => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType,
+        categories: ['A'],
+        catAxisHidden: true,
+        valAxisHidden: true,
+        series: [series({
+          values: [10],
+          seriesDataLabels: {
+            showVal: true, showCatName: false, showSerName: false, showPercent: false,
+            position: 'ctr', fontFace: 'ChartEx Label Face',
+          },
+        })],
+      }), RECT, 1);
+
+      expect(rec.texts.find(text => text.text === '10')?.font)
+        .toContain('"ChartEx Label Face"');
+    },
+  );
 
   it.each(['waterfall', 'funnel'])(
     '%s preserves category-only point slots when the string dimension is longer',
@@ -6473,7 +6657,7 @@ describe('CH8 — pie / doughnut geometry', () => {
         name: 'S', categories: ['A', 'B'], values: [1, 2],
         seriesDataLabels: {
           showVal: false, showCatName: false, showSerName: false, showPercent: true,
-          formatCode: '0.0%', fontSizeHpt: 1200, position: 'ctr',
+          formatCode: '0.0%', fontSizeHpt: 1200, position: 'ctr', fontFace: 'Pie Face',
         },
       })],
     });
@@ -6483,6 +6667,8 @@ describe('CH8 — pie / doughnut geometry', () => {
     renderChart(scaled.ctx, model, RECT, 2);
     expect(normal.fontTexts.some(text => text.text === '33.3%' && text.font.includes('12px')))
       .toBe(true);
+    expect(normal.fontTexts.find(text => text.text === '33.3%')?.font)
+      .toContain('"Pie Face"');
     expect(scaled.fontTexts.some(text => text.text === '33.3%' && text.font.includes('24px')))
       .toBe(true);
   });
@@ -7964,7 +8150,7 @@ describe('CH6-follow — series trendlines (commit 3)', () => {
     expect(hidden.segs).toEqual(without.segs);
   });
 
-  it('places equation and R² beside each trendline endpoint and keeps both blocks bounded', () => {
+  it('aligns automatic equation blocks to one plot-relative column while following endpoint height', () => {
     const renderLabels = (values: number[]) => {
       const rec = recordingCtx();
       renderChart(rec.ctx, lineWithTrend({
@@ -8047,7 +8233,7 @@ describe('CH6-follow — series trendlines (commit 3)', () => {
       .toEqual(expected);
   });
 
-  it('places automatic labels near each fitted trendline endpoint', () => {
+  it('uses the rightmost fitted value only for automatic label height', () => {
     const labelY = (values: number[]): number => {
       const rec = recordingCtx();
       renderChart(rec.ctx, lineWithTrend({
@@ -9917,11 +10103,13 @@ describe('CH15 — chartEx sunburst', () => {
     renderChart(rec.ctx, sunburstModel({
       series: [series({
         values: [],
+        dataLabelOverrides: [{ idx: 0, text: 'Branch A', fontFace: 'Point Sunburst Face' }],
         seriesDataLabels: {
           showVal: false,
           showCatName: true,
           showSerName: false,
           showPercent: false,
+          fontFace: 'Sunburst Face',
         },
       })],
     }), RECT, 1);
@@ -9931,6 +10119,8 @@ describe('CH15 — chartEx sunburst', () => {
     expect(joined).toContain('Branch');
     expect(joined).toContain('Stem');
     expect(joined).toContain('Leaf');
+    expect(rec.fontTexts.some(text => text.font.includes('"Sunburst Face"'))).toBe(true);
+    expect(rec.fontTexts.some(text => text.font.includes('"Point Sunburst Face"'))).toBe(true);
   });
 
   it('does not invent ring labels when the ChartEx series omits dataLabels', () => {
@@ -10483,7 +10673,7 @@ describe('CH15 — chartEx treemap', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
       chartType: 'treemap',
-      dataLabelFontFace: 'Aptos Narrow',
+      dataLabelFontFace: 'Wrong Chart Face',
       series: [series({
         seriesDataLabels: {
           showVal: true,
@@ -10493,6 +10683,7 @@ describe('CH15 — chartEx treemap', () => {
           position: 'outEnd',
           fontSizeHpt: 1000,
           fontBold: true,
+          fontFace: 'Aptos Narrow',
         },
       })],
       chartexTreemap: {

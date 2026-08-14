@@ -1,6 +1,7 @@
 import type {
   ChartDataLabelOverride,
   ChartDataPointOverride,
+  ChartDisplayUnits,
   ChartModel,
   ChartRect,
   ChartSeries,
@@ -61,6 +62,7 @@ import {
   type ProjectedStrokePrimitive,
 } from './three-d-stroke.js';
 import { buildThreeDOutlineTopology } from './three-d-outline.js';
+import { paintLegendFrame } from './legend-frame.js';
 
 const PALETTE = ['4472C4', 'ED7D31', '70AD47', 'A5A5A5', 'FFC000', '5B9BD5'] as const;
 const SUPPORTED_CARTESIAN_THREE_D_TYPES = new Set([
@@ -869,6 +871,7 @@ function drawThreeDDataLabel(
   defaultPosition = 't',
   leaderAnchor: Point = anchor,
   leaderLineEligible = true,
+  valueDisplayUnits?: ChartDisplayUnits | null,
 ): void {
   // Callers resolve indexed overrides through their per-series Map before the
   // paint loop. Falling back to Array.find here would quietly reintroduce
@@ -891,6 +894,7 @@ function drawThreeDDataLabel(
       ?? chart.categories[categoryIndex] ?? `${categoryIndex + 1}`,
     seriesName: series.name || `Series ${seriesIndex + 1}`,
     sourceValue: value,
+    valueDivisor: valueDisplayUnits?.divisor,
     percentRatio: percentValue != null && Number.isFinite(percentValue) ? percentValue : undefined,
     formatCode: override?.formatCode
       ?? defaults?.formatCode ?? chart.dataLabelFormatCode ?? series.valFormatCode,
@@ -905,7 +909,9 @@ function drawThreeDDataLabel(
     ptToPx,
   ) ?? 9 * ptToPx;
   const bold = override?.fontBold ?? defaults?.fontBold ?? chart.dataLabelFontBold ?? false;
-  const fallbackFamily = chartFontFamily(chart, chart.dataLabelFontFace);
+  const fallbackFamily = chartFontFamily(
+    chart, override?.fontFace ?? defaults?.fontFace ?? chart.dataLabelFontFace,
+  );
   ctx.font = `${bold ? 'bold ' : ''}${fontPx}px ${fallbackFamily}`;
   const fallbackColor = `#${override?.fontColor ?? defaults?.fontColor
     ?? series.labelColor ?? chart.dataLabelFontColor ?? '111111'}`;
@@ -1312,6 +1318,7 @@ function simpleLegend(
   categoryDriven = false,
 ): void {
   if (!bounds) return;
+  paintLegendFrame(ctx, chart, bounds, ptToPx);
   const indexedPoints = new Map<number, ChartDataPointOverride>(
     chart.series[0]?.dataPointOverrides?.map(override => [override.idx, override]) ?? [],
   );
@@ -2407,6 +2414,7 @@ function renderCartesian(
         deferredDataLabels.push(() => drawThreeDDataLabel(
           ctx, chart, series, item.seriesIndex, item.categoryIndex,
           item.labelValue, anchor, rect, ptToPx, 0, undefined, labelOverride,
+          't', anchor, true, chart.valAxisDisplayUnits,
         ));
       }
     }
@@ -2905,6 +2913,7 @@ function renderCartesian(
               : 0,
             undefined,
             labelOverride,
+            't', point, true, chart.valAxisDisplayUnits,
           ));
         }
       }
@@ -3348,7 +3357,7 @@ function renderPie(
       ) ?? 9 * ptToPx;
       ctx.font = `${labelOverride?.fontBold ?? defaults?.fontBold
         ?? chart.dataLabelFontBold ? 'bold ' : ''}${fontPx}px ${chartFontFamily(
-        chart, chart.dataLabelFontFace,
+        chart, labelOverride?.fontFace ?? defaults?.fontFace ?? chart.dataLabelFontFace,
       )}`;
       const labelText = effectiveDataLabelText({
         customText: labelOverride?.text,
@@ -3366,7 +3375,9 @@ function renderPie(
         separator: labelOverride?.separator ?? defaults?.separator,
         date1904: chart.date1904,
       });
-      const fallbackFamily = chartFontFamily(chart, chart.dataLabelFontFace);
+      const fallbackFamily = chartFontFamily(
+        chart, labelOverride?.fontFace ?? defaults?.fontFace ?? chart.dataLabelFontFace,
+      );
       const richMeasure = labelOverride?.text && labelOverride.richRuns?.length
         ? resolveRichDataLabelBlock(ctx, {
           runs: labelOverride.richRuns,

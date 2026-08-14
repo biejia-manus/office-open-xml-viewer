@@ -208,8 +208,9 @@ pub struct ChartModel {
     pub legend_manual_layout: Option<LegendManualLayout>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub val_axis_format_code: Option<String>,
-    /// `<c:valAx><c:dispUnits>` (§21.2.2.45) scales only the displayed tick
-    /// values; geometry and the underlying series values remain unscaled.
+    /// `<c:valAx><c:dispUnits>` (§21.2.2.45) scales displayed axis-associated
+    /// values (ticks and Office-generated `showVal` data-label text); geometry
+    /// and the underlying series values remain unscaled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub val_axis_display_units: Option<ChartDisplayUnits>,
     /// The same display-unit contract for a numeric horizontal axis (scatter /
@@ -364,6 +365,15 @@ pub struct ChartModel {
     /// `<c:legend><c:txPr>…defRPr@b` legend bold flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend_font_bold: Option<bool>,
+    /// `<c:legend><c:spPr>` explicit frame fill (hex, no `#`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_fill_color: Option<String>,
+    /// `<c:legend><c:spPr><a:ln>` explicit frame stroke (hex, no `#`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_line_color: Option<String>,
+    /// `<c:legend><c:spPr><a:ln@w>` frame stroke width in EMU.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_line_width_emu: Option<u32>,
     /// Theme heading (majorFont) Latin face — fallback for chart title / axis
     /// titles when their `<c:txPr>` supplies no `<a:latin>`. `None` when the
     /// theme is not threaded (renderer keeps sans-serif; byte-stable).
@@ -632,7 +642,6 @@ pub struct ChartThreeDSeriesAxis {
     pub font_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_hpt: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_bold: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_italic: Option<bool>,
@@ -968,6 +977,8 @@ pub struct ChartDataLabelOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_hpt: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_face: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_bold: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format_code: Option<String>,
@@ -1058,6 +1069,9 @@ pub struct ChartSeriesDataLabels {
     pub font_bold: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_hpt: Option<i32>,
+    /// `<c:dLbls><c:txPr>…<a:latin typeface>` series-default label face.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_face: Option<String>,
     /// Series-default callout-box style (`<c:dLbls>` §21.2.2.49 `<c:spPr>`
     /// §21.2.2.197) — the box drawn around each pie/doughnut label. When present
     /// the pie renderer switches from plain outer-ring text to Word's boxed
@@ -1961,17 +1975,21 @@ pub fn extract_bar_gap_overlap(root: Node) -> (Option<i32>, Option<i32>) {
     (gap, ov)
 }
 
+fn is_chart_group_data_labels(node: Node) -> bool {
+    node.is_element()
+        && matches!(node.tag_name().name(), "dLbls" | "dataLabels")
+        && node
+            .parent()
+            .map(|parent| !matches!(parent.tag_name().name(), "ser" | "series"))
+            .unwrap_or(true)
+}
+
 /// First chart-group-level `<c:dLbls><c:dLblPos val>` in the chart.
 /// Series-level positions are retained on `ChartSeriesDataLabels` and must not
 /// leak into sibling series as a chart-wide fallback. ECMA-376 §21.2.2.49.
 pub fn extract_data_label_position(root: Node) -> Option<String> {
     root.descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "dLbls")
-        .filter(|n| {
-            n.parent()
-                .map(|parent| parent.tag_name().name() != "ser")
-                .unwrap_or(true)
-        })
+        .filter(|n| is_chart_group_data_labels(*n))
         .find_map(|dlbls| {
             child(dlbls, "dLblPos")
                 .and_then(|n| n.attribute("val"))
@@ -1979,11 +1997,13 @@ pub fn extract_data_label_position(root: Node) -> Option<String> {
         })
 }
 
-/// First non-`General` `<c:dLbls><c:numFmt formatCode>` in the chart.
+/// First non-`General` chart-group `<c:dLbls><c:numFmt formatCode>`. Series
+/// format codes stay on `ChartSeriesDataLabels` and do not become a sibling
+/// series fallback.
 /// ECMA-376 §21.2.2.37.
 pub fn extract_data_label_format_code(root: Node) -> Option<String> {
     root.descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "dLbls")
+        .filter(|n| is_chart_group_data_labels(*n))
         .find_map(|dlbls| {
             child(dlbls, "numFmt")
                 .and_then(|n| n.attribute("formatCode"))
@@ -2626,12 +2646,11 @@ pub fn extract_axis_title_face(axis_node: Node) -> Option<String> {
     title_latin_typeface(child(axis_node, "title")?)
 }
 
-/// First `<c:dLbls><c:txPr>…<a:latin typeface>` in the chart — the data-label
-/// font face. Scoped to a `<c:txPr>` inside a `<c:dLbls>` so a series-value
-/// run's face isn't picked up. `None` when absent.
+/// First chart-group `<c:dLbls><c:txPr>…<a:latin typeface>` — the chart-wide
+/// data-label font face. Series-local faces remain on their series.
 pub fn extract_data_label_face(root: Node) -> Option<String> {
     root.descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "dLbls")
+        .filter(|n| is_chart_group_data_labels(*n))
         .find_map(|dlbls| first_latin_typeface(child(dlbls, "txPr")?))
 }
 
@@ -2686,6 +2705,34 @@ pub fn extract_legend_font_color(root: Node, resolver: &dyn ColorResolver) -> Op
             None
         }
     })
+}
+
+/// `<c:legend><c:spPr>` frame paint. The frame fill and line are independent
+/// DrawingML choices; absent or explicit `noFill` remains `None`, while an
+/// authored solid fill/stroke is resolved through the package theme.
+pub fn extract_legend_frame_style(
+    root: Node,
+    resolver: &dyn ColorResolver,
+) -> (Option<String>, Option<String>, Option<u32>) {
+    let Some(legend) = root
+        .descendants()
+        .find(|n| n.is_element() && n.tag_name().name() == "legend")
+    else {
+        return (None, None, None);
+    };
+    let fill = child(legend, "spPr").and_then(|shape| {
+        if child(shape, "noFill").is_some() {
+            None
+        } else {
+            resolver.resolve_shape_fill(shape)
+        }
+    });
+    let (line_color, line_width, line_hidden) = extract_sp_pr_ln_style(legend, resolver);
+    (
+        fill,
+        if line_hidden { None } else { line_color },
+        line_width,
+    )
 }
 
 // ============================================================================
@@ -2974,12 +3021,11 @@ pub fn extract_chart_space_border(chart_space_root: Node) -> (Option<String>, Op
     (color, width)
 }
 
-/// First `<c:dLbls><c:txPr>` font size (hpt). Mirrors the per-series + chart
-/// fallback chain: walk every `<c:dLbls>` in document order, returning the
-/// first inner `<a:defRPr@sz>` / `<a:rPr@sz>` we find.
+/// First chart-group `<c:dLbls><c:txPr>` font size (hpt). Series-local sizes
+/// stay on `ChartSeriesDataLabels` and must not become a sibling fallback.
 pub fn extract_data_label_font_size(root: Node) -> Option<i32> {
     root.descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "dLbls")
+        .filter(|n| is_chart_group_data_labels(*n))
         .find_map(|dl| {
             child(dl, "txPr").and_then(|tx| {
                 tx.descendants().find_map(|n| {
@@ -2996,10 +3042,10 @@ pub fn extract_data_label_font_size(root: Node) -> Option<i32> {
         })
 }
 
-/// First explicit data-label bold flag from `<c:dLbls><c:txPr>`.
+/// First explicit chart-group data-label bold flag from `<c:dLbls><c:txPr>`.
 pub fn extract_data_label_font_bold(root: Node) -> Option<bool> {
     root.descendants()
-        .filter(|n| n.is_element() && matches!(n.tag_name().name(), "dLbls" | "dataLabels"))
+        .filter(|n| is_chart_group_data_labels(*n))
         .find_map(|labels| {
             child(labels, "txPr").and_then(|tx| {
                 tx.descendants().find_map(|node| {
@@ -3012,15 +3058,8 @@ pub fn extract_data_label_font_bold(root: Node) -> Option<bool> {
         })
 }
 
-/// First `<c:dLbls><c:txPr>...<a:solidFill>` resolved to a hex color.
-///
-/// Walks each `<c:dLbls>` (chart-level + per-series) in document order,
-/// drills into its `<c:txPr>` and looks for the first descendant
-/// `<a:solidFill>` whose color the resolver can map. Stops on the first
-/// successful resolution — this matches the chart-then-series fallback
-/// pattern Office writers actually emit (e.g. a top-level `<c:dLbls>`
-/// declaring the label color globally and the `<c:ser><c:dLbls>` blocks
-/// inheriting it).
+/// First chart-group `<c:dLbls><c:txPr>...<a:solidFill>` resolved to a hex
+/// color. Series-local text paint remains on its series.
 ///
 /// Note we deliberately scope the search to inside `<c:txPr>` so a
 /// sibling `<c:dLbls><c:spPr><a:solidFill>` (the label *background*
@@ -3028,7 +3067,7 @@ pub fn extract_data_label_font_bold(root: Node) -> Option<bool> {
 pub fn extract_data_label_font_color(root: Node, resolver: &dyn ColorResolver) -> Option<String> {
     for dlbls in root
         .descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "dLbls")
+        .filter(|n| is_chart_group_data_labels(*n))
     {
         let Some(txpr) = child(dlbls, "txPr") else {
             continue;
@@ -4069,6 +4108,7 @@ fn parse_chartex_series_labels(
             .map(ToOwned::to_owned),
         font_bold: extract_axis_tick_label_bold(labels),
         font_size_hpt: extract_axis_tick_label_size(labels),
+        font_face: extract_axis_tick_label_face(labels),
         label_box: None,
         show_leader_lines: false,
         leader_line_color: None,
@@ -4103,6 +4143,7 @@ fn parse_chartex_series_labels(
             position: attr(&label, "pos"),
             font_color,
             font_size_hpt: extract_axis_tick_label_size(label),
+            font_face: extract_axis_tick_label_face(label),
             font_bold: extract_axis_tick_label_bold(label),
             format_code: child(label, "numFmt").and_then(|node| attr(&node, "formatCode")),
             separator: child(label, "separator")
@@ -4141,6 +4182,7 @@ fn parse_chartex_series_labels(
                 position: None,
                 font_color: None,
                 font_size_hpt: None,
+                font_face: None,
                 font_bold: None,
                 format_code: None,
                 separator: None,
@@ -4810,6 +4852,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
                 .map(|value| value.to_string()),
             font_bold: data_label_font_bold,
             font_size_hpt: data_label_font_size_hpt,
+            font_face: data_label_font_face.clone(),
             label_box: None,
             show_leader_lines: false,
             leader_line_color: None,
@@ -4873,6 +4916,8 @@ pub fn parse_chartex_part_with_references_and_style_parts(
     let (legend_font_face, legend_font_size_hpt, legend_font_bold) =
         extract_legend_text_props(root);
     let legend_font_color = extract_legend_font_color(root, resolver);
+    let (legend_fill_color, legend_line_color, legend_line_width_emu) =
+        extract_legend_frame_style(root, resolver);
     let (chart_border_color, chart_border_width_emu) = child(root, "spPr")
         .and_then(|shape| child(shape, "ln"))
         .map(|line| {
@@ -5009,6 +5054,9 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         legend_font_color,
         legend_font_size_hpt,
         legend_font_bold,
+        legend_fill_color,
+        legend_line_color,
+        legend_line_width_emu,
         theme_major_font_latin: resolver.theme_major_font_latin(),
         theme_minor_font_latin: resolver.theme_minor_font_latin(),
         val_axis_minor_tick_mark: Some(val_axis_minor_tick_mark),
@@ -6071,6 +6119,7 @@ pub fn parse_series_data_labels(
             .and_then(|n| n.attribute("sz"))
             .and_then(parse_text_font_size_hpt)
     });
+    let font_face_default = txpr.and_then(first_latin_typeface);
 
     // §21.2.2.197 series-level callout-box shape (`<c:dLbls><c:spPr>`) and
     // §21.2.2.183/§21.2.2.92 leader-line style. `<c:spPr>` may appear both as a
@@ -6096,6 +6145,7 @@ pub fn parse_series_data_labels(
         separator,
         font_bold: font_bold_default,
         font_size_hpt: font_size_default,
+        font_face: font_face_default,
         label_box,
         show_leader_lines,
         leader_line_color,
@@ -6163,6 +6213,10 @@ pub fn parse_series_data_labels(
                     .or_else(|| default_run_props.and_then(|run| run.attribute("sz")))
                     .and_then(parse_text_font_size_hpt)
             });
+        let font_face = first_rich_run
+            .and_then(|run| run.font_face.clone())
+            .or_else(|| rich_run_props.and_then(first_latin_typeface))
+            .or_else(|| default_run_props.and_then(first_latin_typeface));
         let font_bold = first_rich_run.and_then(|run| run.bold).or_else(|| {
             rich_run_props
                 .and_then(|run| run.attribute("b"))
@@ -6188,6 +6242,7 @@ pub fn parse_series_data_labels(
             position: pos,
             font_color,
             font_size_hpt,
+            font_face,
             font_bold,
             format_code: child(dl, "numFmt").and_then(|node| attr(&node, "formatCode")),
             separator: child(dl, "separator")
@@ -6215,6 +6270,7 @@ pub fn parse_series_data_labels(
         || series_defaults.format_code.is_some()
         || series_defaults.font_bold.is_some()
         || series_defaults.font_size_hpt.is_some()
+        || series_defaults.font_face.is_some()
         || series_defaults.label_box.is_some()
         || series_defaults.show_leader_lines
         || series_defaults.leader_line_color.is_some()
@@ -7725,13 +7781,18 @@ pub fn parse_chart_part_with_references(
         }
     }
 
-    // Data labels are on when `<c:dLbls>` enables `<c:showVal>` OR
-    // `<c:showPercent>` (ECMA-376 §21.2.2.189 / §21.2.2.187) — at chart level
-    // or in any series. Pie/doughnut charts commonly use showPercent only; the renderer draws the
-    // slice percentage for pie/doughnut and the raw value for bar/line.
+    // Chart-group data labels are on when a chart-level `<c:dLbls>` enables
+    // `<c:showVal>` or `<c:showPercent>` (§21.2.2.189 / §21.2.2.187).
+    // Series-local `<c:ser><c:dLbls>` is retained on that ChartSeries and must
+    // not turn labels on for unlabelled sibling series.
     let show_data_labels = root
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "dLbls")
+        .filter(|n| {
+            n.parent()
+                .map(|parent| parent.tag_name().name() != "ser")
+                .unwrap_or(true)
+        })
         .any(|d_lbls| {
             // `<c:showVal>` / `<c:showPercent>` are CT_Boolean: a present element
             // is ON unless `val` explicitly disables it (bare element ⇒ true), so
@@ -8112,6 +8173,8 @@ pub fn parse_chart_part_with_references(
     let (legend_font_face, legend_font_size_hpt, legend_font_bold) =
         extract_legend_text_props(root);
     let legend_font_color = { extract_legend_font_color(root, color_resolver) };
+    let (legend_fill_color, legend_line_color, legend_line_width_emu) =
+        extract_legend_frame_style(root, color_resolver);
     // Theme fallback fonts: the resolver supplies the theme's major/minor Latin
     // faces (pptx keys them `+mj-lt` / `+mn-lt` in its color+font map). None
     // when the theme lacks a fontScheme. The renderer uses these when a chart
@@ -8343,6 +8406,9 @@ pub fn parse_chart_part_with_references(
         legend_font_color,
         legend_font_size_hpt,
         legend_font_bold,
+        legend_fill_color,
+        legend_line_color,
+        legend_line_width_emu,
         theme_major_font_latin,
         theme_minor_font_latin,
         // ChartModel fields the legacy pptx `<c:chart>` path leaves unset
@@ -8618,6 +8684,9 @@ mod tests {
             legend_font_color: None,
             legend_font_size_hpt: None,
             legend_font_bold: None,
+            legend_fill_color: None,
+            legend_line_color: None,
+            legend_line_width_emu: None,
             theme_major_font_latin: None,
             theme_minor_font_latin: None,
             date1904: false,
@@ -9625,6 +9694,115 @@ mod tests {
         assert_eq!(face.as_deref(), Some("Calibri"));
         assert_eq!(size, Some(1100));
         assert_eq!(bold, Some(true));
+    }
+
+    #[test]
+    fn classic_series_data_labels_do_not_enable_unlabelled_sibling_series() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart><c:plotArea>
+              <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+                <c:ser><c:idx val="0"/><c:val><c:numLit><c:pt idx="0"><c:v>8</c:v></c:pt></c:numLit></c:val>
+                  <c:dLbls><c:txPr><a:p><a:pPr><a:defRPr b="0"/></a:pPr></a:p></c:txPr><c:showVal val="1"/></c:dLbls>
+                </c:ser>
+                <c:ser><c:idx val="1"/><c:val><c:numLit><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:val></c:ser>
+              </c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let model = parse_chart_part(chart_space_of(&xml).root_element(), &FixtureResolver)
+            .expect("bar chart parses");
+
+        assert!(
+            !model.show_data_labels,
+            "series-local dLbls is not chart-wide"
+        );
+        assert_eq!(
+            model.series[0]
+                .series_data_labels
+                .as_ref()
+                .map(|d| d.show_val),
+            Some(true)
+        );
+        assert_eq!(
+            model.series[0]
+                .series_data_labels
+                .as_ref()
+                .and_then(|d| d.font_bold),
+            Some(false)
+        );
+        assert!(model.series[1].series_data_labels.is_none());
+    }
+
+    #[test]
+    fn classic_chart_group_label_style_does_not_inherit_the_first_series_style() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart><c:plotArea>
+              <c:lineChart><c:grouping val="standard"/>
+                <c:ser><c:idx val="0"/><c:val><c:numLit><c:pt idx="0"><c:v>8</c:v></c:pt></c:numLit></c:val>
+                  <c:dLbls><c:numFmt formatCode="0.0"/><c:txPr><a:p><a:pPr><a:defRPr sz="800" b="0">
+                    <a:solidFill><a:schemeClr val="accent1"/></a:solidFill><a:latin typeface="Series Face"/>
+                  </a:defRPr></a:pPr></a:p></c:txPr><c:showVal val="1"/></c:dLbls>
+                </c:ser>
+                <c:dLbls><c:numFmt formatCode="0.00"/><c:txPr><a:p><a:pPr><a:defRPr sz="1200" b="1">
+                  <a:solidFill><a:schemeClr val="accent2"/></a:solidFill><a:latin typeface="Group Face"/>
+                </a:defRPr></a:pPr></a:p></c:txPr><c:showVal val="1"/></c:dLbls>
+              </c:lineChart></c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let model = parse_chart_part(chart_space_of(&xml).root_element(), &FixtureResolver)
+            .expect("line chart parses");
+
+        assert!(model.show_data_labels);
+        assert_eq!(model.data_label_format_code.as_deref(), Some("0.00"));
+        assert_eq!(model.data_label_font_size_hpt, Some(1200));
+        assert_eq!(model.data_label_font_bold, Some(true));
+        assert_eq!(model.data_label_font_color.as_deref(), Some("ED7D31"));
+        assert_eq!(model.data_label_font_face.as_deref(), Some("Group Face"));
+        let local = model.series[0]
+            .series_data_labels
+            .as_ref()
+            .expect("series-local label style is preserved");
+        assert_eq!(local.format_code.as_deref(), Some("0.0"));
+        assert_eq!(local.font_size_hpt, Some(800));
+        assert_eq!(local.font_bold, Some(false));
+        assert_eq!(local.font_color.as_deref(), Some("4472C4"));
+        assert_eq!(local.font_face.as_deref(), Some("Series Face"));
+    }
+
+    #[test]
+    fn classic_legend_frame_fill_and_outline_are_preserved() {
+        struct TransformAwareLegendResolver;
+        impl ColorResolver for TransformAwareLegendResolver {
+            fn resolve_solid_fill(&self, node: Node) -> Option<String> {
+                FixtureResolver.resolve_solid_fill(node)
+            }
+
+            fn resolve_shape_fill(&self, parent: Node) -> Option<String> {
+                match parent.tag_name().name() {
+                    "spPr" => Some("DDEEFF".to_string()),
+                    "ln" => Some("808080".to_string()),
+                    _ => None,
+                }
+            }
+        }
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart>
+              <c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/>
+                <c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val>
+              </c:ser></c:barChart></c:plotArea>
+              <c:legend><c:legendPos val="r"/><c:spPr>
+                <a:solidFill><a:schemeClr val="accent1"><a:lumMod val="20000"/><a:lumOff val="80000"/></a:schemeClr></a:solidFill>
+                <a:ln w="3175"><a:solidFill><a:srgbClr val="808080"/></a:solidFill></a:ln>
+              </c:spPr></c:legend>
+            </c:chart></c:chartSpace>"#,
+        );
+        let model = parse_chart_part(
+            chart_space_of(&xml).root_element(),
+            &TransformAwareLegendResolver,
+        )
+        .expect("legend chart parses");
+        let serialized = serde_json::to_value(model).expect("chart serializes");
+
+        assert_eq!(serialized["legendFillColor"], "DDEEFF");
+        assert_eq!(serialized["legendLineColor"], "808080");
+        assert_eq!(serialized["legendLineWidthEmu"], 3175);
     }
 
     #[test]
@@ -10671,7 +10849,14 @@ mod tests {
         assert_eq!(m.chart_type, "doughnut");
         assert_eq!(m.hole_size, Some(45));
         assert_eq!(m.first_slice_angle, Some(90));
-        assert!(m.show_data_labels);
+        assert!(!m.show_data_labels);
+        assert_eq!(
+            m.series[0]
+                .series_data_labels
+                .as_ref()
+                .map(|labels| labels.show_percent),
+            Some(true)
+        );
 
         let colors = m.series[0]
             .data_point_colors

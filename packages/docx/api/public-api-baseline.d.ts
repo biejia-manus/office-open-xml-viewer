@@ -62,6 +62,7 @@ export interface ChartDataLabelOverride {
     position?: string;
     fontColor?: string;
     fontSizeHpt?: number;
+    fontFace?: string;
     fontBold?: boolean;
     formatCode?: string;
     separator?: string;
@@ -288,6 +289,9 @@ export interface ChartModel {
     legendFontColor?: string | null;
     legendFontSizeHpt?: number | null;
     legendFontBold?: boolean | null;
+    legendFillColor?: string | null;
+    legendLineColor?: string | null;
+    legendLineWidthEmu?: number | null;
     themeMajorFontLatin?: string | null;
     themeMinorFontLatin?: string | null;
     chartBorderColor?: string | null;
@@ -451,6 +455,7 @@ export interface ChartSeriesDataLabels {
     separator?: string;
     fontBold?: boolean;
     fontSizeHpt?: number;
+    fontFace?: string;
     labelBox?: ChartLabelBox;
     showLeaderLines?: boolean;
     leaderLineColor?: string;

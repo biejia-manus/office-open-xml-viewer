@@ -5,6 +5,23 @@ semantic versioning. While the major version is zero, minor releases may contain
 explicitly documented breaking changes; patch releases remain compatible with
 the corresponding minor release.
 
+## 0.79.1 — 2026-08-15
+
+Patch. Corrects authored chart labels, legend frames, and automatic worksheet
+row heights without changing the 0.79 public integration contract.
+
+- **data labels:** keep series-local label settings on their authored series,
+  and apply value-axis display units consistently to generated value labels in
+  classic, ChartEx, and optional 3-D chart paths.
+- **trendline labels:** align automatic equation and R² blocks with Excel's
+  plot-relative placement while preserving authored manual layouts.
+- **legend frames:** retain explicit solid legend fills and outlines, including
+  DrawingML theme color transforms, across DOCX, XLSX, and PPTX chart hosts.
+- **worksheet row heights:** auto-fit rows that omit an authored `ht` to wrapped,
+  rich, rotated, or larger text while preserving explicit heights and excluding
+  merged cells, matching Excel's display behavior. (#1260)
+- **compatibility:** no application or API migration is required from 0.79.0.
+
 ## 0.79.0 — 2026-08-14
 
 Compatible minor release. Adds opt-in advanced chart renderers and completes a

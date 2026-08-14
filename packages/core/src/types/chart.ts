@@ -272,6 +272,8 @@ export interface ChartDataLabelOverride {
   position?: string;
   fontColor?: string;
   fontSizeHpt?: number;
+  /** Effective per-point `<a:latin typeface>`; undefined inherits the series. */
+  fontFace?: string;
   /** `<a:defRPr b="1">` inside the per-idx rich text. */
   fontBold?: boolean;
   /** Per-point number format; undefined inherits the series default. */
@@ -335,6 +337,8 @@ export interface ChartSeriesDataLabels {
   fontBold?: boolean;
   /** Series-level font size for data labels (OOXML hundredths of a point). */
   fontSizeHpt?: number;
+  /** Series-level `<c:dLbls><c:txPr>…<a:latin typeface>` font face. */
+  fontFace?: string;
   /** Series-default callout box (`<c:dLbls><c:spPr>`, ECMA-376 §21.2.2.49/
    *  §21.2.2.197). When present the pie/doughnut renderer draws Word's boxed
    *  callout layout (box + optional leader line) instead of plain text. */
@@ -611,6 +615,12 @@ export interface ChartModel {
   legendFontSizeHpt?: number | null;
   /** `<c:legend><c:txPr>…defRPr@b` legend bold flag. */
   legendFontBold?: boolean | null;
+  /** `<c:legend><c:spPr>` explicit frame fill (hex without '#'). */
+  legendFillColor?: string | null;
+  /** `<c:legend><c:spPr><a:ln>` explicit frame stroke (hex without '#'). */
+  legendLineColor?: string | null;
+  /** `<c:legend><c:spPr><a:ln@w>` frame stroke width in EMU. */
+  legendLineWidthEmu?: number | null;
   /**
    * Theme font-scheme faces (`<a:fontScheme>`, ECMA-376 §20.1.4.2). Latin
    * heading (majorFont) and body (minorFont) typefaces, used as the fallback
@@ -1288,8 +1298,9 @@ export interface SecondaryValueAxis {
   titleManualLayout?: ChartManualLayout | null;
 }
 
-/** ECMA-376 §21.2.2.45 display-unit scaling. The divisor changes tick text,
- * never the value-to-pixel mapping. */
+/** ECMA-376 §21.2.2.45 display-unit scaling. The divisor changes displayed
+ * axis-associated values (ticks and generated `showVal` data-label text),
+ * never the source value or value-to-pixel mapping. */
 export interface ChartDisplayUnits {
   divisor: number;
   /** Authored `ST_BuiltInUnit` token; absent for `<c:custUnit>`. */

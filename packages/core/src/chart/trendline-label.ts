@@ -12,9 +12,9 @@ export interface TrendlineLabelPlacement {
 /**
  * Resolve one measured trendline-label block.
  *
- * Automatic labels use the visible fitted-curve endpoint when supplied. A
- * valid authored manual layout is resolved against chart space and bypasses
- * that anchor.
+ * Automatic labels use the visible fitted-curve endpoint for vertical
+ * placement when supplied. A valid authored manual layout is resolved against
+ * chart space and bypasses that anchor.
  */
 export function placeTrendlineLabel(
   chartRect: ManualLayoutRect,
@@ -30,16 +30,22 @@ export function placeTrendlineLabel(
   const inset = Math.max(4, fontPx * 0.5);
   const w = Math.min(measuredWidth, Math.max(0, plotRect.w - inset * 2));
   const h = Math.min(measuredHeight, plotRect.h);
-  // Office's automatic trendline labels follow their fitted curve rather than
-  // sharing one chart-corner anchor. Use the visible run endpoint supplied by
-  // the renderer and clamp the measured block to the plot; callers without a
-  // curve anchor retain the established top-right compatibility placement.
+  // Office's automatic classic trendline label rule is under-specified. A
+  // boundary set measured from Excel (positive/negative, shallow/steep, and
+  // unequal endpoint values) keeps the measured block's RIGHT edge at 75% of
+  // the plot width while its BOTTOM follows the fitted curve's right endpoint
+  // with a quarter-em text-baseline allowance. Keep this compatibility rule
+  // local to automatic trendline labels; authored manual layout remains exact.
+  const automaticRight = plotRect.x + plotRect.w * 0.75;
   const automatic = {
     x: automaticAnchor
-      ? Math.max(plotRect.x, Math.min(plotRect.x + plotRect.w - w, automaticAnchor.x - w))
+      ? Math.max(plotRect.x, Math.min(plotRect.x + plotRect.w - w, automaticRight - w))
       : Math.max(plotRect.x, plotRect.x + plotRect.w - inset - w),
     y: automaticAnchor
-      ? Math.max(plotRect.y, Math.min(plotRect.y + plotRect.h - h, automaticAnchor.y - h - inset))
+      ? Math.max(
+        plotRect.y,
+        Math.min(plotRect.y + plotRect.h - h, automaticAnchor.y - h + fontPx * 0.25),
+      )
       : Math.min(plotRect.y + plotRect.h - h, plotRect.y + inset),
     w,
     h,
