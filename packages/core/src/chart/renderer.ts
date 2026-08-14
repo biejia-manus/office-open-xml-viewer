@@ -62,6 +62,7 @@ import {
 } from './rich-data-label.js';
 import { effectiveDataLabelText } from './data-label-content.js';
 import { placeTrendlineLabel } from './trendline-label.js';
+import { paintLegendFrame } from './legend-frame.js';
 import {
   boundDataLabelText,
   fitDataLabelLines,
@@ -956,9 +957,11 @@ function drawLegendForLayout(
     : null;
   if (manualBox) {
     const orient = manualBox.w >= manualBox.h ? 'horizontal' : 'vertical';
+    paintLegendFrame(ctx, chart, manualBox, ptToPx);
     drawLegend(ctx, chart.series, manualBox.x, manualBox.y, manualBox.w, manualBox.h, orient, chart.chartType, legStyle, chart.scatterStyle, varyByPoint, chart.categories, ptToPx, fillPaints, shapeRotationDeg, chart.varyColors !== false);
     return;
   }
+  paintLegendFrame(ctx, chart, defaultBox, ptToPx);
   drawLegend(ctx, chart.series, defaultBox.x, defaultBox.y, defaultBox.w, defaultBox.h,
     defaultOrientation, chart.chartType, legStyle, chart.scatterStyle, varyByPoint,
     chart.categories, ptToPx, fillPaints, shapeRotationDeg, chart.varyColors !== false);
@@ -2912,6 +2915,7 @@ function renderBarChart(
           },
           labelOverrides[si],
           pct ? sv / 100 : undefined,
+          s.useSecondaryAxis && sec ? sec.displayUnits : chart.valAxisDisplayUnits,
         );
         if (label) {
           // ECMA-376 §21.2.2.30 / §21.1.2.3.2 — data label font size comes from
@@ -2924,7 +2928,10 @@ function renderBarChart(
           const authoredLabel = labelOverrides[si].get(ci);
           const bold = label.fontBold
             || (seriesLabels?.fontBold == null && authoredLabel?.fontBold == null);
-          ctx.font = `${bold ? 'bold ' : ''}${lsz}px ${chartFontFamily(chart, chart.dataLabelFontFace, 'minor')}`;
+          const labelFont = chartFontFamily(
+            chart, label.fontFace ?? chart.dataLabelFontFace, 'minor',
+          );
+          ctx.font = `${bold ? 'bold ' : ''}${lsz}px ${labelFont}`;
           // drawBarDataLabel takes (bx, by, barL=length, barW=thickness). For
           // a vertical column bar, "length" is the bar's height and
           // "thickness" is its horizontal width — pass them in that order.
@@ -2947,7 +2954,7 @@ function renderBarChart(
               chart,
               authoredLabel,
               ptToPx,
-              chartFontFamily(chart, chart.dataLabelFontFace, 'minor'),
+              labelFont,
               bold,
             ),
           );
@@ -2993,6 +3000,7 @@ function renderBarChart(
           },
           labelOverrides[si],
           pct ? sv / 100 : undefined,
+          s.useSecondaryAxis && sec ? sec.displayUnits : chart.valAxisDisplayUnits,
         );
         if (label) {
           const sizeHpt = label.fontSizeHpt ?? chart.dataLabelFontSizeHpt;
@@ -3001,7 +3009,10 @@ function renderBarChart(
           const authoredLabel = labelOverrides[si].get(ci);
           const bold = label.fontBold
             || (seriesLabels?.fontBold == null && authoredLabel?.fontBold == null);
-          ctx.font = `${bold ? 'bold ' : ''}${lsz}px ${chartFontFamily(chart, chart.dataLabelFontFace, 'minor')}`;
+          const labelFont = chartFontFamily(
+            chart, label.fontFace ?? chart.dataLabelFontFace, 'minor',
+          );
+          ctx.font = `${bold ? 'bold ' : ''}${lsz}px ${labelFont}`;
           drawBarDataLabel(
             ctx, label.text,
             bx, by, barL, barW,
@@ -3017,7 +3028,7 @@ function renderBarChart(
               chart,
               authoredLabel,
               ptToPx,
-              chartFontFamily(chart, chart.dataLabelFontFace, 'minor'),
+              labelFont,
               bold,
             ),
           );
@@ -3662,6 +3673,7 @@ function renderLineChart(
             return ((dpt?.markerSize ?? s.markerSize ?? 5) / 2) * ptToPx;
           },
           face => chartFontFamily(chart, face, 'minor'),
+          isSecondarySeries(s) ? sec?.displayUnits : chart.valAxisDisplayUnits,
         );
       });
     }
@@ -3698,9 +3710,19 @@ function renderLineChart(
           // §21.2.2.48 `<c:dLblPos>`: the family-level value dump honors the
           // chart-level position (else the line default `'r'`). The marker gap
           // stays directional while the whole label layer is painted last.
+          const labelText = effectiveDataLabelText({
+            showValue: true,
+            sourceValue: s.values[ci] ?? 0,
+            valueDivisor: displayUnitDivisor(
+              isSecondarySeries(s) ? sec?.displayUnits : chart.valAxisDisplayUnits,
+            ),
+            formatCode: chart.dataLabelFormatCode ?? s.valFormatCode ?? null,
+            date1904: chart.date1904,
+          });
           drawDataLabelText(
-            ctx, toX(ci), yOf(pv), formatChartVal(s.values[ci] ?? 0),
-            chart.dataLabelPosition ?? 'r', dataLabelPx, undefined, false,
+            ctx, toX(ci), yOf(pv), labelText,
+            chart.dataLabelPosition ?? 'r', dataLabelPx,
+            chart.dataLabelFontColor ?? undefined, chart.dataLabelFontBold ?? false,
             chartFontFamily(chart, chart.dataLabelFontFace, 'minor'),
             drawMarkers ? markerR + 1 : 2,
             { x: px0, y: py0, w: pw, h: ph },
@@ -4472,6 +4494,7 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
           : undefined,
         undefined,
         face => chartFontFamily(chart, face, 'minor'),
+        isSecondarySeries(s) ? sec?.displayUnits : chart.valAxisDisplayUnits,
       );
     }
   }
@@ -4537,6 +4560,7 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
       undefined,
       undefined,
       face => chartFontFamily(chart, face, 'minor'),
+      isSecondarySeries(s) ? sec?.displayUnits : chart.valAxisDisplayUnits,
     );
     drawSeriesTrendlines(
       ctx, s, stroke, toX, yOf, ptToPx, undefined,
@@ -4911,7 +4935,9 @@ function renderPieChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Cha
   // rich dispatch so the legacy chart-wide percent path cannot resurrect it.
   const hasRichLabels = s.seriesDataLabels != null || (s.dataLabelOverrides?.length ?? 0) > 0;
   const legacyLabels = chart.showDataLabels && !hasRichLabels;
-  const dLblFont = chartFontFamily(chart, chart.dataLabelFontFace, 'minor');
+  const dLblFont = chartFontFamily(
+    chart, richDef.fontFace ?? chart.dataLabelFontFace, 'minor',
+  );
 
   for (let ring = 0; ring < rings.length; ring++) {
     const rs = rings[ring];
@@ -5106,12 +5132,15 @@ function drawPieRichLabels(
     const sizePx = chartTextFontSizePx(sizeHpt, ptToPx) ?? Math.max(8, outerR * 0.1);
     const bold = ov?.fontBold ?? def.fontBold;
     const fontColor = ov?.fontColor ?? def.fontColor;
-    const rich = customRichDataLabelOptions(chart, ov, ptToPx, font, bold ?? false);
+    const labelFont = (ov?.fontFace ?? def.fontFace)
+      ? chartFontFamily(chart, ov?.fontFace ?? def.fontFace, 'minor')
+      : font;
+    const rich = customRichDataLabelOptions(chart, ov, ptToPx, labelFont, bold ?? false);
     const automaticLabelR = innerR > 0.01
       ? (innerR + outerR) / 2
       : outerR * PIE_CTR_LABEL_RADIUS_FRAC;
     if (ov?.manualLayout) {
-      ctx.font = `${bold ? 'bold ' : ''}${sizePx}px ${font}`;
+      ctx.font = `${bold ? 'bold ' : ''}${sizePx}px ${labelFont}`;
       drawBoundedDataLabelText(
         ctx,
         text,
@@ -5131,7 +5160,7 @@ function drawPieRichLabels(
       continue;
     }
     if (outside) {
-      ctx.font = `${bold ? 'bold ' : ''}${sizePx}px ${font}`;
+      ctx.font = `${bold ? 'bold ' : ''}${sizePx}px ${labelFont}`;
       const richBlock = rich
         ? resolveRichDataLabelBlock(ctx, rich, sizePx, fontColor ? `#${fontColor}` : '#333')
         : null;
@@ -5153,6 +5182,7 @@ function drawPieRichLabels(
         Math.min(textH, Math.max(0, chartH - sizePx)),
         lineHeight, sizePx, bold ?? false,
         fontColor ? `#${fontColor}` : '#333',
+        labelFont,
         richBlock ?? undefined,
       ));
       continue;
@@ -5176,7 +5206,7 @@ function drawPieRichLabels(
     const labelR = automaticLabelR;
     const lx2 = cx2 + Math.cos(midAngle) * labelR;
     const ly2 = cy2 + Math.sin(midAngle) * labelR;
-    ctx.font = `${bold ? 'bold ' : ''}${sizePx}px ${font}`;
+    ctx.font = `${bold ? 'bold ' : ''}${sizePx}px ${labelFont}`;
     const tangentialCapacity = 2 * labelR * Math.sin(Math.min(Math.PI, Math.abs(slice)) / 2)
       - sizePx;
     const radialCapacity = innerR > 0.01
@@ -5207,7 +5237,7 @@ function drawPieRichLabels(
   }
 
   drawPieOutsideLabels(
-    ctx, def, outsideLabels, cx2, cy2, outerR, font, ptToPx,
+    ctx, def, outsideLabels, cx2, cy2, outerR, ptToPx,
     chartX, chartY, chartW, chartH,
   );
 }
@@ -5227,6 +5257,7 @@ interface PieOutsideLabel {
   fontPx: number;
   bold: boolean;
   fontColor: string;
+  font: string;
   cxBox: number;
   cyBox: number;
   initialCx: number;
@@ -5280,6 +5311,7 @@ function createPieOutsideLabel(
   fontPx: number,
   bold: boolean,
   fontColor: string,
+  font: string,
   rich?: RichDataLabelBlock,
 ): PieOutsideLabel {
   const clearance = fontPx * 0.5;
@@ -5292,7 +5324,7 @@ function createPieOutsideLabel(
     lines, rich,
     rimX: pieCx + Math.cos(midAngle) * outerR,
     rimY: pieCy + Math.sin(midAngle) * outerR,
-    boxW, boxH, lineHeight, fontPx, bold, fontColor,
+    boxW, boxH, lineHeight, fontPx, bold, fontColor, font,
     cxBox, cyBox, initialCx: cxBox, initialCy: cyBox,
     leftSide: Math.cos(midAngle) < 0,
   };
@@ -5309,7 +5341,6 @@ function drawPieOutsideLabels(
   pieCx: number,
   pieCy: number,
   outerR: number,
-  font: string,
   ptToPx: number,
   boundsX: number,
   boundsY: number,
@@ -5388,7 +5419,7 @@ function drawPieOutsideLabels(
       paintRichDataLabelBlock(ctx, label.rich, label.cxBox, label.cyBox);
       continue;
     }
-    ctx.font = `${label.bold ? 'bold ' : ''}${label.fontPx}px ${font}`;
+    ctx.font = `${label.bold ? 'bold ' : ''}${label.fontPx}px ${label.font}`;
     ctx.fillStyle = label.fontColor;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -5425,6 +5456,7 @@ interface PieCalloutLabel {
   boxBorderPx: number;
   fontPx: number;
   bold: boolean;
+  font: string;
   /** An authored inside position keeps the box at its slice anchor. */
   inside: boolean;
   /** Explicit per-point manual layout is never moved by the auto collision pass. */
@@ -5493,6 +5525,9 @@ function drawPieCalloutLabels(
     // Per-point overrides (font colour/size/bold + box), else series defaults.
     const fontPx = chartTextFontSizePx(ov?.fontSizeHpt, ptToPx) ?? baseFontPx;
     const bold = ov?.fontBold ?? def.fontBold ?? false;
+    const labelFont = (ov?.fontFace ?? def.fontFace)
+      ? chartFontFamily(chart, ov?.fontFace ?? def.fontFace, 'minor')
+      : font;
     const fontColor = ov?.fontColor ? `#${ov.fontColor}` : (def.fontColor ? `#${def.fontColor}` : '#000');
     const box = ov?.labelBox ?? seriesBox;
     const boxFill = box?.fill ? `#${box.fill}` : null;
@@ -5519,13 +5554,13 @@ function drawPieCalloutLabels(
       defaultSeparator: '\n',
     });
     if (!text) continue;
-    const richOptions = customRichDataLabelOptions(chart, ov, ptToPx, font, bold);
+    const richOptions = customRichDataLabelOptions(chart, ov, ptToPx, labelFont, bold);
 
     const padX = Math.max(4, fontPx * 0.45);
     const padY = Math.max(2, fontPx * 0.28);
     const lineGap = fontPx * 0.22;
     const lineH = fontPx + lineGap;
-    ctx.font = `${bold ? 'bold ' : ''}${fontPx}px ${font}`;
+    ctx.font = `${bold ? 'bold ' : ''}${fontPx}px ${labelFont}`;
     const rich = richOptions
       ? resolveRichDataLabelBlock(ctx, richOptions, fontPx, fontColor)
       : null;
@@ -5645,7 +5680,7 @@ function drawPieCalloutLabels(
 
     labels.push({
       lines, rich: rich ?? undefined, lineHeight: lineH, midAngle, rimX, rimY, boxW, boxH, cxBox, cyBox,
-      leftSide, fontColor, boxFill, boxBorder, boxBorderPx, fontPx, bold, inside, manualClip,
+      leftSide, fontColor, boxFill, boxBorder, boxBorderPx, fontPx, bold, font: labelFont, inside, manualClip,
     });
   }
 
@@ -5802,7 +5837,7 @@ function drawPieCalloutLabels(
       if (l.manualClip) ctx.restore();
       continue;
     }
-    ctx.font = `${l.bold ? 'bold ' : ''}${l.fontPx}px ${font}`;
+    ctx.font = `${l.bold ? 'bold ' : ''}${l.fontPx}px ${l.font}`;
     ctx.fillStyle = l.fontColor;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -6212,6 +6247,7 @@ function drawScatterSeriesLayer(
   isBubble: boolean,
   style: string,
   layoutReferenceRect: DataLabelRect,
+  valueDisplayUnits?: ChartDisplayUnits | null,
 ): void {
   const drawLines = style === 'line' || style === 'lineMarker' || style === 'lineNoMarker';
   const drawSmooth = style === 'smooth' || style === 'smoothMarker' || style === 'smoothNoMarker';
@@ -6324,6 +6360,7 @@ function drawScatterSeriesLayer(
       { x: px0, y: py0, w: pw, h: ph },
       layoutReferenceRect,
       face => chartFontFamily(chart, face, 'minor'),
+      valueDisplayUnits,
     );
   }
 
@@ -6741,11 +6778,13 @@ function renderScatterChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r:
   drawScatterSeriesLayer(
     ctx, chart, primaryEntries, useIndexX, toX, toY, r,
     px0, py0, pw, ph, ptToPx, isBubble, style, { x, y, w, h },
+    chart.valAxisDisplayUnits,
   );
   if (secondaryEntries.length > 0 && secondaryXPlan && secondaryYPlan) {
     drawScatterSeriesLayer(
       ctx, chart, secondaryEntries, useIndexX, toSecondaryX, toSecondaryY, r,
       px0, py0, pw, ph, ptToPx, isBubble, style, { x, y, w, h },
+      secondaryY?.displayUnits,
     );
   }
 
@@ -7021,6 +7060,7 @@ function drawSeriesDataLabels(
   bounds: DataLabelRect = { x: -1e6, y: -1e6, w: 2e6, h: 2e6 },
   layoutReferenceRect: DataLabelRect = bounds,
   richFontFamilyForFace?: (face: string) => string,
+  valueDisplayUnits?: ChartDisplayUnits | null,
 ): void {
   const overrides = s.dataLabelOverrides ?? [];
   const overridesByIndex = indexPointOverrides(overrides);
@@ -7049,6 +7089,7 @@ function drawSeriesDataLabels(
       ),
       seriesName: s.name,
       sourceValue: yv,
+      valueDivisor: displayUnitDivisor(valueDisplayUnits),
       formatCode: ovr?.formatCode ?? seriesDef?.formatCode ?? null,
       date1904,
       separator: ovr?.separator ?? seriesDef?.separator,
@@ -7060,8 +7101,12 @@ function drawSeriesDataLabels(
       ?? Math.max(9, Math.min(11, ph / 25));
     const color = ovr?.fontColor ?? seriesDef?.fontColor;
     const bold = ovr?.fontBold ?? seriesDef?.fontBold ?? false;
+    const labelFace = ovr?.fontFace ?? seriesDef?.fontFace;
+    const labelFont = labelFace && richFontFamilyForFace
+      ? richFontFamilyForFace(labelFace)
+      : fontFamily;
     drawDataLabelText(
-      ctx, toX(xv), toY(yv), text, pos, fontSizePx, color, bold, fontFamily, 0,
+      ctx, toX(xv), toY(yv), text, pos, fontSizePx, color, bold, labelFont, 0,
       bounds, ovr?.manualLayout,
       layoutReferenceRect,
       ovr?.richRuns,
@@ -7360,6 +7405,7 @@ function drawCategoryDataLabels(
   percentRatioAt?: (index: number) => number,
   markerGapAt?: (index: number) => number,
   richFontFamilyForFace?: (face: string) => string,
+  valueDisplayUnits?: ChartDisplayUnits | null,
 ): boolean {
   const overrides = s.dataLabelOverrides ?? [];
   const overridesByIndex = indexPointOverrides(overrides);
@@ -7387,6 +7433,7 @@ function drawCategoryDataLabels(
       category: cats[ci] ?? '',
       seriesName: s.name,
       sourceValue,
+      valueDivisor: displayUnitDivisor(valueDisplayUnits),
       percentRatio: percentRatioAt?.(ci),
       formatCode: ovr?.formatCode ?? seriesDef?.formatCode ?? null,
       date1904,
@@ -7399,8 +7446,12 @@ function drawCategoryDataLabels(
       ?? Math.max(9, Math.min(11, ph / 25));
     const color = ovr?.fontColor ?? seriesDef?.fontColor;
     const bold = ovr?.fontBold ?? seriesDef?.fontBold ?? false;
+    const labelFace = ovr?.fontFace ?? seriesDef?.fontFace;
+    const labelFont = labelFace && richFontFamilyForFace
+      ? richFontFamilyForFace(labelFace)
+      : fontFamily;
     drawDataLabelText(
-      ctx, xAt(ci), yAt(anchorValue), text, pos, fontSizePx, color, bold, fontFamily,
+      ctx, xAt(ci), yAt(anchorValue), text, pos, fontSizePx, color, bold, labelFont,
       markerGapAt?.(ci) ?? 0,
       bounds, ovr?.manualLayout,
       layoutReferenceRect,
@@ -7424,6 +7475,7 @@ interface ResolvedChartExLabel {
   fontColor?: string;
   fontSizeHpt?: number;
   fontBold?: boolean;
+  fontFace?: string;
   manualLayout?: ChartDataLabelOverride['manualLayout'];
 }
 
@@ -7455,6 +7507,7 @@ function resolveChartExLabel(
   },
   overrideLookup: ReadonlyMap<number, NonNullable<ChartSeries['dataLabelOverrides']>[number]>,
   valueOption?: boolean | number,
+  valueDisplayUnits?: ChartDisplayUnits | null,
 ): ResolvedChartExLabel | null {
   if (!series) return null;
   const definition = series.seriesDataLabels;
@@ -7487,6 +7540,7 @@ function resolveChartExLabel(
     category,
     seriesName: series.name,
     sourceValue: value,
+    valueDivisor: displayUnitDivisor(valueDisplayUnits),
     percentRatio,
     formatCode: authoredFormatCode ?? series.valFormatCode ?? null,
     percentFormatCode: authoredFormatCode ?? '0%',
@@ -7500,6 +7554,7 @@ function resolveChartExLabel(
     fontColor: override?.fontColor ?? definition?.fontColor,
     fontSizeHpt: override?.fontSizeHpt ?? definition?.fontSizeHpt,
     fontBold: override?.fontBold ?? definition?.fontBold,
+    fontFace: override?.fontFace ?? definition?.fontFace,
     manualLayout: override?.manualLayout,
   };
 }
@@ -8277,7 +8332,10 @@ function renderWaterfallChart(
       const dataLabelFontPx = chartTextFontSizePx(label.fontSizeHpt, ptToPx)
         ?? axisLabelPx(chart.dataLabelFontSizeHpt, h, ptToPx);
       const dataLabelBold = label.fontBold ?? chart.dataLabelFontBold ?? false;
-      ctx.font = `${dataLabelBold ? 'bold ' : ''}${dataLabelFontPx}px ${chartFontFamily(chart, chart.dataLabelFontFace, 'minor')}`;
+      const dataLabelFont = chartFontFamily(
+        chart, label.fontFace ?? chart.dataLabelFontFace, 'minor',
+      );
+      ctx.font = `${dataLabelBold ? 'bold ' : ''}${dataLabelFontPx}px ${dataLabelFont}`;
       drawBoundedDataLabelText(
         ctx,
         label.text,
@@ -8441,7 +8499,10 @@ function renderFunnelChart(
     if (label) {
       const fontPx = chartTextFontSizePx(label.fontSizeHpt, ptToPx)
         ?? axisLabelPx(chart.dataLabelFontSizeHpt, h, ptToPx);
-      ctx.font = `${label.fontBold ? 'bold ' : ''}${fontPx}px ${chartFontFamily(chart, chart.dataLabelFontFace, 'minor')}`;
+      const labelFont = chartFontFamily(
+        chart, label.fontFace ?? chart.dataLabelFontFace, 'minor',
+      );
+      ctx.font = `${label.fontBold ? 'bold ' : ''}${fontPx}px ${labelFont}`;
       drawBoundedDataLabelText(
         ctx,
         label.text,
@@ -9489,7 +9550,9 @@ function renderSunburstChart(
   );
 
   const labelDef = series?.seriesDataLabels;
-  const labelFont = chartFontFamily(chart, chart.dataLabelFontFace, 'minor');
+  const labelFont = chartFontFamily(
+    chart, labelDef?.fontFace ?? chart.dataLabelFontFace, 'minor',
+  );
   const labelPx = chartTextFontSizePx(labelDef?.fontSizeHpt, ptToPx)
     ?? Math.max(7, Math.min(13, outerR * 0.075));
   const labelColor = labelDef?.fontColor ? `#${labelDef.fontColor}` : '#ffffff';
@@ -9553,6 +9616,9 @@ function renderSunburstChart(
       const labelText = label.text;
       const nodeLabelPx = chartTextFontSizePx(label.fontSizeHpt, ptToPx) ?? labelPx;
       const nodeLabelColor = label.fontColor ? `#${label.fontColor}` : labelColor;
+      const nodeLabelFont = label.fontFace
+        ? chartFontFamily(chart, label.fontFace, 'minor')
+        : labelFont;
 
       // Excel's sunburst category labels run along the radius (not around the
       // circumference). Center the text at the wedge mid-radius and wrap it to
@@ -9569,7 +9635,7 @@ function renderSunburstChart(
 
       const labelX = cx + Math.cos(midA) * midR;
       const labelY = cy + Math.sin(midA) * midR;
-      ctx.font = `${label.fontBold ? 'bold ' : ''}${nodeLabelPx}px ${labelFont}`;
+      ctx.font = `${label.fontBold ? 'bold ' : ''}${nodeLabelPx}px ${nodeLabelFont}`;
       if (label.manualLayout) {
         drawBoundedDataLabelText(
           ctx,
@@ -9592,7 +9658,7 @@ function renderSunburstChart(
       const deg = ((rot * 180) / Math.PI) % 360;
       if (deg > 90 || deg < -90) rot += Math.PI;
       ctx.rotate(rot);
-      ctx.font = `${label.fontBold ? 'bold ' : ''}${nodeLabelPx}px ${labelFont}`;
+      ctx.font = `${label.fontBold ? 'bold ' : ''}${nodeLabelPx}px ${nodeLabelFont}`;
       drawBoundedDataLabelText(
         ctx,
         labelText,
@@ -9769,9 +9835,11 @@ function renderTreemapChart(
   const { px0, py0, pw, ph } = frame.plotRect;
   const plotBounds = { x: px0, y: py0, w: pw, h: ph };
 
-  const fontFamily = chartFontFamily(chart, chart.dataLabelFontFace, 'minor');
   const parentMode = treemap.parentLabelLayout ?? 'overlapping';
   const labelDef = chart.series[0]?.seriesDataLabels;
+  const fontFamily = chartFontFamily(
+    chart, labelDef?.fontFace ?? chart.dataLabelFontFace, 'minor',
+  );
   const labelFontPx = chartTextFontSizePx(labelDef?.fontSizeHpt, ptToPx)
     ?? Math.max(8, Math.min(13, frame.plotRect.ph * 0.025));
   const labelColor = labelDef?.fontColor ? `#${labelDef.fontColor}` : '#ffffff';
@@ -9814,6 +9882,9 @@ function renderTreemapChart(
       const showParent = parentLabel != null
         && (parentMode !== 'overlapping' || node.depth === 0);
       const fontPx = nodeLabelFontPx;
+      const parentFontFamily = parentLabel?.fontFace
+        ? chartFontFamily(chart, parentLabel.fontFace, 'minor')
+        : fontFamily;
       const bannerH = parentMode === 'banner' && showParent
         ? Math.min(tile.h * 0.28, fontPx + 7)
         : 0;
@@ -9844,7 +9915,7 @@ function renderTreemapChart(
       for (const child of layoutTreemapTiles(node.children, content)) paint(child.node, child.rect);
 
       if (showParent && (parentLabel.manualLayout || (tile.w > fontPx * 2 && tile.h > fontPx + 4))) {
-        ctx.font = `${nodeLabelBold ? 'bold ' : ''}${fontPx}px ${fontFamily}`;
+        ctx.font = `${nodeLabelBold ? 'bold ' : ''}${fontPx}px ${parentFontFamily}`;
         const labelRect = bannerH > 0
           ? { x: tile.x, y: tile.y, w: tile.w, h: bannerH }
           : tile;
@@ -9908,7 +9979,10 @@ function renderTreemapChart(
     const fontPx = chartTextFontSizePx(leafLabel.fontSizeHpt, ptToPx)
       ?? nodeLabelFontPx;
     if (!leafLabel.manualLayout && (tile.w <= fontPx * 1.2 || tile.h <= fontPx * 1.2)) return;
-    ctx.font = `${leafLabel.fontBold ? 'bold ' : ''}${fontPx}px ${fontFamily}`;
+    const leafFontFamily = leafLabel.fontFace
+      ? chartFontFamily(chart, leafLabel.fontFace, 'minor')
+      : fontFamily;
+    ctx.font = `${leafLabel.fontBold ? 'bold ' : ''}${fontPx}px ${leafFontFamily}`;
     const automaticBounds = tile;
     // ChartEx uses `outEnd` for treemap value labels but Excel paints that
     // token inside the tile at its lower-left corner. Keep the family-specific

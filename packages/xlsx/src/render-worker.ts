@@ -28,7 +28,7 @@ import {
   type PullSessionResponse,
 } from '@silurus/ooxml-core/worker';
 import { renderWorksheetViewport } from './render-orchestrator.js';
-import { inheritSheetRenderCache } from './renderer.js';
+import { inheritSheetRenderCache, markAutoRowHeightsPrepared } from './renderer.js';
 import { XLSX_GOOGLE_FONTS, xlsxFontPreloadNames } from './google-fonts.js';
 import { resolveSharedStringRows } from './shared-strings.js';
 import {
@@ -231,6 +231,9 @@ self.onmessage = async (e: MessageEvent<RenderWorkerRequest | PullSessionCommand
       );
       const renderWorksheet = projected.worksheet;
       if (projected.created) inheritSheetRenderCache(ws, renderWorksheet);
+      if (req.viewProjection?.autoRowHeightsPrepared) {
+        markAutoRowHeightsPrepared(renderWorksheet);
+      }
       const maximumDigitWidth = req.layoutMetrics?.maximumDigitWidth;
       if (maximumDigitWidth !== undefined) {
         if (!Number.isFinite(maximumDigitWidth) || maximumDigitWidth <= 0) {
