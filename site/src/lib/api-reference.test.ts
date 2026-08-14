@@ -1,7 +1,35 @@
 import { describe, expect, it } from 'vitest';
-import { apiReference } from './api-reference.js';
+import { apiReference, chartAddons } from './api-reference.js';
 
 describe('official-site API reference', () => {
+  it('documents both optional chart renderer entries and their shared contracts', () => {
+    expect(chartAddons.map(({ entry, exportName, contract }) => ({ entry, exportName, contract })))
+      .toEqual([
+        {
+          entry: '@silurus/ooxml/three-d',
+          exportName: 'threeD',
+          contract: 'ChartThreeDRenderer',
+        },
+        {
+          entry: '@silurus/ooxml/region-map',
+          exportName: 'regionMap',
+          contract: 'ChartRegionMapRenderer',
+        },
+      ]);
+  });
+
+  it('documents optional chart injection on every format Viewer and engine', () => {
+    for (const classes of Object.values(apiReference)) {
+      for (const apiClass of classes) {
+        const options = apiClass.options ?? [];
+        expect(options.find(({ name }) => name === 'threeD')?.type, apiClass.name)
+          .toBe('ChartThreeDRenderer');
+        expect(options.find(({ name }) => name === 'regionMap')?.type, apiClass.name)
+          .toBe('ChartRegionMapRenderer');
+      }
+    }
+  });
+
   it('documents the shared resource controls on every browser API class', () => {
     for (const classes of Object.values(apiReference)) {
       for (const apiClass of classes) {

@@ -1,5 +1,5 @@
 ---
-import { apiReference } from '../lib/api-reference';
+import { apiReference, chartAddons } from '../lib/api-reference';
 import InlineApiDescription from './InlineApiDescription.astro';
 interface Props {
   format: 'docx' | 'xlsx' | 'pptx';
@@ -17,6 +17,17 @@ const borrowedEngine = {
   pptx: { className: 'PptxPresentation', factory: 'fromPresentation()' },
   xlsx: { className: 'XlsxWorkbook', factory: 'fromWorkbook()' },
 }[format];
+const viewerName = { docx: 'DocxViewer', xlsx: 'XlsxViewer', pptx: 'PptxViewer' }[format];
+const viewerTarget = format === 'xlsx' ? 'container' : 'canvas';
+const addonExample = `import { ${viewerName} } from '@silurus/ooxml/${format}';
+import { threeD } from '@silurus/ooxml/three-d';
+import { regionMap } from '@silurus/ooxml/region-map';
+
+const viewer = new ${viewerName}(${viewerTarget}, {
+  mode: 'main',
+  threeD,
+  regionMap,
+});`;
 ---
 <section class="api" data-reveal>
   <p class="api-badge">API reference</p>
@@ -87,6 +98,32 @@ const borrowedEngine = {
       <code>onSelectionContextChange</code> when that snapshot may have changed.
     </p>
     <a class="api-detail-link" href="/selection-context">Open the selection &amp; AI guide →</a>
+  </div>
+
+  <div id="chart-rendering-addons" class="api-addons">
+    <h4>Optional chart renderers</h4>
+    <p>
+      3-D charts and country Region Maps are explicit add-ons shared by DOCX, XLSX and PPTX.
+      Omit them to keep the base graph smaller. Authored 3-D charts retain the canonical 2-D
+      fallback; Region Maps require their add-on. Both add-ons require <code>mode: 'main'</code>.
+    </p>
+    <pre><code>{addonExample}</code></pre>
+    <div class="api-addon-table-wrap">
+      <table class="api-addon-table">
+        <thead><tr><th>Add-on</th><th>Entry / export</th><th>Contract</th><th>Scope</th></tr></thead>
+        <tbody>
+          {chartAddons.map((addon) => (
+            <tr>
+              <th>{addon.name}</th>
+              <td><code>{addon.entry}</code><br /><code>{addon.exportName}</code></td>
+              <td><code>{addon.contract}</code></td>
+              <td>{addon.desc}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <a class="api-detail-link" href="/announcements/v079-chart-rendering-addons">Read the chart rendering release note →</a>
   </div>
 
   {groupedClasses.map((c) => (
@@ -196,10 +233,19 @@ const borrowedEngine = {
   .api-mode-table td { color: var(--text-dim); }
   .api-mode-table th + th, .api-mode-table th + td, .api-mode-table td + td { border-left: 1px solid var(--border); }
 
-  .api-errors, .api-selection { margin-top: 30px; padding: 26px 28px 28px; border: 1px solid var(--border); background: var(--bg-elev); }
-  .api-errors h4, .api-selection h4 { margin: 0; font-size: 19px; }
-  .api-errors > p, .api-selection > p { max-width: 92ch; margin: 10px 0 14px; color: var(--text-dim); font-size: 14.5px; }
-  .api-selection code { font-family: var(--mono); font-size: .9em; color: var(--text); }
+  .api-errors, .api-selection, .api-addons { margin-top: 30px; padding: 26px 28px 28px; border: 1px solid var(--border); background: var(--bg-elev); }
+  .api-errors h4, .api-selection h4, .api-addons h4 { margin: 0; font-size: 19px; }
+  .api-errors > p, .api-selection > p, .api-addons > p { max-width: 92ch; margin: 10px 0 14px; color: var(--text-dim); font-size: 14.5px; }
+  .api-selection code, .api-addons code { font-family: var(--mono); font-size: .9em; color: var(--text); }
+  .api-addons > pre { margin: 14px 0; padding: 16px 18px; overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--code-bg); }
+  .api-addons > pre code { white-space: pre; color: var(--code-keyword); }
+  .api-addon-table-wrap { margin: 14px 0; overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+  .api-addon-table { width: 100%; min-width: 820px; border-collapse: collapse; font-size: 13.5px; }
+  .api-addon-table th, .api-addon-table td { padding: 10px 12px; text-align: left; vertical-align: top; border-top: 1px solid var(--border); }
+  .api-addon-table thead th { border-top: 0; background: var(--code-bg); color: var(--text); }
+  .api-addon-table tbody th { color: var(--text); white-space: nowrap; }
+  .api-addon-table td { color: var(--text-dim); }
+  .api-addon-table th + th, .api-addon-table th + td, .api-addon-table td + td { border-left: 1px solid var(--border); }
   .api-detail-link { color: var(--accent); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
 
   .api-class { margin-top: 30px; }

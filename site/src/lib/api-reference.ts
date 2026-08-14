@@ -27,6 +27,31 @@ export interface ApiClass {
   methods: ApiMethod[];
 }
 
+export interface ApiAddon {
+  name: string;
+  entry: string;
+  exportName: string;
+  contract: string;
+  desc: string;
+}
+
+export const chartAddons: readonly ApiAddon[] = [
+  {
+    name: '3-D chart renderer',
+    entry: '@silurus/ooxml/three-d',
+    exportName: 'threeD',
+    contract: 'ChartThreeDRenderer',
+    desc: 'Renders the authored OOXML view with one model-space camera and bounded mesh pipeline. Supports the documented cartesian and pie 3-D families and authored bar/column shape meshes. Main-thread rendering only.',
+  },
+  {
+    name: 'Offline Region Map renderer',
+    entry: '@silurus/ooxml/region-map',
+    exportName: 'regionMap',
+    contract: 'ChartRegionMapRenderer',
+    desc: 'Renders supported country-level ChartEx maps without network access using a pinned public-domain Natural Earth asset. Cached provider identities and unsupported sub-country/view-specific layouts fail closed.',
+  },
+];
+
 const RESOURCE_LIMITS = { name: 'resourceLimits', type: 'OoxmlResourceLimits', def: '128 MiB per entry / 256 MiB distinct total / 4,096 entries', desc: 'Shared DOCX/XLSX/PPTX package budgets. maxArchiveEntryBytes caps each package part; maxTotalInflatedBytes counts the largest amount read from every distinct part without charging repeat reads twice; maxArchiveEntries bounds central-directory entries before ZIP index allocation. Supply positive safe integers, or null to disable one configurable budget (internal hard ceilings remain). Violations reject with OoxmlResourceLimitError. These deterministic counters reduce OOM risk but do not measure or guarantee peak memory.', emphasis: 'Violations reject with OoxmlResourceLimitError.', detailsHref: '/errors#ooxml-resource-limit-error', detailsLabel: 'Error fields' };
 const RESOURCE_METRICS = { name: 'onResourceMetrics', type: '(metrics: OoxmlResourceMetrics) => void', desc: 'Receives the content-free initial-load report used by the debug card, without enabling console output. It reports the configured public policy, timing checkpoints, format/mode, success or typed failure discriminants, source bytes, and observed archive counters when available. It does not wait for a Viewer\'s first paint. On success, call getResourceMetrics() on the engine or Viewer for a fresh snapshot after lazy package work. Callback exceptions never change load results.', emphasis: 'Receives the content-free initial-load report used by the debug card, without enabling console output.' };
 const RESOURCE_METRICS_METHOD = { sig: 'getResourceMetrics(): Promise<OoxmlResourceMetrics>', desc: 'Return a fresh, content-free package-usage snapshot, including lazy archive work observed since load. Collection is always active; debug controls only console output.', emphasis: 'Collection is always active; debug controls only console output.' };
@@ -38,8 +63,8 @@ const DPR = { name: 'dpr', type: 'number', def: 'devicePixelRatio', desc: 'Devic
 const WASM_URL = { name: 'wasmUrl', type: 'string | URL', def: 'bundled asset', desc: 'Override the URL the parser worker fetches the WebAssembly module from. By default each format resolves the `*_parser_bg.wasm` asset that ships next to its bundle (relative to the module URL); set this to serve it from a CDN or a self-hosted path instead (a relative value resolves against the document URL). Pointing it at a mismatched or missing file makes load() reject when the worker instantiates it.', emphasis: 'Override the URL the parser worker fetches the WebAssembly module from.' };
 const WORKER_TIMEOUT = { name: 'workerTimeoutMs', type: 'number', def: 'unlimited', desc: 'Reject the parse if the worker does not answer within this many ms — an opt-in safety net for a wedged / crashed worker that would otherwise leave load() pending forever. Unlimited by default (a large document with heavy media can legitimately take tens of seconds). A worker that throws or fails to load already rejects immediately regardless; this only covers the "silent, never-responds" case.', emphasis: 'Reject the parse if the worker does not answer within this many ms' };
 const MATH = { name: 'math', type: 'MathRenderer', def: 'undefined', desc: 'Opt-in OMML equation engine (MathJax + STIX Two Math, ~3 MB). Import it from the separate @silurus/ooxml/math entry — `import { math } from "@silurus/ooxml/math"` — and pass it to render equations. Omit it and equations are skipped, and the engine is left out of your build. When passed, the engine ships as a standalone asset fetched lazily the first time a document contains an equation.', emphasis: 'Opt-in OMML equation engine (MathJax + STIX Two Math, ~3 MB).' };
-const THREE_D = { name: 'threeD', type: 'ChartThreeDRenderer', def: 'undefined', desc: 'Opt-in model-space 3-D chart renderer. Import `threeD` from the separate `@silurus/ooxml/three-d` entry and inject it once. Omit it to use the canonical 2-D fallback and keep the mesh/camera implementation out of the application graph. Main-thread rendering only.', emphasis: 'Opt-in model-space 3-D chart renderer.' };
-const REGION_MAP = { name: 'regionMap', type: 'ChartRegionMapRenderer', def: 'undefined', desc: 'Opt-in offline ChartEx Region Map renderer backed by a fixed Natural Earth country asset. Import `regionMap` from `@silurus/ooxml/region-map` and inject it once. Unsupported cached or sub-country views fail closed. Main-thread rendering only.', emphasis: 'Opt-in offline ChartEx Region Map renderer' };
+const THREE_D = { name: 'threeD', type: 'ChartThreeDRenderer', def: 'undefined', desc: 'Opt-in model-space 3-D chart renderer. Import `threeD` from the separate `@silurus/ooxml/three-d` entry and inject it once. Omit it to use the canonical 2-D fallback and keep the mesh/camera implementation out of the application graph. It renders the view angle authored in OOXML. Main-thread rendering only.', emphasis: 'Opt-in model-space 3-D chart renderer.', detailsHref: '/announcements/v079-chart-rendering-addons#one-3-d-scene-for-axes-and-data', detailsLabel: '3-D scope' };
+const REGION_MAP = { name: 'regionMap', type: 'ChartRegionMapRenderer', def: 'undefined', desc: 'Opt-in offline ChartEx Region Map renderer using a pinned, public-domain Natural Earth country asset. Import `regionMap` from `@silurus/ooxml/region-map` and inject it once. Unsupported cached or sub-country views fail closed. Main-thread rendering only.', emphasis: 'Opt-in offline ChartEx Region Map renderer', detailsHref: '/announcements/v079-chart-rendering-addons#offline-country-region-maps', detailsLabel: 'Region Map scope' };
 const MODE = { name: 'mode', type: "'main' | 'worker'", def: "'main'", desc: "'main' parses in a worker and renders on the main thread (default). 'worker' also renders inside the worker; the main thread only paints the returned ImageBitmap. This contains parser/renderer state and many failures away from Window, but a Worker is not a separate process or a strict memory sandbox and cannot guarantee recovery from every browser-level OOM. Requires Worker + OffscreenCanvas. Canvas-target render methods are unavailable in 'worker' mode, equations require 'main', and transferring each frame can add latency.", emphasis: 'a Worker is not a separate process or a strict memory sandbox and cannot guarantee recovery from every browser-level OOM.' };
 const VIEWER_MODE = { name: 'mode', type: "'main' | 'worker'", def: "'main'", desc: "'main' renders on the main thread (default). 'worker' renders the viewer off the main thread and paints transferred ImageBitmaps, improving UI responsiveness and containing parser/renderer state away from Window. It is not a separate process or a strict memory sandbox and cannot guarantee recovery from every browser-level OOM. Scroll, tabs, zoom, selection and find remain available; equations require 'main'. Requires Worker + OffscreenCanvas, and frame transfer can add latency.", emphasis: 'It is not a separate process or a strict memory sandbox and cannot guarantee recovery from every browser-level OOM.' };
 const ZOOM_MIN_MAX = { name: 'zoomMin / zoomMax', type: 'number', def: '0.1 / 4', desc: 'Zoom factor bounds for setScale / fitWidth / fitPage (10%–400%).' };
