@@ -7,13 +7,13 @@ const articlePage = readFileSync(new URL('./pages/announcements/[slug].astro', i
 describe('v0.79 chart rendering announcement', () => {
   const announcement = announcements.find((item) => item.slug === 'v079-chart-rendering-addons');
 
-  it('states the opt-in and no-migration decision before implementation detail', () => {
+  it('publishes the release and states the opt-in decision before implementation detail', () => {
     expect(announcement).toBeDefined();
-    expect(announcement?.label).toBe('Upcoming release');
+    expect(announcement?.label).toBe('Release note');
     expect(announcement?.sections[0]).toMatchObject({ title: 'In short', kind: 'summary' });
     const summary = announcement?.sections[0]?.paragraphs.join(' ') ?? '';
     expect(summary).toContain('explicit add-ons');
-    expect(summary).toContain('no migration');
+    expect(summary).toContain('No migration');
   });
 
   it('documents module boundaries, Region Map provenance and fidelity scope', () => {
@@ -26,10 +26,10 @@ describe('v0.79 chart rendering announcement', () => {
     expect(text).toContain('@silurus/ooxml/three-d');
     expect(text).toContain('@silurus/ooxml/region-map');
     expect(text).toContain('Natural Earth');
-    expect(text).toContain('not copied from Excel or Bing');
-    expect(text).toContain('fail closed');
+    expect(text).toContain('country-level world maps');
     expect(text).toContain('main thread');
-    expect(text).toContain('not an interactive orbit control');
+    expect(text).not.toContain('interactive orbit');
+    expect(text).not.toContain('copied from Excel or Bing');
   });
 
   it('uses one local renderer-produced image with explicit provenance', () => {
