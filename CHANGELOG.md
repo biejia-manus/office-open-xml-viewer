@@ -5,6 +5,41 @@ semantic versioning. While the major version is zero, minor releases may contain
 explicitly documented breaking changes; patch releases remain compatible with
 the corresponding minor release.
 
+## 0.79.0 — 2026-08-14
+
+Compatible minor release. Adds opt-in advanced chart renderers and completes a
+specification-first fidelity audit across charts hosted by Word, Excel, and
+PowerPoint.
+
+- **optional 3-D charts:** add the tree-shakeable `@silurus/ooxml/three-d`
+  entry, using one homogeneous model-space camera for chart walls, axes, grids,
+  labels, and bounded meshes. It supports cartesian and pie 3-D families plus
+  authored box, cylinder, cone, cone-to-max, pyramid, and pyramid-to-max bar
+  shapes. Applications opt in on the main thread; existing integrations retain
+  the 2-D fallback.
+- **offline Region Maps:** add the tree-shakeable
+  `@silurus/ooxml/region-map` entry for country-level ChartEx world maps using
+  pinned public-domain Natural Earth geometry. Authored projections, theme
+  colors, and two/three-stop value ramps are retained; unsupported cached or
+  sub-country views fail closed without network access.
+- **shared chart fidelity:** preserve more authored axis, title, rich-label,
+  legend, point, line, fill, and Chart Style properties through the shared
+  parser/model/renderer pipeline. Automatic linear axes, explicit bounds,
+  major/minor ticks, plot margins, secondary axes, and legend layout now use
+  common bounded policies across classic and ChartEx families.
+- **specialized chart families:** improve waterfall connectors and labels,
+  Pareto and histogram axes, box-and-whisker geometry, treemap and sunburst
+  hierarchy labels, funnel, bubble, line, area, combo, and chart-sheet layout.
+  XLSX chart sheets and absolute chart anchors are retained.
+- **bounded work and package boundaries:** cap expanded 3-D primitives,
+  hierarchy/data-label work, map rows, ticks, and parser caches. The 3-D camera,
+  mesh code, and geographic asset remain outside ordinary DOCX/XLSX/PPTX entry
+  graphs unless explicitly imported.
+- **site and compatibility:** the API reference and Try Yours demo expose the
+  optional renderers consistently across all three host formats. No existing
+  option is removed or renamed; add-ons are required only for their authored
+  chart families.
+
 ## 0.78.1 — 2026-08-12
 
 Patch. Fixes a DOCX pagination regression introduced in v0.78.0 without
