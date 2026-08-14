@@ -4,6 +4,45 @@ import { announcements } from './lib/announcements';
 
 const articlePage = readFileSync(new URL('./pages/announcements/[slug].astro', import.meta.url), 'utf8');
 
+describe('v0.79 chart rendering announcement', () => {
+  const announcement = announcements.find((item) => item.slug === 'v079-chart-rendering-addons');
+
+  it('states the opt-in and no-migration decision before implementation detail', () => {
+    expect(announcement).toBeDefined();
+    expect(announcement?.label).toBe('Upcoming release');
+    expect(announcement?.sections[0]).toMatchObject({ title: 'In short', kind: 'summary' });
+    const summary = announcement?.sections[0]?.paragraphs.join(' ') ?? '';
+    expect(summary).toContain('explicit add-ons');
+    expect(summary).toContain('no migration');
+  });
+
+  it('documents module boundaries, Region Map provenance and fidelity scope', () => {
+    const text = announcement?.sections.flatMap((section) => [
+      ...(section.modules ?? []),
+      ...section.paragraphs,
+      ...(section.bullets ?? []),
+      ...(section.examples?.map(({ code }) => code) ?? []),
+    ]).join('\n') ?? '';
+    expect(text).toContain('@silurus/ooxml/three-d');
+    expect(text).toContain('@silurus/ooxml/region-map');
+    expect(text).toContain('Natural Earth');
+    expect(text).toContain('not copied from Excel or Bing');
+    expect(text).toContain('fail closed');
+    expect(text).toContain('main thread');
+    expect(text).toContain('not an interactive orbit control');
+  });
+
+  it('uses one local renderer-produced image with explicit provenance', () => {
+    expect(announcement?.image).toMatchObject({
+      src: '/announcements/chart-rendering-v079.webp',
+    });
+    expect(announcement?.image?.alt).toContain('synthetic');
+    expect(announcement?.image?.caption).toContain('Natural Earth');
+    expect(articlePage).toContain('announcement.image');
+    expect(articlePage).toContain('<figcaption>');
+  });
+});
+
 describe('resource-governance announcement', () => {
   const announcement = announcements.find((item) => item.slug === 'v075-resource-governance');
 
