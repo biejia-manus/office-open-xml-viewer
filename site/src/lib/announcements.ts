@@ -45,7 +45,7 @@ export const announcements: readonly Announcement[] = [
     audience: 'Applications that display Office charts. Existing applications keep the 2-D fallback without source changes; import the optional add-ons only when authored 3-D charts or country-level Region Maps are required.',
     image: {
       src: '/announcements/chart-rendering-v079.webp',
-      alt: 'A grid of eight synthetic chart renderings: 3-D columns, 3-D pie, an offline country Region Map, line, waterfall, treemap, funnel and box-and-whisker charts.',
+      alt: 'A grid of eight synthetic chart renderings: 3-D columns, 3-D pie, an offline country Region Map, a combo chart with minor ticks, waterfall, treemap, funnel and box-and-whisker charts.',
       caption: 'Rendered by @silurus/ooxml from synthetic data. The map uses public-domain Natural Earth geometry; no Office, Bing or private-document artwork is reproduced.',
     },
     sections: [
