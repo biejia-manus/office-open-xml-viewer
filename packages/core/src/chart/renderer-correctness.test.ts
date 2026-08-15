@@ -272,7 +272,7 @@ describe('chart-space background', () => {
 });
 
 describe('classic 3-D compatibility projection', () => {
-  it('uses the canonical 2-D family fallback when the optional addon is absent', () => {
+  it('uses the canonical 2-D family fallback when the optional renderer is absent', () => {
     const rec = recordingCtx();
     renderChartCore(rec.ctx, baseModel({
       chartType: 'clusteredBar', categories: ['A'],

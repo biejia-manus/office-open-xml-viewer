@@ -49,7 +49,7 @@ linear planner.
   before allocation; unsafe authored minor plans are skipped rather than
   truncated to one side of the axis.
 - Classic Canvas chart input is capped at 10,000 expanded point slots. The
-  optional 3-D addon also applies a cumulative projected-face/stroke budget.
+  optional 3-D renderer also applies a cumulative projected-face/stroke budget.
 - Chart hierarchy input is capped by both row/segment count and depth before
   tree construction.
 - Indexed point and label overrides are resolved into maps before paint loops;
@@ -72,13 +72,14 @@ shared chart painter. Their implementations live in separate package entries:
 - `@silurus/ooxml/three-d`
 - `@silurus/ooxml/region-map`
 
-Omitting an addon removes its implementation and large assets from the base
-dependency closure. The built-in addons also publish a structured-clone-safe
-identity descriptor so worker mode can lazy-import the same implementation in
-its own realm without depending on bundler-renamed exports. Custom
-function-valued addons remain main-thread-only unless they expose a module
+Omitting a renderer keeps its implementation out of the ordinary synchronous
+dependency closure. The built-in renderers also publish a structured-clone-safe
+identity descriptor so worker mode can import the supplied implementation in
+its own realm without depending on bundler-renamed exports. Build tools may
+retain these worker imports as separate lazy chunks. Custom function-valued
+renderers remain main-thread-only unless they expose a renderer-module
 descriptor. Clean build checks verify both the optional entry and the absence
-of its marker from the base DOCX/XLSX/PPTX entries.
+of its marker from the base DOCX/XLSX/PPTX static dependency closures.
 
 ## Known, deliberately limited compatibility surfaces
 
@@ -88,7 +89,7 @@ of its marker from the base DOCX/XLSX/PPTX entries.
 - Box-and-whisker's omitted major unit is a narrow ChartEx family policy derived
   from Office vector observations. It does not override an authored unit and is
   not reused by other ChartEx families.
-- The 3-D mesh addon implements the six ST_Shape values as model-space box,
+- The 3-D mesh renderer implements the six ST_Shape values as model-space box,
   revolved, or tapered meshes. Office lighting is approximated from face normals;
   no sample-specific screen-space paint patches are permitted.
 - Region Map supports deterministic offline country geometry. It does not

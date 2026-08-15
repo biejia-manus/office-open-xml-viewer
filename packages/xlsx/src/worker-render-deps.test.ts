@@ -8,7 +8,7 @@ import type { ParsedWorkbook, Worksheet } from './types.js';
 import { workerRenderDeps } from './worker-render-deps.js';
 
 describe('worker render dependencies', () => {
-  it('passes every reconstructed addon through the dependency channel used by the renderer', () => {
+  it('passes every reconstructed renderer through the dependency channel used by the renderer', () => {
     const ws = {} as Worksheet;
     const styles = {} as ParsedWorkbook['styles'];
     const math = {} as MathRenderer;

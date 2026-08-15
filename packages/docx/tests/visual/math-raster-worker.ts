@@ -1,17 +1,17 @@
-import { rasterizeMathSvg, type WorkerAddonDescriptor } from '@silurus/ooxml-core';
-import { loadWorkerRenderAddons } from '@silurus/ooxml-core/worker';
+import { rasterizeMathSvg, type WorkerRendererDescriptor } from '@silurus/ooxml-core';
+import { loadWorkerRenderers } from '@silurus/ooxml-core/worker';
 
 interface Request {
   readonly mathml: string;
-  readonly addon: WorkerAddonDescriptor;
+  readonly renderer: WorkerRendererDescriptor;
 }
 
 self.onmessage = async ({ data }: MessageEvent<Request>) => {
   try {
-    const addons = await loadWorkerRenderAddons({ math: data.addon });
-    if (!addons.math) throw new Error('worker math addon was not reconstructed');
-    await addons.math.loadMathJax();
-    const output = await addons.math.mathMLToSvg(data.mathml);
+    const renderers = await loadWorkerRenderers({ math: data.renderer });
+    if (!renderers.math) throw new Error('worker math renderer was not reconstructed');
+    await renderers.math.loadMathJax();
+    const output = await renderers.math.mathMLToSvg(data.mathml);
     const raster = await rasterizeMathSvg(output, '#111827');
     const canvas = new OffscreenCanvas(900, 240);
     const context = canvas.getContext('2d');

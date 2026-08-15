@@ -21,7 +21,7 @@ import {
   type ChartThreeDRenderer,
   type ChartRegionMapRenderer,
   type OoxmlResourceMetrics,
-  workerRenderAddons,
+  workerRendererDescriptors,
 } from '@silurus/ooxml-core';
 import {
   deserializeWorkerError,
@@ -37,7 +37,7 @@ import {
   PULL_SESSION_PROTOCOL,
   type NormalizedOoxmlResourcePolicy,
   type PullSessionResponse,
-  type WorkerRenderAddons,
+  type WorkerRendererDescriptors,
 } from '@silurus/ooxml-core/worker';
 import { BoundedRawPartCache } from '@silurus/ooxml-core/internal/bounded-raw-part-cache';
 import { PPTX_GOOGLE_FONTS } from './google-fonts';
@@ -277,19 +277,19 @@ export class PptxPresentation {
       pres._metrics = metrics;
       if (opts.math && mode === 'worker' && !opts.math.worker) {
         console.warn(
-          "[ooxml] the supplied math engine has no worker module descriptor; equations will be skipped in mode: 'worker'. Use @silurus/ooxml/math or provide MathRenderer.worker.",
+          "[ooxml] the supplied math renderer has no worker renderer-module descriptor; equations will be skipped in mode: 'worker'. Use @silurus/ooxml/math or provide MathRenderer.worker.",
         );
       }
       if (opts.threeD && mode === 'worker' && !opts.threeD.worker) {
         console.warn(
-          "[ooxml] the supplied 3-D chart addon has no worker module descriptor; charts use their 2-D family fallback in mode: 'worker'. Use @silurus/ooxml/three-d or provide ChartThreeDRenderer.worker.",
+          "[ooxml] the supplied 3-D chart renderer has no worker renderer-module descriptor; charts use their 2-D family fallback in mode: 'worker'. Use @silurus/ooxml/three-d or provide ChartThreeDRenderer.worker.",
         );
       }
       pres._math = mode === 'worker' ? undefined : opts.math;
       pres._threeD = mode === 'worker' ? undefined : opts.threeD;
       if (opts.regionMap && mode === 'worker' && !opts.regionMap.worker) {
         console.warn(
-          "[ooxml] the supplied Region Map addon has no worker module descriptor; geospatial charts use the unsupported-chart placeholder in mode: 'worker'. Use @silurus/ooxml/region-map or provide ChartRegionMapRenderer.worker.",
+          "[ooxml] the supplied Region Map renderer has no worker renderer-module descriptor; geospatial charts use the unsupported-chart placeholder in mode: 'worker'. Use @silurus/ooxml/region-map or provide ChartRegionMapRenderer.worker.",
         );
       }
       pres._regionMap = mode === 'worker' ? undefined : opts.regionMap;
@@ -299,7 +299,7 @@ export class PptxPresentation {
         mode === 'worker' ? !!opts.useGoogleFonts : false,
         opts.workerTimeoutMs,
         (usage) => metrics.observeUsage(usage),
-        mode === 'worker' ? workerRenderAddons(opts) : undefined,
+        mode === 'worker' ? workerRendererDescriptors(opts) : undefined,
       );
       metrics.checkpoint('presentation preflight ready');
       if (mode === 'main' && opts.useGoogleFonts && pres._preflight) {
@@ -327,12 +327,12 @@ export class PptxPresentation {
     useGoogleFonts = false,
     timeoutMs?: number,
     onUsage?: (usage: import('@silurus/ooxml-core').OoxmlResourceUsageSnapshot) => void,
-    addons?: WorkerRenderAddons,
+    renderers?: WorkerRendererDescriptors,
   ): Promise<void> {
     const response = await this._bridge.request(
       (id) =>
         this._mode === 'worker'
-          ? ({ kind: 'parse', id, buffer, resourcePolicy, useGoogleFonts, addons } satisfies RenderWorkerRequest)
+          ? ({ kind: 'parse', id, buffer, resourcePolicy, useGoogleFonts, renderers } satisfies RenderWorkerRequest)
           : ({ kind: 'parse', id, buffer, resourcePolicy } satisfies PptxWorkerRequest),
       [buffer],
       { timeoutMs },

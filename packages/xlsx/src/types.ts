@@ -1091,9 +1091,9 @@ export interface XlsxRenderViewportOptions {
 export interface RenderViewportOptions extends XlsxRenderViewportOptions {
   loadedImages?: Map<string, CanvasImageSource | null>;
   fetchImage?: (path: string, mimeType: string) => Promise<Blob>;
-  /** @internal Optional synchronous 3-D chart addon retained by the workbook. */
+  /** @internal Optional synchronous 3-D chart renderer retained by the workbook. */
   threeD?: ChartThreeDRenderer;
-  /** @internal Optional synchronous offline Region Map addon. */
+  /** @internal Optional synchronous offline Region Map renderer. */
   regionMap?: ChartRegionMapRenderer;
 }
 

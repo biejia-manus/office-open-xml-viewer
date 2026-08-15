@@ -61,9 +61,9 @@ export interface RenderDocumentOptions {
   layoutServices?: LayoutServices;
   /** Internal load-time default captured once and mirrored into worker mode. */
   defaultCurrentDateMs?: number;
-  /** Internal load-time optional 3-D addon retained by DocxDocument. */
+  /** Internal load-time optional 3-D renderer retained by DocxDocument. */
   threeD?: ChartThreeDRenderer;
-  /** Internal load-time optional Region Map addon retained by DocxDocument. */
+  /** Internal load-time optional Region Map renderer retained by DocxDocument. */
   regionMap?: ChartRegionMapRenderer;
 }
 

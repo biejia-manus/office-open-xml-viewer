@@ -7890,7 +7890,7 @@ function classicThreeDWorkCount(
   threeD: ChartThreeDRenderer | undefined,
 ): number | null {
   // The expanded-face budget belongs to the optional mesh renderer. Without
-  // the addon this chart intentionally follows its canonical 2-D family, so
+  // the renderer this chart intentionally follows its canonical 2-D family, so
   // rejecting it by a cost that will never be allocated would make the
   // tree-shaken fallback less capable than an ordinary 2-D chart.
   if (!chart.threeD || !threeD) return null;
@@ -10190,10 +10190,10 @@ export function renderChart(
    * fills with `rotWithShape="0"` counter-rotate by this amount.
    */
   shapeRotationDeg = 0,
-  /** Optional tree-shakable 3-D addon. Without it, the canonical 2-D family
-   * remains visible and no mesh/camera implementation enters the base bundle. */
+  /** Optional 3-D renderer. Without it, the canonical 2-D family remains
+   * visible and no mesh/camera implementation enters the static render path. */
   threeD?: ChartThreeDRenderer,
-  /** Optional tree-shakable offline Region Map addon. */
+  /** Optional offline Region Map renderer. */
   regionMap?: ChartRegionMapRenderer,
 ): void {
   // The per-family renderers (and the early-return/default text paths below)

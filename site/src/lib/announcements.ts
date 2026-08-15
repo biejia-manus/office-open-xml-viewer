@@ -42,7 +42,7 @@ export const announcements: readonly Announcement[] = [
     version: 'v0.79.0',
     title: '3-D charts, Region Maps and chart fidelity in v0.79.0',
     summary: 'v0.79.0 adds opt-in 3-D and offline Region Map renderers while improving shared chart axes, labels, legends and modern chart families across DOCX, XLSX and PPTX.',
-    audience: 'Applications that display Office charts. Existing applications keep the established chart fallback without source changes; import the optional add-ons only when authored 3-D charts or country-level Region Maps are required.',
+    audience: 'Applications that display Office charts. Existing applications keep the established chart fallback without source changes; import the optional renderer modules only when authored 3-D charts or country-level Region Maps are required.',
     image: {
       src: '/announcements/chart-rendering-v079.webp',
       alt: 'A grid of eight synthetic chart renderings: 3-D columns, 3-D pie, an offline country Region Map, a combo chart with minor ticks, waterfall, treemap, bubble and box-and-whisker charts.',
@@ -55,14 +55,14 @@ export const announcements: readonly Announcement[] = [
         modules: ['@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx', '@silurus/ooxml/three-d', '@silurus/ooxml/region-map'],
         rationale: '3-D camera and map geometry stay out of the default bundles unless an application enables them.',
         paragraphs: [
-          'v0.79.0 keeps ordinary chart rendering in the format entries and provides 3-D and Region Map rendering as explicit add-ons. The same injected renderer works for charts hosted by Word, Excel and PowerPoint.',
+          'v0.79.0 keeps ordinary chart rendering in the format entries and provides 3-D and Region Map rendering as optional renderer modules. The same injected renderer works for charts hosted by Word, Excel and PowerPoint.',
           'Existing viewers continue to use the established chart fallback without configuration changes. No migration is required.',
         ],
         bullets: [
           'Authored 3-D chart views render through one model-space camera and projected mesh pipeline.',
           'Country-level ChartEx Region Maps render offline from worksheet or document data.',
           'Shared axis planning, titles, data labels, legend paint and ChartEx layout now follow more authored OOXML properties.',
-          'Both optional modules are tree-shakeable. They launched for the main thread only in v0.79.0; current releases also reconstruct the built-ins inside render workers.',
+          'Both renderers use separate entries and are loaded only when supplied. They launched for the main thread only in v0.79.0; current releases also reconstruct the built-ins inside render workers.',
         ],
       },
       {
@@ -70,7 +70,7 @@ export const announcements: readonly Announcement[] = [
         modules: ['@silurus/ooxml/three-d', '@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx'],
         rationale: 'Axes, walls, grids, bars, lines and surfaces must share one projection to remain geometrically coherent.',
         paragraphs: [
-          'The 3-D add-on projects chart walls, axes and data through one homogeneous camera instead of applying unrelated screen-space offsets. Bar and column solids use projected meshes, area charts use extruded surfaces, and pie slices use bounded mesh geometry. Authored box, cylinder, cone, cone-to-max, pyramid and pyramid-to-max shapes are retained where the OOXML model supplies them.',
+          'The 3-D renderer projects chart walls, axes and data through one homogeneous camera instead of applying unrelated screen-space offsets. Bar and column solids use projected meshes, area charts use extruded surfaces, and pie slices use bounded mesh geometry. Authored box, cylinder, cone, cone-to-max, pyramid and pyramid-to-max shapes are retained where the OOXML model supplies them.',
           'The renderer honors the view saved in the document, including rotation, perspective, right-angle axes, depth and height.',
         ],
       },
@@ -79,7 +79,7 @@ export const announcements: readonly Announcement[] = [
         modules: ['@silurus/ooxml/region-map', '@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx'],
         rationale: 'An OOXML Region Map may store country names and values without embedding the geographic polygons used by Excel.',
         paragraphs: [
-          'The parser keeps ChartEx country identities, numeric color values, authored projections and two- or three-stop color scales. The add-on renders supported countries offline.',
+          'The parser keeps ChartEx country identities, numeric color values, authored projections and two- or three-stop color scales. The renderer module renders supported countries offline.',
           'The map uses public-domain Natural Earth Admin 0 Countries 1:110m geometry.',
           'v0.79.0 supports country-level world maps. Cached provider identities and state, county or postal views are not supported.',
         ],
@@ -89,7 +89,7 @@ export const announcements: readonly Announcement[] = [
         modules: ['@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx', '@silurus/ooxml/three-d', '@silurus/ooxml/region-map'],
         rationale: 'Dependency injection keeps the base entries small and gives every host format the same renderer contract.',
         paragraphs: [
-          'Import each renderer from its separate package entry and pass it to a Viewer or headless engine at construction/load time. Current built-in add-ons render in both modes through stable worker identities; custom add-ons without a module descriptor retain the documented worker fallback.',
+          'Import each renderer from its separate package entry and pass it to a Viewer or headless engine at construction/load time. Current built-in renderers work in both modes through stable worker identities; custom renderers without a renderer-module descriptor retain the documented worker fallback.',
         ],
         examples: [
           {
@@ -121,7 +121,7 @@ await viewer.load(source);`,
         title: 'Upgrading',
         paragraphs: [
           'No existing option is removed or renamed. Upgrade normally to receive the shared 2-D chart fixes. Add the threeD or regionMap option only when the corresponding authored chart needs its optional renderer.',
-          'The optional entries are ESM-only like the rest of the package. Applications using custom add-ons in mode: worker must expose a worker module descriptor or retain the documented fallback.',
+          'The optional entries are ESM-only like the rest of the package. Applications using custom renderers in mode: worker must expose a worker renderer-module descriptor or retain the documented fallback.',
         ],
       },
     ],

@@ -395,7 +395,7 @@ export interface ChartRect {
     w: number;
     h: number;
 }
-export interface ChartRegionMapRenderer extends WorkerLoadableAddon {
+export interface ChartRegionMapRenderer extends WorkerLoadableRenderer {
     render(ctx: CanvasRenderingContext2D, chart: ChartModel, rect: ChartRect, ptToPx: number): boolean;
 }
 export interface ChartSeries {
@@ -500,7 +500,7 @@ export interface ChartThreeD {
     sideWall?: ChartThreeDSurface | null;
     backWall?: ChartThreeDSurface | null;
 }
-export interface ChartThreeDRenderer extends WorkerLoadableAddon {
+export interface ChartThreeDRenderer extends WorkerLoadableRenderer {
     render(ctx: CanvasRenderingContext2D, chart: ChartModel, rect: ChartRect, ptToPx: number): boolean;
 }
 export interface ChartThreeDSeriesAxis {
@@ -560,6 +560,7 @@ export interface ChartTrendline {
     lineHidden?: boolean | null;
 }
 export type ChartType = 'line' | 'stackedLine' | 'stackedLinePct' | 'clusteredBar' | 'clusteredBarH' | 'stackedBar' | 'stackedBarH' | 'stackedBarPct' | 'stackedBarHPct' | 'area' | 'stackedArea' | 'stackedAreaPct' | 'pie' | 'doughnut' | 'scatter' | 'bubble' | 'radar' | 'waterfall' | 'stock' | 'boxWhisker' | 'sunburst' | 'treemap' | string;
+export function createWorkerRendererModuleDescriptor(moduleUrl: string, exportName: string): WorkerRendererModuleDescriptor;
 export interface DimOptions {
     color: string;
     opacity: number;
@@ -760,7 +761,7 @@ export interface MathRadical {
     index?: MathNode[];
     radicand: MathNode[];
 }
-export interface MathRenderer extends WorkerLoadableAddon {
+export interface MathRenderer extends WorkerLoadableRenderer {
     loadMathJax(): Promise<void>;
     mathMLToSvg(mathml: string): Promise<MathSvg>;
 }
@@ -1536,18 +1537,18 @@ export interface ViewerContextMenuEvent<TContext> {
     readonly originalEvent: MouseEvent;
     getContext(): Promise<TContext | null>;
 }
-const WORKER_ADDON_PROTOCOL: 'ooxml-worker-addon/v1';
-export type WorkerAddonDescriptor = WorkerBuiltinAddonDescriptor | WorkerModuleAddonDescriptor;
-export interface WorkerBuiltinAddonDescriptor {
-    readonly protocol: typeof WORKER_ADDON_PROTOCOL;
-    readonly builtin: WorkerBuiltinAddonName;
+export const WORKER_RENDERER_MODULE_PROTOCOL: 'ooxml-worker-renderer-module/v1';
+export interface WorkerBuiltinRendererDescriptor {
+    readonly protocol: typeof WORKER_RENDERER_MODULE_PROTOCOL;
+    readonly builtin: WorkerBuiltinRendererName;
 }
-export type WorkerBuiltinAddonName = 'math' | 'threeD' | 'regionMap';
-interface WorkerLoadableAddon {
-    readonly worker?: WorkerAddonDescriptor;
+export type WorkerBuiltinRendererName = 'math' | 'threeD' | 'regionMap';
+interface WorkerLoadableRenderer {
+    readonly worker?: WorkerRendererDescriptor;
 }
-export interface WorkerModuleAddonDescriptor {
-    readonly protocol: typeof WORKER_ADDON_PROTOCOL;
+export type WorkerRendererDescriptor = WorkerBuiltinRendererDescriptor | WorkerRendererModuleDescriptor;
+export interface WorkerRendererModuleDescriptor {
+    readonly protocol: typeof WORKER_RENDERER_MODULE_PROTOCOL;
     readonly moduleUrl: string;
     readonly exportName: string;
 }

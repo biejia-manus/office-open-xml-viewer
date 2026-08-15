@@ -36,22 +36,24 @@ export {
 } from './pull-credit-error.js';
 export { exactTransferableArrayBuffer } from './transfer.js';
 export {
-  WORKER_ADDON_PROTOCOL,
-  assertWorkerAddonDescriptor,
-  createBuiltinWorkerAddonDescriptor,
-  createWorkerAddonDescriptor,
-  loadWorkerAddon,
-  loadWorkerRenderAddons,
-  workerRenderAddons,
-  type WorkerAddonDescriptor,
-  type WorkerBuiltinAddonDescriptor,
-  type WorkerBuiltinAddonName,
-  type WorkerLoadableAddon,
-  type WorkerModuleAddonDescriptor,
-  type WorkerRenderAddonSources,
-  type WorkerRenderAddons,
-  type LoadedWorkerRenderAddons,
-} from './addon.js';
+  WORKER_RENDERER_MODULE_PROTOCOL,
+  assertWorkerRendererDescriptor,
+  createBuiltinWorkerRendererDescriptor,
+  createWorkerRendererModuleDescriptor,
+  workerRendererDescriptors,
+  type WorkerRendererDescriptor,
+  type WorkerBuiltinRendererDescriptor,
+  type WorkerBuiltinRendererName,
+  type WorkerLoadableRenderer,
+  type WorkerRendererModuleDescriptor,
+  type WorkerRendererSources,
+  type WorkerRendererDescriptors,
+} from './renderer-module-contract.js';
+export {
+  loadWorkerRenderer,
+  loadWorkerRenderers,
+  type LoadedWorkerRenderers,
+} from './renderer-module.js';
 export {
   DEFAULT_OOXML_RESOURCE_LIMITS,
   normalizeLoadResourceOptions,

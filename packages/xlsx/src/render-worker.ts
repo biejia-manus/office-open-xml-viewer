@@ -24,8 +24,8 @@ import {
   HARD_MAX_RAW_PART_CACHE_ENTRIES,
   resourcePolicyForWasm,
   serializeWorkerError,
-  loadWorkerRenderAddons,
-  type LoadedWorkerRenderAddons,
+  loadWorkerRenderers,
+  type LoadedWorkerRenderers,
   type PullSessionCommand,
   type PullSessionResponse,
 } from '@silurus/ooxml-core/worker';
@@ -58,7 +58,7 @@ const host = new WasmParserHost<XlsxArchive>(init, {
   reinit,
 });
 let workbook: ParsedWorkbook | null = null;
-let renderAddons: LoadedWorkerRenderAddons = {};
+let renderers: LoadedWorkerRenderers = {};
 /** Settled before any render when `useGoogleFonts` was requested. The resolved
  *  value (the preloaded FontFace[]) is unused here: the worker owns its own
  *  FontFaceSet (`self.fonts`) and terminates with it, so there is nothing to
@@ -189,7 +189,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerRequest | PullSessionCommand
       dropDecodedBitmapCache(getImage);
       dropSvgImageCache(getImage);
       rawParts.clear();
-      renderAddons = await loadWorkerRenderAddons(req.addons);
+      renderers = await loadWorkerRenderers(req.renderers);
       const [maxEntry, maxTotal, maxEntries] = resourcePolicyForWasm(req.resourcePolicy);
       // Construction + `parse()` run under `host.run` so a trap in EITHER poisons
       // + recycles the instance (and frees the archive). `setArchive` frees any
@@ -248,7 +248,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerRequest | PullSessionCommand
       }
       const canvas = new OffscreenCanvas(1, 1); // orchestrator resizes it
       await renderWorksheetViewport(
-        workerRenderDeps(renderWorksheet, workbook.styles, renderAddons),
+        workerRenderDeps(renderWorksheet, workbook.styles, renderers),
         canvas,
         req.viewport,
         // Supply the in-worker byte loader so embedded images decode straight

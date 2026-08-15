@@ -45,7 +45,7 @@ for (const pageIndex of PAGES) {
   });
 }
 
-test('worker mode renders non-empty equation pixels through the same math addon', async ({ page }) => {
+test('worker mode renders non-empty equation pixels through the same math renderer', async ({ page }) => {
   await page.goto('/tests/visual/math-worker-equivalence.html');
   await page.waitForFunction(
     () => document.body.dataset.status === 'ready' || document.body.dataset.status === 'error',
@@ -83,6 +83,6 @@ test('worker mode renders non-empty equation pixels through the same math addon'
     { threshold: 0.1 },
   );
   const pct = (diff / (main.width * main.height)) * 100;
-  console.log(`  math addon: worker-vs-main diff ${pct.toFixed(3)}%, ink ${inkPixels}`);
+  console.log(`  math renderer: worker-vs-main diff ${pct.toFixed(3)}%, ink ${inkPixels}`);
   expect(pct).toBeLessThanOrEqual(0.01);
 });

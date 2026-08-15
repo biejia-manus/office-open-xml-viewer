@@ -12,7 +12,7 @@ describe('v0.79 chart rendering announcement', () => {
     expect(announcement?.label).toBe('Release note');
     expect(announcement?.sections[0]).toMatchObject({ title: 'In short', kind: 'summary' });
     const summary = announcement?.sections[0]?.paragraphs.join(' ') ?? '';
-    expect(summary).toContain('explicit add-ons');
+    expect(summary).toContain('optional renderer modules');
     expect(summary).toContain('No migration');
   });
 

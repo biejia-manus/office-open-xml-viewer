@@ -16,7 +16,7 @@ import {
   type ChartThreeDRenderer,
   type ChartRegionMapRenderer,
   type OoxmlResourceMetrics,
-  workerRenderAddons,
+  workerRendererDescriptors,
 } from '@silurus/ooxml-core';
 import {
   deserializeWorkerError,
@@ -29,7 +29,7 @@ import {
   readLatestOoxmlResourceMetrics,
   PULL_SESSION_PROTOCOL,
   type NormalizedOoxmlResourcePolicy,
-  type WorkerRenderAddons,
+  type WorkerRendererDescriptors,
 } from '@silurus/ooxml-core/worker';
 import { BoundedRawPartCache } from '@silurus/ooxml-core/internal/bounded-raw-part-cache';
 import type { DocxDocumentModel, RenderPageOptions, WorkerRequest, WorkerResponse, DocComment, DocNote } from './types';
@@ -83,7 +83,8 @@ export interface LoadOptions extends CoreLoadOptions {
    * via an `ImageBitmapRenderingContext`. Requires OffscreenCanvas. Documents
    * needing DOM-only OpenType vertical glyph selection transparently continue
    * in main mode; {@link DocxDocument.mode} reports the effective mode. The math
-   * engine is unavailable only when the effective mode remains worker.
+   * built-in renderer works in both modes; custom renderers need a worker
+   * renderer-module descriptor.
    */
   mode?: 'main' | 'worker';
 }
@@ -231,7 +232,7 @@ export class DocxDocument {
         mode === 'worker' ? !!opts.useGoogleFonts : false,
         opts.workerTimeoutMs,
         (usage) => metrics.observeUsage(usage),
-        mode === 'worker' ? workerRenderAddons(opts) : undefined,
+        mode === 'worker' ? workerRendererDescriptors(opts) : undefined,
       );
       if (mode === 'worker' && doc._mode === 'main') {
         metrics.setMode('main');
@@ -241,18 +242,18 @@ export class DocxDocument {
       }
       if (opts.math && doc._mode === 'worker' && !opts.math.worker) {
         console.warn(
-          "[ooxml] the supplied math engine has no worker module descriptor; equations will be skipped in mode: 'worker'. Use @silurus/ooxml/math or provide MathRenderer.worker.",
+          "[ooxml] the supplied math renderer has no worker renderer-module descriptor; equations will be skipped in mode: 'worker'. Use @silurus/ooxml/math or provide MathRenderer.worker.",
         );
       }
       if (opts.threeD && doc._mode === 'worker' && !opts.threeD.worker) {
         console.warn(
-          "[ooxml] the supplied 3-D chart addon has no worker module descriptor; charts use their 2-D family fallback in mode: 'worker'. Use @silurus/ooxml/three-d or provide ChartThreeDRenderer.worker.",
+          "[ooxml] the supplied 3-D chart renderer has no worker renderer-module descriptor; charts use their 2-D family fallback in mode: 'worker'. Use @silurus/ooxml/three-d or provide ChartThreeDRenderer.worker.",
         );
       }
       doc._threeD = doc._mode === 'worker' ? undefined : opts.threeD;
       if (opts.regionMap && doc._mode === 'worker' && !opts.regionMap.worker) {
         console.warn(
-          "[ooxml] the supplied Region Map addon has no worker module descriptor; geospatial charts use the unsupported-chart placeholder in mode: 'worker'. Use @silurus/ooxml/region-map or provide ChartRegionMapRenderer.worker.",
+          "[ooxml] the supplied Region Map renderer has no worker renderer-module descriptor; geospatial charts use the unsupported-chart placeholder in mode: 'worker'. Use @silurus/ooxml/region-map or provide ChartRegionMapRenderer.worker.",
         );
       }
       doc._regionMap = doc._mode === 'worker' ? undefined : opts.regionMap;
@@ -281,7 +282,7 @@ export class DocxDocument {
       // Equations are converted + rasterized before pagination (which reads their
       // extents synchronously). Requires the opt-in `math` engine; without it,
       // equations are skipped (and the engine asset is never bundled). Worker
-      // mode performs the same preparation with the addon's imported engine.
+      // mode performs the same preparation with the renderer's imported engine.
       let preparedMath;
       if (doc._mode === 'main' && opts.math && doc._document && documentHasMath(doc._document)) {
         preparedMath = await prepareMathRuns(doc._document, opts.math);
@@ -336,12 +337,12 @@ export class DocxDocument {
     useGoogleFonts = false,
     timeoutMs?: number,
     onUsage?: (usage: import('@silurus/ooxml-core').OoxmlResourceUsageSnapshot) => void,
-    addons?: WorkerRenderAddons,
+    renderers?: WorkerRendererDescriptors,
   ): Promise<void> {
     const res = await this._bridge.request(
       (id) =>
         this._mode === 'worker'
-          ? ({ type: 'parse', id, data: buffer, resourcePolicy, useGoogleFonts, defaultCurrentDateMs: documentLayoutRuntimeOf(this).defaultCurrentDateMs, addons } satisfies RenderWorkerRequest)
+          ? ({ type: 'parse', id, data: buffer, resourcePolicy, useGoogleFonts, defaultCurrentDateMs: documentLayoutRuntimeOf(this).defaultCurrentDateMs, renderers } satisfies RenderWorkerRequest)
           : ({ type: 'parse', id, data: buffer, resourcePolicy } satisfies WorkerRequest),
       [buffer],
       { timeoutMs },

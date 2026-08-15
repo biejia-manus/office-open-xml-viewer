@@ -6,7 +6,7 @@
 // so the ~3 MB engine asset tree-shakes out of their bundles. The engine is
 // injected at runtime via the `math` viewer option — see `MathRenderer`.
 
-import type { WorkerLoadableAddon } from '../worker/addon.js';
+import type { WorkerLoadableRenderer } from '../worker/renderer-module-contract.js';
 
 export interface MathSvg {
   /** standalone `<svg>…</svg>` markup. */
@@ -31,7 +31,7 @@ export interface MathSvg {
  * Omit it and the equation engine (MathJax + STIX Two Math, ~3 MB) is never
  * imported, so a bundler drops it entirely.
  */
-export interface MathRenderer extends WorkerLoadableAddon {
+export interface MathRenderer extends WorkerLoadableRenderer {
   /** Preload the engine. Called once before converting equations. */
   loadMathJax(): Promise<void>;
   /** MathML string → standalone SVG + baseline-relative em extents. */

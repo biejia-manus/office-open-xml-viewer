@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { apiReference, chartAddons } from './api-reference.js';
+import { apiReference, optionalChartRenderers } from './api-reference.js';
 
 describe('official-site API reference', () => {
   it('documents both optional chart renderer entries and their shared contracts', () => {
-    expect(chartAddons.map(({ entry, exportName, contract }) => ({ entry, exportName, contract })))
+    expect(optionalChartRenderers.map(({ entry, exportName, contract }) => ({ entry, exportName, contract })))
       .toEqual([
         {
           entry: '@silurus/ooxml/three-d',

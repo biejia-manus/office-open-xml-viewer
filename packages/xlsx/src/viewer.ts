@@ -286,7 +286,7 @@ export interface XlsxSheetViewerOptions extends LoadOptions {
    * ImageBitmap onto the viewer's canvas, so document rendering never blocks the
    * UI thread. All interaction (scroll, sheet tabs, frozen panes, zoom, cell
    * selection) is unchanged. Requires `Worker` + `OffscreenCanvas`. Built-in
-   * math and chart addons are reconstructed inside the worker from their
+   * math and chart renderers are reconstructed inside the worker from their
    * serializable stable identities.
    */
   /**

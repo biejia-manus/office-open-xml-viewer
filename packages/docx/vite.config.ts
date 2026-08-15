@@ -12,9 +12,9 @@ export default defineConfig({
   plugins: [wasm(), topLevelAwait()],
   resolve: {
     alias: {
-      '@ooxml-test-three-d-addon': resolve(__dirname, '../../src/three-d.ts'),
-      '@ooxml-test-region-map-addon': resolve(__dirname, '../../src/region-map.ts'),
-      '@ooxml-test-math-addon': resolve(__dirname, '../../src/math.ts'),
+      '@ooxml-test-three-d-renderer': resolve(__dirname, '../../src/three-d.ts'),
+      '@ooxml-test-region-map-renderer': resolve(__dirname, '../../src/region-map.ts'),
+      '@ooxml-test-math-renderer': resolve(__dirname, '../../src/math.ts'),
     },
   },
   build: {

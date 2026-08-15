@@ -15,9 +15,9 @@ export default defineConfig({
   root: dirname,
   resolve: {
     alias: {
-      '@ooxml-test-three-d-addon': resolve(dirname, '../../src/three-d.ts'),
-      '@ooxml-test-region-map-addon': resolve(dirname, '../../src/region-map.ts'),
-      '@ooxml-test-math-addon': resolve(dirname, '../../src/math.ts'),
+      '@ooxml-test-three-d-renderer': resolve(dirname, '../../src/three-d.ts'),
+      '@ooxml-test-region-map-renderer': resolve(dirname, '../../src/region-map.ts'),
+      '@ooxml-test-math-renderer': resolve(dirname, '../../src/math.ts'),
     },
   },
   server: { port: 5175, strictPort: true },

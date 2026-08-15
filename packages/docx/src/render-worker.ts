@@ -25,8 +25,8 @@ import {
   PULL_SESSION_PROTOCOL,
   resourcePolicyForWasm,
   serializeWorkerError,
-  loadWorkerRenderAddons,
-  type LoadedWorkerRenderAddons,
+  loadWorkerRenderers,
+  type LoadedWorkerRenderers,
   type PullSessionResponse,
 } from '@silurus/ooxml-core/worker';
 import { prepareMathRuns, renderLayoutSourceToCanvas } from './renderer';
@@ -77,7 +77,7 @@ const documentPull = new DocumentPullWorker(
 let documentGeneration = 0;
 let fallbackPull: DocumentPullWorker | null = null;
 let doc: RetainedRenderWorkerDocumentLayout | null = null;
-let renderAddons: LoadedWorkerRenderAddons = {};
+let renderers: LoadedWorkerRenderers = {};
 let localMetricFontFaces: FontFace[] = [];
 const rawParts = new BoundedRawPartCache({
   maxEntries: HARD_MAX_RAW_PART_CACHE_ENTRIES,
@@ -145,7 +145,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest>) => {
       // Cached blobs belong to the previous document; serving them after a
       // re-parse would silently return the wrong file's image.
       rawParts.clear();
-      renderAddons = await loadWorkerRenderAddons(req.addons);
+      renderers = await loadWorkerRenderers(req.renderers);
       // A re-parse starts a fresh document: also drop the shared decoded owner
       // (base raster + derived colour surfaces) and SVG lookup owner, symmetric
       // with DocxDocument.destroy(). The worker's `getImage`
@@ -227,8 +227,8 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest>) => {
       }
       const localMetrics = await loadDocxLocalFontMetrics(model);
       localMetricFontFaces = localMetrics.faces;
-      const preparedMath = renderAddons.math && source.mathOccurrences.length > 0
-        ? await prepareMathRuns(model, renderAddons.math)
+      const preparedMath = renderers.math && source.mathOccurrences.length > 0
+        ? await prepareMathRuns(model, renderers.math)
         : undefined;
       const layoutServices = createLayoutServices(source, {
         localMetrics: localMetrics.metrics,
@@ -274,8 +274,8 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest>) => {
         fetchImage: getImage,
         layoutServices: doc.layoutServices,
         defaultCurrentDateMs: doc.defaultCurrentDateMs,
-        threeD: renderAddons.threeD,
-        regionMap: renderAddons.regionMap,
+        threeD: renderers.threeD,
+        regionMap: renderers.regionMap,
       });
       const runs = textRunsForSelectedPage(doc.layoutServices, req.pageIndex, {
         ...req.opts,

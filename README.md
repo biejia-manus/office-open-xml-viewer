@@ -105,9 +105,10 @@ pnpm add @silurus/ooxml
 > and the loader chunk never enters your graph at all.
 >
 > The 3-D chart and Region Map renderers follow the same dependency-injection
-> boundary: import and pass only the addons an application needs. Ordinary
-> format entries do not reach either optional implementation, so bundlers can
-> tree-shake their mesh code and fixed geographic asset completely.
+> boundary: import and pass only the optional renderer modules an application
+> needs. Their implementations are not eagerly loaded or evaluated by ordinary
+> format entries. A worker imports a supplied renderer in its own realm; build
+> tools may retain that worker implementation as a separate lazy chunk.
 
 ---
 
@@ -209,9 +210,9 @@ shapes / text boxes the same way.)
 ### Optional chart renderers
 
 Model-space 3-D charts and offline country-level Region Maps are separate
-entries. Inject them once in the same load options object as `math`; omitting an
-addon keeps it out of the application graph. The built-in addons render in both
-main and worker modes. Without `threeD`, 3-D chart groups
+entries. Inject them once in the same load options object as `math`; omitting a
+renderer keeps it out of the ordinary render path. The built-in renderers work
+in both main and worker modes. Without `threeD`, 3-D chart groups
 fall back to their canonical 2-D family. Without `regionMap`, Region Maps show
 the standard unsupported-chart placeholder.
 
@@ -229,7 +230,7 @@ const workbookViewer = new XlsxViewer(container, {
 await workbookViewer.load('/workbook-with-advanced-charts.xlsx');
 ```
 
-The Region Map addon is deterministic and network-free. It uses a pinned
+The Region Map renderer is deterministic and network-free. It uses a pinned
 Natural Earth country dataset, supports authored world projections and
 two/three-stop value ramps, and fails closed for cached identities or
 sub-country/view-specific layouts that the bounded offline model cannot yet
@@ -271,9 +272,13 @@ Notes:
 - The canvas-target methods (`renderSlide(canvas)`, `renderPage(canvas)`,
   `renderViewport(canvas)`) are unavailable in worker mode — use the `*ToBitmap`
   variants instead.
-- The built-in math, 3-D chart, and Region Map addons work in both modes. A
-  custom addon needs a worker module descriptor; otherwise worker mode emits a
-  warning and uses the feature's documented fallback.
+- The built-in math, 3-D chart, and Region Map renderers work in both modes. A
+  custom renderer needs a worker renderer-module descriptor; otherwise worker
+  mode emits a warning and uses the feature's documented fallback.
+- Built-in renderers already carry that descriptor. For a custom renderer,
+  `createWorkerRendererModuleDescriptor(moduleUrl, exportName)` describes the
+  ESM export that the worker imports when the renderer is supplied in
+  `mode: 'worker'`; it is not selected by document content.
 - Trade-off: worker mode keeps the main thread responsive, but each frame is
   transferred back as an `ImageBitmap`, so a single render can be marginally
   slower than `mode: 'main'`. Choose it for non-blocking UI, not raw speed.

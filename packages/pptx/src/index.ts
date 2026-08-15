@@ -93,11 +93,15 @@ export type {
   TextOutline,
   TextSelectionContextOptions,
   ViewerContextMenuEvent,
-  WorkerAddonDescriptor,
-  WorkerBuiltinAddonDescriptor,
-  WorkerBuiltinAddonName,
-  WorkerModuleAddonDescriptor,
+  WorkerRendererDescriptor,
+  WorkerBuiltinRendererDescriptor,
+  WorkerBuiltinRendererName,
+  WorkerRendererModuleDescriptor,
   ZoomableViewer,
+} from '@silurus/ooxml-core';
+export {
+  WORKER_RENDERER_MODULE_PROTOCOL,
+  createWorkerRendererModuleDescriptor,
 } from '@silurus/ooxml-core';
 // IX2 find-in-document: the highlight overlay builder + the pptx match-location
 // shape. `FindMatch` / `FindMatchesOptions` come from core (shared across formats).
