@@ -93,6 +93,10 @@ export type {
   TextOutline,
   TextSelectionContextOptions,
   ViewerContextMenuEvent,
+  WorkerAddonDescriptor,
+  WorkerBuiltinAddonDescriptor,
+  WorkerBuiltinAddonName,
+  WorkerModuleAddonDescriptor,
   ZoomableViewer,
 } from '@silurus/ooxml-core';
 // IX2 find-in-document: the highlight overlay builder + the pptx match-location

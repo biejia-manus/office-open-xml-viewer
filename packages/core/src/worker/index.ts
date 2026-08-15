@@ -36,6 +36,23 @@ export {
 } from './pull-credit-error.js';
 export { exactTransferableArrayBuffer } from './transfer.js';
 export {
+  WORKER_ADDON_PROTOCOL,
+  assertWorkerAddonDescriptor,
+  createBuiltinWorkerAddonDescriptor,
+  createWorkerAddonDescriptor,
+  loadWorkerAddon,
+  loadWorkerRenderAddons,
+  workerRenderAddons,
+  type WorkerAddonDescriptor,
+  type WorkerBuiltinAddonDescriptor,
+  type WorkerBuiltinAddonName,
+  type WorkerLoadableAddon,
+  type WorkerModuleAddonDescriptor,
+  type WorkerRenderAddonSources,
+  type WorkerRenderAddons,
+  type LoadedWorkerRenderAddons,
+} from './addon.js';
+export {
   DEFAULT_OOXML_RESOURCE_LIMITS,
   normalizeLoadResourceOptions,
   normalizeResourcePolicy,

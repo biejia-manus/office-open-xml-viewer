@@ -87,6 +87,10 @@ export type {
   TextSelectionContextOptions,
   TileInfo,
   ViewerContextMenuEvent,
+  WorkerAddonDescriptor,
+  WorkerBuiltinAddonDescriptor,
+  WorkerBuiltinAddonName,
+  WorkerModuleAddonDescriptor,
   ZoomableViewer,
 } from '@silurus/ooxml-core';
 // IX2 find-in-document: the highlight overlay builder + the docx match-location

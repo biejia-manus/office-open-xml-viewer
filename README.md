@@ -210,8 +210,8 @@ shapes / text boxes the same way.)
 
 Model-space 3-D charts and offline country-level Region Maps are separate
 entries. Inject them once in the same load options object as `math`; omitting an
-addon keeps it out of the application graph. They currently render on the main
-thread, so use `mode: 'main'` (the default). Without `threeD`, 3-D chart groups
+addon keeps it out of the application graph. The built-in addons render in both
+main and worker modes. Without `threeD`, 3-D chart groups
 fall back to their canonical 2-D family. Without `regionMap`, Region Maps show
 the standard unsupported-chart placeholder.
 
@@ -224,7 +224,7 @@ const container = document.getElementById('xlsx-container') as HTMLElement;
 const workbookViewer = new XlsxViewer(container, {
   threeD,
   regionMap,
-  mode: 'main',
+  mode: 'worker',
 });
 await workbookViewer.load('/workbook-with-advanced-charts.xlsx');
 ```
@@ -271,8 +271,9 @@ Notes:
 - The canvas-target methods (`renderSlide(canvas)`, `renderPage(canvas)`,
   `renderViewport(canvas)`) are unavailable in worker mode — use the `*ToBitmap`
   variants instead.
-- OMML equations require `mode: 'main'`; in worker mode they are skipped (with a
-  console warning).
+- The built-in math, 3-D chart, and Region Map addons work in both modes. A
+  custom addon needs a worker module descriptor; otherwise worker mode emits a
+  warning and uses the feature's documented fallback.
 - Trade-off: worker mode keeps the main thread responsive, but each frame is
   transferred back as an `ImageBitmap`, so a single render can be marginally
   slower than `mode: 'main'`. Choose it for non-blocking UI, not raw speed.

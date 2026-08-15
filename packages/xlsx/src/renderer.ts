@@ -8,7 +8,7 @@ import type {
 } from './types.js';
 import type { Stroke, ChartThreeDRenderer, ChartRegionMapRenderer } from '@silurus/ooxml-core';
 import { placePhoneticRuns } from './phonetic.js';
-import { crispOffset, renderChart, renderSparkline, renderPresetShape, createAuxCanvas, PT_TO_PX, EMU_PER_PX, mathToMathML, recolorSvg, classifyCjkFont, classifyFontGeneric, cjkFallbackChain, NON_CJK_SANS_FALLBACKS, NON_CJK_SERIF_FALLBACKS, kinsokuAdjustedSplit, DEFAULT_KINSOKU_RULES, isCjkBreakChar, isLatinWordCodePoint, isUax14NoBreakPair, containsSeaScript, isGraphemeFillText, seaMixedBreakOffsets, fitSeaWordPrefix, graphemeClusterOffsets, xlsxBorderDashArray, drawImageCropped, hexToRgba, intendedSingleLinePx, verticalTrLongMark, verticalVertGlyphReachable, applyStroke, resolveFill, type SparklineModel, type MathNode, type MathRenderer } from '@silurus/ooxml-core';
+import { crispOffset, renderChart, renderSparkline, renderPresetShape, createAuxCanvas, PT_TO_PX, EMU_PER_PX, mathToMathML, rasterizeMathSvg, tintMathRaster, classifyCjkFont, classifyFontGeneric, cjkFallbackChain, NON_CJK_SANS_FALLBACKS, NON_CJK_SERIF_FALLBACKS, kinsokuAdjustedSplit, DEFAULT_KINSOKU_RULES, isCjkBreakChar, isLatinWordCodePoint, isUax14NoBreakPair, containsSeaScript, isGraphemeFillText, seaMixedBreakOffsets, fitSeaWordPrefix, graphemeClusterOffsets, xlsxBorderDashArray, drawImageCropped, hexToRgba, intendedSingleLinePx, verticalTrLongMark, verticalVertGlyphReachable, applyStroke, resolveFill, type SparklineModel, type MathNode, type MathRenderer, type RasterizedMathSvg } from '@silurus/ooxml-core';
 import { evalFormulaToBool, todaySerial, nowSerial } from './formula.js';
 import { formatCellValueWithColor } from './number-format.js';
 import { type CfContext, type CfResult, compileCf, evaluateCf } from './conditional-format.js';
@@ -4516,7 +4516,7 @@ function drawShape(
 // stored on the instance) and tree-shakes out otherwise.
 interface MathRender {
   /** The equation rasterized as opaque black glyphs on transparent. */
-  img: HTMLImageElement;
+  raster: RasterizedMathSvg;
   /** baseline-relative extents in em (1em = the equation's font size in px). */
   widthEm: number;
   ascentEm: number;
@@ -4530,42 +4530,9 @@ const mathRenders = new WeakMap<MathNode[], MathRender>();
 function tintedMathImage(render: MathRender, color: string): CanvasImageSource {
   const cached = render.tinted.get(color);
   if (cached) return cached;
-  const iw = render.img.naturalWidth || 1;
-  const ih = render.img.naturalHeight || 1;
-  const canvas = document.createElement('canvas');
-  canvas.width = iw;
-  canvas.height = ih;
-  const cx = canvas.getContext('2d');
-  if (!cx) return render.img;
-  cx.drawImage(render.img, 0, 0, iw, ih);
-  cx.globalCompositeOperation = 'source-in';
-  cx.fillStyle = color;
-  cx.fillRect(0, 0, iw, ih);
-  render.tinted.set(color, canvas);
-  return canvas;
-}
-
-function svgToImage(svg: string): Promise<HTMLImageElement> {
-  const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-  const img = new Image();
-  return new Promise((resolve, reject) => {
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = url;
-  });
-}
-
-// px-per-em rasterization resolution for equation SVGs — keeps glyphs crisp on
-// HiDPI canvases (a MathJax SVG otherwise rasterizes at a small intrinsic size
-// and drawImage upscales it). 256 stays crisp past 40pt at devicePixelRatio 3.
-const MATH_RASTER_PX_PER_EM = 256;
-function sizeSvgForRaster(svg: string, widthEm: number, heightEm: number): string {
-  const w = Math.max(1, Math.round(widthEm * MATH_RASTER_PX_PER_EM));
-  const h = Math.max(1, Math.round(heightEm * MATH_RASTER_PX_PER_EM));
-  return svg.replace(/<svg([^>]*?)>/, (_m, attrs: string) => {
-    const cleaned = attrs.replace(/\s(?:width|height)="[^"]*"/g, '');
-    return `<svg${cleaned} width="${w}" height="${h}">`;
-  });
+  const tinted = tintMathRaster(render.raster, color);
+  render.tinted.set(color, tinted);
+  return tinted;
 }
 
 /** Gather every math run reachable from a worksheet's shapes. Equations live
@@ -4612,10 +4579,9 @@ export async function prepareWorksheetMath(ws: Worksheet, math: MathRenderer): P
     if (mathRenders.has(r.nodes)) continue;
     try {
       const out = await math.mathMLToSvg(mathToMathML(r.nodes, r.display));
-      const sized = sizeSvgForRaster(recolorSvg(out.svg, '#000000'), out.widthEm, out.ascentEm + out.descentEm);
-      const img = await svgToImage(sized);
+      const raster = await rasterizeMathSvg(out, '#000000');
       mathRenders.set(r.nodes, {
-        img,
+        raster,
         widthEm: out.widthEm,
         ascentEm: out.ascentEm,
         descentEm: out.descentEm,

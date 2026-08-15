@@ -112,6 +112,9 @@ const SHARED_PAINT_IMPORTS = new Map([
     ['imageNaturalSize', 'value'],
     ['isHTMLCanvas', 'value'],
     ['mathToMathML', 'value'],
+    // Math engine output is decoded before layout; paint consumes only the
+    // resulting CanvasImageSource keyed by the immutable resource record.
+    ['rasterizeMathSvg', 'value'],
     ['metafileRasterSize', 'value'],
     ['paintDrawingMLShape', 'value'],
     ['withVertFeature', 'value'],

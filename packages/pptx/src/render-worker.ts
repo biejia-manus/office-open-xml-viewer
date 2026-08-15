@@ -25,6 +25,8 @@ import {
   HARD_MAX_RAW_PART_CACHE_ENTRIES,
   resourcePolicyForWasm,
   serializeWorkerError,
+  loadWorkerRenderAddons,
+  type LoadedWorkerRenderAddons,
 } from '@silurus/ooxml-core/worker';
 import { BoundedRawPartCache } from '@silurus/ooxml-core/internal/bounded-raw-part-cache';
 import type {
@@ -60,6 +62,7 @@ type PresentationLifecycleState = 'empty' | 'opening' | 'ready' | 'failed';
 let presentationState: PresentationLifecycleState = 'empty';
 let fontsLoaded: Promise<unknown> = Promise.resolve();
 let resourceUsage: OoxmlResourceUsageSnapshot | undefined;
+let renderAddons: LoadedWorkerRenderAddons = {};
 const rawParts = new BoundedRawPartCache({
   maxEntries: HARD_MAX_RAW_PART_CACHE_ENTRIES,
   maxBytes: HARD_MAX_RAW_PART_CACHE_BYTES,
@@ -131,6 +134,7 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
   dropSvgImageCache(getImage);
   fontsLoaded = Promise.resolve();
   resourceUsage = undefined;
+  renderAddons = await loadWorkerRenderAddons(request.addons);
 
   const [maxEntry, maxTotal, maxEntries] = resourcePolicyForWasm(request.resourcePolicy);
   const bootstrap = await slidePull.run(() => executeArchiveFromNew(
@@ -224,6 +228,9 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
           fetchImage: getImage,
           skipMediaControls: request.skipMediaControls,
           dim: request.dim,
+          math: renderAddons.math,
+          threeD: renderAddons.threeD,
+          regionMap: renderAddons.regionMap,
         }, (run) => runs.push(run));
         return { bitmap: canvas.transferToImageBitmap(), runs };
       });
@@ -245,6 +252,9 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
           hlinkColor: compact.hlinkColor,
           fetchMedia: getMedia,
           fetchImage: getImage,
+          math: renderAddons.math,
+          threeD: renderAddons.threeD,
+          regionMap: renderAddons.regionMap,
         }, (run) => runs.push(run));
         return runs;
       });

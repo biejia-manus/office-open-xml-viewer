@@ -367,11 +367,29 @@ export {
 } from './chart/three-d-contract';
 export type { ChartRegionMapRenderer } from './chart/region-map-contract';
 export {
+  WORKER_ADDON_PROTOCOL,
+  createBuiltinWorkerAddonDescriptor,
+  createWorkerAddonDescriptor,
+  workerRenderAddons,
+  type WorkerAddonDescriptor,
+  type WorkerBuiltinAddonDescriptor,
+  type WorkerBuiltinAddonName,
+  type WorkerLoadableAddon,
+  type WorkerModuleAddonDescriptor,
+  type WorkerRenderAddonSources,
+  type WorkerRenderAddons,
+} from './worker/addon';
+export {
   mathToMathML,
   svgExtents,
   recolorSvg,
+  MATH_RASTER_PX_PER_EM,
+  rasterizeMathSvg,
+  sizeMathSvgForRaster,
+  tintMathRaster,
   type MathSvg,
   type MathRenderer,
+  type RasterizedMathSvg,
 } from './math';
 export type {
   MathAccent,

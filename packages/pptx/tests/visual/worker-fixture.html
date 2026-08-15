@@ -9,6 +9,9 @@
   <canvas id="worker-canvas"></canvas>
   <script type="module">
     import { PptxPresentation } from '/src/index.ts';
+    import { math } from '@ooxml-test-math-addon';
+    import { threeD } from '@ooxml-test-three-d-addon';
+    import { regionMap } from '@ooxml-test-region-map-addon';
 
     const params = new URLSearchParams(location.search);
     const name = params.get('pptx') ?? 'demo/sample-1';
@@ -29,10 +32,11 @@
         bmp.close();
       };
 
-      const main = await PptxPresentation.load(buf.slice(0), { useGoogleFonts: true });
+      const addons = { math, threeD, regionMap };
+      const main = await PptxPresentation.load(buf.slice(0), { useGoogleFonts: true, ...addons });
       paint('main-canvas', await main.renderSlideToBitmap(slide, { width, dpr }));
 
-      const wk = await PptxPresentation.load(buf.slice(0), { mode: 'worker', useGoogleFonts: true });
+      const wk = await PptxPresentation.load(buf.slice(0), { mode: 'worker', useGoogleFonts: true, ...addons });
       paint('worker-canvas', await wk.renderSlideToBitmap(slide, { width, dpr }));
 
       // IX-nav: the slide part-name → index map must be identical in main and

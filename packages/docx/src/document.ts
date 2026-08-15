@@ -16,6 +16,7 @@ import {
   type ChartThreeDRenderer,
   type ChartRegionMapRenderer,
   type OoxmlResourceMetrics,
+  workerRenderAddons,
 } from '@silurus/ooxml-core';
 import {
   deserializeWorkerError,
@@ -28,6 +29,7 @@ import {
   readLatestOoxmlResourceMetrics,
   PULL_SESSION_PROTOCOL,
   type NormalizedOoxmlResourcePolicy,
+  type WorkerRenderAddons,
 } from '@silurus/ooxml-core/worker';
 import { BoundedRawPartCache } from '@silurus/ooxml-core/internal/bounded-raw-part-cache';
 import type { DocxDocumentModel, RenderPageOptions, WorkerRequest, WorkerResponse, DocComment, DocNote } from './types';
@@ -229,6 +231,7 @@ export class DocxDocument {
         mode === 'worker' ? !!opts.useGoogleFonts : false,
         opts.workerTimeoutMs,
         (usage) => metrics.observeUsage(usage),
+        mode === 'worker' ? workerRenderAddons(opts) : undefined,
       );
       if (mode === 'worker' && doc._mode === 'main') {
         metrics.setMode('main');
@@ -236,20 +239,20 @@ export class DocxDocument {
           "[ooxml] mode: 'worker' fell back to main-thread rendering because this document requires DOM OpenType vertical glyph selection.",
         );
       }
-      if (opts.math && doc._mode === 'worker') {
+      if (opts.math && doc._mode === 'worker' && !opts.math.worker) {
         console.warn(
-          "[ooxml] the math engine is unavailable in mode: 'worker'; equations will be skipped. Use mode: 'main' for documents with equations.",
+          "[ooxml] the supplied math engine has no worker module descriptor; equations will be skipped in mode: 'worker'. Use @silurus/ooxml/math or provide MathRenderer.worker.",
         );
       }
-      if (opts.threeD && doc._mode === 'worker') {
+      if (opts.threeD && doc._mode === 'worker' && !opts.threeD.worker) {
         console.warn(
-          "[ooxml] the 3-D chart addon is unavailable in mode: 'worker'; charts use their 2-D family fallback. Use mode: 'main' for authored 3-D charts.",
+          "[ooxml] the supplied 3-D chart addon has no worker module descriptor; charts use their 2-D family fallback in mode: 'worker'. Use @silurus/ooxml/three-d or provide ChartThreeDRenderer.worker.",
         );
       }
       doc._threeD = doc._mode === 'worker' ? undefined : opts.threeD;
-      if (opts.regionMap && doc._mode === 'worker') {
+      if (opts.regionMap && doc._mode === 'worker' && !opts.regionMap.worker) {
         console.warn(
-          "[ooxml] the Region Map addon is unavailable in mode: 'worker'; geospatial charts use the unsupported-chart placeholder. Use mode: 'main' for Region Maps.",
+          "[ooxml] the supplied Region Map addon has no worker module descriptor; geospatial charts use the unsupported-chart placeholder in mode: 'worker'. Use @silurus/ooxml/region-map or provide ChartRegionMapRenderer.worker.",
         );
       }
       doc._regionMap = doc._mode === 'worker' ? undefined : opts.regionMap;
@@ -277,8 +280,8 @@ export class DocxDocument {
       }
       // Equations are converted + rasterized before pagination (which reads their
       // extents synchronously). Requires the opt-in `math` engine; without it,
-      // equations are skipped (and the engine asset is never bundled). Math is
-      // main-mode only (the engine needs a DOM, absent in workers).
+      // equations are skipped (and the engine asset is never bundled). Worker
+      // mode performs the same preparation with the addon's imported engine.
       let preparedMath;
       if (doc._mode === 'main' && opts.math && doc._document && documentHasMath(doc._document)) {
         preparedMath = await prepareMathRuns(doc._document, opts.math);
@@ -333,11 +336,12 @@ export class DocxDocument {
     useGoogleFonts = false,
     timeoutMs?: number,
     onUsage?: (usage: import('@silurus/ooxml-core').OoxmlResourceUsageSnapshot) => void,
+    addons?: WorkerRenderAddons,
   ): Promise<void> {
     const res = await this._bridge.request(
       (id) =>
         this._mode === 'worker'
-          ? ({ type: 'parse', id, data: buffer, resourcePolicy, useGoogleFonts, defaultCurrentDateMs: documentLayoutRuntimeOf(this).defaultCurrentDateMs } satisfies RenderWorkerRequest)
+          ? ({ type: 'parse', id, data: buffer, resourcePolicy, useGoogleFonts, defaultCurrentDateMs: documentLayoutRuntimeOf(this).defaultCurrentDateMs, addons } satisfies RenderWorkerRequest)
           : ({ type: 'parse', id, data: buffer, resourcePolicy } satisfies WorkerRequest),
       [buffer],
       { timeoutMs },

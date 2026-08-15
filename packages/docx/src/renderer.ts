@@ -9,7 +9,7 @@ import { textRunsForPage } from './text-run-projection.js';
 import { dropBrowserImageCache } from './paint/browser-images.js';
 import { canvasPageScale, renderSelectedDocumentPage } from './paint/canvas-document.js';
 import { ensureDocumentLayoutVariants } from './layout/document.js';
-import { prepareBrowserMathResources } from './paint/browser-math.js';
+import { prepareMathResources } from './paint/math-resources.js';
 import { createLayoutServices } from './layout-runtime.js';
 import {
   type LayoutSourceStore,
@@ -34,7 +34,7 @@ export async function prepareMathRuns(
   if (Array.isArray(input)) {
     throw new TypeError('prepareMathRuns requires a document model so every story has an explicit structural source');
   }
-  return prepareBrowserMathResources(layoutSourceStore(input).mathOccurrences, math);
+  return prepareMathResources(layoutSourceStore(input).mathOccurrences, math);
 }
 
 export interface RenderDocumentOptions {

@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 // MathML → SVG via a pre-bundled MathJax v4 + STIX Two Math converter.
 //
 // This module is the *heavy* half of the math feature: it references the
@@ -57,15 +59,22 @@ function loadScript(src: string): Promise<void> {
   });
 }
 
+/** Module workers have no document and cannot use the classic-worker
+ * importScripts API. The prebuilt engine is a strict IIFE that is also valid as
+ * a side-effect-only ES module, so dynamic import evaluates it in the worker's
+ * own global realm and installs `globalThis.__ooxmlStix2`. */
+async function loadWorkerModule(src: string): Promise<void> {
+  await import(/* @vite-ignore */ src);
+}
+
 function ensureEngine(): Promise<Stix2Engine> {
   if (enginePromise) return enginePromise;
   enginePromise = (async () => {
     const existing = (globalThis as any).__ooxmlStix2 as Stix2Engine | undefined;
     if (existing) return existing;
-    if (typeof document === 'undefined') {
-      throw new Error('Math rendering requires a DOM (browser environment)');
-    }
-    await loadScript(resolveAssetUrl());
+    const assetUrl = resolveAssetUrl();
+    if (typeof document === 'undefined') await loadWorkerModule(assetUrl);
+    else await loadScript(assetUrl);
     const engine = (globalThis as any).__ooxmlStix2 as Stix2Engine | undefined;
     if (!engine) throw new Error('Math engine failed to initialize');
     return engine;

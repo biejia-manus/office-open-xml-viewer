@@ -9,6 +9,9 @@
   <canvas id="worker-canvas"></canvas>
   <script type="module">
     import { DocxDocument } from '/src/index.ts';
+    import { math } from '@ooxml-test-math-addon';
+    import { threeD } from '@ooxml-test-three-d-addon';
+    import { regionMap } from '@ooxml-test-region-map-addon';
 
     const params = new URLSearchParams(location.search);
     const name = params.get('docx') ?? 'demo/sample-1';
@@ -29,11 +32,12 @@
         bmp.close();
       };
 
-      const main = await DocxDocument.load(buf.slice(0), { useGoogleFonts: true });
+      const addons = { math, threeD, regionMap };
+      const main = await DocxDocument.load(buf.slice(0), { useGoogleFonts: true, ...addons });
       paint('main-canvas', await main.renderPageToBitmap(page, { width, dpr }));
       main.destroy();
 
-      const wk = await DocxDocument.load(buf.slice(0), { mode: 'worker', useGoogleFonts: true });
+      const wk = await DocxDocument.load(buf.slice(0), { mode: 'worker', useGoogleFonts: true, ...addons });
       paint('worker-canvas', await wk.renderPageToBitmap(page, { width, dpr }));
       wk.destroy();
 

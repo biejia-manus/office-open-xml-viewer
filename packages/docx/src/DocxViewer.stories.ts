@@ -1,14 +1,9 @@
 import type { Meta, StoryObj } from '@storybook/html';
 import { DocxDocument } from './document';
 import { DocxViewer } from './viewer';
-// Opt-in math engine. In published usage: `import { math } from '@silurus/ooxml/math'`.
-// In the monorepo the stories build the same MathRenderer from the core engine.
-import { loadMathJax, mathMLToSvg } from '../../core/src/math/engine';
-import { renderSimpleThreeDChart } from '../../core/src/chart/three-d-renderer';
-import { renderRegionMapChart } from '../../core/src/chart/region-map-renderer';
-const math = { loadMathJax, mathMLToSvg };
-const threeD = { render: renderSimpleThreeDChart };
-const regionMap = { render: renderRegionMapChart };
+import { math } from '../../../src/math';
+import { threeD } from '../../../src/three-d';
+import { regionMap } from '../../../src/region-map';
 
 type Args = {
   width: number;

@@ -3,6 +3,7 @@ import wasm from 'vite-plugin-wasm';
 import { resolve } from 'path';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { wasmAssetUrl } from '../../vite.config';
 
 const dirname =
   typeof __dirname !== 'undefined'
@@ -15,6 +16,7 @@ export default defineConfig({
     alias: {
       '@ooxml-test-three-d-addon': resolve(dirname, '../../src/three-d.ts'),
       '@ooxml-test-region-map-addon': resolve(dirname, '../../src/region-map.ts'),
+      '@ooxml-test-math-addon': resolve(dirname, '../../src/math.ts'),
     },
   },
   server: {
@@ -43,6 +45,9 @@ export default defineConfig({
   },
   worker: {
     format: 'es',
-    plugins: () => [wasm()],
+    plugins: () => [wasmAssetUrl(), wasm()],
+    rollupOptions: {
+      output: { assetFileNames: '[name][extname]' },
+    },
   },
 });

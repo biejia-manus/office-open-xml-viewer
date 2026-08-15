@@ -40,7 +40,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * bare `.wasm`, and every `?url` here is a real on-disk asset we want emitted —
  * exactly what Vite's non-lib mode would do anyway.
  */
-function wasmAssetUrl(): Plugin {
+export function wasmAssetUrl(): Plugin {
   const SUFFIX = '?url';
   return {
     name: 'wasm-asset-url',
@@ -138,6 +138,12 @@ export default defineConfig(({ command }) => ({
   },
   worker: {
     format: 'es',
-    plugins: () => [wasm()],
+    // Built-in worker addons lazy-import the same optional math engine. Keep
+    // its ~3 MB `?url` asset external in nested worker builds too; otherwise
+    // library mode base64-inlines one copy into every format worker chunk.
+    plugins: () => [wasmAssetUrl(), wasm()],
+    rollupOptions: {
+      output: { assetFileNames: '[name][extname]' },
+    },
   },
 }));

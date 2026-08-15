@@ -62,7 +62,7 @@ export const announcements: readonly Announcement[] = [
           'Authored 3-D chart views render through one model-space camera and projected mesh pipeline.',
           'Country-level ChartEx Region Maps render offline from worksheet or document data.',
           'Shared axis planning, titles, data labels, legend paint and ChartEx layout now follow more authored OOXML properties.',
-          'Both optional modules are tree-shakeable and main-thread only.',
+          'Both optional modules are tree-shakeable. They launched for the main thread only in v0.79.0; current releases also reconstruct the built-ins inside render workers.',
         ],
       },
       {
@@ -89,7 +89,7 @@ export const announcements: readonly Announcement[] = [
         modules: ['@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx', '@silurus/ooxml/three-d', '@silurus/ooxml/region-map'],
         rationale: 'Dependency injection keeps the base entries small and gives every host format the same renderer contract.',
         paragraphs: [
-          'Import each renderer from its separate package entry and pass it to a Viewer or headless engine at construction/load time. Both add-ons render on the main thread. Worker rendering keeps the 2-D fallback for 3-D charts; Region Maps require main-thread rendering.',
+          'Import each renderer from its separate package entry and pass it to a Viewer or headless engine at construction/load time. Current built-in add-ons render in both modes through stable worker identities; custom add-ons without a module descriptor retain the documented worker fallback.',
         ],
         examples: [
           {
@@ -99,7 +99,7 @@ import { threeD } from '@silurus/ooxml/three-d';
 import { regionMap } from '@silurus/ooxml/region-map';
 
 const viewer = new XlsxViewer(container, {
-  mode: 'main',
+  mode: 'worker',
   threeD,
   regionMap,
 });
@@ -121,7 +121,7 @@ await viewer.load(source);`,
         title: 'Upgrading',
         paragraphs: [
           'No existing option is removed or renamed. Upgrade normally to receive the shared 2-D chart fixes. Add the threeD or regionMap option only when the corresponding authored chart needs its optional renderer.',
-          'The optional entries are ESM-only like the rest of the package. Applications using mode: worker should keep the fallback or switch the affected document view to mode: main before injecting an add-on.',
+          'The optional entries are ESM-only like the rest of the package. Applications using custom add-ons in mode: worker must expose a worker module descriptor or retain the documented fallback.',
         ],
       },
     ],

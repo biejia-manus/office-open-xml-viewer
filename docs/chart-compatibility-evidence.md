@@ -73,10 +73,12 @@ shared chart painter. Their implementations live in separate package entries:
 - `@silurus/ooxml/region-map`
 
 Omitting an addon removes its implementation and large assets from the base
-dependency closure. Function-valued addons are intentionally main-thread only;
-worker mode reports that restriction and uses the documented fallback. Clean
-build checks verify both the optional entry and the absence of its marker from
-the base DOCX/XLSX/PPTX entries.
+dependency closure. The built-in addons also publish a structured-clone-safe
+identity descriptor so worker mode can lazy-import the same implementation in
+its own realm without depending on bundler-renamed exports. Custom
+function-valued addons remain main-thread-only unless they expose a module
+descriptor. Clean build checks verify both the optional entry and the absence
+of its marker from the base DOCX/XLSX/PPTX entries.
 
 ## Known, deliberately limited compatibility surfaces
 

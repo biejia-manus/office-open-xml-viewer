@@ -90,6 +90,10 @@ export type {
   SecondaryValueAxis,
   SpaceLine,
   ViewerContextMenuEvent,
+  WorkerAddonDescriptor,
+  WorkerBuiltinAddonDescriptor,
+  WorkerBuiltinAddonName,
+  WorkerModuleAddonDescriptor,
   ZoomableViewer,
 } from '@silurus/ooxml-core';
 export { autoResize, type AutoResizeOptions } from '@silurus/ooxml-core';

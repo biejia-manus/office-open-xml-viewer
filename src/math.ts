@@ -11,6 +11,7 @@
 //
 // `math` is a `MathRenderer` — the contract the viewers' `math` option expects.
 import { loadMathJax, mathMLToSvg } from '../packages/core/src/math/engine.js';
+import { createBuiltinWorkerAddonDescriptor } from '../packages/core/src/worker/addon.js';
 import type { MathRenderer } from '../packages/core/src/math/mathjax.js';
 
 /**
@@ -18,6 +19,10 @@ import type { MathRenderer } from '../packages/core/src/math/mathjax.js';
  * `math` option to enable equation rendering. Self-contained: no network, no
  * cross-origin requests.
  */
-export const math: MathRenderer = { loadMathJax, mathMLToSvg };
+export const math: MathRenderer = {
+  loadMathJax,
+  mathMLToSvg,
+  worker: createBuiltinWorkerAddonDescriptor('math'),
+};
 
 export type { MathSvg, MathRenderer } from '../packages/core/src/math/mathjax.js';
