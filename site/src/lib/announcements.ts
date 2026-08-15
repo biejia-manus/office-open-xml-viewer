@@ -89,7 +89,7 @@ export const announcements: readonly Announcement[] = [
         modules: ['@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx', '@silurus/ooxml/three-d', '@silurus/ooxml/region-map'],
         rationale: 'Dependency injection keeps the base entries small and gives every host format the same renderer contract.',
         paragraphs: [
-          'Import each renderer from its separate package entry and pass it to a Viewer or headless engine at construction/load time. Current built-in renderers work in both modes through stable worker identities; custom renderers without a renderer-module descriptor retain the documented worker fallback.',
+          'Import each renderer from its separate package entry and pass it to a Viewer or headless engine at construction/load time. The same built-in renderer injection works in main and worker modes; custom renderer objects retain the documented worker fallback.',
         ],
         examples: [
           {
@@ -121,7 +121,7 @@ await viewer.load(source);`,
         title: 'Upgrading',
         paragraphs: [
           'No existing option is removed or renamed. Upgrade normally to receive the shared 2-D chart fixes. Add the threeD or regionMap option only when the corresponding authored chart needs its optional renderer.',
-          'The optional entries are ESM-only like the rest of the package. Applications using custom renderers in mode: worker must expose a worker renderer-module descriptor or retain the documented fallback.',
+          'The optional entries are ESM-only like the rest of the package. Custom renderer objects retain the documented fallback in worker mode.',
         ],
       },
     ],

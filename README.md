@@ -89,7 +89,7 @@ pnpm add @silurus/ooxml
 > | `@silurus/ooxml/xlsx` | 2.6 MB | 0.82 MB | XLSX renderer, parser WASM, and lazy worker |
 > | `@silurus/ooxml/pptx` | 2.5 MB | 0.78 MB | PPTX renderer, parser WASM, and lazy worker |
 > | `@silurus/ooxml/math` | 3.1 MB | 1.1 MB | Optional MathJax + STIX Two Math engine |
-> | `@silurus/ooxml/three-d` | 81 KB | 23 KB | Optional model-space 3-D chart mesh and camera |
+> | `@silurus/ooxml/three-d` | 92 KB | 27 KB | Optional model-space 3-D chart mesh and camera |
 > | `@silurus/ooxml/region-map` | 236 KB | 66 KB | Optional offline Region Map renderer and fixed country geometry |
 >
 > These are production-artifact estimates, not initial-load figures: each row
@@ -106,9 +106,9 @@ pnpm add @silurus/ooxml
 >
 > The 3-D chart and Region Map renderers follow the same dependency-injection
 > boundary: import and pass only the optional renderer modules an application
-> needs. Their implementations are not eagerly loaded or evaluated by ordinary
-> format entries. A worker imports a supplied renderer in its own realm; build
-> tools may retain that worker implementation as a separate lazy chunk.
+> needs. Their implementations are not eagerly loaded or evaluated in main
+> mode. Worker mode fetches a self-contained render-worker asset that includes
+> the worker-side built-ins, so consumer bundlers can copy it safely.
 
 ---
 
@@ -183,8 +183,8 @@ OMML equations (`m:oMath` / `m:oMathPara`) in `.docx`, `.pptx` and `.xlsx` are r
 [MathJax](https://www.mathjax.org/) + [STIX Two Math](https://github.com/stipub/stixfonts).
 That engine is ~3 MB, so it is **opt-in**: import the `math` engine from the separate
 `@silurus/ooxml/math` entry and pass it to the viewer. Pass it and equations render;
-omit it and the engine is referenced nowhere, so a bundler leaves it out of your build
-entirely (equations are simply skipped). When you *do* pass it, the ~3 MB engine ships
+omit it and the engine asset is not fetched or evaluated (equations are simply skipped;
+the on-demand render-worker asset retains a small loader). When you *do* pass it, the ~3 MB engine ships
 as a **standalone asset file** next to the bundle rather than an inline data URL, and is
 fetched **on demand — only the first time a document actually contains an equation**, so
 equation-free documents never pay for it. It is fully self-contained: served from your own
@@ -272,13 +272,10 @@ Notes:
 - The canvas-target methods (`renderSlide(canvas)`, `renderPage(canvas)`,
   `renderViewport(canvas)`) are unavailable in worker mode — use the `*ToBitmap`
   variants instead.
-- The built-in math, 3-D chart, and Region Map renderers work in both modes. A
-  custom renderer needs a worker renderer-module descriptor; otherwise worker
-  mode emits a warning and uses the feature's documented fallback.
-- Built-in renderers already carry that descriptor. For a custom renderer,
-  `createWorkerRendererModuleDescriptor(moduleUrl, exportName)` describes the
-  ESM export that the worker imports when the renderer is supplied in
-  `mode: 'worker'`; it is not selected by document content.
+- The built-in math, 3-D chart, and Region Map renderers work in both modes
+  through the same `math`, `threeD`, and `regionMap` options. Custom renderer
+  objects are main-realm code and therefore use the feature's documented
+  fallback in `mode: 'worker'`.
 - Trade-off: worker mode keeps the main thread responsive, but each frame is
   transferred back as an `ImageBitmap`, so a single render can be marginally
   slower than `mode: 'main'`. Choose it for non-blocking UI, not raw speed.

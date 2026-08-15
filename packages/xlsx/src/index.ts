@@ -90,15 +90,7 @@ export type {
   SecondaryValueAxis,
   SpaceLine,
   ViewerContextMenuEvent,
-  WorkerRendererDescriptor,
-  WorkerBuiltinRendererDescriptor,
-  WorkerBuiltinRendererName,
-  WorkerRendererModuleDescriptor,
   ZoomableViewer,
-} from '@silurus/ooxml-core';
-export {
-  WORKER_RENDERER_MODULE_PROTOCOL,
-  createWorkerRendererModuleDescriptor,
 } from '@silurus/ooxml-core';
 export { autoResize, type AutoResizeOptions } from '@silurus/ooxml-core';
 // IX1 — the shared hyperlink target shape surfaced by `XlsxViewerOptions.

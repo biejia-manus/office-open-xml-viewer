@@ -4,11 +4,10 @@ import {
   renderRegionMapChart,
 } from '../packages/core/src/chart/region-map-renderer.js';
 import type { ChartRegionMapRenderer } from '../packages/core/src/chart/region-map-contract.js';
-import { createBuiltinWorkerRendererDescriptor } from '../packages/core/src/worker/renderer-module-contract.js';
+import { registerBuiltinWorkerRenderer } from '../packages/core/src/worker/renderer-module-contract.js';
 
-export const regionMap: ChartRegionMapRenderer = {
+export const regionMap: ChartRegionMapRenderer = registerBuiltinWorkerRenderer({
   render: renderRegionMapChart,
-  worker: createBuiltinWorkerRendererDescriptor('regionMap'),
-};
+}, 'regionMap');
 
 export type { ChartRegionMapRenderer } from '../packages/core/src/chart/region-map-contract.js';

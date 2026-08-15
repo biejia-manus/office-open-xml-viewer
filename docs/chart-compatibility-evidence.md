@@ -73,13 +73,13 @@ shared chart painter. Their implementations live in separate package entries:
 - `@silurus/ooxml/region-map`
 
 Omitting a renderer keeps its implementation out of the ordinary synchronous
-dependency closure. The built-in renderers also publish a structured-clone-safe
-identity descriptor so worker mode can import the supplied implementation in
-its own realm without depending on bundler-renamed exports. Build tools may
-retain these worker imports as separate lazy chunks. Custom function-valued
-renderers remain main-thread-only unless they expose a renderer-module
-descriptor. Clean build checks verify both the optional entry and the absence
-of its marker from the base DOCX/XLSX/PPTX static dependency closures.
+dependency closure. Worker mode identifies only the first-party renderer
+objects through an internal registry and reconstructs them in its own realm;
+the renderer interfaces themselves contain no worker transport metadata.
+Custom function-valued renderers remain main-thread-only and use the documented
+fallback in worker mode. Clean build checks verify the optional entry boundary,
+the base DOCX/XLSX/PPTX static dependency closures, and the self-contained
+production worker assets.
 
 ## Known, deliberately limited compatibility surfaces
 

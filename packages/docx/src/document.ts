@@ -73,7 +73,7 @@ export interface LoadOptions extends CoreLoadOptions {
   /**
    * Opt-in OMML equation engine. Import it from the separate `@silurus/ooxml/math`
    * entry and pass it in: `import { math } from '@silurus/ooxml/math'`. When
-   * omitted, equations are skipped and the ~3 MB engine never enters the bundle.
+   * omitted, equations are skipped and the ~3 MB engine is not loaded or evaluated.
    */
   math?: MathRenderer;
   /**
@@ -82,9 +82,9 @@ export interface LoadOptions extends CoreLoadOptions {
    * {@link DocxDocument.renderPageToBitmap} and paint the returned ImageBitmap
    * via an `ImageBitmapRenderingContext`. Requires OffscreenCanvas. Documents
    * needing DOM-only OpenType vertical glyph selection transparently continue
-   * in main mode; {@link DocxDocument.mode} reports the effective mode. The math
-   * built-in renderer works in both modes; custom renderers need a worker
-   * renderer-module descriptor.
+   * in main mode; {@link DocxDocument.mode} reports the effective mode. Built-in
+   * optional renderers use the same injection options in both modes. Custom
+   * renderer objects use their documented fallback in worker mode.
    */
   mode?: 'main' | 'worker';
 }
@@ -219,6 +219,7 @@ export class DocxDocument {
       mode === 'worker'
         ? (await import('./render-worker-host')).createRenderWorker()
         : new InlineWorker();
+    const rendererDescriptors = mode === 'worker' ? workerRendererDescriptors(opts) : undefined;
     let doc: DocxDocument | undefined;
     try {
       doc = new DocxDocument(worker, mode, defaultCurrentDateMs, opts.wasmUrl);
@@ -232,7 +233,7 @@ export class DocxDocument {
         mode === 'worker' ? !!opts.useGoogleFonts : false,
         opts.workerTimeoutMs,
         (usage) => metrics.observeUsage(usage),
-        mode === 'worker' ? workerRendererDescriptors(opts) : undefined,
+        rendererDescriptors,
       );
       if (mode === 'worker' && doc._mode === 'main') {
         metrics.setMode('main');
@@ -240,20 +241,20 @@ export class DocxDocument {
           "[ooxml] mode: 'worker' fell back to main-thread rendering because this document requires DOM OpenType vertical glyph selection.",
         );
       }
-      if (opts.math && doc._mode === 'worker' && !opts.math.worker) {
+      if (opts.math && doc._mode === 'worker' && !rendererDescriptors?.math) {
         console.warn(
-          "[ooxml] the supplied math renderer has no worker renderer-module descriptor; equations will be skipped in mode: 'worker'. Use @silurus/ooxml/math or provide MathRenderer.worker.",
+          "[ooxml] a custom math renderer cannot cross the worker boundary; equations will be skipped in mode: 'worker'. Use the math renderer from @silurus/ooxml/math.",
         );
       }
-      if (opts.threeD && doc._mode === 'worker' && !opts.threeD.worker) {
+      if (opts.threeD && doc._mode === 'worker' && !rendererDescriptors?.threeD) {
         console.warn(
-          "[ooxml] the supplied 3-D chart renderer has no worker renderer-module descriptor; charts use their 2-D family fallback in mode: 'worker'. Use @silurus/ooxml/three-d or provide ChartThreeDRenderer.worker.",
+          "[ooxml] a custom 3-D chart renderer cannot cross the worker boundary; charts use their 2-D family fallback in mode: 'worker'. Use the renderer from @silurus/ooxml/three-d.",
         );
       }
       doc._threeD = doc._mode === 'worker' ? undefined : opts.threeD;
-      if (opts.regionMap && doc._mode === 'worker' && !opts.regionMap.worker) {
+      if (opts.regionMap && doc._mode === 'worker' && !rendererDescriptors?.regionMap) {
         console.warn(
-          "[ooxml] the supplied Region Map renderer has no worker renderer-module descriptor; geospatial charts use the unsupported-chart placeholder in mode: 'worker'. Use @silurus/ooxml/region-map or provide ChartRegionMapRenderer.worker.",
+          "[ooxml] a custom Region Map renderer cannot cross the worker boundary; geospatial charts use the unsupported-chart placeholder in mode: 'worker'. Use the renderer from @silurus/ooxml/region-map.",
         );
       }
       doc._regionMap = doc._mode === 'worker' ? undefined : opts.regionMap;

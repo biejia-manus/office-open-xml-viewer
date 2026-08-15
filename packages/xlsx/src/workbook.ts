@@ -97,9 +97,9 @@ export interface LoadOptions extends CoreLoadOptions {
    * behaviour). 'worker': parse AND render inside the worker; use
    * {@link XlsxWorkbook.renderViewportToBitmap} and paint the returned
    * ImageBitmap via an `ImageBitmapRenderingContext`. Requires OffscreenCanvas.
-   * Built-in optional renderers are reconstructed inside the worker from stable
-   * identities. A custom renderer must expose a structured-clone-safe worker
-   * renderer-module descriptor.
+   * Built-in optional renderers use the same injection options in both modes
+   * and are reconstructed inside the worker. Custom renderer objects use their
+   * documented fallback in worker mode.
    */
   mode?: 'main' | 'worker';
 }
@@ -135,7 +135,7 @@ export class XlsxWorkbook {
   private resourcePolicy: NormalizedOoxmlResourcePolicy | null = null;
   /** Opt-in OMML equation engine, injected once at {@link load}. Every
    *  `renderViewport` call reuses it — equations in shapes render when present,
-   *  and are skipped (engine tree-shaken) when omitted. */
+   *  and are skipped when omitted. */
   private math: MathRenderer | undefined;
   /** Optional synchronous 3-D chart renderer. Worker mode reconstructs the
    * built-in implementation from its serializable identity. */
@@ -278,22 +278,25 @@ export class XlsxWorkbook {
     this.generation = (this.generation ?? 0) + 1;
     this.resourcePolicy = resourcePolicy;
     this.workerTimeoutMs = opts.workerTimeoutMs;
-    this.math = opts.math;
+    this.math = this._mode === 'worker' ? undefined : opts.math;
     this.threeD = this._mode === 'worker' ? undefined : opts.threeD;
     this.regionMap = this._mode === 'worker' ? undefined : opts.regionMap;
-    if (opts.math && this._mode === 'worker' && !opts.math.worker) {
+    const rendererDescriptors = this._mode === 'worker'
+      ? workerRendererDescriptors(opts)
+      : undefined;
+    if (opts.math && this._mode === 'worker' && !rendererDescriptors?.math) {
       console.warn(
-        "[ooxml] the supplied math renderer has no worker renderer-module descriptor; equations will be skipped in mode: 'worker'. Use @silurus/ooxml/math or provide MathRenderer.worker.",
+        "[ooxml] a custom math renderer cannot cross the worker boundary; equations will be skipped in mode: 'worker'. Use the math renderer from @silurus/ooxml/math.",
       );
     }
-    if (opts.threeD && this._mode === 'worker' && !opts.threeD.worker) {
+    if (opts.threeD && this._mode === 'worker' && !rendererDescriptors?.threeD) {
       console.warn(
-        "[ooxml] the supplied 3-D chart renderer has no worker renderer-module descriptor; charts use their 2-D family fallback in mode: 'worker'. Use @silurus/ooxml/three-d or provide ChartThreeDRenderer.worker.",
+        "[ooxml] a custom 3-D chart renderer cannot cross the worker boundary; charts use their 2-D family fallback in mode: 'worker'. Use the renderer from @silurus/ooxml/three-d.",
       );
     }
-    if (opts.regionMap && this._mode === 'worker' && !opts.regionMap.worker) {
+    if (opts.regionMap && this._mode === 'worker' && !rendererDescriptors?.regionMap) {
       console.warn(
-        "[ooxml] the supplied Region Map renderer has no worker renderer-module descriptor; geospatial charts use the unsupported-chart placeholder in mode: 'worker'. Use @silurus/ooxml/region-map or provide ChartRegionMapRenderer.worker.",
+        "[ooxml] a custom Region Map renderer cannot cross the worker boundary; geospatial charts use the unsupported-chart placeholder in mode: 'worker'. Use the renderer from @silurus/ooxml/region-map.",
       );
     }
     // In worker mode the worker preloads fonts before its first render
@@ -312,7 +315,7 @@ export class XlsxWorkbook {
               data: workerData,
               resourcePolicy,
               useGoogleFonts: !!opts.useGoogleFonts,
-              renderers: workerRendererDescriptors(opts),
+              renderers: rendererDescriptors,
             } satisfies RenderWorkerRequest)
           : ({
               type: 'parse',

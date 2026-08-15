@@ -3,7 +3,7 @@
   <canvas id="main-canvas" width="900" height="240"></canvas>
   <canvas id="worker-canvas" width="900" height="240"></canvas>
   <script type="module">
-    import { rasterizeMathSvg } from '@silurus/ooxml-core';
+    import { rasterizeMathSvg, workerRendererDescriptors } from '@silurus/ooxml-core';
     import { math } from '@ooxml-test-math-renderer';
 
     const mathml = '<math xmlns="http://www.w3.org/1998/Math/MathML"><mfrac><mrow><mo>∑</mo><msubsup><mi>x</mi><mi>i</mi><mn>2</mn></msubsup></mrow><msqrt><mrow><mi>n</mi><mo>+</mo><mn>1</mn></mrow></msqrt></mfrac><mo>=</mo><mover><mi>μ</mi><mo>¯</mo></mover></math>';
@@ -27,7 +27,7 @@
       const result = await new Promise((resolve, reject) => {
         worker.onmessage = ({ data }) => data.ok ? resolve(data) : reject(new Error(data.message));
         worker.onerror = (event) => reject(new Error(event.message));
-        worker.postMessage({ mathml, renderer: math.worker });
+        worker.postMessage({ mathml, renderer: workerRendererDescriptors({ math }).math });
       });
       const workerCanvas = document.getElementById('worker-canvas');
       const workerContext = workerCanvas.getContext('bitmaprenderer');

@@ -1,5 +1,5 @@
-import { rasterizeMathSvg, type WorkerRendererDescriptor } from '@silurus/ooxml-core';
-import { loadWorkerRenderers } from '@silurus/ooxml-core/worker';
+import { rasterizeMathSvg } from '@silurus/ooxml-core';
+import { loadWorkerRenderers, type WorkerRendererDescriptor } from '@silurus/ooxml-core/worker';
 
 interface Request {
   readonly mathml: string;

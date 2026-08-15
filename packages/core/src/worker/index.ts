@@ -36,16 +36,10 @@ export {
 } from './pull-credit-error.js';
 export { exactTransferableArrayBuffer } from './transfer.js';
 export {
-  WORKER_RENDERER_MODULE_PROTOCOL,
   assertWorkerRendererDescriptor,
-  createBuiltinWorkerRendererDescriptor,
-  createWorkerRendererModuleDescriptor,
   workerRendererDescriptors,
   type WorkerRendererDescriptor,
-  type WorkerBuiltinRendererDescriptor,
   type WorkerBuiltinRendererName,
-  type WorkerLoadableRenderer,
-  type WorkerRendererModuleDescriptor,
   type WorkerRendererSources,
   type WorkerRendererDescriptors,
 } from './renderer-module-contract.js';

@@ -366,19 +366,7 @@ export {
   type ChartThreeDRenderer,
 } from './chart/three-d-contract';
 export type { ChartRegionMapRenderer } from './chart/region-map-contract';
-export {
-  WORKER_RENDERER_MODULE_PROTOCOL,
-  createBuiltinWorkerRendererDescriptor,
-  createWorkerRendererModuleDescriptor,
-  workerRendererDescriptors,
-  type WorkerRendererDescriptor,
-  type WorkerBuiltinRendererDescriptor,
-  type WorkerBuiltinRendererName,
-  type WorkerLoadableRenderer,
-  type WorkerRendererModuleDescriptor,
-  type WorkerRendererSources,
-  type WorkerRendererDescriptors,
-} from './worker/renderer-module-contract';
+export { workerRendererDescriptors } from './worker/renderer-module-contract';
 export {
   mathToMathML,
   svgExtents,

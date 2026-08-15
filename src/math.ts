@@ -10,8 +10,12 @@
 //   new DocxViewer(canvas, { math });
 //
 // `math` is a `MathRenderer` — the contract the viewers' `math` option expects.
-import { loadMathJax, mathMLToSvg } from '../packages/core/src/math/engine.js';
-import { createBuiltinWorkerRendererDescriptor } from '../packages/core/src/worker/renderer-module-contract.js';
+import {
+  loadMathJax,
+  mathMLToSvg,
+  resolveMathJaxAssetUrl,
+} from '../packages/core/src/math/engine.js';
+import { registerBuiltinWorkerRenderer } from '../packages/core/src/worker/renderer-module-contract.js';
 import type { MathRenderer } from '../packages/core/src/math/mathjax.js';
 
 /**
@@ -19,10 +23,9 @@ import type { MathRenderer } from '../packages/core/src/math/mathjax.js';
  * `math` option to enable equation rendering. Self-contained: no network, no
  * cross-origin requests.
  */
-export const math: MathRenderer = {
+export const math: MathRenderer = registerBuiltinWorkerRenderer({
   loadMathJax,
   mathMLToSvg,
-  worker: createBuiltinWorkerRendererDescriptor('math'),
-};
+}, 'math', { engineAssetUrl: resolveMathJaxAssetUrl() });
 
 export type { MathSvg, MathRenderer } from '../packages/core/src/math/mathjax.js';

@@ -1,5 +1,4 @@
 import type { ChartModel, ChartRect } from '../types/chart.js';
-import type { WorkerLoadableRenderer } from '../worker/renderer-module-contract.js';
 
 /** Synchronous optional 3-D chart painter.
  *
@@ -8,7 +7,7 @@ import type { WorkerLoadableRenderer } from '../worker/renderer-module-contract.
  * the same chart as its canonical 2-D family when no 3-D renderer is injected,
  * without importing mesh/camera/material code.
  */
-export interface ChartThreeDRenderer extends WorkerLoadableRenderer {
+export interface ChartThreeDRenderer {
   render(
     ctx: CanvasRenderingContext2D,
     chart: ChartModel,

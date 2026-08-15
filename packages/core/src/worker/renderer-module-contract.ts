@@ -1,33 +1,30 @@
-/** Structured-clone-safe contract for an optional renderer that must be
- * reconstructed inside a dedicated render worker. Functions never cross the
- * worker boundary: the main realm sends this descriptor and the worker imports
- * the implementation in its own realm. */
-export const WORKER_RENDERER_MODULE_PROTOCOL = 'ooxml-worker-renderer-module/v1' as const;
+/** Internal structured-clone-safe contract used to reconstruct first-party
+ * optional renderers inside a dedicated render worker. Functions never cross
+ * the worker boundary. This transport detail intentionally stays out of the
+ * public renderer interfaces. */
+const WORKER_RENDERER_MODULE_PROTOCOL = 'ooxml-worker-renderer-module/v1' as const;
 
 export type WorkerBuiltinRendererName = 'math' | 'threeD' | 'regionMap';
 
-export interface WorkerBuiltinRendererDescriptor {
+interface WorkerBuiltinRendererDescriptorBase {
   readonly protocol: typeof WORKER_RENDERER_MODULE_PROTOCOL;
   /** Stable first-party renderer identity resolved by a worker-local lazy import. */
   readonly builtin: WorkerBuiltinRendererName;
 }
 
-export interface WorkerRendererModuleDescriptor {
-  readonly protocol: typeof WORKER_RENDERER_MODULE_PROTOCOL;
-  /** Absolute ESM URL chosen by the application/library, never by OOXML input. */
-  readonly moduleUrl: string;
-  /** Named module export implementing the renderer's ordinary direct contract. */
-  readonly exportName: string;
+interface WorkerMathRendererDescriptor extends WorkerBuiltinRendererDescriptorBase {
+  readonly builtin: 'math';
+  /** Absolute URL resolved by the consumer bundler in the main realm. */
+  readonly engineAssetUrl: string;
+}
+
+interface WorkerChartRendererDescriptor extends WorkerBuiltinRendererDescriptorBase {
+  readonly builtin: 'threeD' | 'regionMap';
 }
 
 export type WorkerRendererDescriptor =
-  | WorkerBuiltinRendererDescriptor
-  | WorkerRendererModuleDescriptor;
-
-/** Optional capability implemented by a renderer that can run in render workers. */
-export interface WorkerLoadableRenderer {
-  readonly worker?: WorkerRendererDescriptor;
-}
+  | WorkerMathRendererDescriptor
+  | WorkerChartRendererDescriptor;
 
 export interface WorkerRendererDescriptors {
   readonly math?: WorkerRendererDescriptor;
@@ -36,37 +33,55 @@ export interface WorkerRendererDescriptors {
 }
 
 export interface WorkerRendererSources {
-  readonly math?: WorkerLoadableRenderer;
-  readonly threeD?: WorkerLoadableRenderer;
-  readonly regionMap?: WorkerLoadableRenderer;
+  readonly math?: object;
+  readonly threeD?: object;
+  readonly regionMap?: object;
 }
 
-function requireAbsoluteModuleUrl(moduleUrl: string): string {
-  try {
-    return new URL(moduleUrl).href;
-  } catch {
-    throw new TypeError(`Worker renderer moduleUrl must be absolute: ${moduleUrl}`);
-  }
-}
-
-/** Describe a custom renderer module that a render worker can import on demand. */
-export function createWorkerRendererModuleDescriptor(
-  moduleUrl: string,
-  exportName: string,
-): WorkerRendererModuleDescriptor {
-  if (!exportName) throw new TypeError('Worker renderer exportName must not be empty');
-  return Object.freeze({
-    protocol: WORKER_RENDERER_MODULE_PROTOCOL,
-    moduleUrl: requireAbsoluteModuleUrl(moduleUrl),
-    exportName,
-  });
-}
+const workerRendererRegistry = new WeakMap<object, WorkerRendererDescriptor>();
 
 /** Create a bundler-stable descriptor for a built-in optional renderer. */
-export function createBuiltinWorkerRendererDescriptor(
+function createBuiltinWorkerRendererDescriptor(
+  builtin: 'math',
+  engineAssetUrl: string,
+): WorkerMathRendererDescriptor;
+function createBuiltinWorkerRendererDescriptor(
+  builtin: 'threeD' | 'regionMap',
+): WorkerChartRendererDescriptor;
+function createBuiltinWorkerRendererDescriptor(
   builtin: WorkerBuiltinRendererName,
-): WorkerBuiltinRendererDescriptor {
+  engineAssetUrl?: string,
+): WorkerRendererDescriptor {
+  if (builtin === 'math') {
+    if (!engineAssetUrl) throw new TypeError('Math worker renderer requires an engine asset URL');
+    return Object.freeze({
+      protocol: WORKER_RENDERER_MODULE_PROTOCOL,
+      builtin,
+      engineAssetUrl,
+    });
+  }
   return Object.freeze({ protocol: WORKER_RENDERER_MODULE_PROTOCOL, builtin });
+}
+
+export function registerBuiltinWorkerRenderer<T extends object>(
+  renderer: T,
+  builtin: 'math',
+  options: { readonly engineAssetUrl: string },
+): T;
+export function registerBuiltinWorkerRenderer<T extends object>(
+  renderer: T,
+  builtin: 'threeD' | 'regionMap',
+): T;
+export function registerBuiltinWorkerRenderer<T extends object>(
+  renderer: T,
+  builtin: WorkerBuiltinRendererName,
+  options?: { readonly engineAssetUrl: string },
+): T {
+  const descriptor = builtin === 'math'
+    ? createBuiltinWorkerRendererDescriptor(builtin, options?.engineAssetUrl ?? '')
+    : createBuiltinWorkerRendererDescriptor(builtin);
+  workerRendererRegistry.set(renderer, descriptor);
+  return renderer;
 }
 
 export function assertWorkerRendererDescriptor(
@@ -75,16 +90,14 @@ export function assertWorkerRendererDescriptor(
   if (descriptor.protocol !== WORKER_RENDERER_MODULE_PROTOCOL) {
     throw new TypeError(`Unsupported worker renderer protocol: ${String(descriptor.protocol)}`);
   }
-  if ('builtin' in descriptor) {
-    if (descriptor.builtin !== 'math'
-      && descriptor.builtin !== 'threeD'
-      && descriptor.builtin !== 'regionMap') {
-      throw new TypeError(`Unsupported built-in worker renderer: ${String(descriptor.builtin)}`);
-    }
-    return descriptor;
+  if (descriptor.builtin !== 'math'
+    && descriptor.builtin !== 'threeD'
+    && descriptor.builtin !== 'regionMap') {
+    throw new TypeError(`Unsupported built-in worker renderer: ${String(descriptor.builtin)}`);
   }
-  if (!descriptor.exportName) throw new TypeError('Worker renderer exportName must not be empty');
-  requireAbsoluteModuleUrl(descriptor.moduleUrl);
+  if (descriptor.builtin === 'math' && typeof descriptor.engineAssetUrl !== 'string') {
+    throw new TypeError('Math worker renderer requires an engine asset URL');
+  }
   return descriptor;
 }
 
@@ -94,12 +107,13 @@ export function assertWorkerRendererDescriptor(
 export function workerRendererDescriptors(
   sources: WorkerRendererSources,
 ): WorkerRendererDescriptors | undefined {
+  const math = sources.math ? workerRendererRegistry.get(sources.math) : undefined;
+  const threeD = sources.threeD ? workerRendererRegistry.get(sources.threeD) : undefined;
+  const regionMap = sources.regionMap ? workerRendererRegistry.get(sources.regionMap) : undefined;
   const descriptors: WorkerRendererDescriptors = {
-    ...(sources.math?.worker ? { math: assertWorkerRendererDescriptor(sources.math.worker) } : {}),
-    ...(sources.threeD?.worker ? { threeD: assertWorkerRendererDescriptor(sources.threeD.worker) } : {}),
-    ...(sources.regionMap?.worker
-      ? { regionMap: assertWorkerRendererDescriptor(sources.regionMap.worker) }
-      : {}),
+    ...(math ? { math } : {}),
+    ...(threeD ? { threeD } : {}),
+    ...(regionMap ? { regionMap } : {}),
   };
   return Object.keys(descriptors).length > 0 ? Object.freeze(descriptors) : undefined;
 }

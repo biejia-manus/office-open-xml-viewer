@@ -3,7 +3,6 @@ import type { ChartThreeDRenderer } from '../chart/three-d-contract.js';
 import type { MathRenderer } from '../math/mathjax.js';
 import {
   assertWorkerRendererDescriptor,
-  type WorkerBuiltinRendererName,
   type WorkerRendererDescriptor,
   type WorkerRendererDescriptors,
 } from './renderer-module-contract.js';
@@ -19,23 +18,19 @@ export interface LoadedWorkerRenderers {
  * content never selects executable module URLs. */
 export async function loadWorkerRenderer<T>(descriptor: WorkerRendererDescriptor): Promise<T> {
   assertWorkerRendererDescriptor(descriptor);
-  if ('builtin' in descriptor) return loadBuiltinRenderer(descriptor.builtin) as Promise<T>;
-  const namespace = await import(/* @vite-ignore */ descriptor.moduleUrl) as Record<string, unknown>;
-  if (!(descriptor.exportName in namespace)) {
-    throw new TypeError(
-      `Worker renderer module ${descriptor.moduleUrl} does not export "${descriptor.exportName}"`,
-    );
-  }
-  return namespace[descriptor.exportName] as T;
+  return loadBuiltinRenderer(descriptor) as Promise<T>;
 }
 
-async function loadBuiltinRenderer(builtin: WorkerBuiltinRendererName): Promise<object> {
-  switch (builtin) {
+async function loadBuiltinRenderer(descriptor: WorkerRendererDescriptor): Promise<object> {
+  switch (descriptor.builtin) {
     case 'math': {
       const engine = await import('../math/engine.js');
       return Object.freeze({
-        loadMathJax: engine.loadMathJax,
-        mathMLToSvg: engine.mathMLToSvg,
+        loadMathJax: () => engine.loadMathJaxFromAsset(descriptor.engineAssetUrl),
+        mathMLToSvg: (mathml: string) => engine.mathMLToSvgFromAsset(
+          mathml,
+          descriptor.engineAssetUrl,
+        ),
       });
     }
     case 'threeD': {

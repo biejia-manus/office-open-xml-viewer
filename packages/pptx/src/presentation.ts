@@ -182,7 +182,7 @@ export class PptxPresentation {
   private readonly _fetchMedia = (path: string): Promise<Blob> => this.getMedia(path);
   /** Opt-in OMML equation engine, injected once at {@link load}. Every
    *  `renderSlide` / `presentSlide` reuses it — equations render when present,
-   *  and are skipped (engine tree-shaken) when omitted. */
+   *  and are skipped when omitted. */
   private _math: MathRenderer | undefined;
   private _threeD: ChartThreeDRenderer | undefined;
   private _regionMap: ChartRegionMapRenderer | undefined;
@@ -271,25 +271,26 @@ export class PptxPresentation {
       mode === 'worker'
         ? (await import('./render-worker-host')).createRenderWorker()
         : new InlineWorker();
+    const rendererDescriptors = mode === 'worker' ? workerRendererDescriptors(opts) : undefined;
     let pres: PptxPresentation | undefined;
     try {
       pres = new PptxPresentation(worker, mode, opts.wasmUrl);
       pres._metrics = metrics;
-      if (opts.math && mode === 'worker' && !opts.math.worker) {
+      if (opts.math && mode === 'worker' && !rendererDescriptors?.math) {
         console.warn(
-          "[ooxml] the supplied math renderer has no worker renderer-module descriptor; equations will be skipped in mode: 'worker'. Use @silurus/ooxml/math or provide MathRenderer.worker.",
+          "[ooxml] a custom math renderer cannot cross the worker boundary; equations will be skipped in mode: 'worker'. Use the math renderer from @silurus/ooxml/math.",
         );
       }
-      if (opts.threeD && mode === 'worker' && !opts.threeD.worker) {
+      if (opts.threeD && mode === 'worker' && !rendererDescriptors?.threeD) {
         console.warn(
-          "[ooxml] the supplied 3-D chart renderer has no worker renderer-module descriptor; charts use their 2-D family fallback in mode: 'worker'. Use @silurus/ooxml/three-d or provide ChartThreeDRenderer.worker.",
+          "[ooxml] a custom 3-D chart renderer cannot cross the worker boundary; charts use their 2-D family fallback in mode: 'worker'. Use the renderer from @silurus/ooxml/three-d.",
         );
       }
       pres._math = mode === 'worker' ? undefined : opts.math;
       pres._threeD = mode === 'worker' ? undefined : opts.threeD;
-      if (opts.regionMap && mode === 'worker' && !opts.regionMap.worker) {
+      if (opts.regionMap && mode === 'worker' && !rendererDescriptors?.regionMap) {
         console.warn(
-          "[ooxml] the supplied Region Map renderer has no worker renderer-module descriptor; geospatial charts use the unsupported-chart placeholder in mode: 'worker'. Use @silurus/ooxml/region-map or provide ChartRegionMapRenderer.worker.",
+          "[ooxml] a custom Region Map renderer cannot cross the worker boundary; geospatial charts use the unsupported-chart placeholder in mode: 'worker'. Use the renderer from @silurus/ooxml/region-map.",
         );
       }
       pres._regionMap = mode === 'worker' ? undefined : opts.regionMap;
@@ -299,7 +300,7 @@ export class PptxPresentation {
         mode === 'worker' ? !!opts.useGoogleFonts : false,
         opts.workerTimeoutMs,
         (usage) => metrics.observeUsage(usage),
-        mode === 'worker' ? workerRendererDescriptors(opts) : undefined,
+        rendererDescriptors,
       );
       metrics.checkpoint('presentation preflight ready');
       if (mode === 'main' && opts.useGoogleFonts && pres._preflight) {

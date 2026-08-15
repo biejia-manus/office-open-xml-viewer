@@ -386,7 +386,7 @@ export interface ChartRect {
     w: number;
     h: number;
 }
-export interface ChartRegionMapRenderer extends WorkerLoadableRenderer {
+export interface ChartRegionMapRenderer {
     render(ctx: CanvasRenderingContext2D, chart: ChartModel, rect: ChartRect, ptToPx: number): boolean;
 }
 export interface ChartRun {
@@ -512,7 +512,7 @@ export interface ChartThreeD {
     sideWall?: ChartThreeDSurface | null;
     backWall?: ChartThreeDSurface | null;
 }
-export interface ChartThreeDRenderer extends WorkerLoadableRenderer {
+export interface ChartThreeDRenderer {
     render(ctx: CanvasRenderingContext2D, chart: ChartModel, rect: ChartRect, ptToPx: number): boolean;
 }
 export interface ChartThreeDSeriesAxis {
@@ -584,7 +584,6 @@ export interface ColumnsSpec {
     sep: boolean;
     cols: ColSpec[];
 }
-export function createWorkerRendererModuleDescriptor(moduleUrl: string, exportName: string): WorkerRendererModuleDescriptor;
 export interface DocComment {
     id: string;
     author?: string;
@@ -1245,7 +1244,7 @@ export interface MathRadical {
     index?: MathNode[];
     radicand: MathNode[];
 }
-export interface MathRenderer extends WorkerLoadableRenderer {
+export interface MathRenderer {
     loadMathJax(): Promise<void>;
     mathMLToSvg(mathml: string): Promise<MathSvg>;
 }
@@ -1750,21 +1749,6 @@ export interface TileInfo {
 export interface ViewerContextMenuEvent<TContext> {
     readonly originalEvent: MouseEvent;
     getContext(): Promise<TContext | null>;
-}
-export const WORKER_RENDERER_MODULE_PROTOCOL: 'ooxml-worker-renderer-module/v1';
-export interface WorkerBuiltinRendererDescriptor {
-    readonly protocol: typeof WORKER_RENDERER_MODULE_PROTOCOL;
-    readonly builtin: WorkerBuiltinRendererName;
-}
-export type WorkerBuiltinRendererName = 'math' | 'threeD' | 'regionMap';
-interface WorkerLoadableRenderer {
-    readonly worker?: WorkerRendererDescriptor;
-}
-export type WorkerRendererDescriptor = WorkerBuiltinRendererDescriptor | WorkerRendererModuleDescriptor;
-export interface WorkerRendererModuleDescriptor {
-    readonly protocol: typeof WORKER_RENDERER_MODULE_PROTOCOL;
-    readonly moduleUrl: string;
-    readonly exportName: string;
 }
 export interface ZoomableViewer {
     getScale(): number;
