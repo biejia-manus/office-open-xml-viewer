@@ -74,7 +74,7 @@ export function wasmAssetUrl(): Plugin {
   };
 }
 
-export default defineConfig(({ command }) => ({
+export default defineConfig(({ command, mode }) => ({
   // Published library assets must resolve from the imported module URL, not
   // from the hosting page's origin root. This is especially important for the
   // standalone module workers and sibling assets when consumers serve the
@@ -86,7 +86,7 @@ export default defineConfig(({ command }) => ({
     // Storybook loads the root Vite config in serve mode. The declaration
     // plugins are build-only: their Rolldown buildStart hooks expect library
     // inputs and fail against Storybook's dev-server graph.
-    ...(command === 'build'
+    ...(command === 'build' && mode !== 'runtime'
       ? dts({
           // TypeScript 7 is the repository's sole compiler. Its native tsgo
           // declaration generator avoids the removed JavaScript Compiler API.
