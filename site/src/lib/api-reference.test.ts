@@ -48,6 +48,8 @@ describe('official-site API reference', () => {
         expect(mode?.desc, apiClass.name).toMatch(/built-in/i);
       }
     }
+    expect(formatRenderModeGuidance.docx).toContain('automatically use main mode');
+    expect(formatRenderModeGuidance.docx).toContain("document's mode");
   });
 
   it('documents the shared resource controls on every browser API class', () => {

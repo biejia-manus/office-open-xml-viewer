@@ -67,7 +67,7 @@ const viewer = new ${viewerName}(${viewerTarget}, {
             <td>Requires Worker + OffscreenCanvas, downloads a larger worker and transfers one bitmap per frame.</td>
           </tr>
           <tr>
-            <th>Optional renderers</th>
+            <th>Equations and advanced charts</th>
             <td>Built-in and custom renderer objects.</td>
             <td>Built-in math, 3-D and Region Map renderers; arbitrary custom renderer objects cannot be transferred.</td>
           </tr>
@@ -132,11 +132,11 @@ const viewer = new ${viewerName}(${viewerTarget}, {
   </div>
 
   <div id="chart-rendering-addons" class="api-addons">
-    <h4>Optional chart renderers</h4>
+    <h4>3-D charts and Region Maps</h4>
     <p>
-      3-D charts and country Region Maps are optional renderer modules shared by DOCX, XLSX and PPTX.
-      Omit them to keep the base graph smaller. Authored 3-D charts retain the canonical 2-D
-      fallback; Region Maps require their renderer. The built-in renderers work in both render modes.
+      Import these capabilities from their separate package entries when a document needs them.
+      The same exports work with DOCX, XLSX and PPTX in both render modes. If omitted, authored 3-D
+      charts use the canonical 2-D fallback, while Region Maps are not drawn.
     </p>
     <pre><code>{rendererExample}</code></pre>
     <div class="api-addon-table-wrap">

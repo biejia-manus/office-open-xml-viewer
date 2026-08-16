@@ -67,16 +67,17 @@ export const announcements: readonly Announcement[] = [
         paragraphs: [
           'In main mode, parsing already runs in a Worker, while layout and Canvas rendering run on the main thread. It is the best default for ordinary previews, smaller files and applications that prioritize the smallest download and lowest per-frame transfer overhead.',
           'In worker mode, parsing, layout and Canvas rendering run in a Web Worker. Choose it when rendering a larger document competes with scrolling, navigation, animation or other UI work in your application. Viewer controls and interactions remain available in both modes.',
+          'A DOCX document that needs browser-only OpenType vertical-glyph selection automatically uses main mode for correct text shaping. Read the loaded document\'s mode when your integration needs to observe that fallback.',
           'Worker mode requires Worker and OffscreenCanvas support. It improves responsiveness rather than guaranteeing faster total rendering time, and it is not a separate process or a memory-safety boundary.',
         ],
       },
       {
         title: 'Use the same options in either mode',
         modules: ['@silurus/ooxml/math', '@silurus/ooxml/three-d', '@silurus/ooxml/region-map'],
-        rationale: 'Switching modes should not require a second setup for built-in optional renderers.',
+        rationale: 'Switching modes should not require a second setup for equations, 3-D charts or Region Maps.',
         paragraphs: [
           'Pass math, threeD and regionMap exactly as in main-thread mode. The library recognizes its built-in renderers and reconstructs them inside the worker without exposing worker protocol objects through the public renderer contracts.',
-          'Custom renderer objects remain a main-mode feature because arbitrary JavaScript objects cannot be transferred into a Worker. Use the built-in renderer exports when optional rendering is required in worker mode.',
+          'Custom renderer objects remain a main-mode feature because arbitrary JavaScript objects cannot be transferred into a Worker. Use the built-in math, threeD and regionMap exports when those capabilities are required in worker mode.',
         ],
         examples: [
           {
@@ -103,14 +104,16 @@ await viewer.load(source);`,
         rationale: 'Worker mode is primarily a UI-responsiveness choice, not an automatic speed or memory improvement.',
         paragraphs: [
           'Worker mode downloads a larger self-contained worker asset and transfers a rendered bitmap for each frame. Main mode has less worker code to download and avoids that frame transfer, but heavy layout or paint can occupy the UI thread.',
-          'Both modes keep Viewer navigation, zoom, virtualized scrolling, selection, find, hyperlinks and built-in optional renderers available. PowerPoint media controls and other DOM overlays continue to be presented by the Viewer in either mode.',
+          'Both modes keep Viewer navigation, zoom, virtualized scrolling, selection, find, hyperlinks, equations, 3-D charts and Region Maps available. PowerPoint media controls and other DOM overlays continue to be presented by the Viewer in either mode.',
         ],
       },
       {
         title: 'Technical note',
         paragraphs: [
-          'The render worker is packaged as a self-contained asset so application bundlers cannot copy it without its internal rendering code. Consumer-resolved resources such as the MathJax engine URL are passed to that worker explicitly.',
-          'The worker path is checked with same-browser main/worker pixel comparisons for public DOCX, XLSX and PPTX examples, equations, 3-D charts and Region Maps. Production tests also load the published assets directly and through a consumer Vite build so worker resources are verified after rebundling.',
+          'JavaScript renderer functions cannot cross the structured-clone boundary. Instead of exposing a second worker-specific API, v0.80 keeps the public math, threeD and regionMap objects as ordinary renderer contracts and records the built-in module identity privately. The worker reconstructs only those recognized built-ins, so application code uses the same options while transport details stay out of the public types.',
+          'Production packaging was the less obvious part. A consumer bundler can treat a published Worker as an opaque asset: copying the entry file while leaving its split chunks behind, or rebasing a MathJax URL against the consumer output directory. The published render worker is therefore self-contained, while browser-resolved external asset URLs are handed across explicitly. Tests cover both the raw package output and a fresh Vite consumer rebundle.',
+          'Math output also needed one drawing contract in both realms. Equations are rasterized through the same Canvas path in Window and Worker contexts on a size-bounded surface. A 256 px/em source is reduced in two stages and cached at 64 px/em for cleaner 100% display without turning ordinary document text into vector geometry.',
+          'Finally, the worker path is compared against main mode in the same browser for public DOCX, XLSX and PPTX examples, equations, 3-D charts and Region Maps. The exercised frames are pixel-identical; CI retains a small tolerance only for browser text rasterization differences across environments.',
         ],
       },
     ],

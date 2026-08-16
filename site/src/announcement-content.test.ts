@@ -29,10 +29,16 @@ describe('v0.80 worker rendering announcement', () => {
     expect(text).toContain('Use main mode for smaller documents');
     expect(text).toContain('Use worker mode when larger or more complex documents');
     expect(text).toContain("mode: 'worker'");
-    expect(text).toContain('self-contained asset');
+    expect(text).toContain('published render worker is therefore self-contained');
     expect(text).toContain('larger self-contained worker asset');
     expect(text).toContain('transfers a rendered bitmap for each frame');
     expect(text).toContain('equations, 3-D charts and Region Maps');
+    expect(text).toContain('structured-clone boundary');
+    expect(text).toContain('opaque asset');
+    expect(text).toContain('size-bounded surface');
+    expect(text).toContain('cached at 64 px/em');
+    expect(text).toContain('pixel-identical');
+    expect(text).toContain('automatically uses main mode');
   });
 });
 
