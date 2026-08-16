@@ -10,7 +10,10 @@ describe('v0.80 worker rendering announcement', () => {
   it('presents worker rendering as an upcoming opt-in minor release', () => {
     expect(announcement).toBeDefined();
     expect(announcement).toMatchObject({ label: 'Upcoming release', version: 'v0.80.0' });
+    expect(announcement?.summary).toContain('extends the existing');
+    expect(announcement?.summary).not.toContain('adds one worker rendering mode');
     expect(announcement?.sections[0]).toMatchObject({ title: 'In short', kind: 'summary' });
+    expect(announcement?.sections[0]?.paragraphs.join(' ')).toContain('introduced in v0.59.0');
     expect(announcement?.sections[0]?.paragraphs.join(' ')).toContain('Main-thread mode remains the default');
   });
 

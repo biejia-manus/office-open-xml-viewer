@@ -40,21 +40,21 @@ export const announcements: readonly Announcement[] = [
     date: '2026-08-16',
     label: 'Upcoming release',
     version: 'v0.80.0',
-    title: 'Off-main-thread rendering across all three formats in v0.80.0',
-    summary: 'v0.80.0 adds one worker rendering mode for DOCX, XLSX and PPTX, including the built-in math, 3-D chart and Region Map renderers.',
-    audience: 'Browser applications that display larger Office files or need to keep scrolling and other UI work responsive while documents are laid out and painted. Main-thread rendering remains the default, so existing applications do not need to change.',
+    title: 'Built-in renderer parity for worker mode in v0.80.0',
+    summary: 'v0.80.0 extends the existing DOCX, XLSX and PPTX worker mode so the built-in math, 3-D chart and Region Map renderers use the same injection API and rendering path as main-thread mode.',
+    audience: 'Browser applications that use worker mode and need equations, authored 3-D charts or country-level Region Maps without moving document layout and paint back to the main thread. Main-thread rendering remains the default, so existing applications do not need to change.',
     sections: [
       {
         title: 'In short',
         kind: 'summary',
         modules: ['@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx', '@silurus/ooxml/math', '@silurus/ooxml/three-d', '@silurus/ooxml/region-map'],
-        rationale: 'Parsing and Canvas paint can be moved away from Window without creating a second renderer API or a different document appearance.',
+        rationale: 'The existing worker mode should support the same built-in optional renderers without introducing a transport-specific renderer API.',
         paragraphs: [
-          'Pass mode: "worker" to a Viewer or headless load call to parse, lay out and render inside a Web Worker. The worker paints to an OffscreenCanvas and returns an ImageBitmap for the visible canvas.',
+          'Worker rendering across DOCX, XLSX and PPTX was introduced in v0.59.0. v0.80.0 closes its remaining built-in renderer gaps: equations, 3-D charts and Region Maps now use the same math, threeD and regionMap options in main-thread and worker modes.',
           'Main-thread mode remains the default. No migration is required for existing applications.',
         ],
         bullets: [
-          'DOCX pagination, XLSX sheet projection and PPTX slide rendering run in the render worker.',
+          'The established worker pipeline still parses, lays out and paints inside the render worker.',
           'The built-in math, 3-D chart and Region Map renderers use the same injection options in both modes.',
           'Selection, find, navigation and viewer interactions retain the same public APIs.',
           'The exercised main/worker comparison set produced identical pixels; CI keeps a small allowance for browser text rasterization differences.',
