@@ -76,30 +76,31 @@ const viewer = new ${viewerName}(${viewerTarget}, {
     </div>
     <p>{formatModeNote}</p>
 
-    <h4>Choose who owns loading</h4>
+    <h4>Load once for one Viewer or share one document</h4>
     <p>
-      <strong>Normal case:</strong> construct the Viewer, then call <code>viewer.load(source)</code>.
-      The Viewer owns the parsed engine, supports replacement loads, and destroys it during teardown.
+      <strong>For most applications:</strong> construct one Viewer and call <code>viewer.load(source)</code>.
+      Use this when the Viewer is the only place displaying the document. It can replace the current
+      file with another <code>load()</code> call and releases the loaded engine during teardown.
     </p>
     <p>
-      <strong>Shared-engine case:</strong> load <code>{borrowedEngine.className}</code> once and create
-      each view with <code>{borrowedEngine.factory}</code>. This is mutually exclusive with Viewer loading:
-      <code>load()</code> is unavailable, and the caller must destroy the borrowed engine after every
-      view has been destroyed.
+      <strong>When several views need the same document:</strong> load <code>{borrowedEngine.className}</code>
+      once, then create each view with <code>{borrowedEngine.factory}</code>. This avoids parsing the same
+      source again. Those Viewers cannot replace the file with <code>viewer.load()</code>; after every view
+      is destroyed, your application must destroy the shared engine.
     </p>
     <div class="api-mode-table-wrap">
       <table class="api-mode-table">
         <thead>
-          <tr><th>Loading ownership</th><th>Setup</th><th>Cleanup</th></tr>
+          <tr><th>Use this when</th><th>Setup</th><th>Cleanup</th></tr>
         </thead>
         <tbody>
           <tr>
-            <th>Viewer-owned (normal)</th>
+            <th>One Viewer displays the document</th>
             <td>Pass <code>mode</code> to the Viewer, then call <code>load(source)</code>.</td>
             <td>Destroy the Viewer; it also destroys its engine.</td>
           </tr>
           <tr>
-            <th>Shared engine</th>
+            <th>Several views share one parsed document</th>
             <td><code>{borrowedEngine.className}.load(source, {'{'} mode: 'worker' {'}'})</code>, then <code>{borrowedEngine.factory}</code>.</td>
             <td>Destroy every View first, then destroy the shared engine.</td>
           </tr>
