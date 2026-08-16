@@ -5,6 +5,26 @@ semantic versioning. While the major version is zero, minor releases may contain
 explicitly documented breaking changes; patch releases remain compatible with
 the corresponding minor release.
 
+## 0.80.0 — 2026-08-16
+
+Compatible minor release. Completes built-in renderer parity between the
+existing main-thread and worker rendering modes across DOCX, XLSX, and PPTX.
+
+- **worker renderer parity:** equations, authored 3-D charts, and country-level
+  Region Maps now use the same `math`, `threeD`, and `regionMap` injection
+  options in main and worker modes.
+- **production-safe workers:** publish self-contained render workers and carry
+  consumer-resolved assets such as MathJax across the worker boundary, including
+  applications that rebundle the packages with Vite.
+- **equation quality:** use one bounded Canvas raster path in Window and Worker
+  contexts, with staged high-resolution reduction for cleaner equation output.
+- **integration guidance:** add worker file-upload examples and document how to
+  choose between main and worker rendering, including responsiveness, download,
+  frame-transfer, browser-support, and custom-renderer trade-offs.
+- **compatibility:** main mode remains the default and existing applications do
+  not require migration. DOCX content requiring browser-only vertical-glyph
+  selection automatically falls back to effective main mode for correct shaping.
+
 ## 0.79.1 — 2026-08-15
 
 Patch. Corrects authored chart labels, legend frames, and automatic worksheet

@@ -7,9 +7,9 @@ const articlePage = readFileSync(new URL('./pages/announcements/[slug].astro', i
 describe('v0.80 worker rendering announcement', () => {
   const announcement = announcements.find((item) => item.slug === 'v080-worker-rendering');
 
-  it('presents worker rendering as an upcoming opt-in minor release', () => {
+  it('presents worker rendering as a released compatible minor version', () => {
     expect(announcement).toBeDefined();
-    expect(announcement).toMatchObject({ label: 'Upcoming release', version: 'v0.80.0' });
+    expect(announcement).toMatchObject({ label: 'Release note', version: 'v0.80.0' });
     expect(announcement?.summary).toContain('extends the existing');
     expect(announcement?.summary).not.toContain('adds one worker rendering mode');
     expect(announcement?.sections[0]).toMatchObject({ title: 'In short', kind: 'summary' });
