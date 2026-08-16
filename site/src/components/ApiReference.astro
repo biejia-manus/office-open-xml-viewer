@@ -1,5 +1,5 @@
 ---
-import { apiReference, optionalChartRenderers } from '../lib/api-reference';
+import { apiReference, formatRenderModeGuidance, optionalChartRenderers } from '../lib/api-reference';
 import InlineApiDescription from './InlineApiDescription.astro';
 interface Props {
   format: 'docx' | 'xlsx' | 'pptx';
@@ -19,12 +19,13 @@ const borrowedEngine = {
 }[format];
 const viewerName = { docx: 'DocxViewer', xlsx: 'XlsxViewer', pptx: 'PptxViewer' }[format];
 const viewerTarget = format === 'xlsx' ? 'container' : 'canvas';
+const formatModeNote = formatRenderModeGuidance[format];
 const rendererExample = `import { ${viewerName} } from '@silurus/ooxml/${format}';
 import { threeD } from '@silurus/ooxml/three-d';
 import { regionMap } from '@silurus/ooxml/region-map';
 
 const viewer = new ${viewerName}(${viewerTarget}, {
-  mode: 'main',
+  mode: 'worker',
   threeD,
   regionMap,
 });`;
@@ -38,7 +39,44 @@ const viewer = new ${viewerName}(${viewerTarget}, {
   </p>
 
   <div class="api-ownership">
-    <h4>Choose one loading mode</h4>
+    <h4>Choose a rendering mode</h4>
+    <p>
+      Both modes parse the Office package in a Worker. The difference is where document layout and
+      Canvas rendering run. Start with <code>main</code>; choose <code>worker</code> when rendering
+      noticeably competes with the rest of your application UI.
+    </p>
+    <div class="api-mode-table-wrap">
+      <table class="api-mode-table">
+        <thead>
+          <tr><th>Decision</th><th><code>mode: 'main'</code> (default)</th><th><code>mode: 'worker'</code></th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>Best for</th>
+            <td>Ordinary previews, smaller files, custom renderers and the smallest worker download.</td>
+            <td>Larger or more complex documents where rendering can interrupt scrolling, navigation or other UI.</td>
+          </tr>
+          <tr>
+            <th>Rendering</th>
+            <td>Layout and Canvas paint run on the main thread.</td>
+            <td>Layout and Canvas paint run in a Web Worker; the Viewer presents the returned frame.</td>
+          </tr>
+          <tr>
+            <th>Trade-offs</th>
+            <td>No frame-transfer overhead, but heavy rendering can occupy the UI thread.</td>
+            <td>Requires Worker + OffscreenCanvas, downloads a larger worker and transfers one bitmap per frame.</td>
+          </tr>
+          <tr>
+            <th>Optional renderers</th>
+            <td>Built-in and custom renderer objects.</td>
+            <td>Built-in math, 3-D and Region Map renderers; arbitrary custom renderer objects cannot be transferred.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>{formatModeNote}</p>
+
+    <h4>Choose who owns loading</h4>
     <p>
       <strong>Normal case:</strong> construct the Viewer, then call <code>viewer.load(source)</code>.
       The Viewer owns the parsed engine, supports replacement loads, and destroys it during teardown.
@@ -49,35 +87,28 @@ const viewer = new ${viewerName}(${viewerTarget}, {
       <code>load()</code> is unavailable, and the caller must destroy the borrowed engine after every
       view has been destroyed.
     </p>
-    <p>
-      Loading ownership and execution mode are separate choices. Both loading modes support both
-      execution modes:
-    </p>
     <div class="api-mode-table-wrap">
       <table class="api-mode-table">
         <thead>
-          <tr><th>Loading ownership</th><th><code>mode: 'main'</code></th><th><code>mode: 'worker'</code></th></tr>
+          <tr><th>Loading ownership</th><th>Setup</th><th>Cleanup</th></tr>
         </thead>
         <tbody>
           <tr>
-            <th>Viewer-owned</th>
-            <td>Pass <code>mode: 'main'</code> to the Viewer, then call <code>load(source)</code>.</td>
-            <td>Pass <code>mode: 'worker'</code> to the Viewer, then call <code>load(source)</code>.</td>
+            <th>Viewer-owned (normal)</th>
+            <td>Pass <code>mode</code> to the Viewer, then call <code>load(source)</code>.</td>
+            <td>Destroy the Viewer; it also destroys its engine.</td>
           </tr>
           <tr>
             <th>Shared engine</th>
-            <td><code>{borrowedEngine.className}.load(source, {'{'} mode: 'main' {'}'})</code>, then <code>{borrowedEngine.factory}</code>.</td>
             <td><code>{borrowedEngine.className}.load(source, {'{'} mode: 'worker' {'}'})</code>, then <code>{borrowedEngine.factory}</code>.</td>
+            <td>Destroy every View first, then destroy the shared engine.</td>
           </tr>
         </tbody>
       </table>
     </div>
     <p>
       On the shared-engine path, the engine's mode is authoritative: <code>{borrowedEngine.factory}</code>
-      deliberately does not accept a mode and cannot switch an already-loaded engine. Here,
-      <code>main</code> means parsing in a Worker and rendering on the main thread; <code>worker</code>
-      means both parsing and rendering in a Worker. Worker rendering requires Worker and
-      OffscreenCanvas support and may have format-specific feature limitations.
+      deliberately does not accept a mode and cannot switch an already-loaded engine.
     </p>
   </div>
 

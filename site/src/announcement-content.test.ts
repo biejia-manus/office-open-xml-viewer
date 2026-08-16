@@ -25,11 +25,13 @@ describe('v0.80 worker rendering announcement', () => {
       ...(section.examples?.map(({ code }) => code) ?? []),
     ]).join('\n') ?? '';
 
-    expect(text).toContain('What stays on the main thread');
-    expect(text).toContain('visible DOM and canvas');
+    expect(text).toContain('Choose the mode that fits your app');
+    expect(text).toContain('Use main mode for smaller documents');
+    expect(text).toContain('Use worker mode when larger or more complex documents');
     expect(text).toContain("mode: 'worker'");
     expect(text).toContain('self-contained asset');
-    expect(text).toContain('not a separate operating-system process');
+    expect(text).toContain('larger self-contained worker asset');
+    expect(text).toContain('transfers a rendered bitmap for each frame');
     expect(text).toContain('equations, 3-D charts and Region Maps');
   });
 });

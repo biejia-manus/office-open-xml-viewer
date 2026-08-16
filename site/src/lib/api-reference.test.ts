@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { apiReference, optionalChartRenderers } from './api-reference.js';
+import {
+  apiReference,
+  formatRenderModeGuidance,
+  optionalChartRenderers,
+} from './api-reference.js';
 
 describe('official-site API reference', () => {
   it('documents both optional chart renderer entries and their shared contracts', () => {
@@ -26,6 +30,22 @@ describe('official-site API reference', () => {
           .toBe('ChartThreeDRenderer');
         expect(options.find(({ name }) => name === 'regionMap')?.type, apiClass.name)
           .toBe('ChartRegionMapRenderer');
+      }
+    }
+  });
+
+  it('gives every format a current main/worker choice and feature-parity guide', () => {
+    for (const [format, classes] of Object.entries(apiReference)) {
+      const guidance = formatRenderModeGuidance[format as keyof typeof formatRenderModeGuidance];
+      expect(guidance, format).toContain('both modes');
+      expect(guidance, format).toContain('Worker mode');
+      for (const apiClass of classes) {
+        const mode = apiClass.options?.find(({ name }) => name === 'mode');
+        expect(mode?.def, apiClass.name).toBe("'main'");
+        expect(mode?.desc, apiClass.name).toContain("Use 'main'");
+        expect(mode?.desc, apiClass.name).toContain("Use 'worker'");
+        expect(mode?.desc, apiClass.name).toContain('larger');
+        expect(mode?.desc, apiClass.name).toMatch(/built-in/i);
       }
     }
   });
