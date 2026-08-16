@@ -36,6 +36,86 @@ export interface Announcement {
 
 export const announcements: readonly Announcement[] = [
   {
+    slug: 'v080-worker-rendering',
+    date: '2026-08-16',
+    label: 'Upcoming release',
+    version: 'v0.80.0',
+    title: 'Off-main-thread rendering across all three formats in v0.80.0',
+    summary: 'v0.80.0 adds one worker rendering mode for DOCX, XLSX and PPTX, including the built-in math, 3-D chart and Region Map renderers.',
+    audience: 'Browser applications that display larger Office files or need to keep scrolling and other UI work responsive while documents are laid out and painted. Main-thread rendering remains the default, so existing applications do not need to change.',
+    sections: [
+      {
+        title: 'In short',
+        kind: 'summary',
+        modules: ['@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx', '@silurus/ooxml/math', '@silurus/ooxml/three-d', '@silurus/ooxml/region-map'],
+        rationale: 'Parsing and Canvas paint can be moved away from Window without creating a second renderer API or a different document appearance.',
+        paragraphs: [
+          'Pass mode: "worker" to a Viewer or headless load call to parse, lay out and render inside a Web Worker. The worker paints to an OffscreenCanvas and returns an ImageBitmap for the visible canvas.',
+          'Main-thread mode remains the default. No migration is required for existing applications.',
+        ],
+        bullets: [
+          'DOCX pagination, XLSX sheet projection and PPTX slide rendering run in the render worker.',
+          'The built-in math, 3-D chart and Region Map renderers use the same injection options in both modes.',
+          'Selection, find, navigation and viewer interactions retain the same public APIs.',
+          'The exercised main/worker comparison set produced identical pixels; CI keeps a small allowance for browser text rasterization differences.',
+        ],
+      },
+      {
+        title: 'What stays on the main thread',
+        modules: ['@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx'],
+        rationale: 'DOM interaction and presentation belong to the Viewer, while document interpretation and Canvas paint belong to the render worker.',
+        paragraphs: [
+          'Worker mode does not remove the main thread from the Viewer. The main thread still owns the visible DOM and canvas, handles input, scrolling, zoom, sheet or page navigation, selection and find overlays, and schedules the current frame. It receives the finished ImageBitmap and presents it without repeating document layout or paint.',
+          'DOM-dependent presentation also remains on the main thread. This includes Viewer controls and overlays, hyperlink interaction, and PowerPoint media playback composited over a worker-rendered slide. The main thread also owns callbacks, stale-frame rejection, worker lifecycle and error reporting.',
+        ],
+      },
+      {
+        title: 'The same renderer injection in both modes',
+        modules: ['@silurus/ooxml/math', '@silurus/ooxml/three-d', '@silurus/ooxml/region-map'],
+        rationale: 'Applications should select capabilities once instead of learning a transport-specific renderer interface.',
+        paragraphs: [
+          'Pass math, threeD and regionMap exactly as in main-thread mode. The library recognizes its built-in renderers and reconstructs them inside the worker without exposing worker protocol objects through the public renderer contracts.',
+          'Arbitrary custom renderer objects cannot cross the structured-clone boundary. They retain the documented worker fallback; use the built-in renderer exports when the same optional rendering is required in worker mode.',
+        ],
+        examples: [
+          {
+            title: 'Render an XLSX Viewer off the main thread',
+            code: `import { XlsxViewer } from '@silurus/ooxml/xlsx';
+import { math } from '@silurus/ooxml/math';
+import { threeD } from '@silurus/ooxml/three-d';
+import { regionMap } from '@silurus/ooxml/region-map';
+
+const viewer = new XlsxViewer(container, {
+  mode: 'worker',
+  math,
+  threeD,
+  regionMap,
+});
+
+await viewer.load(source);`,
+          },
+        ],
+      },
+      {
+        title: 'Packaging and performance',
+        modules: ['@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx'],
+        rationale: 'A render worker must remain loadable after an application bundles and deploys the library.',
+        paragraphs: [
+          'The render worker is emitted as a self-contained asset so common consumer bundlers cannot copy the worker while orphaning one of its internal chunks. Consumer-resolved resources such as the MathJax engine URL are carried across the worker boundary explicitly.',
+          'Worker mode is loaded on demand, but its self-contained asset is larger than the parse-only worker used by main-thread rendering. It also transfers one ImageBitmap per rendered frame. Choose worker mode when UI responsiveness and isolation of renderer state are more important than the smallest worker download or the lowest single-frame transfer overhead.',
+          'A Web Worker is not a separate operating-system process or a strict memory sandbox. It reduces work on Window and contains many parser or renderer failures, but cannot guarantee recovery from every browser-level out-of-memory condition.',
+        ],
+      },
+      {
+        title: 'Compatibility and verification',
+        paragraphs: [
+          'Worker rendering requires Worker and OffscreenCanvas support. Documents that require a DOM-only text path may use the documented main-thread fallback rather than silently changing layout.',
+          'The worker path is checked with same-browser main/worker pixel comparisons for public DOCX, XLSX and PPTX examples, equations, 3-D charts and Region Maps. Production tests also load the published assets directly and through a consumer Vite build so worker resources are verified after rebundling.',
+        ],
+      },
+    ],
+  },
+  {
     slug: 'v079-chart-rendering-addons',
     date: '2026-08-14',
     label: 'Release note',

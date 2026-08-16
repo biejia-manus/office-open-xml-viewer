@@ -4,6 +4,33 @@ import { announcements } from './lib/announcements';
 
 const articlePage = readFileSync(new URL('./pages/announcements/[slug].astro', import.meta.url), 'utf8');
 
+describe('v0.80 worker rendering announcement', () => {
+  const announcement = announcements.find((item) => item.slug === 'v080-worker-rendering');
+
+  it('presents worker rendering as an upcoming opt-in minor release', () => {
+    expect(announcement).toBeDefined();
+    expect(announcement).toMatchObject({ label: 'Upcoming release', version: 'v0.80.0' });
+    expect(announcement?.sections[0]).toMatchObject({ title: 'In short', kind: 'summary' });
+    expect(announcement?.sections[0]?.paragraphs.join(' ')).toContain('Main-thread mode remains the default');
+  });
+
+  it('states the main-thread boundary and production trade-offs', () => {
+    const text = announcement?.sections.flatMap((section) => [
+      section.title,
+      ...section.paragraphs,
+      ...(section.bullets ?? []),
+      ...(section.examples?.map(({ code }) => code) ?? []),
+    ]).join('\n') ?? '';
+
+    expect(text).toContain('What stays on the main thread');
+    expect(text).toContain('visible DOM and canvas');
+    expect(text).toContain("mode: 'worker'");
+    expect(text).toContain('self-contained asset');
+    expect(text).toContain('not a separate operating-system process');
+    expect(text).toContain('equations, 3-D charts and Region Maps');
+  });
+});
+
 describe('v0.79 chart rendering announcement', () => {
   const announcement = announcements.find((item) => item.slug === 'v079-chart-rendering-addons');
 
