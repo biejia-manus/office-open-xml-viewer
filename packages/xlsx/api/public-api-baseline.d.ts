@@ -585,17 +585,6 @@ export interface ChartTextRun {
     color?: string | null;
     fontFace?: string | null;
 }
-/** DrawingML paint authored on a 3-D chart surface (`floor`, `sideWall`, or
- * `backWall`). Each surface is a real face of the shared projected scene, not
- * a renderer decoration. */
-export interface ChartThreeDSurface {
-    fillColor?: string | null;
-    fillHidden?: boolean | null;
-    lineColor?: string | null;
-    lineWidthEmu?: number | null;
-    lineDash?: string | null;
-    lineHidden?: boolean | null;
-}
 export interface ChartThreeD {
     rotationX?: number | null;
     rotationY?: number | null;
@@ -605,13 +594,14 @@ export interface ChartThreeD {
     rightAngleAxes?: boolean | null;
     gapDepthPercent?: number | null;
     shape?: string | null;
-    /** `<c:bar3DChart><c:grouping val>` (§21.2.2.77). `standard` uses the
-     *  series/depth axis; `clustered` uses adjacent category-axis slots. */
     barGrouping?: 'standard' | 'clustered' | 'stacked' | 'percentStacked' | string | null;
     seriesAxis?: ChartThreeDSeriesAxis | null;
     floor?: ChartThreeDSurface | null;
     sideWall?: ChartThreeDSurface | null;
     backWall?: ChartThreeDSurface | null;
+}
+export interface ChartThreeDRenderer {
+    render(ctx: CanvasRenderingContext2D, chart: ChartModel, rect: ChartRect, ptToPx: number): boolean;
 }
 export interface ChartThreeDSeriesAxis {
     title?: string | null;
@@ -638,8 +628,13 @@ export interface ChartThreeDSeriesAxis {
     titleVerticalMode?: ChartModel['catAxisTitleVerticalMode'];
     titleManualLayout?: ChartManualLayout | null;
 }
-export interface ChartThreeDRenderer {
-    render(ctx: CanvasRenderingContext2D, chart: ChartModel, rect: ChartRect, ptToPx: number): boolean;
+export interface ChartThreeDSurface {
+    fillColor?: string | null;
+    fillHidden?: boolean | null;
+    lineColor?: string | null;
+    lineWidthEmu?: number | null;
+    lineDash?: string | null;
+    lineHidden?: boolean | null;
 }
 export interface ChartTrendline {
     trendlineType: string;

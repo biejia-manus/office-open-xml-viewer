@@ -15,6 +15,7 @@ import {
   type ChartRegionMapRenderer,
   OoxmlResourceLimitError,
   type OoxmlResourceMetrics,
+  workerRendererDescriptors,
 } from '@silurus/ooxml-core';
 import {
   deserializeWorkerError,
@@ -96,7 +97,9 @@ export interface LoadOptions extends CoreLoadOptions {
    * behaviour). 'worker': parse AND render inside the worker; use
    * {@link XlsxWorkbook.renderViewportToBitmap} and paint the returned
    * ImageBitmap via an `ImageBitmapRenderingContext`. Requires OffscreenCanvas.
-   * The math engine is unavailable in this mode (equations are skipped).
+   * Built-in optional renderers use the same injection options in both modes
+   * and are reconstructed inside the worker. Custom renderer objects use their
+   * documented fallback in worker mode.
    */
   mode?: 'main' | 'worker';
 }
@@ -132,13 +135,13 @@ export class XlsxWorkbook {
   private resourcePolicy: NormalizedOoxmlResourcePolicy | null = null;
   /** Opt-in OMML equation engine, injected once at {@link load}. Every
    *  `renderViewport` call reuses it — equations in shapes render when present,
-   *  and are skipped (engine tree-shaken) when omitted. */
+   *  and are skipped when omitted. */
   private math: MathRenderer | undefined;
-  /** Optional synchronous 3-D chart addon; main-thread only because functions
-   * cannot cross the worker structured-clone boundary. */
+  /** Optional synchronous 3-D chart renderer. Worker mode reconstructs the
+   * built-in implementation from its serializable identity. */
   private threeD: ChartThreeDRenderer | undefined;
-  /** Optional synchronous Region Map addon; main-thread only because functions
-   * cannot cross the worker structured-clone boundary. */
+  /** Optional synchronous Region Map renderer. Worker mode reconstructs the
+   * built-in implementation from its serializable identity. */
   private regionMap: ChartRegionMapRenderer | undefined;
   /** Web-font registrations are per FontFaceSet. Same-origin child windows have
    * their own set even when they share this workbook instance. */
@@ -275,22 +278,25 @@ export class XlsxWorkbook {
     this.generation = (this.generation ?? 0) + 1;
     this.resourcePolicy = resourcePolicy;
     this.workerTimeoutMs = opts.workerTimeoutMs;
-    this.math = opts.math;
+    this.math = this._mode === 'worker' ? undefined : opts.math;
     this.threeD = this._mode === 'worker' ? undefined : opts.threeD;
     this.regionMap = this._mode === 'worker' ? undefined : opts.regionMap;
-    if (opts.math && this._mode === 'worker') {
+    const rendererDescriptors = this._mode === 'worker'
+      ? workerRendererDescriptors(opts)
+      : undefined;
+    if (opts.math && this._mode === 'worker' && !rendererDescriptors?.math) {
       console.warn(
-        "[ooxml] the math engine is unavailable in mode: 'worker'; equations will be skipped. Use mode: 'main' for workbooks with equations.",
+        "[ooxml] a custom math renderer cannot cross the worker boundary; equations will be skipped in mode: 'worker'. Use the math renderer from @silurus/ooxml/math.",
       );
     }
-    if (opts.threeD && this._mode === 'worker') {
+    if (opts.threeD && this._mode === 'worker' && !rendererDescriptors?.threeD) {
       console.warn(
-        "[ooxml] the 3-D chart addon is unavailable in mode: 'worker'; charts use their 2-D family fallback. Use mode: 'main' for authored 3-D charts.",
+        "[ooxml] a custom 3-D chart renderer cannot cross the worker boundary; charts use their 2-D family fallback in mode: 'worker'. Use the renderer from @silurus/ooxml/three-d.",
       );
     }
-    if (opts.regionMap && this._mode === 'worker') {
+    if (opts.regionMap && this._mode === 'worker' && !rendererDescriptors?.regionMap) {
       console.warn(
-        "[ooxml] the Region Map addon is unavailable in mode: 'worker'; geospatial charts use the unsupported-chart placeholder. Use mode: 'main' for Region Maps.",
+        "[ooxml] a custom Region Map renderer cannot cross the worker boundary; geospatial charts use the unsupported-chart placeholder in mode: 'worker'. Use the renderer from @silurus/ooxml/region-map.",
       );
     }
     // In worker mode the worker preloads fonts before its first render
@@ -309,6 +315,7 @@ export class XlsxWorkbook {
               data: workerData,
               resourcePolicy,
               useGoogleFonts: !!opts.useGoogleFonts,
+              renderers: rendererDescriptors,
             } satisfies RenderWorkerRequest)
           : ({
               type: 'parse',

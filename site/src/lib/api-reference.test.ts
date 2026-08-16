@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { apiReference, chartAddons } from './api-reference.js';
+import {
+  apiReference,
+  formatRenderModeGuidance,
+  optionalChartRenderers,
+} from './api-reference.js';
 
 describe('official-site API reference', () => {
   it('documents both optional chart renderer entries and their shared contracts', () => {
-    expect(chartAddons.map(({ entry, exportName, contract }) => ({ entry, exportName, contract })))
+    expect(optionalChartRenderers.map(({ entry, exportName, contract }) => ({ entry, exportName, contract })))
       .toEqual([
         {
           entry: '@silurus/ooxml/three-d',
@@ -28,6 +32,24 @@ describe('official-site API reference', () => {
           .toBe('ChartRegionMapRenderer');
       }
     }
+  });
+
+  it('gives every format a current main/worker choice and feature-parity guide', () => {
+    for (const [format, classes] of Object.entries(apiReference)) {
+      const guidance = formatRenderModeGuidance[format as keyof typeof formatRenderModeGuidance];
+      expect(guidance, format).toContain('both modes');
+      expect(guidance, format).toContain('Worker mode');
+      for (const apiClass of classes) {
+        const mode = apiClass.options?.find(({ name }) => name === 'mode');
+        expect(mode?.def, apiClass.name).toBe("'main'");
+        expect(mode?.desc, apiClass.name).toContain("Use 'main'");
+        expect(mode?.desc, apiClass.name).toContain("Use 'worker'");
+        expect(mode?.desc, apiClass.name).toContain('larger');
+        expect(mode?.desc, apiClass.name).toMatch(/built-in/i);
+      }
+    }
+    expect(formatRenderModeGuidance.docx).toContain('automatically use main mode');
+    expect(formatRenderModeGuidance.docx).toContain("document's mode");
   });
 
   it('documents the shared resource controls on every browser API class', () => {
