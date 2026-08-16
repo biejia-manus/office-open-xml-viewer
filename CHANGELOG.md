@@ -5,6 +5,20 @@ semantic versioning. While the major version is zero, minor releases may contain
 explicitly documented breaking changes; patch releases remain compatible with
 the corresponding minor release.
 
+## 0.80.1 — 2026-08-17
+
+Patch. Corrects numeric axis-label spacing across authored chart families
+without changing the 0.80 public integration contract.
+
+- **scatter charts:** place numeric labels beyond authored outward tick marks
+  instead of allowing major ticks to enter or touch adjacent glyphs.
+- **3-D charts:** keep value and category labels clear of projected tick marks
+  while preserving the established Office-compatible axis spacing.
+- **ChartEx axes:** use an axis-relative label offset for histogram,
+  box-and-whisker, and Pareto value axes instead of scaling the offset with the
+  label font size.
+- **compatibility:** no application or API migration is required from 0.80.0.
+
 ## 0.80.0 — 2026-08-16
 
 Compatible minor release. Completes built-in renderer parity between the
