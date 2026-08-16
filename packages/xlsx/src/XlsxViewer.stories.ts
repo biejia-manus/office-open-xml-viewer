@@ -86,18 +86,9 @@ export function buildViewerUI(
 }
 
 // ---------------------------------------------------------------------------
-// File upload
+// File upload (shared by main-thread and Web Worker stories)
 // ---------------------------------------------------------------------------
-export const FileUpload: Story = {
-  name: 'Load from file',
-  args: { debug: true },
-  argTypes: {
-    debug: {
-      control: 'boolean',
-      description: 'Print resource-usage metrics to the browser console',
-    },
-  },
-  render(args) {
+function renderFileUpload(args: Args, mode: 'main' | 'worker'): HTMLElement {
     const root = document.createElement('div');
     root.style.cssText = 'width:100%;height:100vh;display:flex;flex-direction:column;overflow:hidden;font-family:sans-serif;box-sizing:border-box;';
 
@@ -125,6 +116,7 @@ export const FileUpload: Story = {
       viewer?.destroy();
       viewerContainer.innerHTML = '';
       viewer = new XlsxViewer(viewerContainer, {
+        mode,
         cellScale: args.scale,
         debug: args.debug,
         useGoogleFonts: true,
@@ -146,7 +138,27 @@ export const FileUpload: Story = {
     });
 
     return root;
+}
+
+const fileUploadArgTypes = {
+  debug: {
+    control: 'boolean' as const,
+    description: 'Print resource-usage metrics to the browser console',
   },
+};
+
+export const FileUpload: Story = {
+  name: 'Load from file — main thread',
+  args: { debug: true },
+  argTypes: fileUploadArgTypes,
+  render: (args) => renderFileUpload(args, 'main'),
+};
+
+export const FileUploadWorker: Story = {
+  name: 'Load from file — Web Worker',
+  args: { debug: true },
+  argTypes: fileUploadArgTypes,
+  render: (args) => renderFileUpload(args, 'worker'),
 };
 
 // ---------------------------------------------------------------------------

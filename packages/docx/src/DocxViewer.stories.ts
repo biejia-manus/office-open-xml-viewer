@@ -137,18 +137,9 @@ function createCanvasSpinner(): HTMLElement {
 }
 
 // ---------------------------------------------------------------------------
-// File-upload viewer
+// File-upload viewer (shared by main-thread and Web Worker stories)
 // ---------------------------------------------------------------------------
-export const FileUpload: Story = {
-  name: 'Load from file',
-  args: { width: 700, debug: true },
-  argTypes: {
-    debug: {
-      control: 'boolean',
-      description: 'Print resource-usage metrics to the browser console',
-    },
-  },
-  render(args) {
+function renderFileUpload(args: Args, mode: 'main' | 'worker'): HTMLElement {
     const root = document.createElement('div');
     root.style.cssText = 'font-family:sans-serif;padding:16px;';
 
@@ -202,6 +193,7 @@ export const FileUpload: Story = {
       const canvas = document.createElement('canvas');
       container.appendChild(canvas);
       viewer = new DocxViewer(canvas, {
+        mode,
         width: args.width,
         dpr: window.devicePixelRatio,
         debug: args.debug,
@@ -239,5 +231,25 @@ export const FileUpload: Story = {
     nextBtn.addEventListener('click', () => { viewer?.nextPage(); updateNav(); });
 
     return root;
+}
+
+const fileUploadArgTypes = {
+  debug: {
+    control: 'boolean' as const,
+    description: 'Print resource-usage metrics to the browser console',
   },
+};
+
+export const FileUpload: Story = {
+  name: 'Load from file — main thread',
+  args: { width: 700, debug: true },
+  argTypes: fileUploadArgTypes,
+  render: (args) => renderFileUpload(args, 'main'),
+};
+
+export const FileUploadWorker: Story = {
+  name: 'Load from file — Web Worker',
+  args: { width: 700, debug: true },
+  argTypes: fileUploadArgTypes,
+  render: (args) => renderFileUpload(args, 'worker'),
 };
