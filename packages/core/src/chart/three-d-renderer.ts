@@ -754,19 +754,20 @@ function drawAngledCategoryLabel(
   rotation: number,
   horizontal: boolean,
   outwardY = 1,
+  offset = 6,
 ): void {
   if (horizontal || rotation === 0) {
     ctx.textAlign = horizontal ? 'right' : 'center';
     ctx.textBaseline = horizontal ? 'middle' : outwardY < 0 ? 'bottom' : 'top';
     ctx.fillText(
       label,
-      point.x + (horizontal ? -6 : 0),
-      point.y + (horizontal ? 0 : outwardY * 6),
+      point.x + (horizontal ? -offset : 0),
+      point.y + (horizontal ? 0 : outwardY * offset),
     );
     return;
   }
   ctx.save();
-  ctx.translate(point.x, point.y + outwardY * 6);
+  ctx.translate(point.x, point.y + outwardY * offset);
   ctx.rotate(rotation);
   ctx.textAlign = outwardY < 0 ? 'left' : 'right';
   ctx.textBaseline = 'middle';
@@ -1825,7 +1826,7 @@ function projectedAxisTick(
   const normal = screenAnnotationOutward(
     axisStart, axisEnd, projectedSceneCenter, screenDirection,
   );
-  const length = (level === 'minor' ? 4 : 6) * ptToPx;
+  const length = projectedAxisTickLengthPx(level, ptToPx);
   const sideLength = mode === 'cross' ? length / 2 : length;
   const outer = mode === 'out' || mode === 'cross' ? sideLength : 0;
   const inner = mode === 'in' || mode === 'cross' ? sideLength : 0;
@@ -1833,6 +1834,31 @@ function projectedAxisTick(
   ctx.moveTo(anchor.x + normal.x * outer, anchor.y + normal.y * outer);
   ctx.lineTo(anchor.x - normal.x * inner, anchor.y - normal.y * inner);
   ctx.stroke();
+}
+
+function projectedAxisTickLengthPx(level: 'major' | 'minor', ptToPx: number): number {
+  return (level === 'minor' ? 4 : 6) * ptToPx;
+}
+
+function projectedAxisTickOutwardExtentPx(
+  mode: string | null | undefined,
+  level: 'major' | 'minor',
+  ptToPx: number,
+): number {
+  if (mode !== 'out' && mode !== 'cross') return 0;
+  const length = projectedAxisTickLengthPx(level, ptToPx);
+  return mode === 'cross' ? length / 2 : length;
+}
+
+function projectedAxisTickLabelOffsetPx(
+  mode: string | null | undefined,
+  lineHidden: boolean | null | undefined,
+  ptToPx: number,
+  previousMinimum: number,
+): number {
+  if (lineHidden) return previousMinimum;
+  const tickOutset = projectedAxisTickOutwardExtentPx(mode, 'major', ptToPx);
+  return Math.max(previousMinimum, tickOutset + 3 * ptToPx);
 }
 
 interface ThreeDAxisGeometry {
@@ -3019,6 +3045,9 @@ function renderCartesian(
     );
     ctx.textAlign = Math.abs(labelNormal.x) < 0.2 ? 'center' : labelNormal.x < 0 ? 'right' : 'left';
     ctx.textBaseline = Math.abs(labelNormal.y) < 0.2 ? 'middle' : labelNormal.y < 0 ? 'bottom' : 'top';
+    const labelOffset = projectedAxisTickLabelOffsetPx(
+      chart.valAxisMajorTickMark, chart.valAxisLineHidden, ptToPx, 5,
+    );
     const displayUnitDivisor = chart.valAxisDisplayUnits?.divisor;
     for (const value of axis.majorTicks) {
       const point = horizontal
@@ -3034,13 +3063,16 @@ function renderCartesian(
             : value,
         percent ? chart.valAxisFormatCode ?? '0%' : chart.valAxisFormatCode,
         chart.date1904,
-      ), point.x + labelNormal.x * 5, point.y + labelNormal.y * 5);
+      ), point.x + labelNormal.x * labelOffset, point.y + labelNormal.y * labelOffset);
     }
   }
   const categoryFontPx = chartTextFontSizePx(chart.catAxisFontSizeHpt, ptToPx) ?? 9 * ptToPx;
   ctx.font = `${chart.catAxisFontItalic ? 'italic ' : ''}${chart.catAxisFontBold ? 'bold ' : ''}${categoryFontPx}px ${fontFamily(chart.catAxisFontFace)}`;
   ctx.fillStyle = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#595959';
   if (!chart.catAxisHidden && chart.catAxisTickLabelPos !== 'none') {
+    const labelOffset = projectedAxisTickLabelOffsetPx(
+      chart.catAxisMajorTickMark, chart.catAxisLineHidden, ptToPx, 6,
+    );
     const formattedCategories = Array.from({ length: categoryCount }, (_, index) =>
       formatCategoryLabel(
         String(categories[index] ?? index + 1),
@@ -3097,7 +3129,11 @@ function renderCartesian(
         const onScreenLeft = axisMidpoint.x <= sceneMidpoint.x;
         ctx.textAlign = onScreenLeft ? 'right' : 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(formattedCategories[categoryIndex], point.x + (onScreenLeft ? -6 : 6), point.y);
+        ctx.fillText(
+          formattedCategories[categoryIndex],
+          point.x + (onScreenLeft ? -labelOffset : labelOffset),
+          point.y,
+        );
       } else {
         const sceneMidpoint = projection.project(
           front.x + front.w / 2,
@@ -3117,6 +3153,7 @@ function renderCartesian(
           rotation,
           horizontal,
           outward.y < 0 ? -1 : 1,
+          labelOffset,
         );
       }
     }
