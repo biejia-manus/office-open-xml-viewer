@@ -4175,6 +4175,32 @@ describe('ChartEx flat layouts dispatch to semantic renderers', () => {
     expect(rec.rects).toHaveLength(2);
   });
 
+  it('keeps ChartEx histogram value labels at the observed axis-relative offset', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'histogram',
+      categories: [],
+      series: [series({ values: [0, 1, 2, 3, 4] })],
+      chartexHistogramBinning: { binCount: 2, intervalClosed: 'l' },
+      valMin: 0,
+      valMax: 4,
+      valAxisMajorUnit: 2,
+      valAxisFontSizeHpt: 1000,
+      valAxisLineColor: '123456',
+      valAxisLineHidden: false,
+    }), RECT, 1);
+
+    const axis = rec.segs.find(segment =>
+      segment.ss === '#123456'
+      && Math.abs(segment.x0 - segment.x1) < 0.001
+      && Math.abs(segment.y1 - segment.y0) > 100
+    );
+    const zero = rec.texts.find(text => text.text === '0' && text.align === 'right');
+    expect(axis).toBeDefined();
+    expect(zero).toBeDefined();
+    expect(axis!.x0 - zero!.x).toBeCloseTo(7, 5);
+  });
+
   it('keeps dense one- and two-digit category labels on one line across fallback font metrics', () => {
     const categories = Array.from({ length: 29 }, (_, index) => String(index + 1));
     const rec = recordingCtx();
@@ -9126,6 +9152,28 @@ describe('CH15 — chartEx box-and-whisker', () => {
     });
   }
 
+  it('keeps ChartEx value-label offset stable across a larger authored font', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, boxModel({
+      valMin: 0,
+      valMax: 10,
+      valAxisMajorUnit: 10,
+      valAxisFontSizeHpt: 1200,
+      valAxisLineColor: '123456',
+      valAxisLineHidden: false,
+    }), RECT, 1);
+
+    const axis = rec.segs.find(segment =>
+      segment.ss === '#123456'
+      && Math.abs(segment.x0 - segment.x1) < 0.001
+      && Math.abs(segment.y1 - segment.y0) > 100
+    );
+    const zero = rec.texts.find(text => text.text === '0' && text.align === 'right');
+    expect(axis).toBeDefined();
+    expect(zero).toBeDefined();
+    expect(axis!.x0 - zero!.x).toBeCloseTo(7, 5);
+  });
+
   it('preserves the authored box-series outline on the filled legend key', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, boxModel({
@@ -9381,7 +9429,7 @@ describe('CH15 — chartEx box-and-whisker', () => {
 
     const zeroLabel = rec.texts.find(text => text.text === '0.0');
     expect(zeroLabel).toBeDefined();
-    expect((verticalAxis?.x0 ?? 0) - (zeroLabel?.x ?? 0)).toBeCloseTo(12);
+    expect((verticalAxis?.x0 ?? 0) - (zeroLabel?.x ?? 0)).toBeCloseTo(7);
   });
 
   it('places the value axis from measured tick-label width instead of a fixed chart-width gutter', () => {

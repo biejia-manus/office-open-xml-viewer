@@ -2161,6 +2161,17 @@ function drawBarDataLabel(
 // percentStacked. Also handles mixed bar+line series (seriesType per series).
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * MS ChartEx does not expose a value-axis label-offset property. Office vector
+ * output from histogram, box-and-whisker, and Pareto charts (10 pt and 12 pt
+ * labels, with and without cross ticks) places the visible label edge about
+ * 6.2–7.5 pt from the axis centreline. Keep this compatibility fallback
+ * ChartEx-only; classic axes retain their existing font-relative contract.
+ */
+function chartExValueTickLabelOffsetPx(ptToPx: number): number {
+  return 7 * ptToPx;
+}
+
 function renderBarChart(
   ctx: CanvasRenderingContext2D,
   chart: ChartModel,
@@ -2638,9 +2649,11 @@ function renderBarChart(
         if (drawMajorGrid) strokeValueGridlineH(ctx, px0, pw, gy, isZero, grid);
         if (drawLabels) {
           ctx.textAlign = 'right';
-          const gap = chart.valAxisFontSizeHpt != null
-            ? valueTickLabelGapPx(drawnValTickFontPx)
-            : 12;
+          const gap = options.gapPolicy === 'chartex'
+            ? chartExValueTickLabelOffsetPx(ptToPx)
+            : chart.valAxisFontSizeHpt != null
+              ? valueTickLabelGapPx(drawnValTickFontPx)
+              : 12;
           ctx.fillText(label, px0 - gap, gy);
         }
       } else {
@@ -8828,7 +8841,11 @@ function renderBoxWhiskerChart(
 
   const font = chartFontFamily(chart, chart.valAxisFontFace, 'minor');
   const valFontPx = axisLabelPx(chart.valAxisFontSizeHpt, h, ptToPx);
-  const valTickLabelGap = valueTickLabelGapPx(valFontPx);
+  // Keep the existing font-relative layout reserve so the plot geometry stays
+  // stable; only the painted ChartEx label uses the observed axis-relative
+  // offset below.
+  const valTickLabelLayoutGap = valueTickLabelGapPx(valFontPx);
+  const valTickLabelPaintGap = chartExValueTickLabelOffsetPx(ptToPx);
   const provisionalScale = planLinearValueAxis({
     dataMin,
     dataMax,
@@ -8860,7 +8877,7 @@ function renderBoxWhiskerChart(
       maxLabelW = Math.max(maxLabelW, ctx.measureText(label).width);
     }
     ctx.font = previousFont;
-    valLabelBandW = maxLabelW + valTickLabelGap + AXIS_OUTER_TEXT_MARGIN_PT * ptToPx;
+    valLabelBandW = maxLabelW + valTickLabelLayoutGap + AXIS_OUTER_TEXT_MARGIN_PT * ptToPx;
   }
 
   // Shared title band + cartesian plot rect. Reserve category/value-axis bands
@@ -8956,7 +8973,7 @@ function renderBoxWhiskerChart(
       ctx.fillStyle = chart.valAxisFontColor ? `#${chart.valAxisFontColor}` : '#595959';
       ctx.fillText(
         formatPrimaryValueAxisTick(chart, v, false),
-        px0 - valTickLabelGap,
+        px0 - valTickLabelPaintGap,
         gy,
       );
       drawAxisTick(
