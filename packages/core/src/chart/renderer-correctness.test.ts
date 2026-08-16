@@ -411,6 +411,56 @@ describe('classic 3-D compatibility projection', () => {
     }
   });
 
+  it('places 3-D value and category labels beyond their outward major ticks', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      valMin: 0,
+      valMax: 10,
+      valAxisMajorUnit: 10,
+      valAxisMajorTickMark: 'out',
+      catAxisMajorTickMark: 'out',
+      valAxisLineColor: 'FF00FF',
+      catAxisLineColor: '00AA00',
+      valAxisMajorGridlines: false,
+      catAxisLabelRotation: 0,
+      threeD: { rotationX: 15, rotationY: 20, depthPercent: 100, perspective: 30 },
+      series: [series({ values: [5, 8] })],
+    }), RECT, 1);
+
+    const valueZero = rec.texts.find(text => text.text === '0');
+    const categoryA = rec.texts.find(text => text.text === 'A');
+    expect(valueZero).toBeDefined();
+    expect(categoryA).toBeDefined();
+
+    const valueTick = rec.strokes.find(stroke =>
+      stroke.ss === '#FF00FF'
+      && stroke.points.length === 2
+      && Math.abs(Math.abs(stroke.points[1].x - stroke.points[0].x) - 6) < 0.001
+      && Math.abs(stroke.points[1].y - stroke.points[0].y) < 0.001
+      && Math.abs(stroke.points[0].y - valueZero!.y) < 0.001);
+    const categoryTick = rec.strokes.find(stroke =>
+      stroke.ss === '#00AA00'
+      && stroke.points.length === 2
+      && Math.abs(Math.abs(stroke.points[1].y - stroke.points[0].y) - 6) < 0.001
+      && Math.abs(stroke.points[1].x - stroke.points[0].x) < 0.001
+      && Math.abs(stroke.points[0].x - categoryA!.x) < 0.001);
+    expect(valueTick).toBeDefined();
+    expect(categoryTick).toBeDefined();
+
+    if (valueZero!.align === 'right') {
+      expect(valueZero!.x).toBeLessThan(Math.min(valueTick!.points[0].x, valueTick!.points[1].x));
+    } else {
+      expect(valueZero!.x).toBeGreaterThan(Math.max(valueTick!.points[0].x, valueTick!.points[1].x));
+    }
+    if (categoryA!.baseline === 'top') {
+      expect(categoryA!.y).toBeGreaterThan(Math.max(categoryTick!.points[0].y, categoryTick!.points[1].y));
+    } else {
+      expect(categoryA!.y).toBeLessThan(Math.min(categoryTick!.points[0].y, categoryTick!.points[1].y));
+    }
+  });
+
   it('applies the Office 3-D value-axis default of cross minor ticks at major/5', () => {
     const rec = strokedPolylineCtx();
     renderChart(rec.ctx, baseModel({
@@ -4125,6 +4175,32 @@ describe('ChartEx flat layouts dispatch to semantic renderers', () => {
     expect(rec.rects).toHaveLength(2);
   });
 
+  it('keeps ChartEx histogram value labels at the observed axis-relative offset', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'histogram',
+      categories: [],
+      series: [series({ values: [0, 1, 2, 3, 4] })],
+      chartexHistogramBinning: { binCount: 2, intervalClosed: 'l' },
+      valMin: 0,
+      valMax: 4,
+      valAxisMajorUnit: 2,
+      valAxisFontSizeHpt: 1000,
+      valAxisLineColor: '123456',
+      valAxisLineHidden: false,
+    }), RECT, 1);
+
+    const axis = rec.segs.find(segment =>
+      segment.ss === '#123456'
+      && Math.abs(segment.x0 - segment.x1) < 0.001
+      && Math.abs(segment.y1 - segment.y0) > 100
+    );
+    const zero = rec.texts.find(text => text.text === '0' && text.align === 'right');
+    expect(axis).toBeDefined();
+    expect(zero).toBeDefined();
+    expect(axis!.x0 - zero!.x).toBeCloseTo(7, 5);
+  });
+
   it('keeps dense one- and two-digit category labels on one line across fallback font metrics', () => {
     const categories = Array.from({ length: 29 }, (_, index) => String(index + 1));
     const rec = recordingCtx();
@@ -5349,6 +5425,53 @@ describe('CH9 — scatter error-bar cap geometry (§21.2.2.20)', () => {
 });
 
 describe('CH9 — scatter axis crossing and tick-label position (§21.2.2.207)', () => {
+  it('places nextTo labels beyond authored outward tick marks on both numeric axes', () => {
+    const rec = markerRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'scatter',
+      categories: ['0', '1'],
+      series: [series({ values: [0, 1], showMarker: false })],
+      catAxisMin: 0,
+      catAxisMax: 1,
+      valMin: 0,
+      valMax: 1,
+      catAxisMajorUnit: 1,
+      valAxisMajorUnit: 1,
+      catAxisMajorTickMark: 'out',
+      valAxisMajorTickMark: 'out',
+      catAxisTickLabelPos: 'nextTo',
+      valAxisTickLabelPos: 'nextTo',
+      catAxisMajorGridlines: false,
+      valAxisMajorGridlines: false,
+    }), RECT, 1);
+
+    const xZero = rec.texts.find(text =>
+      text.text === '0' && text.align === 'center' && text.baseline === 'top');
+    const yZero = rec.texts.find(text =>
+      text.text === '0' && text.align === 'right' && text.baseline === 'middle');
+    expect(xZero).toBeDefined();
+    expect(yZero).toBeDefined();
+
+    const xTick = rec.segments.find(segment =>
+      segment.length === 2
+      && Math.abs(segment[0].x - (xZero as TextCall).x) < 0.001
+      && Math.abs(segment[0].x - segment[1].x) < 0.001
+      && Math.abs(Math.abs(segment[1].y - segment[0].y) - 6) < 0.001);
+    const yTick = rec.segments.find(segment =>
+      segment.length === 2
+      && Math.abs(segment[0].y - (yZero as TextCall).y) < 0.001
+      && Math.abs(segment[0].y - segment[1].y) < 0.001
+      && Math.abs(Math.abs(segment[1].x - segment[0].x) - 6) < 0.001);
+    expect(xTick).toBeDefined();
+    expect(yTick).toBeDefined();
+
+    // Label anchors are measured from the outside endpoint of the tick, not
+    // from the axis rule. This keeps the 6pt Office major tick out of the
+    // adjacent glyphs at the lower-left crossing.
+    expect((xZero as TextCall).y).toBeGreaterThan(Math.max(xTick![0].y, xTick![1].y));
+    expect((yZero as TextCall).x).toBeLessThan(Math.min(yTick![0].x, yTick![1].x));
+  });
+
   it('crosses both numeric axes at zero while low tick labels stay on the plot edges', () => {
     const rec = markerRecordingCtx();
     renderChart(rec.ctx, baseModel({
@@ -6834,11 +6957,13 @@ function strokedPolylineCtx(): {
     points: Array<{ x: number; y: number }>; ss: string; lw: number; dash: number[];
     cap: string; join: string;
   }>;
+  texts: TextCall[];
 } {
   const strokes: Array<{
     points: Array<{ x: number; y: number }>; ss: string; lw: number; dash: number[];
     cap: string; join: string;
   }> = [];
+  const texts: TextCall[] = [];
   let path: Array<{ x: number; y: number }> = [];
   let dash: number[] = [];
   const state: Record<string, unknown> = {
@@ -6868,6 +6993,12 @@ function strokedPolylineCtx(): {
         };
         case 'setLineDash': return (value: number[]) => { dash = [...value]; };
         case 'getLineDash': return () => [...dash];
+        case 'fillText': return (text: string, x: number, y: number) => {
+          texts.push({
+            text: String(text), x, y,
+            align: String(state.textAlign), baseline: String(state.textBaseline),
+          });
+        };
         case 'createLinearGradient': case 'createRadialGradient':
           return () => ({ addColorStop() {} });
         default: return () => undefined;
@@ -6878,6 +7009,7 @@ function strokedPolylineCtx(): {
   return {
     ctx: new Proxy(state, handler) as unknown as CanvasRenderingContext2D,
     strokes,
+    texts,
   };
 }
 
@@ -9020,6 +9152,28 @@ describe('CH15 — chartEx box-and-whisker', () => {
     });
   }
 
+  it('keeps ChartEx value-label offset stable across a larger authored font', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, boxModel({
+      valMin: 0,
+      valMax: 10,
+      valAxisMajorUnit: 10,
+      valAxisFontSizeHpt: 1200,
+      valAxisLineColor: '123456',
+      valAxisLineHidden: false,
+    }), RECT, 1);
+
+    const axis = rec.segs.find(segment =>
+      segment.ss === '#123456'
+      && Math.abs(segment.x0 - segment.x1) < 0.001
+      && Math.abs(segment.y1 - segment.y0) > 100
+    );
+    const zero = rec.texts.find(text => text.text === '0' && text.align === 'right');
+    expect(axis).toBeDefined();
+    expect(zero).toBeDefined();
+    expect(axis!.x0 - zero!.x).toBeCloseTo(7, 5);
+  });
+
   it('preserves the authored box-series outline on the filled legend key', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, boxModel({
@@ -9275,7 +9429,7 @@ describe('CH15 — chartEx box-and-whisker', () => {
 
     const zeroLabel = rec.texts.find(text => text.text === '0.0');
     expect(zeroLabel).toBeDefined();
-    expect((verticalAxis?.x0 ?? 0) - (zeroLabel?.x ?? 0)).toBeCloseTo(12);
+    expect((verticalAxis?.x0 ?? 0) - (zeroLabel?.x ?? 0)).toBeCloseTo(7);
   });
 
   it('places the value axis from measured tick-label width instead of a fixed chart-width gutter', () => {

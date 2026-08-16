@@ -989,8 +989,7 @@ function drawAxisTick(
   if (lineHidden || mode === 'none' || !mode) return;
   // Office's vector output uses 6pt major ticks and 4pt minor ticks. Tick
   // length still scales mildly with an unusually thick authored axis rule.
-  const baseLen = (level === 'minor' ? 4 : 6) * ptToPx;
-  const len = lineWidth ? Math.max(baseLen, lineWidth + 2 * ptToPx) : baseLen;
+  const len = axisTickLengthPx(level, lineWidth, ptToPx);
   // Office's 6pt/4pt observation is the complete cross-tick length, not the
   // length on each side of the axis. out/in use the full length on one side;
   // cross splits it evenly around the rule.
@@ -1024,6 +1023,27 @@ function drawAxisTick(
   ctx.stroke();
   ctx.strokeStyle = prevS;
   ctx.lineWidth = prevW;
+}
+
+function axisTickLengthPx(
+  level: 'major' | 'minor',
+  lineWidth: number | undefined,
+  ptToPx: number,
+): number {
+  const baseLen = (level === 'minor' ? 4 : 6) * ptToPx;
+  return lineWidth ? Math.max(baseLen, lineWidth + 2 * ptToPx) : baseLen;
+}
+
+/** Distance an axis tick occupies outside the plot-side axis rule. */
+function axisTickOutwardExtentPx(
+  mode: string | null | undefined,
+  level: 'major' | 'minor',
+  lineWidth: number | undefined,
+  ptToPx: number,
+): number {
+  if (mode !== 'out' && mode !== 'cross') return 0;
+  const length = axisTickLengthPx(level, lineWidth, ptToPx);
+  return mode === 'cross' ? length / 2 : length;
 }
 
 /** Stroke one horizontal value-axis gridline spanning the plot width at `gy`.
@@ -2141,6 +2161,17 @@ function drawBarDataLabel(
 // percentStacked. Also handles mixed bar+line series (seriesType per series).
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * MS ChartEx does not expose a value-axis label-offset property. Office vector
+ * output from histogram, box-and-whisker, and Pareto charts (10 pt and 12 pt
+ * labels, with and without cross ticks) places the visible label edge about
+ * 6.2–7.5 pt from the axis centreline. Keep this compatibility fallback
+ * ChartEx-only; classic axes retain their existing font-relative contract.
+ */
+function chartExValueTickLabelOffsetPx(ptToPx: number): number {
+  return 7 * ptToPx;
+}
+
 function renderBarChart(
   ctx: CanvasRenderingContext2D,
   chart: ChartModel,
@@ -2618,9 +2649,11 @@ function renderBarChart(
         if (drawMajorGrid) strokeValueGridlineH(ctx, px0, pw, gy, isZero, grid);
         if (drawLabels) {
           ctx.textAlign = 'right';
-          const gap = chart.valAxisFontSizeHpt != null
-            ? valueTickLabelGapPx(drawnValTickFontPx)
-            : 12;
+          const gap = options.gapPolicy === 'chartex'
+            ? chartExValueTickLabelOffsetPx(ptToPx)
+            : chart.valAxisFontSizeHpt != null
+              ? valueTickLabelGapPx(drawnValTickFontPx)
+              : 12;
           ctx.fillText(label, px0 - gap, gy);
         }
       } else {
@@ -6635,6 +6668,11 @@ function renderScatterChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r:
       chart.valAxisFontBold ?? false,
       chart.valAxisFontItalic ?? false,
     );
+    const yAxisLineColor = chart.valAxisLineColor ? `#${chart.valAxisLineColor}` : undefined;
+    const yAxisLineWidth = axisLineWidthPx(chart.valAxisLineWidthEmu, ptToPx);
+    const yMajorTickOutset = chart.valAxisLineHidden
+      ? 0
+      : axisTickOutwardExtentPx(chart.valAxisMajorTickMark, 'major', yAxisLineWidth, ptToPx);
     if (chart.valAxisMinorGridlines) {
       const minorGrid = valMinorGridStroke(chart, ptToPx);
       for (const value of yMinorTicks) {
@@ -6659,7 +6697,7 @@ function renderScatterChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r:
         } else if (labelPos === 'low') {
           ctx.textAlign = 'right'; labelX = px0 - yTickGap;
         } else {
-          ctx.textAlign = 'right'; labelX = yAxisX - yTickGap;
+          ctx.textAlign = 'right'; labelX = yAxisX - yMajorTickOutset - yTickGap;
         }
         ctx.textBaseline = 'middle';
         ctx.fillText(formatPrimaryValueAxisTick(chart, v, false), labelX, gy);
@@ -6667,13 +6705,11 @@ function renderScatterChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r:
       // Scatter keeps its own undefined colour default (→ drawAxisTick's '#888'),
       // so only the width formula is shared. `axisLineWidthPx`'s 1 px fallback is
       // equivalent to undefined here (drawAxisTick treats both as a hairline).
-      const yAxisLineColor = chart.valAxisLineColor ? `#${chart.valAxisLineColor}` : undefined;
-      drawAxisTick(ctx, chart.valAxisMajorTickMark, 'val', yAxisX, gy, yAxisLineColor, axisLineWidthPx(chart.valAxisLineWidthEmu, ptToPx), false, chart.valAxisLineHidden, 'major', ptToPx);
+      drawAxisTick(ctx, chart.valAxisMajorTickMark, 'val', yAxisX, gy, yAxisLineColor, yAxisLineWidth, false, chart.valAxisLineHidden, 'major', ptToPx);
     }
     if (chart.valAxisMinorTickMark && chart.valAxisMinorTickMark !== 'none') {
-      const yAxisLineColor = chart.valAxisLineColor ? `#${chart.valAxisLineColor}` : undefined;
       for (const value of yMinorTicks) {
-        drawAxisTick(ctx, chart.valAxisMinorTickMark, 'val', yAxisX, toY(value), yAxisLineColor, axisLineWidthPx(chart.valAxisLineWidthEmu, ptToPx), false, chart.valAxisLineHidden, 'minor', ptToPx);
+        drawAxisTick(ctx, chart.valAxisMinorTickMark, 'val', yAxisX, toY(value), yAxisLineColor, yAxisLineWidth, false, chart.valAxisLineHidden, 'minor', ptToPx);
       }
     }
   }
@@ -6750,22 +6786,25 @@ function renderScatterChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r:
     ctx.fillStyle = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#555';
     ctx.textAlign = 'center';
     const labelPos = chart.catAxisTickLabelPos ?? 'nextTo';
+    const lineWidth = axisLineWidthPx(chart.catAxisLineWidthEmu, ptToPx);
+    const xAxisLineColor = chart.catAxisLineColor ? `#${chart.catAxisLineColor}` : undefined;
+    const tickOutset = chart.catAxisLineHidden
+      ? 0
+      : axisTickOutwardExtentPx(chart.catAxisMajorTickMark, 'major', lineWidth, ptToPx);
     const labelY = labelPos === 'low'
       ? py0 + ph + tickGap
-      : labelPos === 'high' ? py0 - tickGap : xAxisY + tickGap;
+      : labelPos === 'high' ? py0 - tickGap : xAxisY + tickOutset + tickGap;
     ctx.textBaseline = labelPos === 'high' ? 'bottom' : 'top';
     for (const v of xMajorTicks) {
       const gx = toX(v);
       if (labelPos !== 'none') {
         ctx.fillText(formatAxisTickWithUnits(v, chart.catAxisFormatCode, chart.date1904, chart.catAxisDisplayUnits), gx, labelY);
       }
-      const xAxisLineColor = chart.catAxisLineColor ? `#${chart.catAxisLineColor}` : undefined;
-      drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', xAxisY, gx, xAxisLineColor, axisLineWidthPx(chart.catAxisLineWidthEmu, ptToPx), false, chart.catAxisLineHidden, 'major', ptToPx);
+      drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', xAxisY, gx, xAxisLineColor, lineWidth, false, chart.catAxisLineHidden, 'major', ptToPx);
     }
     if (chart.catAxisMinorTickMark && chart.catAxisMinorTickMark !== 'none') {
-      const xAxisLineColor = chart.catAxisLineColor ? `#${chart.catAxisLineColor}` : undefined;
       for (const value of xMinorTicks) {
-        drawAxisTick(ctx, chart.catAxisMinorTickMark, 'cat', xAxisY, toX(value), xAxisLineColor, axisLineWidthPx(chart.catAxisLineWidthEmu, ptToPx), false, chart.catAxisLineHidden, 'minor', ptToPx);
+        drawAxisTick(ctx, chart.catAxisMinorTickMark, 'cat', xAxisY, toX(value), xAxisLineColor, lineWidth, false, chart.catAxisLineHidden, 'minor', ptToPx);
       }
     }
   }
@@ -6811,13 +6850,16 @@ function renderScatterChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r:
     ctx.fillStyle = secondaryX.fontColor ? `#${secondaryX.fontColor}` : '#555';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
+    const tickOutset = secondaryX.lineHidden
+      ? 0
+      : axisTickOutwardExtentPx(secondaryX.majorTickMark, 'major', line.width, ptToPx);
     for (const value of secondaryXPlan.majorTicks) {
       const sx = toSecondaryX(value);
       if (secondaryX.tickLabelPos !== 'none') {
         ctx.fillText(
           formatAxisTickWithUnits(value, secondaryX.formatCode, chart.date1904, secondaryX.displayUnits),
           sx,
-          py0 - categoryTickLabelGapPx(fontPx),
+          py0 - tickOutset - categoryTickLabelGapPx(fontPx),
         );
       }
       drawAxisTick(
@@ -8799,7 +8841,11 @@ function renderBoxWhiskerChart(
 
   const font = chartFontFamily(chart, chart.valAxisFontFace, 'minor');
   const valFontPx = axisLabelPx(chart.valAxisFontSizeHpt, h, ptToPx);
-  const valTickLabelGap = valueTickLabelGapPx(valFontPx);
+  // Keep the existing font-relative layout reserve so the plot geometry stays
+  // stable; only the painted ChartEx label uses the observed axis-relative
+  // offset below.
+  const valTickLabelLayoutGap = valueTickLabelGapPx(valFontPx);
+  const valTickLabelPaintGap = chartExValueTickLabelOffsetPx(ptToPx);
   const provisionalScale = planLinearValueAxis({
     dataMin,
     dataMax,
@@ -8831,7 +8877,7 @@ function renderBoxWhiskerChart(
       maxLabelW = Math.max(maxLabelW, ctx.measureText(label).width);
     }
     ctx.font = previousFont;
-    valLabelBandW = maxLabelW + valTickLabelGap + AXIS_OUTER_TEXT_MARGIN_PT * ptToPx;
+    valLabelBandW = maxLabelW + valTickLabelLayoutGap + AXIS_OUTER_TEXT_MARGIN_PT * ptToPx;
   }
 
   // Shared title band + cartesian plot rect. Reserve category/value-axis bands
@@ -8927,7 +8973,7 @@ function renderBoxWhiskerChart(
       ctx.fillStyle = chart.valAxisFontColor ? `#${chart.valAxisFontColor}` : '#595959';
       ctx.fillText(
         formatPrimaryValueAxisTick(chart, v, false),
-        px0 - valTickLabelGap,
+        px0 - valTickLabelPaintGap,
         gy,
       );
       drawAxisTick(
