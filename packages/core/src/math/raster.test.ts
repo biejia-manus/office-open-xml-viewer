@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { drawMathJaxSvg, rasterizeMathSvg, sizeMathSvgForRaster } from './raster.js';
+import {
+  drawMathJaxSvg,
+  rasterizeMathSvg,
+  sizeMathSvgForRaster,
+} from './raster.js';
 import { MAX_CANVAS_AREA } from '../canvas/clamp.js';
 
 afterEach(() => {
@@ -20,6 +24,7 @@ describe('worker-safe math SVG rasterization', () => {
     const context = {
       save: vi.fn(), restore: vi.fn(), setTransform: vi.fn(), transform: vi.fn(),
       translate: vi.fn(), scale: vi.fn(), rotate: vi.fn(), fill: vi.fn(), stroke: vi.fn(),
+      drawImage: vi.fn(),
       fillStyle: '', strokeStyle: '', lineWidth: 1, lineCap: 'butt', lineJoin: 'miter',
       globalAlpha: 1,
     } as unknown as OffscreenCanvasRenderingContext2D;
@@ -45,8 +50,11 @@ describe('worker-safe math SVG rasterization', () => {
       descentEm: 0.2,
     }, '#123456');
 
-    expect(raster.widthPx).toBe(512);
-    expect(raster.heightPx).toBe(256);
+    expect(raster.widthPx).toBe(128);
+    expect(raster.heightPx).toBe(64);
+    expect(context.drawImage).toHaveBeenCalledTimes(2);
+    expect(context.imageSmoothingEnabled).toBe(true);
+    expect(context.imageSmoothingQuality).toBe('high');
     expect(context.setTransform).toHaveBeenCalledWith(0.256, 0, 0, 0.256, -0, 204.8);
     expect(context.scale).toHaveBeenCalledWith(1, -1);
     expect(context.fill).toHaveBeenCalledTimes(2);
@@ -65,6 +73,7 @@ describe('worker-safe math SVG rasterization', () => {
     const context = {
       save: vi.fn(), restore: vi.fn(), setTransform: vi.fn(), transform: vi.fn(),
       translate: vi.fn(), scale: vi.fn(), rotate: vi.fn(), fill: vi.fn(), stroke: vi.fn(),
+      drawImage: vi.fn(),
       fillStyle: '', strokeStyle: '', lineWidth: 1, lineCap: 'butt', lineJoin: 'miter',
       globalAlpha: 1,
     } as unknown as OffscreenCanvasRenderingContext2D;

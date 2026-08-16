@@ -3,6 +3,7 @@ import { createAuxCanvas, type AuxContext } from '../canvas/aux-canvas.js';
 import { clampCanvasSize } from '../canvas/clamp.js';
 
 export const MATH_RASTER_PX_PER_EM = 256;
+const MATH_RASTER_CACHE_PX_PER_EM = 64;
 
 export interface RasterizedMathSvg {
   readonly source: CanvasImageSource;
@@ -249,7 +250,32 @@ export async function rasterizeMathSvg(
     output.ascentEm + output.descentEm,
   );
   drawMathJaxSvg(context, svg, widthPx, heightPx);
-  return { source: canvas, widthPx, heightPx };
+  let source: CanvasImageSource = canvas;
+  let cachedWidthPx = widthPx;
+  let cachedHeightPx = heightPx;
+  // Chromium does not materially distinguish `low` and `high` quality when a
+  // very dense CanvasImageSource is reduced directly to typical text size.
+  // Build a small mip level once, while the resource is prepared, so every
+  // later Window/Worker paint performs only a modest final reduction. Two 2x
+  // passes retain the 256 px/em path detail without paying that 16x reduction
+  // on every frame.
+  const targetScale = MATH_RASTER_CACHE_PX_PER_EM / MATH_RASTER_PX_PER_EM;
+  const targetWidthPx = Math.max(1, Math.round(widthPx * targetScale));
+  const targetHeightPx = Math.max(1, Math.round(heightPx * targetScale));
+  while (cachedWidthPx > targetWidthPx || cachedHeightPx > targetHeightPx) {
+    const nextWidthPx = Math.max(targetWidthPx, Math.ceil(cachedWidthPx / 2));
+    const nextHeightPx = Math.max(targetHeightPx, Math.ceil(cachedHeightPx / 2));
+    const reduced = createAuxCanvas(nextWidthPx, nextHeightPx);
+    const reducedContext = reduced?.getContext('2d');
+    if (!reduced || !reducedContext) break;
+    reducedContext.imageSmoothingEnabled = true;
+    reducedContext.imageSmoothingQuality = 'high';
+    reducedContext.drawImage(source, 0, 0, nextWidthPx, nextHeightPx);
+    source = reduced;
+    cachedWidthPx = nextWidthPx;
+    cachedHeightPx = nextHeightPx;
+  }
+  return { source, widthPx: cachedWidthPx, heightPx: cachedHeightPx };
 }
 
 /** Recolor a cached black equation raster synchronously for the authored run
