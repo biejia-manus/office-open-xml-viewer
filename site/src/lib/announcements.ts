@@ -38,7 +38,7 @@ export const announcements: readonly Announcement[] = [
   {
     slug: 'v080-worker-rendering',
     date: '2026-08-16',
-    label: 'Upcoming release',
+    label: 'Release note',
     version: 'v0.80.0',
     title: 'Built-in renderer parity for worker mode in v0.80.0',
     summary: 'v0.80.0 extends the existing DOCX, XLSX and PPTX worker mode so the built-in math, 3-D chart and Region Map renderers use the same injection API and rendering path as main-thread mode.',
