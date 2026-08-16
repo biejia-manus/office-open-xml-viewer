@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild';
-import { readFileSync } from 'fs';
+import { mainThreadOnlyWorkerStubs } from './esbuild-worker-stub.mjs';
 
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
@@ -17,29 +17,6 @@ const extensionConfig = {
   minify: production,
 };
 
-// The extension renders on the main thread only (it never passes `mode: 'worker'`
-// nor calls render*ToBitmap). Each viewer package still ships a render worker as
-// a dynamically-imported host plus a self-contained module asset. esbuild's iife
-// output can't code-split that dynamic import into a lazy chunk (only
-// esm/splitting can), so it would otherwise inline dead worker-loading code into
-// webview.js. Stub the import to a throwing no-op — it is never reached at
-// runtime in the extension.
-const stubRenderWorkerPlugin = {
-  name: 'stub-render-worker',
-  setup(build) {
-    build.onResolve({ filter: /render-worker-host/ }, (args) => ({
-      path: args.path,
-      namespace: 'stub-render-worker',
-    }));
-    build.onLoad({ filter: /.*/, namespace: 'stub-render-worker' }, () => ({
-      contents:
-        "export function createRenderWorker() {" +
-        " throw new Error('[ooxml] worker rendering is not available in the VS Code extension (main-thread only)'); }",
-      loader: 'js',
-    }));
-  },
-};
-
 /** @type {esbuild.BuildOptions} */
 const webviewConfig = {
   entryPoints: ['src/webview/bootstrap.ts'],
@@ -55,7 +32,7 @@ const webviewConfig = {
   loader: {
     '.wasm': 'file',
   },
-  plugins: [stubRenderWorkerPlugin],
+  plugins: [mainThreadOnlyWorkerStubs],
 };
 
 async function build() {
