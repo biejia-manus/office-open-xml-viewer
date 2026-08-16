@@ -241,8 +241,8 @@ chart behavior is documented in
 ### Off-main-thread rendering
 
 By default the headless engines parse in a worker but render on the main thread.
-Pass `mode: 'worker'` to `.load()` to parse **and** render entirely inside a Web
-Worker — the main thread only paints the returned `ImageBitmap` via a
+Pass `mode: 'worker'` to `.load()` to normally parse **and** render inside a Web
+Worker — the main thread presents the returned `ImageBitmap` via a
 `bitmaprenderer` context, keeping it free for scrolling and input. It requires
 `Worker` + `OffscreenCanvas`.
 
@@ -276,6 +276,10 @@ Notes:
   through the same `math`, `threeD`, and `regionMap` options. Custom renderer
   objects are main-realm code and therefore use the feature's documented
   fallback in `mode: 'worker'`.
+- A DOCX document that requires browser-only OpenType vertical-glyph selection
+  automatically uses effective main mode for correct shaping. Read
+  `document.mode` after loading when your integration needs to observe this
+  fallback.
 - Trade-off: worker mode keeps the main thread responsive, but each frame is
   transferred back as an `ImageBitmap`, so a single render can be marginally
   slower than `mode: 'main'`. Choose it for non-blocking UI, not raw speed.
