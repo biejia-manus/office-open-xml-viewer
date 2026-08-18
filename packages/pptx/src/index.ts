@@ -29,11 +29,16 @@ export {
 } from './element-selection';
 export type {
   ArrowEnd,
+  ChartAreaGroupDecorations,
+  ChartBarGroupDecorations,
   ChartDataLabelOverride,
   ChartDataTable,
   ChartDataPointOverride,
+  ChartDecorationLineStyle,
   ChartErrBars,
   ChartLabelBox,
+  ChartLegendEntryOverride,
+  ChartLineGroupDecorations,
   ChartManualLayout,
   ChartRect,
   ChartSeriesDataLabels,

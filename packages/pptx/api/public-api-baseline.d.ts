@@ -53,11 +53,11 @@ export interface Camera3d {
     zoom?: number;
     rot?: Rot3d;
 }
-interface ChartAreaGroupDecorations {
+export interface ChartAreaGroupDecorations {
     groupIndex: number;
     dropLines?: ChartDecorationLineStyle | null;
 }
-interface ChartBarGroupDecorations {
+export interface ChartBarGroupDecorations {
     groupIndex: number;
     seriesLines?: ChartDecorationLineStyle[] | null;
 }
@@ -114,7 +114,7 @@ export interface ChartDataTable {
     lineDash?: string | null;
     lineHidden?: boolean | null;
 }
-interface ChartDecorationLineStyle {
+export interface ChartDecorationLineStyle {
     color?: string | null;
     widthEmu?: number | null;
     dash?: string | null;
@@ -256,7 +256,7 @@ export interface ChartLabelBox {
     borderColor?: string;
     borderWidthEmu?: number;
 }
-interface ChartLegendEntryOverride {
+export interface ChartLegendEntryOverride {
     idx: number;
     deleted?: boolean | null;
     fontFace?: string | null;
@@ -264,7 +264,7 @@ interface ChartLegendEntryOverride {
     fontSizeHpt?: number | null;
     fontBold?: boolean | null;
 }
-interface ChartLineGroupDecorations {
+export interface ChartLineGroupDecorations {
     groupIndex: number;
     dropLines?: ChartDecorationLineStyle | null;
     hiLowLines?: ChartDecorationLineStyle | null;
