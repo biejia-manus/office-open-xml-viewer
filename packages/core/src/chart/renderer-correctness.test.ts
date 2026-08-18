@@ -8557,6 +8557,54 @@ describe('CH6 — axis scale model', () => {
     expect(colored.every(s => s.lw === 0.5)).toBe(true);
   });
 
+  it('uses linked major/minor gridline roles behind direct axis formatting', () => {
+    const major = segRecordingCtx();
+    renderChart(major.ctx, lineModel({
+      valAxisMajorGridlines: true,
+      chartStyleRoles: {
+        gridlineMajor: { lineColors: ['AABBCC'], lineWidthEmu: 19_050 },
+      },
+    }), RECT, 1);
+    const majorLines = major.segs.filter(segment =>
+      segment.ss === '#AABBCC' && Math.abs(segment.x1 - segment.x0) > 50
+    );
+    expect(majorLines.length).toBeGreaterThan(0);
+    expect(majorLines.every(segment => segment.lw === 1.5)).toBe(true);
+
+    const minor = segRecordingCtx();
+    renderChart(minor.ctx, lineModel({
+      valAxisMajorGridlines: false,
+      valAxisMinorGridlines: true,
+      valAxisMinorUnit: 2,
+      chartStyleRoles: {
+        gridlineMinor: { lineColors: ['CCBBAA'], lineWidthEmu: 12_700 },
+      },
+    }), RECT, 1);
+    expect(minor.segs.some(segment =>
+      segment.ss === '#CCBBAA' && Math.abs(segment.x1 - segment.x0) > 50 && segment.lw === 1
+    )).toBe(true);
+  });
+
+  it('keeps direct gridline paint and noFill ahead of linked roles', () => {
+    const direct = segRecordingCtx();
+    renderChart(direct.ctx, lineModel({
+      valAxisMajorGridlines: true,
+      valAxisGridlineColor: '112233',
+      chartStyleRoles: { gridlineMajor: { lineColors: ['AABBCC'], lineHidden: true } },
+    }), RECT, 1);
+    expect(direct.segs.some(segment =>
+      segment.ss === '#112233' && Math.abs(segment.x1 - segment.x0) > 50
+    )).toBe(true);
+    expect(direct.segs.some(segment => segment.ss === '#AABBCC')).toBe(false);
+
+    const hidden = segRecordingCtx();
+    renderChart(hidden.ctx, lineModel({
+      valAxisMajorGridlines: true,
+      chartStyleRoles: { gridlineMajor: { lineHidden: true } },
+    }), RECT, 1);
+    expect(horizGridlines(hidden.segs)).toHaveLength(0);
+  });
+
   it('valAxisTickLabelPos="none" hides value tick labels (gridlines stay)', () => {
     const rec = segRecordingCtx();
     renderChart(rec.ctx, lineModel({ valAxisTickLabelPos: 'none' }), RECT, 1);
@@ -8760,6 +8808,29 @@ describe('CH6 — axis scale model', () => {
       expect(firstSeries).toBeGreaterThan(firstGrid);
     },
   );
+
+  it('applies the linked major-gridline role to an enabled secondary axis', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, lineModel({
+      valAxisMajorGridlines: false,
+      series: [
+        series({ values: [10, 20, 30] }),
+        series({ values: [20, 60, 100], useSecondaryAxis: true }),
+      ],
+      secondaryValAxis: {
+        min: 0, max: 100, title: null, hidden: false, lineHidden: false,
+        majorTickMark: 'none', majorUnit: 20, majorGridlines: true,
+      },
+      chartStyleRoles: {
+        gridlineMajor: { lineColors: ['654321'], lineWidthEmu: 25_400 },
+      },
+    }), RECT, 1);
+    const lines = rec.segs.filter(segment =>
+      segment.ss === '#654321' && Math.abs(segment.x1 - segment.x0) > 50
+    );
+    expect(lines.length).toBeGreaterThanOrEqual(6);
+    expect(lines.every(segment => segment.lw === 2)).toBe(true);
+  });
 
   it('secondary tick-label visibility and font properties do not affect ticks or grids', () => {
     const rec = recordingCtx();

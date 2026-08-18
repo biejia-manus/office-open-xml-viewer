@@ -4879,6 +4879,68 @@ function chartStyleRoleDataTable(
   };
 }
 
+interface LinkedGridlineResult {
+  visible: boolean | null | undefined;
+  color?: string | null;
+  widthEmu?: number | null;
+  dash?: string | null;
+}
+
+function chartStyleRoleGridline(
+  chart: ChartModel,
+  role: 'gridlineMajor' | 'gridlineMinor',
+  visible: boolean | null | undefined,
+  color: string | null | undefined,
+  widthEmu: number | null | undefined,
+  dash: string | null | undefined,
+): LinkedGridlineResult {
+  if (visible !== true || !chart.chartStyleRoles?.[role]) {
+    return { visible, color, widthEmu, dash };
+  }
+  const linked = chartStyleRoleLine(chart, { color, widthEmu, dash }, role);
+  return {
+    visible: linked.hidden !== true,
+    color: linked.color,
+    widthEmu: linked.widthEmu,
+    dash: linked.dash,
+  };
+}
+
+function chartStyleRoleSecondaryGridlines(
+  chart: ChartModel,
+  axis: SecondaryValueAxis | null | undefined,
+): SecondaryValueAxis | null | undefined {
+  if (!axis) return axis;
+  if (!chart.chartStyleRoles?.gridlineMajor && !chart.chartStyleRoles?.gridlineMinor) return axis;
+  const major = chartStyleRoleGridline(
+    chart, 'gridlineMajor', axis.majorGridlines,
+    axis.majorGridlineColor, axis.majorGridlineWidthEmu, axis.majorGridlineDash,
+  );
+  const minor = chartStyleRoleGridline(
+    chart, 'gridlineMinor', axis.minorGridlines,
+    axis.minorGridlineColor, axis.minorGridlineWidthEmu, axis.minorGridlineDash,
+  );
+  const changed = major.visible !== axis.majorGridlines
+    || major.color !== axis.majorGridlineColor
+    || major.widthEmu !== axis.majorGridlineWidthEmu
+    || major.dash !== axis.majorGridlineDash
+    || minor.visible !== axis.minorGridlines
+    || minor.color !== axis.minorGridlineColor
+    || minor.widthEmu !== axis.minorGridlineWidthEmu
+    || minor.dash !== axis.minorGridlineDash;
+  return changed ? {
+    ...axis,
+    majorGridlines: major.visible ?? undefined,
+    majorGridlineColor: major.color,
+    majorGridlineWidthEmu: major.widthEmu,
+    majorGridlineDash: major.dash,
+    minorGridlines: minor.visible ?? undefined,
+    minorGridlineColor: minor.color,
+    minorGridlineWidthEmu: minor.widthEmu,
+    minorGridlineDash: minor.dash,
+  } : axis;
+}
+
 /** Materialize the linked decoration roles that an optional family renderer
  * consumes directly from `ChartSeries`. Keeping this projection in core means
  * the 2-D, 3-D, DOCX, XLSX, and PPTX paths receive one effective precedence
@@ -4887,7 +4949,9 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
   if (!chart.chartStyleRoles?.errorBar
     && !chart.chartStyleRoles?.leaderLine
     && !chart.chartStyleRoles?.trendline
-    && !chart.chartStyleRoles?.dataTable) {
+    && !chart.chartStyleRoles?.dataTable
+    && !chart.chartStyleRoles?.gridlineMajor
+    && !chart.chartStyleRoles?.gridlineMinor) {
     return chart;
   }
   let changed = false;
@@ -4938,7 +5002,69 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
       || effective.lineHidden !== dataTable.lineHidden;
     dataTable = effective;
   }
-  return changed ? { ...chart, series, dataTable } : chart;
+  const valMajor = chartStyleRoleGridline(
+    chart, 'gridlineMajor', chart.valAxisMajorGridlines,
+    chart.valAxisGridlineColor, chart.valAxisGridlineWidthEmu, chart.valAxisGridlineDash,
+  );
+  const catMajor = chartStyleRoleGridline(
+    chart, 'gridlineMajor', chart.catAxisMajorGridlines,
+    chart.catAxisGridlineColor, chart.catAxisGridlineWidthEmu, chart.catAxisGridlineDash,
+  );
+  const valMinor = chartStyleRoleGridline(
+    chart, 'gridlineMinor', chart.valAxisMinorGridlines,
+    chart.valAxisMinorGridlineColor,
+    chart.valAxisMinorGridlineWidthEmu,
+    chart.valAxisMinorGridlineDash,
+  );
+  const catMinor = chartStyleRoleGridline(
+    chart, 'gridlineMinor', chart.catAxisMinorGridlines,
+    chart.catAxisMinorGridlineColor,
+    chart.catAxisMinorGridlineWidthEmu,
+    chart.catAxisMinorGridlineDash,
+  );
+  const secondaryValAxis = chartStyleRoleSecondaryGridlines(chart, chart.secondaryValAxis);
+  const secondaryCatAxis = chartStyleRoleSecondaryGridlines(chart, chart.secondaryCatAxis);
+  changed ||= valMajor.visible !== chart.valAxisMajorGridlines
+    || valMajor.color !== chart.valAxisGridlineColor
+    || valMajor.widthEmu !== chart.valAxisGridlineWidthEmu
+    || valMajor.dash !== chart.valAxisGridlineDash
+    || catMajor.visible !== chart.catAxisMajorGridlines
+    || catMajor.color !== chart.catAxisGridlineColor
+    || catMajor.widthEmu !== chart.catAxisGridlineWidthEmu
+    || catMajor.dash !== chart.catAxisGridlineDash
+    || valMinor.visible !== chart.valAxisMinorGridlines
+    || valMinor.color !== chart.valAxisMinorGridlineColor
+    || valMinor.widthEmu !== chart.valAxisMinorGridlineWidthEmu
+    || valMinor.dash !== chart.valAxisMinorGridlineDash
+    || catMinor.visible !== chart.catAxisMinorGridlines
+    || catMinor.color !== chart.catAxisMinorGridlineColor
+    || catMinor.widthEmu !== chart.catAxisMinorGridlineWidthEmu
+    || catMinor.dash !== chart.catAxisMinorGridlineDash
+    || secondaryValAxis !== chart.secondaryValAxis
+    || secondaryCatAxis !== chart.secondaryCatAxis;
+  return changed ? {
+    ...chart,
+    series,
+    dataTable,
+    valAxisMajorGridlines: valMajor.visible,
+    valAxisGridlineColor: valMajor.color,
+    valAxisGridlineWidthEmu: valMajor.widthEmu,
+    valAxisGridlineDash: valMajor.dash,
+    catAxisMajorGridlines: catMajor.visible,
+    catAxisGridlineColor: catMajor.color,
+    catAxisGridlineWidthEmu: catMajor.widthEmu,
+    catAxisGridlineDash: catMajor.dash,
+    valAxisMinorGridlines: valMinor.visible,
+    valAxisMinorGridlineColor: valMinor.color,
+    valAxisMinorGridlineWidthEmu: valMinor.widthEmu,
+    valAxisMinorGridlineDash: valMinor.dash,
+    catAxisMinorGridlines: catMinor.visible,
+    catAxisMinorGridlineColor: catMinor.color,
+    catAxisMinorGridlineWidthEmu: catMinor.widthEmu,
+    catAxisMinorGridlineDash: catMinor.dash,
+    secondaryValAxis,
+    secondaryCatAxis,
+  } : chart;
 }
 
 function drawUpDownBars(

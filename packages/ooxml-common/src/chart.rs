@@ -4455,6 +4455,18 @@ pub fn axis_has_minor_gridlines(axis_node: Node) -> bool {
     child(axis_node, "minorGridlines").is_some()
 }
 
+/// Whether declared minor gridlines have a paintable line. This mirrors
+/// [`axis_major_gridlines_visible`]: the element requests minor gridlines, but
+/// an authored DrawingML `<a:noFill/>` on their line suppresses the stroke.
+fn axis_minor_gridlines_visible(axis_node: Node) -> bool {
+    let Some(gridlines) = child(axis_node, "minorGridlines") else {
+        return false;
+    };
+    !child(gridlines, "spPr")
+        .and_then(|shape| child(shape, "ln"))
+        .is_some_and(|line| child(line, "noFill").is_some())
+}
+
 /// `<c:valAx><c:majorUnit val>` (ECMA-376 §21.2.2.103, `ST_AxisUnit`
 /// §21.2.3.1) — an explicit distance between major ticks/gridlines. Must be a
 /// positive floating-point number; non-positive values are rejected so they
@@ -9271,7 +9283,7 @@ pub fn parse_chart_part_with_references_and_style_parts(
             line_hidden,
             major_tick_mark: extract_axis_tick_mark_or_default(ax, "majorTickMark"),
             minor_tick_mark: extract_axis_tick_mark(ax, "minorTickMark"),
-            minor_gridlines: axis_has_minor_gridlines(ax),
+            minor_gridlines: axis_minor_gridlines_visible(ax),
             minor_gridline_color,
             minor_gridline_width_emu,
             minor_gridline_dash,
@@ -9540,7 +9552,7 @@ pub fn parse_chart_part_with_references_and_style_parts(
         cat_axis_gridline_color.get_or_insert_with(|| "000000".to_string());
         cat_axis_gridline_width_emu.get_or_insert(9_525);
     }
-    let val_axis_minor_gridlines = val_ax.map(|ax| axis_has_minor_gridlines(ax));
+    let val_axis_minor_gridlines = val_ax.map(axis_minor_gridlines_visible);
     let (
         val_axis_minor_gridline_color,
         val_axis_minor_gridline_width_emu,
@@ -9548,7 +9560,7 @@ pub fn parse_chart_part_with_references_and_style_parts(
     ) = val_ax
         .map(|axis| extract_minor_gridline_style(axis, color_resolver))
         .unwrap_or((None, None, None));
-    let cat_axis_minor_gridlines = cat_ax.map(|ax| axis_has_minor_gridlines(ax));
+    let cat_axis_minor_gridlines = cat_ax.map(axis_minor_gridlines_visible);
     let (
         cat_axis_minor_gridline_color,
         cat_axis_minor_gridline_width_emu,
@@ -11497,6 +11509,25 @@ Subtitle</a:t></a:r></a:p>
         );
         assert!(axis_has_major_gridlines(root_of(&both).root_element()));
         assert!(axis_has_minor_gridlines(root_of(&both).root_element()));
+    }
+
+    #[test]
+    fn minor_gridline_no_fill_suppresses_the_effective_stroke() {
+        let visible = format!(
+            r#"<c:valAx xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:minorGridlines><c:spPr><a:ln><a:solidFill><a:srgbClr val="112233"/></a:solidFill></a:ln></c:spPr></c:minorGridlines></c:valAx>"#
+        );
+        let hidden = format!(
+            r#"<c:valAx xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:minorGridlines><c:spPr><a:ln><a:noFill/></a:ln></c:spPr></c:minorGridlines></c:valAx>"#
+        );
+        assert!(axis_minor_gridlines_visible(
+            root_of(&visible).root_element()
+        ));
+        assert!(!axis_minor_gridlines_visible(
+            root_of(&hidden).root_element()
+        ));
+        // Presence remains independently queryable for callers that need the
+        // authored request rather than its effective paint visibility.
+        assert!(axis_has_minor_gridlines(root_of(&hidden).root_element()));
     }
 
     #[test]
