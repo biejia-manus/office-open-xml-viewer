@@ -6867,6 +6867,165 @@ describe('classic multi-level category labels', () => {
     expect(separatorSegments).toHaveLength(5);
   });
 
+  it('paints each multi-level boundary once with one continuous axis stroke', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['Male', 'Female', 'Male', 'Female'],
+      categoryLevels: [
+        ['Male', 'Female', 'Male', 'Female'],
+        ['Smoker', '', 'Non-Smoker', ''],
+      ],
+      catAxisFontSizeHpt: 1000,
+      catAxisLineColor: '000000',
+      catAxisLineWidthEmu: 12_700,
+      catAxisMajorTickMark: 'cross',
+      catAxisMinorTickMark: 'none',
+      valAxisLineHidden: true,
+      valAxisMajorGridlines: false,
+      series: [series({ name: 'Prevalence', values: [25, 22, 15, 18] })],
+    }), RECT, 1);
+
+    const categoryRule = rec.segs.find(segment =>
+      segment.ss === '#000000'
+      && Math.abs(segment.y1 - segment.y0) < 0.01
+      && Math.abs(segment.x1 - segment.x0) > 100);
+    expect(categoryRule).toBeDefined();
+    const axisY = categoryRule!.y0;
+    const boundaries = rec.segs.filter(segment =>
+      segment.ss === '#000000'
+      && Math.abs(segment.x1 - segment.x0) < 0.01
+      && Math.min(segment.y0, segment.y1) < axisY
+      && Math.max(segment.y0, segment.y1) > axisY + 10);
+    expect(boundaries).toHaveLength(5);
+    expect(boundaries.every(segment => segment.lw === 1)).toBe(true);
+    const allAxisCrossingVertical = rec.segs.filter(segment =>
+      segment.ss === '#000000'
+      && Math.abs(segment.x1 - segment.x0) < 0.01
+      && Math.min(segment.y0, segment.y1) < axisY
+      && Math.max(segment.y0, segment.y1) > axisY);
+    expect(allAxisCrossingVertical).toHaveLength(5);
+  });
+
+  it('keeps major ticks on the actual axis when labels and brackets are low', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B', 'C', 'D'],
+      categoryLevels: [
+        ['A', 'B', 'C', 'D'],
+        ['Left', '', 'Right', ''],
+      ],
+      catAxisTickLabelPos: 'low',
+      catAxisLineColor: '000000',
+      catAxisMajorTickMark: 'cross',
+      catAxisMinorTickMark: 'none',
+      valAxisLineHidden: true,
+      valAxisMajorGridlines: false,
+      series: [series({ name: 'Mixed', values: [-10, 15, -5, 20] })],
+    }), RECT, 1);
+
+    const categoryRule = rec.segs.find(segment =>
+      segment.ss === '#000000'
+      && Math.abs(segment.y1 - segment.y0) < 0.01
+      && Math.abs(segment.x1 - segment.x0) > 100);
+    expect(categoryRule).toBeDefined();
+    const axisY = categoryRule!.y0;
+    const actualAxisTicks = rec.segs.filter(segment =>
+      segment.ss === '#000000'
+      && Math.abs(segment.x1 - segment.x0) < 0.01
+      && Math.min(segment.y0, segment.y1) < axisY
+      && Math.max(segment.y0, segment.y1) > axisY
+      && Math.abs(segment.y1 - segment.y0) < 20);
+    expect(actualAxisTicks).toHaveLength(5);
+  });
+
+  it('extends only authored major boundaries into the plot when ticks are skipped', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B', 'C', 'D'],
+      categoryLevels: [
+        ['A', 'B', 'C', 'D'],
+        ['Left', '', 'Right', ''],
+      ],
+      catAxisLineColor: '000000',
+      catAxisMajorTickMark: 'cross',
+      catAxisMinorTickMark: 'none',
+      catAxisTickMarkSkip: 2,
+      valAxisLineHidden: true,
+      valAxisMajorGridlines: false,
+      series: [series({ name: 'Positive', values: [10, 15, 5, 20] })],
+    }), RECT, 1);
+
+    const categoryRule = rec.segs.find(segment =>
+      segment.ss === '#000000'
+      && Math.abs(segment.y1 - segment.y0) < 0.01
+      && Math.abs(segment.x1 - segment.x0) > 100);
+    expect(categoryRule).toBeDefined();
+    const axisY = categoryRule!.y0;
+    const plotwardBoundaries = rec.segs.filter(segment =>
+      segment.ss === '#000000'
+      && Math.abs(segment.x1 - segment.x0) < 0.01
+      && Math.min(segment.y0, segment.y1) < axisY
+      && Math.max(segment.y0, segment.y1) > axisY + 10);
+    expect(plotwardBoundaries).toHaveLength(3);
+  });
+
+  it('does not revive hidden category ticks above multi-level brackets', () => {
+    const bracketGeometry = (majorTickMark: 'cross' | 'none') => {
+      const rec = segRecordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'clusteredBar',
+        categories: ['A', 'B', 'C', 'D'],
+        categoryLevels: [
+          ['A', 'B', 'C', 'D'],
+          ['Left', '', 'Right', ''],
+        ],
+        catAxisLineHidden: true,
+        catAxisMajorTickMark: majorTickMark,
+        catAxisMinorTickMark: 'none',
+        valAxisLineHidden: true,
+        valAxisMajorGridlines: false,
+        series: [series({ name: 'Positive', values: [10, 15, 5, 20] })],
+      }), RECT, 1);
+      return rec.segs
+        .filter(segment =>
+          Math.abs(segment.x1 - segment.x0) < 0.01
+          && Math.abs(segment.y1 - segment.y0) > 10)
+        .map(segment => [segment.x0, segment.y0, segment.x1, segment.y1]);
+    };
+
+    const withoutTicks = bracketGeometry('none');
+    expect(withoutTicks).toHaveLength(5);
+    expect(bracketGeometry('cross')).toEqual(withoutTicks);
+  });
+
+  it('keeps horizontal-bar major ticks when category levels are present', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBarH',
+      categories: ['Male', 'Female', 'Male', 'Female'],
+      categoryLevels: [
+        ['Male', 'Female', 'Male', 'Female'],
+        ['Smoker', '', 'Non-Smoker', ''],
+      ],
+      catAxisLineColor: '000000',
+      catAxisMajorTickMark: 'cross',
+      catAxisMinorTickMark: 'none',
+      valAxisHidden: true,
+      valAxisMajorGridlines: false,
+      series: [series({ name: 'Prevalence', values: [25, 22, 15, 18] })],
+    }), RECT, 1);
+
+    const majorTicks = rec.segs.filter(segment =>
+      segment.ss === '#000000'
+      && Math.abs(segment.y1 - segment.y0) < 0.01
+      && Math.abs(segment.x1 - segment.x0) > 2
+      && Math.abs(segment.x1 - segment.x0) < 20);
+    expect(majorTicks).toHaveLength(5);
+  });
+
   it('honors noMultiLvlLbl by suppressing outer labels', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({

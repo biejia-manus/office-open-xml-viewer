@@ -3666,6 +3666,31 @@ fn chart_style_line_ref_xml(
     Some(Ok(entry.to_xml()))
 }
 
+/// Width inherited by a classic Style 2 axis overlay from the first theme
+/// line-style entry. Classic chart axes do not carry an explicit `lnRef`, but
+/// Office's Style 2 recipe applies `lnStyleLst[0]` before overlaying the local
+/// `<c:*Ax><c:spPr><a:ln>` properties. Consequently a local line that authors
+/// only its color retains the theme width; an absent local line remains absent.
+/// The Office vector boundary set establishes this rule for primary category,
+/// date and value axes, while secondary axes and other numbered built-in styles
+/// remain unresolved.
+fn classic_style_two_axis_line_width_emu(resolver: &dyn ColorResolver) -> Option<u32> {
+    use crate::theme::StyleMatrixLookup;
+
+    let entry = match resolver.theme_format_scheme()?.lookup_line_ref(1) {
+        StyleMatrixLookup::Entry(entry) => entry,
+        StyleMatrixLookup::NoStyle | StyleMatrixLookup::Missing => return None,
+    };
+    let xml = entry.to_xml();
+    let document = crate::depth::parse_guarded(&xml).ok()?;
+    let line = document
+        .descendants()
+        .find(|node| node.is_element() && node.tag_name().name() == "ln")?;
+    parse_chart_style_line(line, resolver, None)
+        .width
+        .and_then(|width| u32::try_from(width).ok())
+}
+
 fn parse_chartex_element_style(
     style_node: Node,
     resolver: &dyn ColorResolver,
@@ -8459,6 +8484,31 @@ pub fn parse_chart_part_with_references(
     let (mut val_axis_line_color, mut val_axis_line_width_emu, val_axis_line_hidden) = val_ax
         .map(|n| extract_axis_line_style(n, color_resolver))
         .unwrap_or((None, None, false));
+    if legacy_chart_style == Some(2) {
+        let cat_needs_theme_width = cat_ax.is_some_and(|axis| {
+            !cat_axis_line_hidden
+                && cat_axis_line_width_emu.is_none()
+                && child(axis, "spPr")
+                    .and_then(|shape| child(shape, "ln"))
+                    .is_some()
+        });
+        let val_needs_theme_width = val_ax.is_some_and(|axis| {
+            !val_axis_line_hidden
+                && val_axis_line_width_emu.is_none()
+                && child(axis, "spPr")
+                    .and_then(|shape| child(shape, "ln"))
+                    .is_some()
+        });
+        if cat_needs_theme_width || val_needs_theme_width {
+            let inherited_width = classic_style_two_axis_line_width_emu(color_resolver);
+            if cat_needs_theme_width {
+                cat_axis_line_width_emu = inherited_width;
+            }
+            if val_needs_theme_width {
+                val_axis_line_width_emu = inherited_width;
+            }
+        }
+    }
     if uses_implicit_legacy_style && cat_ax.is_some() && !cat_axis_line_hidden {
         cat_axis_line_color.get_or_insert_with(|| "000000".to_string());
         cat_axis_line_width_emu.get_or_insert(9_525);
@@ -11260,7 +11310,7 @@ Subtitle</a:t></a:r></a:p>
     }
 
     #[test]
-    fn parse_chart_part_does_not_invent_axis_width_from_theme_line_index() {
+    fn style_two_axis_overlay_inherits_first_theme_line_width() {
         let xml = format!(
             r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:style val="2"/>
               <c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser>
@@ -11282,8 +11332,41 @@ Subtitle</a:t></a:r></a:p>
         };
         let doc = chart_space_of(&xml);
         let model = parse_chart_part(doc.root_element(), &resolver).expect("chart parses");
-        assert_eq!(model.cat_axis_line_width_emu, None);
-        assert_eq!(model.val_axis_line_width_emu, None);
+        assert_eq!(model.cat_axis_line_width_emu, Some(12700));
+        assert_eq!(model.val_axis_line_width_emu, Some(12700));
+
+        let other_style = xml.replace("<c:style val=\"2\"/>", "<c:style val=\"10\"/>");
+        let other_doc = chart_space_of(&other_style);
+        let other = parse_chart_part(other_doc.root_element(), &resolver).expect("chart parses");
+        assert_eq!(other.cat_axis_line_width_emu, None);
+        assert_eq!(other.val_axis_line_width_emu, None);
+
+        let absent_overlay = xml.replace(
+            "<c:catAx><c:spPr><a:ln><a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill></a:ln></c:spPr></c:catAx>",
+            "<c:catAx/>",
+        );
+        let absent_doc = chart_space_of(&absent_overlay);
+        let absent = parse_chart_part(absent_doc.root_element(), &resolver).expect("chart parses");
+        assert_eq!(absent.cat_axis_line_width_emu, None);
+
+        let explicit_width = xml.replacen("<a:ln>", "<a:ln w=\"9525\">", 1);
+        let explicit_doc = chart_space_of(&explicit_width);
+        let explicit =
+            parse_chart_part(explicit_doc.root_element(), &resolver).expect("chart parses");
+        assert_eq!(explicit.cat_axis_line_width_emu, Some(9525));
+        assert_eq!(explicit.val_axis_line_width_emu, Some(12700));
+
+        let no_fill = xml.replace(
+            "<a:ln><a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill></a:ln>",
+            "<a:ln><a:noFill/></a:ln>",
+        );
+        let no_fill_doc = chart_space_of(&no_fill);
+        let no_fill_model =
+            parse_chart_part(no_fill_doc.root_element(), &resolver).expect("chart parses");
+        assert!(no_fill_model.cat_axis_line_hidden);
+        assert!(no_fill_model.val_axis_line_hidden);
+        assert_eq!(no_fill_model.cat_axis_line_width_emu, None);
+        assert_eq!(no_fill_model.val_axis_line_width_emu, None);
     }
 
     /// (b) Combo chart: a bar series on the primary value axis plus a line
