@@ -852,12 +852,18 @@ function drawThreeDDataLabel(
   leaderAnchor: Point = anchor,
   leaderLineEligible = true,
   valueDisplayUnits?: ChartDisplayUnits | null,
+  axisMaximum?: number,
+  plottedValueForAxis = value,
 ): void {
   // Callers resolve indexed overrides through their per-series Map before the
   // paint loop. Falling back to Array.find here would quietly reintroduce
   // quadratic work for a fully-authored maximum-size public model.
   const override = resolvedOverride;
   if (override?.deleted) return;
+  if (chart.showDataLabelsOverMax !== true
+    && axisMaximum != null
+    && Number.isFinite(axisMaximum)
+    && plottedValueForAxis > axisMaximum) return;
   const defaults = series.seriesDataLabels;
   const showVal = override?.showVal ?? defaults?.showVal ?? chart.showDataLabels;
   const showCat = override?.showCatName ?? defaults?.showCatName ?? false;
@@ -2169,6 +2175,7 @@ function renderCartesian(
       outline: boolean; outlineColor: string; outlineWidth: number;
       outlineDash: string; outlineCap: CanvasLineCap; outlineJoin: CanvasLineJoin;
       labelValue: number;
+      plottedLabelValue: number;
     }> = [];
     const positiveBase = new Array(categoryCount).fill(0) as number[];
     const negativeBase = new Array(categoryCount).fill(0) as number[];
@@ -2283,6 +2290,7 @@ function renderCartesian(
             outlineCap: lineCap,
             outlineJoin: lineJoin,
             labelValue: percent ? value / 100 : value,
+            plottedLabelValue: end,
           });
         } else {
           const y0 = front.y + front.h - axis.fraction(visibleBase) * front.h;
@@ -2306,6 +2314,7 @@ function renderCartesian(
             outlineCap: lineCap,
             outlineJoin: lineJoin,
             labelValue: percent ? value / 100 : value,
+            plottedLabelValue: end,
           });
         }
       }
@@ -2415,7 +2424,7 @@ function renderCartesian(
         deferredDataLabels.push(() => drawThreeDDataLabel(
           ctx, chart, series, item.seriesIndex, item.categoryIndex,
           item.labelValue, anchor, rect, ptToPx, 0, undefined, labelOverride,
-          't', anchor, true, chart.valAxisDisplayUnits,
+          't', anchor, true, chart.valAxisDisplayUnits, axis.max, item.plottedLabelValue,
         ));
       }
     }
@@ -2914,7 +2923,8 @@ function renderCartesian(
               : 0,
             undefined,
             labelOverride,
-            't', point, true, chart.valAxisDisplayUnits,
+            't', point, true, chart.valAxisDisplayUnits, axis.max,
+            stacked ? stackedUpper[seriesIndex][categoryIndex] : sourceValue,
           ));
         }
       }

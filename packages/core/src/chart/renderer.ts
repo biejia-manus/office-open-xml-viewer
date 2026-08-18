@@ -2685,6 +2685,20 @@ function dataLabelRectIntersection(a: DataLabelRect, b: DataLabelRect): DataLabe
   return right > x && bottom > y ? { x, y, w: right - x, h: bottom - y } : null;
 }
 
+/** ECMA-376 §21.2.2.180: omission/false suppresses a label whose plotted value
+ * is numerically greater than the effective value-axis maximum. This gate runs
+ * after the shared axis planner has resolved authored and automatic bounds; it
+ * never changes those bounds. */
+function dataLabelWithinAxisMaximum(
+  chart: Pick<ChartModel, 'showDataLabelsOverMax'>,
+  plottedValue: number,
+  axisMaximum: number,
+): boolean {
+  return chart.showDataLabelsOverMax === true
+    || !Number.isFinite(axisMaximum)
+    || plottedValue <= axisMaximum;
+}
+
 /**
  * Draw a bar data label with the ECMA-376 §21.2.2.16 `dLblPos` semantics.
  *
@@ -3806,6 +3820,10 @@ function renderBarChart(
       // a percentStacked chart reaches below the zero line).
       const sv = isPercentGroup ? (raw / stackSum) * 100 : raw;
       const negative = sv < 0;
+      const plottedLabelValue = isStackedGroup
+        ? (negative ? negOffset : posOffset) + sv
+        : sv;
+      const labelAxisMaximum = secondary && secScale ? secScale.max : plan.max;
       const useNegativeStyle = negative
         && (s.invertIfNegative === true || s.automaticNegativeStyle === true);
       // A `<c:dPt>` fill is an explicit point override regardless of the
@@ -3936,7 +3954,7 @@ function renderBarChart(
           isPercentGroup ? sv / 100 : undefined,
           s.useSecondaryAxis && sec ? sec.displayUnits : chart.valAxisDisplayUnits,
         );
-        if (label) {
+        if (label && dataLabelWithinAxisMaximum(chart, plottedLabelValue, labelAxisMaximum)) {
           // ECMA-376 §21.2.2.30 / §21.1.2.3.2 — data label font size comes from
           // `<c:dLbls><c:txPr>...<a:defRPr@sz>` (hundredths of a point). When
           // the file specifies one we honor it; otherwise the proportional
@@ -4032,7 +4050,7 @@ function renderBarChart(
           isPercentGroup ? sv / 100 : undefined,
           s.useSecondaryAxis && sec ? sec.displayUnits : chart.valAxisDisplayUnits,
         );
-        if (label) {
+        if (label && dataLabelWithinAxisMaximum(chart, plottedLabelValue, labelAxisMaximum)) {
           const sizeHpt = label.fontSizeHpt ?? chart.dataLabelFontSizeHpt;
           const lsz = chartTextFontSizePx(sizeHpt, ptToPx)
             ?? Math.max(7, Math.min(11, barW * 0.6));
@@ -4551,6 +4569,7 @@ function renderBarChart(
         false,
         chart.scatterStyle ?? 'marker',
         { x, y, w, h },
+        yScale.max,
       );
     }
   }
@@ -5236,6 +5255,10 @@ function renderLineChart(
           face => chartFontFamily(chart, face, 'minor'),
           isSecondarySeries(s) ? sec?.displayUnits : chart.valAxisDisplayUnits,
           ci => dataLabelLegendKey(si, ci),
+          value => dataLabelWithinAxisMaximum(
+            chart, value,
+            isSecondarySeries(s) && secScale ? secScale.max : plan.max,
+          ),
         );
       });
     }
@@ -6801,6 +6824,10 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
         face => chartFontFamily(chart, face, 'minor'),
         isSecondarySeries(s) ? sec?.displayUnits : chart.valAxisDisplayUnits,
         ci => dataLabelLegendKey(chartIndex, ci),
+        value => dataLabelWithinAxisMaximum(
+          chart, value,
+          isSecondarySeries(s) && secScale ? secScale.max : areaPlan.max,
+        ),
       );
     }
   }
@@ -6868,6 +6895,10 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
       face => chartFontFamily(chart, face, 'minor'),
       isSecondarySeries(s) ? sec?.displayUnits : chart.valAxisDisplayUnits,
       ci => dataLabelLegendKey(chartIndex, ci),
+      value => dataLabelWithinAxisMaximum(
+        chart, value,
+        isSecondarySeries(s) && secScale ? secScale.max : areaPlan.max,
+      ),
     );
     drawSeriesTrendlines(
       ctx, s, stroke, toX, yOf, ptToPx, undefined,
@@ -8742,6 +8773,7 @@ function drawScatterSeriesLayer(
   isBubble: boolean,
   style: string,
   layoutReferenceRect: DataLabelRect,
+  valueAxisMaximum: number,
   valueDisplayUnits?: ChartDisplayUnits | null,
 ): void {
   const drawLines = style === 'line' || style === 'lineMarker' || style === 'lineNoMarker';
@@ -8858,6 +8890,7 @@ function drawScatterSeriesLayer(
       face => chartFontFamily(chart, face, 'minor'),
       valueDisplayUnits,
       pointIndex => dataLabelLegendKey(seriesIndex, pointIndex),
+      value => dataLabelWithinAxisMaximum(chart, value, valueAxisMaximum),
     );
   }
 
@@ -9296,12 +9329,14 @@ function renderScatterChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r:
   drawScatterSeriesLayer(
     ctx, chart, primaryEntries, useIndexX, toX, toY, r,
     px0, py0, pw, ph, ptToPx, isBubble, style, { x, y, w, h },
+    yAxisPlan.max,
     chart.valAxisDisplayUnits,
   );
   if (secondaryEntries.length > 0 && secondaryXPlan && secondaryYPlan) {
     drawScatterSeriesLayer(
       ctx, chart, secondaryEntries, useIndexX, toSecondaryX, toSecondaryY, r,
       px0, py0, pw, ph, ptToPx, isBubble, style, { x, y, w, h },
+      secondaryYPlan.max,
       secondaryY?.displayUnits,
     );
   }
@@ -9583,6 +9618,7 @@ function drawSeriesDataLabels(
   richFontFamilyForFace?: (face: string) => string,
   valueDisplayUnits?: ChartDisplayUnits | null,
   legendKeyAt?: (pointIndex: number) => DataLabelLegendKey | undefined,
+  isValueVisible?: (value: number) => boolean,
 ): void {
   const overrides = s.dataLabelOverrides ?? [];
   const overridesByIndex = indexPointOverrides(overrides);
@@ -9590,6 +9626,7 @@ function drawSeriesDataLabels(
   const seriesDef = s.seriesDataLabels;
   for (let i = 0; i < s.values.length; i++) {
     const yv = s.values[i]; if (yv == null) continue;
+    if (isValueVisible && !isValueVisible(yv)) continue;
     const xv = scatterXValue(cats, i, useIndexX);
     if (xv == null) continue;
     const ovr = overridesByIndex.get(i);
@@ -10108,6 +10145,7 @@ function drawCategoryDataLabels(
   richFontFamilyForFace?: (face: string) => string,
   valueDisplayUnits?: ChartDisplayUnits | null,
   legendKeyAt?: (pointIndex: number) => DataLabelLegendKey | undefined,
+  isValueVisible?: (value: number) => boolean,
 ): boolean {
   const overrides = s.dataLabelOverrides ?? [];
   const overridesByIndex = indexPointOverrides(overrides);
@@ -10116,6 +10154,7 @@ function drawCategoryDataLabels(
   for (let ci = 0; ci < n; ci++) {
     if (s.values[ci] == null && !plotNullAsZero) continue;
     const anchorValue = plotted(ci);
+    if (isValueVisible && !isValueVisible(anchorValue)) continue;
     const sourceValue = s.values[ci] ?? 0;
     const ovr = overridesByIndex.get(ci);
     // Genuine `<c:delete val="1"/>` (§21.2.2.43) skips; a style/flag-only

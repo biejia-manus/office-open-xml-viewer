@@ -868,6 +868,12 @@ export interface ChartModel {
    * consulted for the line and area families. null/undefined = "gap".
    */
   dispBlanksAs?: string | null;
+  /**
+   * `<c:chart><c:showDLblsOverMax>` (ECMA-376 §21.2.2.180). When true,
+   * labels whose plotted value exceeds the effective value-axis maximum remain
+   * visible. A missing element or explicit false suppresses those labels.
+   */
+  showDataLabelsOverMax?: boolean | null;
   // ── Axis scale model (CH6) ───────────────────────────────────────────────
   // Gridline presence, manual major/minor units, log scale and orientation.
   // Every field is byte-stable when absent: the renderer keeps its historical

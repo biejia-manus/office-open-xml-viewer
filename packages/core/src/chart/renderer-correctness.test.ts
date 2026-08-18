@@ -6072,6 +6072,110 @@ describe('classic data-label legend keys (§21.2.2.179)', () => {
   });
 });
 
+describe('showDLblsOverMax (§21.2.2.180)', () => {
+  const labels = {
+    showVal: true,
+    showCatName: false,
+    showSerName: false,
+    showPercent: false,
+    fontColor: 'FF00FF',
+  };
+
+  const renderedLabelTexts = (chart: ChartModel): string[] => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, chart, { x: 0, y: 0, w: 500, h: 300 }, 1);
+    return rec.texts
+      .filter(call => call.fillStyle === '#FF00FF')
+      .map(call => call.text);
+  };
+
+  it('suppresses values above the effective maximum unless explicitly enabled', () => {
+    const chart = {
+      chartType: 'clusteredBar',
+      categories: ['inside', 'over'],
+      series: [{
+        name: 'Series 1', values: [5, 15], color: '4472C4', seriesDataLabels: labels,
+      }],
+      valMin: 0,
+      valMax: 10,
+      showLegend: false,
+    } as ChartModel;
+    expect(renderedLabelTexts(chart)).toEqual(['5']);
+    chart.showDataLabelsOverMax = true;
+    expect(renderedLabelTexts(chart)).toEqual(['5', '15']);
+  });
+
+  it('compares stacked endpoints and negative values to the numeric maximum', () => {
+    const stacked = {
+      chartType: 'stackedBar',
+      categories: ['stack'],
+      series: [
+        { name: 'Base', values: [8], color: '4472C4', seriesDataLabels: labels },
+        { name: 'Top', values: [8], color: 'ED7D31', seriesDataLabels: labels },
+      ],
+      valMin: 0,
+      valMax: 10,
+      showLegend: false,
+    } as ChartModel;
+    expect(renderedLabelTexts(stacked)).toEqual(['8']);
+
+    const negative = {
+      chartType: 'clusteredBar',
+      categories: ['inside', 'over'],
+      series: [{
+        name: 'Negative', values: [-10, -2], color: '4472C4', seriesDataLabels: labels,
+      }],
+      valMin: -12,
+      valMax: -5,
+      showLegend: false,
+    } as ChartModel;
+    expect(renderedLabelTexts(negative)).toEqual(['-10']);
+  });
+
+  it('uses the owning secondary axis and applies the gate to point-level labels', () => {
+    const chart = {
+      chartType: 'line',
+      categories: ['inside', 'over'],
+      series: [{
+        name: 'Secondary',
+        values: [5, 15],
+        color: '4472C4',
+        useSecondaryAxis: true,
+        seriesDataLabels: {
+          ...labels,
+          showVal: false,
+        },
+        dataLabelOverrides: [
+          { idx: 0, text: '', showVal: true, fontColor: 'FF00FF' },
+          { idx: 1, text: '', showVal: true, fontColor: 'FF00FF' },
+        ],
+      }],
+      secondaryValAxis: { min: 0, max: 10 },
+      showLegend: false,
+    } as ChartModel;
+    expect(renderedLabelTexts(chart)).toEqual(['5']);
+    chart.showDataLabelsOverMax = true;
+    expect(renderedLabelTexts(chart)).toEqual(['5', '15']);
+  });
+
+  it('applies the same resolved maximum to classic 3-D labels', () => {
+    const chart = {
+      chartType: 'clusteredBar',
+      categories: ['inside', 'over'],
+      series: [{
+        name: 'Series 1', values: [5, 15], color: '4472C4', seriesDataLabels: labels,
+      }],
+      valMin: 0,
+      valMax: 10,
+      showLegend: false,
+      threeD: { rotationX: 15, rotationY: 20, depthPercent: 100, perspective: 30 },
+    } as ChartModel;
+    expect(renderedLabelTexts(chart)).toEqual(['5']);
+    chart.showDataLabelsOverMax = true;
+    expect(renderedLabelTexts(chart)).toEqual(['5', '15']);
+  });
+});
+
 describe('CH9 — line/area per-point data labels (§21.2.2.45)', () => {
   for (const chartType of ['line', 'area'] as const) {
     it(`${chartType}: dataLabelOverrides render custom text at the point, and delete (empty) skips it`, () => {

@@ -449,6 +449,11 @@ pub struct ChartModel {
     /// when the file sets it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disp_blanks_as: Option<String>,
+    /// `<c:chart><c:showDLblsOverMax>` (ECMA-376 §21.2.2.180). Absent and
+    /// explicit false both suppress labels above the effective axis maximum;
+    /// preserving `Option` retains the authored chart-level boolean on wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_data_labels_over_max: Option<bool>,
     // ── Axis scale model (CH6) ──────────────────────────────────────────────
     /// `<c:valAx><c:majorGridlines>` presence (§21.2.2.100). `Some(false)` when
     /// the value axis exists but omits the element — Office suppresses the value
@@ -3362,6 +3367,16 @@ pub fn extract_disp_blanks_as(root: Node) -> Option<String> {
         .map(|n| n.attribute("val").unwrap_or("zero").to_string())
 }
 
+/// `<c:chart><c:showDLblsOverMax>` (ECMA-376 §21.2.2.180). The element is a
+/// `CT_Boolean`, so a bare element implies true. Absence remains `None` to
+/// preserve the authored chart-level state; its effective schema behavior is
+/// false in the renderer.
+pub fn extract_show_data_labels_over_max(root: Node) -> Option<bool> {
+    root.descendants()
+        .find(|node| node.is_element() && node.tag_name().name() == "chart")
+        .and_then(|chart| bool_child(chart, "showDLblsOverMax"))
+}
+
 pub fn extract_chart_space_border(chart_space_root: Node) -> (Option<String>, Option<u32>) {
     let Some(ln) = child(chart_space_root, "spPr").and_then(|sp| child(sp, "ln")) else {
         return (None, None);
@@ -5547,6 +5562,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         date1904: false,
         // chartEx waterfall has no line/area blanks to display.
         disp_blanks_as: None,
+        show_data_labels_over_max: None,
         // chartEx (cx:) has its own axis model (`<cx:axis>`). Shared fields are
         // populated only where CT_ValueAxisScaling has the same semantics as
         // the classic value-axis contract.
@@ -9016,6 +9032,7 @@ pub fn parse_chart_part_with_references(
     // `<c:chart><c:dispBlanksAs>` (ECMA-376 §21.2.2.42) — null-cell plotting for
     // line/area. Shared with the xlsx parser via ooxml-common.
     let disp_blanks_as = extract_disp_blanks_as(root);
+    let show_data_labels_over_max = extract_show_data_labels_over_max(root);
 
     // ── Chart text font faces (CH10) ────────────────────────────────────────
     // Tick-label faces (`<c:catAx|valAx><c:txPr>…<a:latin>`), data-label face
@@ -9320,6 +9337,7 @@ pub fn parse_chart_part_with_references(
         radar_style,
         date1904,
         disp_blanks_as,
+        show_data_labels_over_max,
         // ── Axis scale model (CH6) ──────────────────────────────────────
         val_axis_major_gridlines,
         cat_axis_major_gridlines,
@@ -9616,6 +9634,7 @@ mod tests {
             theme_minor_font_latin: None,
             date1904: false,
             disp_blanks_as: None,
+            show_data_labels_over_max: None,
             val_axis_major_gridlines: None,
             cat_axis_major_gridlines: None,
             val_axis_gridline_color: None,
@@ -9911,6 +9930,33 @@ mod tests {
         assert_eq!(
             extract_disp_blanks_as(bare.root_element()).as_deref(),
             Some("zero")
+        );
+    }
+
+    #[test]
+    fn show_data_labels_over_max_preserves_absent_false_and_bare_true() {
+        let absent = root_of(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart/></c:chartSpace>"#,
+        );
+        assert_eq!(
+            extract_show_data_labels_over_max(absent.root_element()),
+            None
+        );
+
+        let explicit_false = root_of(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:showDLblsOverMax val="0"/></c:chart></c:chartSpace>"#,
+        );
+        assert_eq!(
+            extract_show_data_labels_over_max(explicit_false.root_element()),
+            Some(false),
+        );
+
+        let bare = root_of(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:showDLblsOverMax/></c:chart></c:chartSpace>"#,
+        );
+        assert_eq!(
+            extract_show_data_labels_over_max(bare.root_element()),
+            Some(true),
         );
     }
 
