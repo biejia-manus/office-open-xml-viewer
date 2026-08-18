@@ -8605,6 +8605,42 @@ describe('CH6 — axis scale model', () => {
     expect(horizGridlines(hidden.segs)).toHaveLength(0);
   });
 
+  it('uses linked category/value-axis line paint behind direct axis formatting', () => {
+    const linked = segRecordingCtx();
+    renderChart(linked.ctx, lineModel({
+      valAxisMajorGridlines: false,
+      chartStyleRoles: {
+        categoryAxis: { lineColors: ['AABBCC'], lineWidthEmu: 19_050 },
+        valueAxis: { lineColors: ['CCBBAA'], lineWidthEmu: 25_400 },
+      },
+    }), RECT, 1);
+    expect(linked.segs.some(segment => segment.ss === '#AABBCC' && segment.lw === 1.5)).toBe(true);
+    expect(linked.segs.some(segment => segment.ss === '#CCBBAA' && segment.lw === 2)).toBe(true);
+
+    const direct = segRecordingCtx();
+    renderChart(direct.ctx, lineModel({
+      valAxisMajorGridlines: false,
+      catAxisLineColor: '112233',
+      chartStyleRoles: {
+        categoryAxis: { lineColors: ['AABBCC'], lineHidden: true },
+      },
+    }), RECT, 1);
+    expect(direct.segs.some(segment => segment.ss === '#112233')).toBe(true);
+    expect(direct.segs.some(segment => segment.ss === '#AABBCC')).toBe(false);
+
+    const hidden = segRecordingCtx();
+    renderChart(hidden.ctx, lineModel({
+      valAxisMajorGridlines: false,
+      chartStyleRoles: {
+        categoryAxis: { lineColors: ['AABBCC'], lineHidden: true },
+        valueAxis: { lineColors: ['CCBBAA'], lineHidden: true },
+      },
+    }), RECT, 1);
+    expect(hidden.segs.some(segment => segment.ss === '#AABBCC' || segment.ss === '#CCBBAA'))
+      .toBe(false);
+    expect(hidden.texts.map(text => text.text)).toEqual(expect.arrayContaining(['A', '10']));
+  });
+
   it('valAxisTickLabelPos="none" hides value tick labels (gridlines stay)', () => {
     const rec = segRecordingCtx();
     renderChart(rec.ctx, lineModel({ valAxisTickLabelPos: 'none' }), RECT, 1);

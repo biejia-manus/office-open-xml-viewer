@@ -4941,6 +4941,43 @@ function chartStyleRoleSecondaryGridlines(
   } : axis;
 }
 
+function chartStyleRoleAxisLine(
+  chart: ChartModel,
+  role: 'categoryAxis' | 'valueAxis',
+  color: string | null | undefined,
+  widthEmu: number | null | undefined,
+  hidden: boolean,
+): ChartDecorationLineStyle {
+  return chartStyleRoleLine(chart, {
+    color,
+    widthEmu,
+    // The shared axis model stores the effective boolean, so false means no
+    // direct noFill rather than an authored visible override.
+    hidden: hidden ? true : undefined,
+  }, role);
+}
+
+function chartStyleRoleSecondaryAxisLine(
+  chart: ChartModel,
+  axis: SecondaryValueAxis | null | undefined,
+  role: 'categoryAxis' | 'valueAxis',
+): SecondaryValueAxis | null | undefined {
+  if (!axis || !chart.chartStyleRoles?.[role]) return axis;
+  const line = chartStyleRoleAxisLine(
+    chart, role, axis.lineColor, axis.lineWidthEmu, axis.lineHidden,
+  );
+  const lineHidden = line.hidden === true;
+  if (line.color === axis.lineColor
+    && line.widthEmu === axis.lineWidthEmu
+    && lineHidden === axis.lineHidden) return axis;
+  return {
+    ...axis,
+    lineColor: line.color,
+    lineWidthEmu: line.widthEmu,
+    lineHidden,
+  };
+}
+
 /** Materialize the linked decoration roles that an optional family renderer
  * consumes directly from `ChartSeries`. Keeping this projection in core means
  * the 2-D, 3-D, DOCX, XLSX, and PPTX paths receive one effective precedence
@@ -4951,7 +4988,9 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     && !chart.chartStyleRoles?.trendline
     && !chart.chartStyleRoles?.dataTable
     && !chart.chartStyleRoles?.gridlineMajor
-    && !chart.chartStyleRoles?.gridlineMinor) {
+    && !chart.chartStyleRoles?.gridlineMinor
+    && !chart.chartStyleRoles?.categoryAxis
+    && !chart.chartStyleRoles?.valueAxis) {
     return chart;
   }
   let changed = false;
@@ -5022,8 +5061,22 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     chart.catAxisMinorGridlineWidthEmu,
     chart.catAxisMinorGridlineDash,
   );
-  const secondaryValAxis = chartStyleRoleSecondaryGridlines(chart, chart.secondaryValAxis);
-  const secondaryCatAxis = chartStyleRoleSecondaryGridlines(chart, chart.secondaryCatAxis);
+  const secondaryValGridlines = chartStyleRoleSecondaryGridlines(chart, chart.secondaryValAxis);
+  const secondaryCatGridlines = chartStyleRoleSecondaryGridlines(chart, chart.secondaryCatAxis);
+  const secondaryValAxis = chartStyleRoleSecondaryAxisLine(
+    chart, secondaryValGridlines, 'valueAxis',
+  );
+  const secondaryCatAxis = chartStyleRoleSecondaryAxisLine(
+    chart, secondaryCatGridlines, 'categoryAxis',
+  );
+  const catAxisLine = chartStyleRoleAxisLine(
+    chart, 'categoryAxis',
+    chart.catAxisLineColor, chart.catAxisLineWidthEmu, chart.catAxisLineHidden,
+  );
+  const valAxisLine = chartStyleRoleAxisLine(
+    chart, 'valueAxis',
+    chart.valAxisLineColor, chart.valAxisLineWidthEmu, chart.valAxisLineHidden,
+  );
   changed ||= valMajor.visible !== chart.valAxisMajorGridlines
     || valMajor.color !== chart.valAxisGridlineColor
     || valMajor.widthEmu !== chart.valAxisGridlineWidthEmu
@@ -5041,7 +5094,13 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     || catMinor.widthEmu !== chart.catAxisMinorGridlineWidthEmu
     || catMinor.dash !== chart.catAxisMinorGridlineDash
     || secondaryValAxis !== chart.secondaryValAxis
-    || secondaryCatAxis !== chart.secondaryCatAxis;
+    || secondaryCatAxis !== chart.secondaryCatAxis
+    || catAxisLine.color !== chart.catAxisLineColor
+    || catAxisLine.widthEmu !== chart.catAxisLineWidthEmu
+    || (catAxisLine.hidden === true) !== chart.catAxisLineHidden
+    || valAxisLine.color !== chart.valAxisLineColor
+    || valAxisLine.widthEmu !== chart.valAxisLineWidthEmu
+    || (valAxisLine.hidden === true) !== chart.valAxisLineHidden;
   return changed ? {
     ...chart,
     series,
@@ -5064,6 +5123,12 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     catAxisMinorGridlineDash: catMinor.dash,
     secondaryValAxis,
     secondaryCatAxis,
+    catAxisLineColor: catAxisLine.color,
+    catAxisLineWidthEmu: catAxisLine.widthEmu,
+    catAxisLineHidden: catAxisLine.hidden === true,
+    valAxisLineColor: valAxisLine.color,
+    valAxisLineWidthEmu: valAxisLine.widthEmu,
+    valAxisLineHidden: valAxisLine.hidden === true,
   } : chart;
 }
 
