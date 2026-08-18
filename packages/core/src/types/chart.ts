@@ -596,6 +596,9 @@ export interface ChartModel {
   /** Direct plot-area outline paint and width. */
   plotAreaLineColor?: string | null;
   plotAreaLineWidthEmu?: number | null;
+  plotAreaLineDash?: string | null;
+  plotAreaLineCap?: string | null;
+  plotAreaLineJoin?: string | null;
   /** Explicit plot-area outline `noFill`. */
   plotAreaLineHidden?: boolean | null;
   /** A direct plot-area line paint was authored, even when unresolved. */
@@ -797,6 +800,9 @@ export interface ChartModel {
   legendLineColor?: string | null;
   /** `<c:legend><c:spPr><a:ln@w>` frame stroke width in EMU. */
   legendLineWidthEmu?: number | null;
+  legendLineDash?: string | null;
+  legendLineCap?: string | null;
+  legendLineJoin?: string | null;
   /** Explicit `<c:legend><c:spPr><a:ln><a:noFill/>`; prevents linked fallback. */
   legendLineHidden?: boolean | null;
   /** A direct legend line paint was authored, even when its color could not be resolved. */
@@ -820,6 +826,9 @@ export interface ChartModel {
   /** `<c:chartSpace><c:spPr><a:ln@w>` border width in EMU. null = 1px hairline
    *  when a color is present. */
   chartBorderWidthEmu?: number | null;
+  chartBorderDash?: string | null;
+  chartBorderCap?: string | null;
+  chartBorderJoin?: string | null;
   /** Explicit chart-area border `noFill`. */
   chartBorderHidden?: boolean | null;
   /** A direct chart-area line paint was authored, even when unresolved. */

@@ -5128,6 +5128,9 @@ function chartStyleRoleLegend(chart: ChartModel): ChartModel {
 
   let legendLineColor = chart.legendLineColor;
   let legendLineWidthEmu = chart.legendLineWidthEmu;
+  let legendLineDash = chart.legendLineDash;
+  let legendLineCap = chart.legendLineCap;
+  let legendLineJoin = chart.legendLineJoin;
   let legendLineHidden = chart.legendLineHidden;
   const directLinePaint = chart.legendLinePaintAuthored === true
     || legendLineColor != null || legendLineHidden === true;
@@ -5137,12 +5140,18 @@ function chartStyleRoleLegend(chart: ChartModel): ChartModel {
       else legendLineColor = chartExStyleColor(chart, linked, 'line', 0, 1);
     }
     legendLineWidthEmu ??= linked.lineWidthEmu;
+    legendLineDash ??= linked.lineDash;
+    legendLineCap ??= linked.lineCap;
+    legendLineJoin ??= linked.lineJoin;
   }
   if (legendFill === chart.legendFill
     && legendFillColor === chart.legendFillColor
     && legendFillHidden === chart.legendFillHidden
     && legendLineColor === chart.legendLineColor
     && legendLineWidthEmu === chart.legendLineWidthEmu
+    && legendLineDash === chart.legendLineDash
+    && legendLineCap === chart.legendLineCap
+    && legendLineJoin === chart.legendLineJoin
     && legendLineHidden === chart.legendLineHidden) return chart;
   return {
     ...chart,
@@ -5151,6 +5160,9 @@ function chartStyleRoleLegend(chart: ChartModel): ChartModel {
     legendFillHidden,
     legendLineColor,
     legendLineWidthEmu,
+    legendLineDash,
+    legendLineCap,
+    legendLineJoin,
     legendLineHidden,
   };
 }
@@ -5176,6 +5188,9 @@ function chartStyleRolePlotArea(chart: ChartModel): ChartModel {
 
   let plotAreaLineColor = chart.plotAreaLineColor;
   let plotAreaLineWidthEmu = chart.plotAreaLineWidthEmu;
+  let plotAreaLineDash = chart.plotAreaLineDash;
+  let plotAreaLineCap = chart.plotAreaLineCap;
+  let plotAreaLineJoin = chart.plotAreaLineJoin;
   let plotAreaLineHidden = chart.plotAreaLineHidden;
   const directLinePaint = chart.plotAreaLinePaintAuthored === true
     || plotAreaLineColor != null || plotAreaLineHidden === true;
@@ -5185,12 +5200,18 @@ function chartStyleRolePlotArea(chart: ChartModel): ChartModel {
       else plotAreaLineColor = chartExStyleColor(chart, linked, 'line', 0, 1);
     }
     plotAreaLineWidthEmu ??= linked.lineWidthEmu;
+    plotAreaLineDash ??= linked.lineDash;
+    plotAreaLineCap ??= linked.lineCap;
+    plotAreaLineJoin ??= linked.lineJoin;
   }
   if (plotAreaFill === chart.plotAreaFill
     && plotAreaBg === chart.plotAreaBg
     && plotAreaFillHidden === chart.plotAreaFillHidden
     && plotAreaLineColor === chart.plotAreaLineColor
     && plotAreaLineWidthEmu === chart.plotAreaLineWidthEmu
+    && plotAreaLineDash === chart.plotAreaLineDash
+    && plotAreaLineCap === chart.plotAreaLineCap
+    && plotAreaLineJoin === chart.plotAreaLineJoin
     && plotAreaLineHidden === chart.plotAreaLineHidden) return chart;
   return {
     ...chart,
@@ -5199,6 +5220,9 @@ function chartStyleRolePlotArea(chart: ChartModel): ChartModel {
     plotAreaFillHidden,
     plotAreaLineColor,
     plotAreaLineWidthEmu,
+    plotAreaLineDash,
+    plotAreaLineCap,
+    plotAreaLineJoin,
     plotAreaLineHidden,
   };
 }
@@ -5227,6 +5251,9 @@ function chartStyleRoleChartArea(chart: ChartModel): ChartModel {
 
   let chartBorderColor = chart.chartBorderColor;
   let chartBorderWidthEmu = chart.chartBorderWidthEmu;
+  let chartBorderDash = chart.chartBorderDash;
+  let chartBorderCap = chart.chartBorderCap;
+  let chartBorderJoin = chart.chartBorderJoin;
   let chartBorderHidden = chart.chartBorderHidden;
   const directLinePaint = chart.chartBorderPaintAuthored === true
     || chartBorderColor != null || chartBorderHidden === true;
@@ -5236,12 +5263,18 @@ function chartStyleRoleChartArea(chart: ChartModel): ChartModel {
       else chartBorderColor = chartExStyleColor(chart, linked, 'line', 0, 1);
     }
     chartBorderWidthEmu ??= linked.lineWidthEmu;
+    chartBorderDash ??= linked.lineDash;
+    chartBorderCap ??= linked.lineCap;
+    chartBorderJoin ??= linked.lineJoin;
   }
   if (chartFill === chart.chartFill
     && chartBg === chart.chartBg
     && chartFillHidden === chart.chartFillHidden
     && chartBorderColor === chart.chartBorderColor
     && chartBorderWidthEmu === chart.chartBorderWidthEmu
+    && chartBorderDash === chart.chartBorderDash
+    && chartBorderCap === chart.chartBorderCap
+    && chartBorderJoin === chart.chartBorderJoin
     && chartBorderHidden === chart.chartBorderHidden) return chart;
   return {
     ...chart,
@@ -5250,6 +5283,9 @@ function chartStyleRoleChartArea(chart: ChartModel): ChartModel {
     chartFillHidden,
     chartBorderColor,
     chartBorderWidthEmu,
+    chartBorderDash,
+    chartBorderCap,
+    chartBorderJoin,
     chartBorderHidden,
   };
 }
@@ -5280,6 +5316,11 @@ function paintPlotAreaFill(
     ctx.save();
     ctx.strokeStyle = `#${chart.plotAreaLineColor}`;
     ctx.lineWidth = lineWidth;
+    ctx.setLineDash(dashPatternForPreset(chart.plotAreaLineDash ?? undefined, lineWidth));
+    ctx.lineCap = chart.plotAreaLineCap === 'rnd'
+      ? 'round' : chart.plotAreaLineCap === 'sq' ? 'square' : 'butt';
+    ctx.lineJoin = chart.plotAreaLineJoin === 'round' || chart.plotAreaLineJoin === 'bevel'
+      ? chart.plotAreaLineJoin : 'miter';
     ctx.strokeRect(
       x + lineWidth / 2,
       y + lineWidth / 2,
@@ -14148,6 +14189,11 @@ export function renderChart(
       ctx.lineWidth = chart.chartBorderWidthEmu
         ? Math.max(0.5, chart.chartBorderWidthEmu / EMU_PER_PT) * ptToPx
         : 1;
+      ctx.setLineDash(dashPatternForPreset(chart.chartBorderDash ?? undefined, ctx.lineWidth));
+      ctx.lineCap = chart.chartBorderCap === 'rnd'
+        ? 'round' : chart.chartBorderCap === 'sq' ? 'square' : 'butt';
+      ctx.lineJoin = chart.chartBorderJoin === 'round' || chart.chartBorderJoin === 'bevel'
+        ? chart.chartBorderJoin : 'miter';
       // Inset by half the line width so the full stroke stays inside the rect.
       const lw = ctx.lineWidth;
       if (rounded) {

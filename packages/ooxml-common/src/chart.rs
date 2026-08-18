@@ -277,6 +277,12 @@ pub struct ChartModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_area_line_width_emu: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_line_dash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_line_cap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_line_join: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_area_line_hidden: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_area_line_paint_authored: Option<bool>,
@@ -402,6 +408,12 @@ pub struct ChartModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart_border_width_emu: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_border_dash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_border_cap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_border_join: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart_border_hidden: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart_border_paint_authored: Option<bool>,
@@ -517,6 +529,12 @@ pub struct ChartModel {
     /// `<c:legend><c:spPr><a:ln@w>` frame stroke width in EMU.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend_line_width_emu: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_line_dash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_line_cap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_line_join: Option<String>,
     /// Explicit `<c:legend><c:spPr><a:ln><a:noFill/>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend_line_hidden: Option<bool>,
@@ -3271,6 +3289,9 @@ struct DirectShapeFill {
 struct DirectShapeLine {
     color: Option<String>,
     width_emu: Option<u32>,
+    dash: Option<String>,
+    cap: Option<String>,
+    join: Option<String>,
     hidden: Option<bool>,
     paint_authored: Option<bool>,
 }
@@ -3335,9 +3356,26 @@ fn extract_direct_shape_line(node: Node, resolver: &dyn ColorResolver) -> Direct
         })
         .map(|_| true);
     let (color, width_emu, no_fill) = extract_sp_pr_ln_style(node, resolver);
+    let dash = line
+        .and_then(|line| child(line, "prstDash"))
+        .and_then(|dash| dash.attribute("val"))
+        .map(ToOwned::to_owned);
+    let cap = line
+        .and_then(|line| line.attribute("cap"))
+        .map(ToOwned::to_owned);
+    let join = line.and_then(|line| {
+        line.children()
+            .find(|node| {
+                node.is_element() && matches!(node.tag_name().name(), "round" | "bevel" | "miter")
+            })
+            .map(|node| node.tag_name().name().to_owned())
+    });
     DirectShapeLine {
         color: if no_fill { None } else { color },
         width_emu,
+        dash,
+        cap,
+        join,
         hidden: no_fill.then_some(true),
         paint_authored,
     }
@@ -3351,6 +3389,9 @@ struct LegendFrameStyle {
     fill_paint_authored: Option<bool>,
     line_color: Option<String>,
     line_width_emu: Option<u32>,
+    line_dash: Option<String>,
+    line_cap: Option<String>,
+    line_join: Option<String>,
     line_hidden: Option<bool>,
     line_paint_authored: Option<bool>,
 }
@@ -3375,6 +3416,9 @@ fn extract_legend_frame_style(root: Node, resolver: &dyn ColorResolver) -> Legen
         fill_paint_authored: direct_fill.paint_authored,
         line_color: direct_line.color,
         line_width_emu: direct_line.width_emu,
+        line_dash: direct_line.dash,
+        line_cap: direct_line.cap,
+        line_join: direct_line.join,
         line_hidden: direct_line.hidden,
         line_paint_authored: direct_line.paint_authored,
     }
@@ -5901,6 +5945,9 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         plot_area_fill_paint_authored: None,
         plot_area_line_color: None,
         plot_area_line_width_emu: None,
+        plot_area_line_dash: None,
+        plot_area_line_cap: None,
+        plot_area_line_join: None,
         plot_area_line_hidden: None,
         plot_area_line_paint_authored: None,
         chart_bg,
@@ -5971,6 +6018,9 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         val_axis_font_italic,
         chart_border_color: chart_line_style.color,
         chart_border_width_emu: chart_line_style.width_emu,
+        chart_border_dash: chart_line_style.dash,
+        chart_border_cap: chart_line_style.cap,
+        chart_border_join: chart_line_style.join,
         chart_border_hidden: chart_line_style.hidden,
         chart_border_paint_authored: chart_line_style.paint_authored,
         secondary_val_axis: None,
@@ -5995,6 +6045,9 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         legend_fill_paint_authored: legend_frame.fill_paint_authored,
         legend_line_color: legend_frame.line_color,
         legend_line_width_emu: legend_frame.line_width_emu,
+        legend_line_dash: legend_frame.line_dash,
+        legend_line_cap: legend_frame.line_cap,
+        legend_line_join: legend_frame.line_join,
         legend_line_hidden: legend_frame.line_hidden,
         legend_line_paint_authored: legend_frame.line_paint_authored,
         theme_major_font_latin: resolver.theme_major_font_latin(),
@@ -9888,6 +9941,9 @@ pub fn parse_chart_part_with_references_and_style_parts(
         plot_area_fill_paint_authored: plot_area_fill_style.paint_authored,
         plot_area_line_color: plot_area_line_style.color,
         plot_area_line_width_emu: plot_area_line_style.width_emu,
+        plot_area_line_dash: plot_area_line_style.dash,
+        plot_area_line_cap: plot_area_line_style.cap,
+        plot_area_line_join: plot_area_line_style.join,
         plot_area_line_hidden: plot_area_line_style.hidden,
         plot_area_line_paint_authored: plot_area_line_style.paint_authored,
         chart_bg,
@@ -9958,6 +10014,9 @@ pub fn parse_chart_part_with_references_and_style_parts(
         val_axis_font_italic,
         chart_border_color: chart_line_style.color,
         chart_border_width_emu: chart_line_style.width_emu,
+        chart_border_dash: chart_line_style.dash,
+        chart_border_cap: chart_line_style.cap,
+        chart_border_join: chart_line_style.join,
         chart_border_hidden: chart_line_style.hidden,
         chart_border_paint_authored: chart_line_style.paint_authored,
         secondary_val_axis,
@@ -9980,6 +10039,9 @@ pub fn parse_chart_part_with_references_and_style_parts(
         legend_fill_paint_authored: legend_frame.fill_paint_authored,
         legend_line_color: legend_frame.line_color,
         legend_line_width_emu: legend_frame.line_width_emu,
+        legend_line_dash: legend_frame.line_dash,
+        legend_line_cap: legend_frame.line_cap,
+        legend_line_join: legend_frame.line_join,
         legend_line_hidden: legend_frame.line_hidden,
         legend_line_paint_authored: legend_frame.line_paint_authored,
         theme_major_font_latin,
@@ -10225,6 +10287,9 @@ mod tests {
             plot_area_fill_paint_authored: None,
             plot_area_line_color: None,
             plot_area_line_width_emu: None,
+            plot_area_line_dash: None,
+            plot_area_line_cap: None,
+            plot_area_line_join: None,
             plot_area_line_hidden: None,
             plot_area_line_paint_authored: None,
             chart_bg: Some("FFFFFF".to_string()),
@@ -10283,6 +10348,9 @@ mod tests {
             val_axis_title_manual_layout: None,
             chart_border_color: None,
             chart_border_width_emu: None,
+            chart_border_dash: None,
+            chart_border_cap: None,
+            chart_border_join: None,
             chart_border_hidden: None,
             chart_border_paint_authored: None,
             cat_axis_crosses: None,
@@ -10324,6 +10392,9 @@ mod tests {
             legend_fill_paint_authored: None,
             legend_line_color: None,
             legend_line_width_emu: None,
+            legend_line_dash: None,
+            legend_line_cap: None,
+            legend_line_join: None,
             legend_line_hidden: None,
             legend_line_paint_authored: None,
             theme_major_font_latin: None,
@@ -11441,7 +11512,7 @@ Subtitle</a:t></a:r></a:p>
     #[test]
     fn parse_chart_part_preserves_direct_plot_area_fill_provenance() {
         let gradient = root_of(
-            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart><c:spPr><a:gradFill rotWithShape="0"><a:gsLst><a:gs pos="0"><a:srgbClr val="112233"/></a:gs><a:gs pos="100000"><a:srgbClr val="AABBCC"/></a:gs></a:gsLst><a:lin ang="2700000"/></a:gradFill><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:ln></c:spPr></c:plotArea></c:chart></c:chartSpace>"#,
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart><c:spPr><a:gradFill rotWithShape="0"><a:gsLst><a:gs pos="0"><a:srgbClr val="112233"/></a:gs><a:gs pos="100000"><a:srgbClr val="AABBCC"/></a:gs></a:gsLst><a:lin ang="2700000"/></a:gradFill><a:ln w="12700" cap="rnd"><a:solidFill><a:srgbClr val="445566"/></a:solidFill><a:prstDash val="dashDot"/><a:bevel/></a:ln></c:spPr></c:plotArea></c:chart></c:chartSpace>"#,
         );
         let model = parse_chart_part(gradient.root_element(), &FixtureResolver)
             .expect("classic chart parses");
@@ -11457,6 +11528,9 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(model.plot_area_fill_paint_authored, Some(true));
         assert_eq!(model.plot_area_line_color.as_deref(), Some("445566"));
         assert_eq!(model.plot_area_line_width_emu, Some(12700));
+        assert_eq!(model.plot_area_line_dash.as_deref(), Some("dashDot"));
+        assert_eq!(model.plot_area_line_cap.as_deref(), Some("rnd"));
+        assert_eq!(model.plot_area_line_join.as_deref(), Some("bevel"));
         assert_eq!(model.plot_area_line_hidden, None);
         assert_eq!(model.plot_area_line_paint_authored, Some(true));
 
@@ -11722,7 +11796,7 @@ Subtitle</a:t></a:r></a:p>
               </c:ser></c:barChart></c:plotArea>
               <c:legend><c:legendPos val="r"/><c:spPr>
                 <a:solidFill><a:schemeClr val="accent1"><a:lumMod val="20000"/><a:lumOff val="80000"/></a:schemeClr></a:solidFill>
-                <a:ln w="3175"><a:solidFill><a:srgbClr val="808080"/></a:solidFill></a:ln>
+                <a:ln w="3175" cap="sq"><a:solidFill><a:srgbClr val="808080"/></a:solidFill><a:prstDash val="sysDash"/><a:round/></a:ln>
               </c:spPr></c:legend>
             </c:chart></c:chartSpace>"#,
         );
@@ -11740,6 +11814,9 @@ Subtitle</a:t></a:r></a:p>
         assert!(serialized.get("legendFillHidden").is_none());
         assert_eq!(serialized["legendLineColor"], "808080");
         assert_eq!(serialized["legendLineWidthEmu"], 3175);
+        assert_eq!(serialized["legendLineDash"], "sysDash");
+        assert_eq!(serialized["legendLineCap"], "sq");
+        assert_eq!(serialized["legendLineJoin"], "round");
         assert_eq!(serialized["legendLinePaintAuthored"], true);
         assert!(serialized.get("legendLineHidden").is_none());
     }
@@ -12367,7 +12444,7 @@ Subtitle</a:t></a:r></a:p>
                 </c:plotArea>
                 <c:legend><c:legendPos val="b"/></c:legend>
               </c:chart>
-              <c:spPr><a:ln w="19050"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill></a:ln></c:spPr>
+              <c:spPr><a:ln w="19050" cap="rnd"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:prstDash val="lgDashDotDot"/><a:miter/></a:ln></c:spPr>
             </c:chartSpace>"#
         );
         let doc = chart_space_of(&xml);
@@ -12416,6 +12493,9 @@ Subtitle</a:t></a:r></a:p>
         // the same color resolver as other DrawingML lines.
         assert_eq!(m.chart_border_color.as_deref(), Some("000000"));
         assert_eq!(m.chart_border_width_emu, Some(19050));
+        assert_eq!(m.chart_border_dash.as_deref(), Some("lgDashDotDot"));
+        assert_eq!(m.chart_border_cap.as_deref(), Some("rnd"));
+        assert_eq!(m.chart_border_join.as_deref(), Some("miter"));
         assert!(!m.cat_axis_hidden);
         assert!(!m.val_axis_hidden);
         assert_eq!(m.cat_axis_title_rotation, None);

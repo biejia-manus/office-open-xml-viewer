@@ -393,6 +393,9 @@ describe('chart-space background', () => {
           }],
           lineColors: ['445566'],
           lineWidthEmu: 9525,
+          lineDash: 'dashDot',
+          lineCap: 'sq',
+          lineJoin: 'bevel',
         },
       },
     });
@@ -403,8 +406,10 @@ describe('chart-space background', () => {
       x: 0, y: 0, w: 640, h: 360, fs: '[object Object]',
     });
     expect(linked.strokeRects).toContainEqual(expect.objectContaining({
-      ss: '#445566', lw: 0.75,
+      ss: '#445566', lw: 0.75, cap: 'square', join: 'bevel',
     }));
+    expect(linked.strokeRects.find(rect => rect.ss === '#445566')?.dash.length)
+      .toBeGreaterThan(0);
 
     const directNoFill = recordingCtx();
     renderChart(directNoFill.ctx, {
@@ -2634,6 +2639,9 @@ describe('bar chart authored layout and fills', () => {
       legendFillColor: 'FFFFFF',
       legendLineColor: '808080',
       legendLineWidthEmu: 3175,
+      legendLineDash: 'dot',
+      legendLineCap: 'rnd',
+      legendLineJoin: 'round',
     });
 
     renderChart(rec.ctx, chart, RECT, 1);
@@ -2641,7 +2649,7 @@ describe('bar chart authored layout and fills', () => {
     expect(rec.rects).toContainEqual({ x: 64, y: 72, w: 320, h: 108, fs: '#FFFFFF' });
     expect(rec.strokeRects).toContainEqual({
       x: 64.25, y: 72.25, w: 319.5, h: 107.5,
-      ss: '#808080', lw: 0.5, dash: [], cap: 'butt', join: 'miter',
+      ss: '#808080', lw: 0.5, dash: [0.75, 1.5], cap: 'round', join: 'round',
     });
   });
 
@@ -2668,6 +2676,9 @@ describe('bar chart authored layout and fills', () => {
           }],
           lineColors: ['808080'],
           lineWidthEmu: 3175,
+          lineDash: 'dashDot',
+          lineCap: 'sq',
+          lineJoin: 'bevel',
         },
       },
     });
@@ -2676,8 +2687,19 @@ describe('bar chart authored layout and fills', () => {
     expect(linked.rects).toContainEqual({ x: 64, y: 72, w: 320, h: 108, fs: '[object Object]' });
     expect(linked.strokeRects).toContainEqual({
       x: 64.25, y: 72.25, w: 319.5, h: 107.5,
-      ss: '#808080', lw: 0.5, dash: [], cap: 'butt', join: 'miter',
+      ss: '#808080', lw: 0.5, dash: [3, 1.5, 0.75, 1.5], cap: 'square', join: 'bevel',
     });
+
+    const directLineGeometry = recordingCtx();
+    renderChart(directLineGeometry.ctx, {
+      ...chart,
+      legendLineDash: 'solid',
+      legendLineCap: 'rnd',
+      legendLineJoin: 'round',
+    }, RECT, 1);
+    expect(directLineGeometry.strokeRects).toContainEqual(expect.objectContaining({
+      ss: '#808080', dash: [], cap: 'round', join: 'round',
+    }));
 
     const directNoFill = recordingCtx();
     renderChart(directNoFill.ctx, {
@@ -2712,6 +2734,9 @@ describe('bar chart authored layout and fills', () => {
           }],
           lineColors: ['445566'],
           lineWidthEmu: 9525,
+          lineDash: 'dashDot',
+          lineCap: 'sq',
+          lineJoin: 'bevel',
         },
       },
     });
@@ -2725,8 +2750,10 @@ describe('bar chart authored layout and fills', () => {
     ]);
     expect(linked.rects).toContainEqual(expect.objectContaining({ fs: '[object Object]' }));
     expect(linked.strokeRects).toContainEqual(expect.objectContaining({
-      ss: '#445566', lw: 0.75,
+      ss: '#445566', lw: 0.75, cap: 'square', join: 'bevel',
     }));
+    expect(linked.strokeRects.find(rect => rect.ss === '#445566')?.dash.length)
+      .toBeGreaterThan(0);
 
     const directNoFill = recordingCtx();
     renderChart(directNoFill.ctx, {

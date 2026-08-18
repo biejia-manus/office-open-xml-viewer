@@ -402,6 +402,9 @@ export interface ChartModel {
     plotAreaFillPaintAuthored?: boolean | null;
     plotAreaLineColor?: string | null;
     plotAreaLineWidthEmu?: number | null;
+    plotAreaLineDash?: string | null;
+    plotAreaLineCap?: string | null;
+    plotAreaLineJoin?: string | null;
     plotAreaLineHidden?: boolean | null;
     plotAreaLinePaintAuthored?: boolean | null;
     chartBg: string | null;
@@ -473,12 +476,18 @@ export interface ChartModel {
     legendFillPaintAuthored?: boolean | null;
     legendLineColor?: string | null;
     legendLineWidthEmu?: number | null;
+    legendLineDash?: string | null;
+    legendLineCap?: string | null;
+    legendLineJoin?: string | null;
     legendLineHidden?: boolean | null;
     legendLinePaintAuthored?: boolean | null;
     themeMajorFontLatin?: string | null;
     themeMinorFontLatin?: string | null;
     chartBorderColor?: string | null;
     chartBorderWidthEmu?: number | null;
+    chartBorderDash?: string | null;
+    chartBorderCap?: string | null;
+    chartBorderJoin?: string | null;
     chartBorderHidden?: boolean | null;
     chartBorderPaintAuthored?: boolean | null;
     catAxisCrosses?: string | null;
