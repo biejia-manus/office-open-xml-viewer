@@ -3500,6 +3500,13 @@ function renderBarChart(
   const categoryLabelAxisY = !isH && (chart.catAxisTickLabelPos ?? 'nextTo') === 'nextTo'
     ? primaryCatAxisY
     : py0 + ph;
+  const catMajorTickSkip = Math.max(1, Math.floor(chart.catAxisTickMarkSkip ?? 1));
+  const multiLevelBoundariesOwnMajorTicks = !isH
+    && categoryLevels != null
+    && dateAxisPlan == null
+    && !chart.catAxisLineHidden
+    && isCrossBetween(chart)
+    && Math.abs(categoryLabelAxisY - primaryCatAxisY) < 0.01;
   // Axis rules + tick marks are drawn AFTER the bars/line (see `drawAxesOnTop`
   // below) so the bars don't paint over the category baseline — PowerPoint
   // keeps the axis line crisp on top of the columns.
@@ -3543,11 +3550,16 @@ function renderBarChart(
     // matters when both levels use `cross`: Office's 6pt major boundary marks
     // remain visibly longer than its 4pt centred minor marks.
     if (!chart.catAxisHidden && chart.catAxisMajorTickMark && chart.catAxisMajorTickMark !== 'none') {
-      const ordinalFractions = catGridlineFractions(chart, n);
-      const tickSkip = Math.max(1, Math.floor(chart.catAxisTickMarkSkip ?? 1));
+      // Multi-level category brackets already occupy every interval boundary.
+      // They absorb the coincident major tick into one continuous stroke below,
+      // avoiding darker/thicker Canvas seams from painting the same segment
+      // twice. Mid-category ticks remain independent of those boundaries.
+      const ordinalFractions = multiLevelBoundariesOwnMajorTicks
+        ? []
+        : catGridlineFractions(chart, n);
       const tickFractions = dateAxisPlan
         ? dateAxisPlan.majorTicks.map(tick => tick.fraction)
-        : ordinalFractions.filter((_, index) => index % tickSkip === 0);
+        : ordinalFractions.filter((_, index) => index % catMajorTickSkip === 0);
       for (const frac of tickFractions) {
         if (!isH) {
           drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', primaryCatAxisY, px0 + frac * pw, catLineColor, catLineW, false, chart.catAxisLineHidden, 'major', ptToPx);
@@ -4108,6 +4120,20 @@ function renderBarChart(
       ctx.strokeStyle = catLineColor;
       ctx.lineWidth = catLineW;
       ctx.setLineDash([]);
+      const boundaryStartY = (boundaryIndex: number): number => {
+        if (!multiLevelBoundariesOwnMajorTicks
+          || boundaryIndex % catMajorTickSkip !== 0) {
+          return categoryLabelAxisY;
+        }
+        const tickLength = axisTickLengthPx('major', catLineW, ptToPx);
+        if (chart.catAxisMajorTickMark === 'cross') {
+          return categoryLabelAxisY - tickLength / 2;
+        }
+        if (chart.catAxisMajorTickMark === 'in') {
+          return categoryLabelAxisY - tickLength;
+        }
+        return categoryLabelAxisY;
+      };
 
       // Each boundary in the innermost category level separates adjacent
       // labels. Boundaries shared by an outer level are extended below by the
@@ -4126,7 +4152,7 @@ function renderBarChart(
         if (outerBoundaryIndices.has(boundaryIndex)) continue;
         const boundary = px0 + boundaryIndex / n * pw;
         ctx.beginPath();
-        ctx.moveTo(boundary, categoryLabelAxisY);
+        ctx.moveTo(boundary, boundaryStartY(boundaryIndex));
         ctx.lineTo(boundary, firstBandBottom);
         ctx.stroke();
       }
@@ -4166,7 +4192,7 @@ function renderBarChart(
       for (const [boundaryIndex, bracketBottom] of outerBoundaryBottoms) {
         const boundary = px0 + boundaryIndex / n * pw;
         ctx.beginPath();
-        ctx.moveTo(boundary, categoryLabelAxisY);
+        ctx.moveTo(boundary, boundaryStartY(boundaryIndex));
         ctx.lineTo(boundary, bracketBottom);
         ctx.stroke();
       }
