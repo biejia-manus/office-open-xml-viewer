@@ -1368,6 +1368,10 @@ pub struct ChartSeriesDataLabels {
     /// `<c:dLbls><c:leaderLines><c:spPr><a:ln w>` leader-line width in EMU.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leader_line_width_emu: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_line_hidden: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_line_dash: Option<String>,
 }
 
 /// Mirror of TS `ChartErrBars`.
@@ -1385,6 +1389,8 @@ pub struct ChartErrBars {
     pub line_width_emu: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
 }
 
 /// Mirror of TS `SecondaryValueAxis`.
@@ -4833,6 +4839,8 @@ fn parse_chartex_series_labels(
         show_leader_lines: false,
         leader_line_color: None,
         leader_line_width_emu: None,
+        leader_line_hidden: None,
+        leader_line_dash: None,
     };
     let mut colors = vec![None; value_count.max(1)];
     let mut has_color = false;
@@ -5599,6 +5607,8 @@ pub fn parse_chartex_part_with_references_and_style_parts(
             show_leader_lines: false,
             leader_line_color: None,
             leader_line_width_emu: None,
+            leader_line_hidden: None,
+            leader_line_dash: None,
         });
     }
     let (cat_axis_line_color, cat_axis_line_width_emu, cat_axis_line_hidden) = cat_axis
@@ -6817,27 +6827,43 @@ fn parse_axis_display_units(axis: Node, resolver: &dyn ColorResolver) -> Option<
     })
 }
 
-/// Parse `<c:dLbls><c:leaderLines>` into `(show_leader_lines, color, width_emu)`.
+/// Parse `<c:dLbls><c:leaderLines>` into the authored visibility and line
+/// properties. Missing fields remain absent so a linked Chart Style can supply
+/// them without overriding local formatting.
 /// `show` comes from the sibling `<c:showLeaderLines val>` (§21.2.2.183); the
 /// stroke style comes from `<c:leaderLines>` (§21.2.2.92) `<c:spPr><a:ln>`.
 fn parse_leader_lines(
     d_lbls: Node,
     resolver: &dyn ColorResolver,
-) -> (bool, Option<String>, Option<u32>) {
+) -> (
+    bool,
+    Option<String>,
+    Option<u32>,
+    Option<bool>,
+    Option<String>,
+) {
     // §21.2.2.183 `<c:showLeaderLines>` — CT_Boolean, so a bare element ⇒ true;
     // absent ⇒ false (no leader lines by default).
     let show = bool_child(d_lbls, "showLeaderLines").unwrap_or(false);
-    let (color, width) = match child(d_lbls, "leaderLines")
+    let (color, width, hidden, dash) = match child(d_lbls, "leaderLines")
         .and_then(|ll| child(ll, "spPr"))
         .and_then(|sp| child(sp, "ln"))
     {
-        None => (None, None),
-        Some(ln) => (
-            resolver.resolve_shape_fill(ln),
-            ln.attribute("w").and_then(|v| v.parse::<u32>().ok()),
-        ),
+        None => (None, None, None, None),
+        Some(ln) => {
+            let hidden = child(ln, "noFill").is_some().then_some(true);
+            let dash = child(ln, "prstDash")
+                .and_then(|node| node.attribute("val"))
+                .map(ToOwned::to_owned);
+            (
+                resolver.resolve_shape_fill(ln),
+                ln.attribute("w").and_then(|v| v.parse::<u32>().ok()),
+                hidden,
+                dash,
+            )
+        }
     };
-    (show, color, width)
+    (show, color, width, hidden, dash)
 }
 
 /// Parse a series-level `<c:dLbls>` into `(series_defaults, per_idx_overrides)`.
@@ -6901,8 +6927,13 @@ pub fn parse_series_data_labels(
             .find(|n| n.is_element() && n.tag_name().name() == "spPr"),
         resolver,
     );
-    let (show_leader_lines, leader_line_color, leader_line_width_emu) =
-        parse_leader_lines(d_lbls, resolver);
+    let (
+        show_leader_lines,
+        leader_line_color,
+        leader_line_width_emu,
+        leader_line_hidden,
+        leader_line_dash,
+    ) = parse_leader_lines(d_lbls, resolver);
 
     let series_defaults = ChartSeriesDataLabels {
         show_val: bool_attr(d_lbls, "showVal"),
@@ -6922,6 +6953,8 @@ pub fn parse_series_data_labels(
         show_leader_lines,
         leader_line_color,
         leader_line_width_emu,
+        leader_line_hidden,
+        leader_line_dash,
     };
 
     let mut overrides = Vec::new();
@@ -7050,7 +7083,9 @@ pub fn parse_series_data_labels(
         || series_defaults.label_box.is_some()
         || series_defaults.show_leader_lines
         || series_defaults.leader_line_color.is_some()
-        || series_defaults.leader_line_width_emu.is_some();
+        || series_defaults.leader_line_width_emu.is_some()
+        || series_defaults.leader_line_hidden.is_some()
+        || series_defaults.leader_line_dash.is_some();
     let series_out = if any_default {
         Some(series_defaults)
     } else {
@@ -7202,6 +7237,10 @@ pub fn parse_error_bars(
             .and_then(|ln| child(ln, "prstDash"))
             .and_then(|n| n.attribute("val"))
             .map(|s| s.to_string());
+        let hidden = sp_pr
+            .and_then(|p| child(p, "ln"))
+            .and_then(|ln| child(ln, "noFill"))
+            .map(|_| true);
 
         result.push(ChartErrBars {
             dir,
@@ -7212,6 +7251,7 @@ pub fn parse_error_bars(
             color,
             line_width_emu,
             dash,
+            hidden,
         });
     }
     result
@@ -13613,6 +13653,35 @@ Subtitle</a:t></a:r></a:p>
         let bars = parse_error_bars(d.root_element(), &[Some(1.0)], &FixtureResolver);
         assert_eq!(bars.len(), 1);
         assert!(bars[0].no_end_cap, "bare <c:noEndCap/> ⇒ true");
+    }
+
+    #[test]
+    fn error_bar_and_leader_line_preserve_no_fill_and_dash() {
+        let error_xml = format!(
+            r#"<c:ser xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:errBars>
+              <c:errBarType val="both"/><c:errValType val="fixedVal"/><c:val val="1"/>
+              <c:spPr><a:ln><a:noFill/><a:prstDash val="dashDot"/></a:ln></c:spPr>
+            </c:errBars></c:ser>"#,
+        );
+        let error_doc = root_of(&error_xml);
+        let bars = parse_error_bars(error_doc.root_element(), &[Some(1.0)], &FixtureResolver);
+        assert_eq!(bars[0].hidden, Some(true));
+        assert_eq!(bars[0].dash.as_deref(), Some("dashDot"));
+
+        let cache = std::collections::HashMap::new();
+        let label_xml = format!(
+            r#"<c:ser xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:dLbls>
+              <c:showLeaderLines val="1"/><c:leaderLines><c:spPr>
+                <a:ln><a:noFill/><a:prstDash val="sysDot"/></a:ln>
+              </c:spPr></c:leaderLines>
+            </c:dLbls></c:ser>"#,
+        );
+        let label_doc = root_of(&label_xml);
+        let (defaults, _) =
+            parse_series_data_labels(label_doc.root_element(), &FixtureResolver, &cache);
+        let defaults = defaults.expect("leader-line defaults");
+        assert_eq!(defaults.leader_line_hidden, Some(true));
+        assert_eq!(defaults.leader_line_dash.as_deref(), Some("sysDot"));
     }
 
     #[test]

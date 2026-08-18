@@ -4327,7 +4327,7 @@ function renderBarChart(
       plottedBarValue(seriesIndex, categoryIndex);
     for (const errorBars of effectiveBarErrorBars(series)) {
       drawBarErrorBars(
-        ctx, series, errorBars, n, isH,
+        ctx, series, chartStyleRoleErrorBar(chart, errorBars), n, isH,
         categoryIndex => barCategoryCenter(series, categoryIndex),
         isH ? horizontalValueAt : valueAt,
         plotted, color, ptToPx,
@@ -4808,6 +4808,77 @@ function chartStyleRoleBarPaint(
     lineHidden: direct.lineHidden
       ?? (lineApplies && linked.lineHidden === true ? true : null),
   };
+}
+
+function chartStyleRoleErrorBar(
+  chart: ChartModel,
+  direct: NonNullable<ChartSeries['errBars']>[number],
+): NonNullable<ChartSeries['errBars']>[number] {
+  const linked = chartStyleRoleLine(chart, {
+    color: direct.color,
+    widthEmu: direct.lineWidthEmu,
+    dash: direct.dash,
+    hidden: direct.hidden,
+  }, 'errorBar');
+  return {
+    ...direct,
+    color: linked.color ?? undefined,
+    lineWidthEmu: linked.widthEmu ?? undefined,
+    dash: linked.dash ?? undefined,
+    hidden: linked.hidden ?? undefined,
+  };
+}
+
+function chartStyleRoleLeaderLine(
+  chart: ChartModel,
+  direct: ChartSeriesDataLabels,
+): ChartDecorationLineStyle {
+  return chartStyleRoleLine(chart, {
+    color: direct.leaderLineColor,
+    widthEmu: direct.leaderLineWidthEmu,
+    dash: direct.leaderLineDash,
+    hidden: direct.leaderLineHidden,
+  }, 'leaderLine');
+}
+
+/** Materialize the linked decoration roles that an optional family renderer
+ * consumes directly from `ChartSeries`. Keeping this projection in core means
+ * the 2-D, 3-D, DOCX, XLSX, and PPTX paths receive one effective precedence
+ * result without teaching an optional renderer about package sidecars. */
+function applyLinkedSeriesDecorationStyles(chart: ChartModel): ChartModel {
+  if (!chart.chartStyleRoles?.errorBar && !chart.chartStyleRoles?.leaderLine) {
+    return chart;
+  }
+  let changed = false;
+  const series = chart.series.map(item => {
+    const errBars = item.errBars?.map(errorBar => {
+      const effective = chartStyleRoleErrorBar(chart, errorBar);
+      changed ||= effective.color !== errorBar.color
+        || effective.lineWidthEmu !== errorBar.lineWidthEmu
+        || effective.dash !== errorBar.dash
+        || effective.hidden !== errorBar.hidden;
+      return effective;
+    });
+    let seriesDataLabels = item.seriesDataLabels;
+    if (seriesDataLabels && chart.chartStyleRoles?.leaderLine) {
+      const effective = chartStyleRoleLeaderLine(chart, seriesDataLabels);
+      const merged = {
+        ...seriesDataLabels,
+        leaderLineColor: effective.color ?? undefined,
+        leaderLineWidthEmu: effective.widthEmu ?? undefined,
+        leaderLineDash: effective.dash ?? undefined,
+        leaderLineHidden: effective.hidden ?? undefined,
+      };
+      changed ||= merged.leaderLineColor !== seriesDataLabels.leaderLineColor
+        || merged.leaderLineWidthEmu !== seriesDataLabels.leaderLineWidthEmu
+        || merged.leaderLineDash !== seriesDataLabels.leaderLineDash
+        || merged.leaderLineHidden !== seriesDataLabels.leaderLineHidden;
+      seriesDataLabels = merged;
+    }
+    if (errBars === item.errBars && seriesDataLabels === item.seriesDataLabels) return item;
+    return { ...item, errBars, seriesDataLabels };
+  });
+  return changed ? { ...chart, series } : chart;
 }
 
 function drawUpDownBars(
@@ -5441,7 +5512,9 @@ function renderLineChart(
     // dots overlay the bar tips. Only fires for series that carry them.
     const plottedOf = (ci: number): number => plotted(si, ci);
     for (const eb of s.errBars ?? []) {
-      drawCategoryErrorBars(ctx, s, eb, n, toX, yOf, plottedOf, color);
+      drawCategoryErrorBars(
+        ctx, s, chartStyleRoleErrorBar(chart, eb), n, toX, yOf, plottedOf, color,
+      );
     }
 
     ctx.fillStyle = color;
@@ -5933,7 +6006,7 @@ function renderStockChart(
       drawCategoryErrorBars(
         ctx,
         stockSeries,
-        errorBars,
+        chartStyleRoleErrorBar(chart, errorBars),
         n,
         toX,
         toY,
@@ -7080,7 +7153,9 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
       const plottedOf = (ci: number): number => plottedAreaValue(areaIndex, ci);
       // Error bars first (markers overlay their tips).
       for (const eb of s.errBars ?? []) {
-        drawCategoryErrorBars(ctx, s, eb, n, toX, yOf, plottedOf, color);
+        drawCategoryErrorBars(
+          ctx, s, chartStyleRoleErrorBar(chart, eb), n, toX, yOf, plottedOf, color,
+        );
       }
       // Markers only when the series opts in (`<c:marker>` symbol/size/… — area
       // charts default to NO markers, so nothing fires without explicit detail).
@@ -7169,7 +7244,9 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
 
     const plottedOf = (ci: number): number => s.values[ci] ?? 0;
     for (const eb of s.errBars ?? []) {
-      drawCategoryErrorBars(ctx, s, eb, n, toX, yOf, plottedOf, stroke);
+      drawCategoryErrorBars(
+        ctx, s, chartStyleRoleErrorBar(chart, eb), n, toX, yOf, plottedOf, stroke,
+      );
     }
     if (s.showMarker === true || seriesHasMarkerDetail(s)) {
       for (let ci = 0; ci < n; ci++) {
@@ -7952,7 +8029,7 @@ function drawPieRichLabels(
   }
 
   drawPieOutsideLabels(
-    ctx, def, outsideLabels, cx2, cy2, outerR, ptToPx,
+    ctx, chart, def, outsideLabels, cx2, cy2, outerR, ptToPx,
     chartX, chartY, chartW, chartH,
   );
 }
@@ -8053,6 +8130,7 @@ function createPieOutsideLabel(
  * be pushed back across the pie rim. */
 function drawPieOutsideLabels(
   ctx: CanvasRenderingContext2D,
+  chart: ChartModel,
   def: ChartSeriesDataLabels,
   labels: PieOutsideLabel[],
   pieCx: number,
@@ -8113,14 +8191,16 @@ function drawPieOutsideLabels(
   ctx.beginPath();
   ctx.rect(boundsX, boundsY, boundsW, boundsH);
   ctx.clip();
-  const leaderColor = def.leaderLineColor ? `#${def.leaderLineColor}` : '#a6a6a6';
-  const leaderPx = def.leaderLineWidthEmu
-    ? Math.max(0.5, (def.leaderLineWidthEmu / EMU_PER_PT) * ptToPx)
+  const leader = chartStyleRoleLeaderLine(chart, def);
+  const leaderColor = leader.color ? `#${leader.color}` : '#a6a6a6';
+  const leaderPx = leader.widthEmu
+    ? Math.max(0.5, (leader.widthEmu / EMU_PER_PT) * ptToPx)
     : 1;
+  ctx.setLineDash(dashPatternForPreset(leader.dash ?? undefined, leaderPx));
   for (const label of labels) {
     const moved = Math.abs(label.cxBox - label.initialCx) > 0.5
       || Math.abs(label.cyBox - label.initialCy) > 0.5;
-    if (!def.showLeaderLines || !moved) continue;
+    if (!def.showLeaderLines || leader.hidden === true || !moved) continue;
     const edgeX = clamp(label.rimX, label.cxBox - label.boxW / 2, label.cxBox + label.boxW / 2);
     const edgeY = clamp(label.rimY, label.cyBox - label.boxH / 2, label.cyBox + label.boxH / 2);
     ctx.beginPath();
@@ -8561,10 +8641,12 @@ function drawPieCalloutLabels(
   ctx.beginPath();
   ctx.rect(boundsX, boundsY, boundsW, boundsH);
   ctx.clip();
-  const leaderColor = def.leaderLineColor ? `#${def.leaderLineColor}` : '#a6a6a6';
-  const leaderPx = def.leaderLineWidthEmu
-    ? Math.max(0.5, (def.leaderLineWidthEmu / EMU_PER_PT) * ptToPx)
+  const leader = chartStyleRoleLeaderLine(chart, def);
+  const leaderColor = leader.color ? `#${leader.color}` : '#a6a6a6';
+  const leaderPx = leader.widthEmu
+    ? Math.max(0.5, (leader.widthEmu / EMU_PER_PT) * ptToPx)
     : 1;
+  ctx.setLineDash(dashPatternForPreset(leader.dash ?? undefined, leaderPx));
 
   for (const l of labels) {
     // The box edge nearest the pie centre — where a leader line should meet.
@@ -8575,7 +8657,7 @@ function drawPieCalloutLabels(
     const dx = edgeX - l.rimX;
     const dy = edgeY - l.rimY;
     const dist = Math.hypot(dx, dy);
-    if (!l.inside && def.showLeaderLines && dist > l.fontPx * 0.9) {
+    if (!l.inside && def.showLeaderLines && leader.hidden !== true && dist > l.fontPx * 0.9) {
       ctx.beginPath();
       ctx.moveTo(l.rimX, l.rimY);
       ctx.lineTo(edgeX, edgeY);
@@ -9108,7 +9190,10 @@ function drawScatterSeriesLayer(
   // placed those guides on top of earlier series' dots and labels.
   for (const { series: s, fallbackColor, cats } of layers) {
     for (const eb of s.errBars ?? []) {
-      drawSeriesErrorBars(ctx, s, eb, cats, useIndexX, toX, toY, fallbackColor);
+      drawSeriesErrorBars(
+        ctx, s, chartStyleRoleErrorBar(chart, eb), cats, useIndexX, toX, toY,
+        fallbackColor,
+      );
     }
   }
 
@@ -9854,6 +9939,7 @@ function drawSeriesErrorBars(
   toY: (v: number) => number,
   fallbackColor: string,
 ): void {
+  if (eb.hidden === true) return;
   ctx.save();
   ctx.strokeStyle = eb.color ? `#${eb.color}` : fallbackColor;
   ctx.lineWidth = eb.lineWidthEmu ? Math.max(0.5, eb.lineWidthEmu / EMU_PER_PT) : 1;
@@ -10336,7 +10422,7 @@ function drawCategoryErrorBars(
   plotted: (ci: number) => number,
   fallbackColor: string,
 ): void {
-  if (eb.dir === 'x') return; // no data-unit X scale on a category axis
+  if (eb.hidden === true || eb.dir === 'x') return; // no data-unit X scale on a category axis
   const drawPlus = eb.barType === 'plus' || eb.barType === 'both';
   const drawMinus = eb.barType === 'minus' || eb.barType === 'both';
   ctx.save();
@@ -10381,6 +10467,7 @@ function drawBarErrorBars(
   fallbackColor: string,
   ptToPx: number,
 ): void {
+  if (eb.hidden === true) return;
   if ((!horizontal && eb.dir === 'x') || (horizontal && eb.dir === 'y')) return;
   const drawPlus = eb.barType === 'plus' || eb.barType === 'both';
   const drawMinus = eb.barType === 'minus' || eb.barType === 'both';
@@ -13316,6 +13403,7 @@ export function renderChart(
   ctx.save();
   try {
     chart = applyPlotVisibleOnly(chart);
+    chart = applyLinkedSeriesDecorationStyles(chart);
     const { x, y, w, h } = rect;
     const rounded = chart.roundedCorners === true;
     const cornerRadius = rounded ? CHART_SPACE_CORNER_RADIUS_PT * ptToPx : 0;

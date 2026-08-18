@@ -417,6 +417,10 @@ export interface ChartSeriesDataLabels {
   leaderLineColor?: string;
   /** `<c:leaderLines><c:spPr><a:ln w>` leader-line width in EMU. */
   leaderLineWidthEmu?: number;
+  /** Explicit `<a:noFill/>` on the leader-line stroke. */
+  leaderLineHidden?: boolean;
+  /** DrawingML preset dash for the leader-line stroke. */
+  leaderLineDash?: string;
 }
 
 export interface ChartErrBars {
@@ -432,6 +436,8 @@ export interface ChartErrBars {
   lineWidthEmu?: number;
   /** "solid"|"dash"|"dot"|"dashDot"|... */
   dash?: string;
+  /** Explicit `<c:errBars><c:spPr><a:ln><a:noFill/>`. */
+  hidden?: boolean;
 }
 
 /**

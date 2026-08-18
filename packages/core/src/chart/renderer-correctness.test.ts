@@ -1827,6 +1827,7 @@ describe('classic 3-D compatibility projection', () => {
     const outside = recordingCtx(() => 200);
     renderChart(outside.ctx, baseModel({
       chartType: 'pie', threeD: { rotationX: 15, rotationY: 20 },
+      chartStyleRoles: { leaderLine: { lineColors: ['FF0000'] } },
       series: [series({
         values: [99, 1],
         seriesDataLabels: {
@@ -1838,6 +1839,36 @@ describe('classic 3-D compatibility projection', () => {
     expect(outside.paintEvents.some(event =>
       event.kind === 'stroke' && event.strokeStyle === '#00FF00'
     )).toBe(true);
+    expect(outside.paintEvents.some(event =>
+      event.kind === 'stroke' && event.strokeStyle === '#FF0000'
+    )).toBe(false);
+  });
+
+  it('uses linked leaderLine paint when the data-label block omits line paint', () => {
+    const render = (lineHidden: boolean) => {
+      const rec = recordingCtx(() => 200);
+      renderChart(rec.ctx, baseModel({
+        chartType: 'pie', threeD: { rotationX: 15, rotationY: 20 },
+        chartStyleRoles: {
+          leaderLine: { lineColors: ['CC5500'], lineWidthEmu: 19050, lineHidden },
+        },
+        series: [series({
+          values: [99, 1],
+          seriesDataLabels: {
+            showVal: true, showCatName: false, showSerName: false, showPercent: false,
+            showLeaderLines: true,
+          },
+        })],
+      }), RECT, 1);
+      return rec;
+    };
+    const visible = render(false);
+    expect(visible.paintEvents.some(event =>
+      event.kind === 'stroke' && event.strokeStyle === '#CC5500'
+    )).toBe(true);
+    expect(render(true).paintEvents.some(event =>
+      event.kind === 'stroke' && event.strokeStyle === '#CC5500'
+    )).toBe(false);
   });
 
   it('keeps non-finite firstSliceAngle out of 3-D pie geometry', () => {
@@ -5760,6 +5791,51 @@ describe('CH9 — line/area draw per-series error bars (§21.2.2.20)', () => {
       expect(verticalSegs(withBars.segments)).toBeGreaterThan(verticalSegs(without.segments));
     });
   }
+
+  it('uses the linked errorBar role behind direct error-bar properties', () => {
+    const rec = segRecordingCtx();
+    const model = baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      valAxisMajorGridlines: false,
+      series: [series({
+        values: [10, 20],
+        errBars: [{
+          dir: 'y', barType: 'both', plus: [2, 2], minus: [2, 2], noEndCap: true,
+        }],
+      })],
+      chartStyleRoles: {
+        errorBar: { lineColors: ['AABBCC'], lineWidthEmu: 19050 },
+      },
+    });
+    renderChart(rec.ctx, model, RECT, 1);
+    expect(rec.segs.filter(segment => segment.ss === '#AABBCC')).toHaveLength(4);
+
+    model.series[0].errBars![0].color = '112233';
+    const direct = segRecordingCtx();
+    renderChart(direct.ctx, model, RECT, 1);
+    expect(direct.segs.filter(segment => segment.ss === '#112233')).toHaveLength(4);
+    expect(direct.segs.some(segment => segment.ss === '#AABBCC')).toBe(false);
+  });
+
+  it('honors direct and linked no-fill error-bar strokes', () => {
+    const make = (hidden: boolean | undefined, roleHidden: boolean): ChartModel => baseModel({
+      chartType: 'line', categories: ['A'], valAxisMajorGridlines: false,
+      series: [series({
+        values: [10],
+        errBars: [{
+          dir: 'y', barType: 'plus', plus: [2], minus: [null], noEndCap: true,
+          hidden,
+        }],
+      })],
+      chartStyleRoles: { errorBar: { lineColors: ['AABBCC'], lineHidden: roleHidden } },
+    });
+    for (const model of [make(true, false), make(undefined, true)]) {
+      const rec = segRecordingCtx();
+      renderChart(rec.ctx, model, RECT, 1);
+      expect(rec.segs.some(segment => segment.ss === '#AABBCC')).toBe(false);
+    }
+  });
 });
 
 describe('CH9 — scatter error-bar cap geometry (§21.2.2.20)', () => {

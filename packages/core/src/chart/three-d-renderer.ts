@@ -973,7 +973,7 @@ function drawThreeDDataLabel(
   );
   if (!placement) return;
   const labelBox = override?.labelBox ?? defaults?.labelBox;
-  if (defaults?.showLeaderLines && leaderLineEligible) {
+  if (defaults?.showLeaderLines && defaults.leaderLineHidden !== true && leaderLineEligible) {
     ctx.beginPath();
     ctx.moveTo(leaderAnchor.x, leaderAnchor.y);
     ctx.lineTo(
@@ -984,6 +984,7 @@ function drawThreeDDataLabel(
     ctx.lineWidth = defaults.leaderLineWidthEmu != null
       ? Math.max(0.25, defaults.leaderLineWidthEmu / EMU_PER_PT * ptToPx)
       : 0.75 * ptToPx;
+    ctx.setLineDash(pptxPresetDashArray(defaults.leaderLineDash ?? 'solid', ctx.lineWidth));
     ctx.stroke();
   }
   if (labelBox) {
