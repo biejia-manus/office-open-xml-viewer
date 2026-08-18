@@ -681,6 +681,7 @@ export interface ChartSeriesDataLabels {
 }
 export interface ChartStockBarPaint {
     fillColor?: string | null;
+    fill?: SolidFill | GradientFill | PatternFill | null;
     fillHidden?: boolean | null;
     lineColor?: string | null;
     lineWidthEmu?: number | null;

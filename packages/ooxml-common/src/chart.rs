@@ -834,6 +834,8 @@ pub struct ChartStockBarPaint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<ChartStyleFill>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_hidden: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_color: Option<String>,
@@ -3934,13 +3936,12 @@ fn parse_chart_up_down_bar_paint(
         return ChartStockBarPaint::default();
     };
     let sp_pr = child(bar, "spPr");
+    let direct_fill = extract_direct_shape_fill(sp_pr, resolver);
     let direct_line = extract_direct_shape_line(bar, resolver);
     ChartStockBarPaint {
-        fill_color: sp_pr.and_then(|shape| resolver.resolve_shape_fill(shape)),
-        fill_hidden: sp_pr
-            .and_then(|shape| child(shape, "noFill"))
-            .is_some()
-            .then_some(true),
+        fill_color: direct_fill.color,
+        fill: direct_fill.fill,
+        fill_hidden: direct_fill.hidden,
         line_color: direct_line.color,
         line_width_emu: direct_line.width_emu,
         line_dash: direct_line.dash,
@@ -16512,6 +16513,31 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(style.down.line_hidden, Some(true));
         assert_eq!(style.down.line_width_emu, Some(25400));
         assert_eq!(style.down.line_join.as_deref(), Some("bevel"));
+    }
+
+    #[test]
+    fn parse_chart_part_stock_up_down_bars_preserve_structured_fills() {
+        let group = r#"<c:stockChart>
+          <c:ser><c:idx val="0"/><c:cat><c:strLit><c:pt idx="0"><c:v>A</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:pt idx="0"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser>
+          <c:upDownBars>
+            <c:upBars><c:spPr><a:pattFill prst="diagCross"><a:fgClr><a:srgbClr val="112233"/></a:fgClr><a:bgClr><a:srgbClr val="DDEEFF"/></a:bgClr></a:pattFill></c:spPr></c:upBars>
+            <c:downBars><c:spPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="000000"/></a:gs><a:gs pos="100000"><a:srgbClr val="FFFFFF"/></a:gs></a:gsLst><a:lin ang="5400000"/></a:gradFill></c:spPr></c:downBars>
+          </c:upDownBars>
+        </c:stockChart>"#;
+        let xml = chart_space_with_group(group);
+        let document = chart_space_of(&xml);
+        let model = parse_chart_part(document.root_element(), &FixtureResolver).expect("stock");
+        let style = model.stock_up_down_bar_style.expect("up/down style");
+        assert!(matches!(
+            style.up.fill,
+            Some(ChartStyleFill::Pattern { ref fg, ref bg, ref preset })
+                if fg == "112233" && bg == "DDEEFF" && preset == "diagCross"
+        ));
+        assert!(matches!(
+            style.down.fill,
+            Some(ChartStyleFill::Gradient { ref stops, angle, .. })
+                if stops.len() == 2 && angle == 90.0
+        ));
     }
 
     #[test]

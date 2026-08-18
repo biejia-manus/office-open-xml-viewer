@@ -4561,7 +4561,7 @@ function renderBarChart(
       series => sec && series.useSecondaryAxis === true ? toYSecondarySeries : toYPrimaryLine,
       () => primaryCatAxisY,
       (series, index) => series.values[index] ?? null,
-      catGap, ptToPx,
+      catGap, ptToPx, shapeRotationDeg,
     );
     if (dateAxisPlan) {
       ctx.save();
@@ -4816,6 +4816,10 @@ function chartStyleRoleBarPaint(
   return {
     fillColor: direct.fillColor
       ?? (fillApplies ? chartExStyleColor(chart, linked, 'fill', 0, 1) : null),
+    fill: direct.fill ?? (
+      direct.fillColor == null && direct.fillHidden !== true && fillApplies
+        ? linked?.fillPaints?.[0] : null
+    ),
     fillHidden: direct.fillHidden
       ?? (fillApplies && linked.fillHidden === true ? true : null),
     lineColor: direct.lineColor
@@ -5585,6 +5589,7 @@ function drawUpDownBars(
   style: ChartStockUpDownBarStyle,
   ptToPx: number,
   useLegacyDefaultPaint: boolean,
+  shapeRotationDeg = 0,
 ): void {
   const gapPercent = Number.isFinite(style.gapWidthPercent) && style.gapWidthPercent >= 0
     ? style.gapWidthPercent
@@ -5602,8 +5607,11 @@ function drawUpDownBars(
     const defaultFill = end >= start ? 'FFFFFF' : '000000';
     const barX = toX(index) - barWidth / 2;
     const barY = Math.min(startY, endY);
-    if (!paint.fillHidden && (paint.fillColor != null || useLegacyDefaultPaint)) {
-      ctx.fillStyle = `#${paint.fillColor ?? defaultFill}`;
+    if (!paint.fillHidden && (paint.fill != null || paint.fillColor != null || useLegacyDefaultPaint)) {
+      ctx.fillStyle = paint.fill
+        ? (resolveFill(paint.fill, ctx, barX, barY, barWidth, barHeight, shapeRotationDeg)
+          ?? `#${paint.fillColor ?? defaultFill}`)
+        : `#${paint.fillColor ?? defaultFill}`;
       ctx.fillRect(barX, barY, barWidth, barHeight);
     }
     if (!paint.lineHidden && (
@@ -5639,6 +5647,7 @@ function drawLineGroupDecorations(
   valueFor: (series: ChartSeries, index: number) => number | null,
   slotWidth: number,
   ptToPx: number,
+  shapeRotationDeg: number,
 ): void {
   for (const decoration of chart.lineGroupDecorations ?? []) {
     let members = chart.series.filter(series => series.lineGroupIndex === decoration.groupIndex);
@@ -5665,6 +5674,7 @@ function drawLineGroupDecorations(
         // Office observation is limited to classic Style 2; other styles keep
         // the geometry/model but do not receive a guessed white/black paint.
         chart.legacyChartStyle === 2,
+        shapeRotationDeg,
       );
     }
 
@@ -6140,7 +6150,7 @@ function renderLineChart(
       const seriesIndex = lineSeriesIndex.get(series);
       return seriesIndex != null ? plotted(seriesIndex, index) : null;
     },
-    decorationSlotWidth, ptToPx,
+    decorationSlotWidth, ptToPx, shapeRotationDeg,
   );
 
   // Line width and marker size come from OOXML in points (<a:ln w=EMU> /
@@ -6655,7 +6665,7 @@ function renderStockChart(
       index => upDownStartS.values[index] ?? null,
       index => upDownEndS.values[index] ?? null,
       n, toX, toY, toY,
-      slotWidth, style, ptToPx, true,
+      slotWidth, style, ptToPx, true, shapeRotationDeg,
     );
   }
 

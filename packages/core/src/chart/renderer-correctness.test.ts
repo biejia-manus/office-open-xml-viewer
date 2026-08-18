@@ -10776,12 +10776,22 @@ describe('classic line-chart group decorations', () => {
     model.chartStyleRoles = {
       dropLine: { lineColors: ['AA0000'], lineWidthEmu: 28575 },
       hiLoLine: { lineColors: ['00AA00'], lineNoStyle: true },
+      upBar: {
+        fillPaints: [{
+          fillType: 'gradient', gradType: 'linear', angle: 0,
+          stops: [{ position: 0, color: '000000' }, { position: 1, color: 'FFFFFF' }],
+        }],
+      },
     };
     const rec = segRecordingCtx();
     renderChart(rec.ctx, model, RECT, 1);
     expect(rec.segs.filter(segment => segment.ss === '#111111')).toHaveLength(5);
     expect(rec.segs.some(segment => segment.ss === '#AA0000')).toBe(false);
     expect(rec.segs.some(segment => segment.ss === '#00AA00')).toBe(false);
+    const bars = recordingCtx();
+    renderChart(bars.ctx, model, RECT, 1);
+    expect(bars.gradients).toHaveLength(0);
+    expect(bars.rects.filter(rect => rect.fs === '#EEEEEE')).toHaveLength(3);
   });
 
   it('limits empty up/down-bar automatic paint to the observed classic Style 2 boundary', () => {
@@ -11423,6 +11433,40 @@ describe('CH13 — stock chart (high/low/close)', () => {
       && rect.dash.length > 0 && rect.cap === 'square' && rect.join === 'round')).toBe(true);
     expect(rec.strokeRects.some(rect => rect.ss === '#660000' && rect.lw === 2
       && rect.dash.length > 0 && rect.cap === 'round' && rect.join === 'bevel')).toBe(true);
+  });
+
+  it('uses the shared structured-fill renderer for stock up/down bars', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, stockModel({
+      stockUpDownBars: true,
+      stockUpDownBarStyle: {
+        gapWidthPercent: 100,
+        up: {
+          fill: {
+            fillType: 'gradient', gradType: 'linear', angle: 90,
+            stops: [
+              { position: 0, color: '112233' },
+              { position: 1, color: 'DDEEFF' },
+            ],
+          },
+        },
+        down: { fillColor: 'CC0000' },
+      },
+      series: [
+        series({ name: 'Open', values: [20, 45, 25] }),
+        series({ name: 'High', values: [55, 57, 57] }),
+        series({ name: 'Low', values: [11, 12, 13] }),
+        series({ name: 'Close', values: [40, 30, 25] }),
+      ],
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(1);
+    expect(rec.gradients[0].stops).toEqual([
+      { position: 0, color: 'rgba(17,34,51,1)' },
+      { position: 1, color: 'rgba(221,238,255,1)' },
+    ]);
+    expect(rec.rects.some(rect => rect.fs === '[object Object]')).toBe(true);
+    expect(rec.rects.some(rect => rect.fs === '#CC0000')).toBe(true);
   });
 
   it('draws three-series up/down bars and only the explicitly authored marker', () => {
