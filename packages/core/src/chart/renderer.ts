@@ -4841,12 +4841,33 @@ function chartStyleRoleLeaderLine(
   }, 'leaderLine');
 }
 
+function chartStyleRoleTrendline(
+  chart: ChartModel,
+  direct: NonNullable<ChartSeries['trendLines']>[number],
+): NonNullable<ChartSeries['trendLines']>[number] {
+  const linked = chartStyleRoleLine(chart, {
+    color: direct.lineColor,
+    widthEmu: direct.lineWidthEmu,
+    dash: direct.lineDash,
+    hidden: direct.lineHidden,
+  }, 'trendline');
+  return {
+    ...direct,
+    lineColor: linked.color ?? undefined,
+    lineWidthEmu: linked.widthEmu ?? undefined,
+    lineDash: linked.dash ?? undefined,
+    lineHidden: linked.hidden ?? undefined,
+  };
+}
+
 /** Materialize the linked decoration roles that an optional family renderer
  * consumes directly from `ChartSeries`. Keeping this projection in core means
  * the 2-D, 3-D, DOCX, XLSX, and PPTX paths receive one effective precedence
  * result without teaching an optional renderer about package sidecars. */
 function applyLinkedSeriesDecorationStyles(chart: ChartModel): ChartModel {
-  if (!chart.chartStyleRoles?.errorBar && !chart.chartStyleRoles?.leaderLine) {
+  if (!chart.chartStyleRoles?.errorBar
+    && !chart.chartStyleRoles?.leaderLine
+    && !chart.chartStyleRoles?.trendline) {
     return chart;
   }
   let changed = false;
@@ -4875,8 +4896,18 @@ function applyLinkedSeriesDecorationStyles(chart: ChartModel): ChartModel {
         || merged.leaderLineHidden !== seriesDataLabels.leaderLineHidden;
       seriesDataLabels = merged;
     }
-    if (errBars === item.errBars && seriesDataLabels === item.seriesDataLabels) return item;
-    return { ...item, errBars, seriesDataLabels };
+    const trendLines = item.trendLines?.map(trendline => {
+      const effective = chartStyleRoleTrendline(chart, trendline);
+      changed ||= effective.lineColor !== trendline.lineColor
+        || effective.lineWidthEmu !== trendline.lineWidthEmu
+        || effective.lineDash !== trendline.lineDash
+        || effective.lineHidden !== trendline.lineHidden;
+      return effective;
+    });
+    if (errBars === item.errBars
+      && seriesDataLabels === item.seriesDataLabels
+      && trendLines === item.trendLines) return item;
+    return { ...item, errBars, seriesDataLabels, trendLines };
   });
   return changed ? { ...chart, series } : chart;
 }

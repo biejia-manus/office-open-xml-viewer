@@ -9807,6 +9807,45 @@ describe('CH6-follow — series trendlines (commit 3)', () => {
     expect(rec.segs.some(segment => segment.dashed)).toBe(true);
   });
 
+  it('uses the linked trendline role behind omitted trendline line properties', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, {
+      ...lineWithTrend({ trendLines: [{ trendlineType: 'linear' }] }),
+      showLegend: true,
+      legendPos: 'b',
+      chartStyleRoles: {
+        trendline: { lineColors: ['AABBCC'], lineWidthEmu: 19_050, lineDash: 'dash' },
+      },
+    }, RECT, 1);
+    expect(rec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#AABBCC' });
+    expect(rec.texts.map(text => text.text)).toContain('Linear (S)');
+  });
+
+  it('keeps direct trendline paint ahead of the linked trendline role', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, {
+      ...lineWithTrend({
+        trendLines: [{ trendlineType: 'linear', lineColor: '112233', lineWidthEmu: 38_100 }],
+      }),
+      chartStyleRoles: {
+        trendline: { lineColors: ['AABBCC'], lineWidthEmu: 19_050 },
+      },
+    }, RECT, 1);
+    expect(rec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#112233' });
+    expect(rec.paintEvents).not.toContainEqual({ kind: 'stroke', strokeStyle: '#AABBCC' });
+  });
+
+  it('suppresses a trendline when the linked trendline role declares noFill', () => {
+    const without = dashSegRecordingCtx();
+    renderChart(without.ctx, lineWithTrend({}), RECT, 1);
+    const hidden = dashSegRecordingCtx();
+    renderChart(hidden.ctx, {
+      ...lineWithTrend({ trendLines: [{ trendlineType: 'linear' }] }),
+      chartStyleRoles: { trendline: { lineHidden: true } },
+    }, RECT, 1);
+    expect(hidden.segs).toEqual(without.segs);
+  });
+
   it('suppresses a trendline with an authored DrawingML noFill line', () => {
     const without = dashSegRecordingCtx();
     renderChart(without.ctx, lineWithTrend({}), RECT, 1);

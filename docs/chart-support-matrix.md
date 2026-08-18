@@ -104,8 +104,9 @@ status differences below are renderer-consumption gaps, not lost package data.
 | S-STYLE-003 | `gridlineMinor`, tick labels, `seriesAxis` | Partial | Roles are retained; direct chart formatting may render while linked-style fallback is incomplete. |
 | S-STYLE-004 | `seriesLine`, `dropLine`, `hiLoLine`, `upBar`, `downBar` | Supported | Direct formatting wins; the linked role supplies only omitted fill/line properties. |
 | S-STYLE-005 | `errorBar`, `leaderLine` | Supported | Direct line paint and `noFill` win; the linked role supplies omitted color, width, dash, and visibility in shared 2-D and optional 3-D paths. |
-| S-STYLE-006 | `dataLabelCallout`, `trendlineLabel` | Partial | Paint is retained; text/shape style inheritance is incomplete. |
-| S-STYLE-007 | `dataPoint3D`, `dataPointWireframe`, `floor`, `wall`, `plotArea3D` | Partial | Paint is retained; authored direct 3-D surface formatting remains authoritative where already modeled. |
+| S-STYLE-006 | `trendline` | Supported | Direct trendline paint and `noFill` win; the linked role supplies omitted color, width, dash, and visibility to the plot and legend. |
+| S-STYLE-007 | `dataLabelCallout`, `trendlineLabel` | Partial | Paint is retained; text/shape style inheritance is incomplete. |
+| S-STYLE-008 | `dataPoint3D`, `dataPointWireframe`, `floor`, `wall`, `plotArea3D` | Partial | Paint is retained; authored direct 3-D surface formatting remains authoritative where already modeled. |
 
 ## ChartEx layouts
 
