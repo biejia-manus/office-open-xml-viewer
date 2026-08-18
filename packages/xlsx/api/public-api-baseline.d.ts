@@ -454,8 +454,13 @@ export interface ChartModel {
     legendFontSizeHpt?: number | null;
     legendFontBold?: boolean | null;
     legendFillColor?: string | null;
+    legendFill?: Fill | null;
+    legendFillHidden?: boolean | null;
+    legendFillPaintAuthored?: boolean | null;
     legendLineColor?: string | null;
     legendLineWidthEmu?: number | null;
+    legendLineHidden?: boolean | null;
+    legendLinePaintAuthored?: boolean | null;
     themeMajorFontLatin?: string | null;
     themeMinorFontLatin?: string | null;
     chartBorderColor?: string | null;
@@ -707,7 +712,7 @@ export interface ChartThreeD {
     backWall?: ChartThreeDSurface | null;
 }
 export interface ChartThreeDRenderer {
-    render(ctx: CanvasRenderingContext2D, chart: ChartModel, rect: ChartRect, ptToPx: number): boolean;
+    render(ctx: CanvasRenderingContext2D, chart: ChartModel, rect: ChartRect, ptToPx: number, shapeRotationDeg?: number): boolean;
 }
 export interface ChartThreeDSeriesAxis {
     title?: string | null;

@@ -762,10 +762,21 @@ export interface ChartModel {
   legendFontBold?: boolean | null;
   /** `<c:legend><c:spPr>` explicit frame fill (hex without '#'). */
   legendFillColor?: string | null;
+  /** Structured `<c:legend><c:spPr>` fill. Solid fills are also mirrored in
+   * `legendFillColor` for wire compatibility. */
+  legendFill?: Fill | null;
+  /** Explicit `<c:legend><c:spPr><a:noFill/>`; prevents linked style fallback. */
+  legendFillHidden?: boolean | null;
+  /** A direct legend fill paint was authored, even when its color could not be resolved. */
+  legendFillPaintAuthored?: boolean | null;
   /** `<c:legend><c:spPr><a:ln>` explicit frame stroke (hex without '#'). */
   legendLineColor?: string | null;
   /** `<c:legend><c:spPr><a:ln@w>` frame stroke width in EMU. */
   legendLineWidthEmu?: number | null;
+  /** Explicit `<c:legend><c:spPr><a:ln><a:noFill/>`; prevents linked fallback. */
+  legendLineHidden?: boolean | null;
+  /** A direct legend line paint was authored, even when its color could not be resolved. */
+  legendLinePaintAuthored?: boolean | null;
   /**
    * Theme font-scheme faces (`<a:fontScheme>`, ECMA-376 §20.1.4.2). Latin
    * heading (majorFont) and body (minorFont) typefaces, used as the fallback

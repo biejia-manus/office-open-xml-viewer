@@ -1,4 +1,5 @@
 import type { ChartModel, ChartRect } from '../types/chart.js';
+import { resolveFill } from '../shape/paint.js';
 import { axisLineWidthPx } from './axis-style.js';
 
 /** Paint the authored solid `<c:legend><c:spPr>` frame before legend content.
@@ -10,14 +11,26 @@ export function paintLegendFrame(
   chart: ChartModel,
   bounds: ChartRect,
   ptToPx: number,
+  shapeRotationDeg = 0,
 ): void {
-  if (!chart.legendFillColor && !chart.legendLineColor) return;
+  if ((!chart.legendFill && !chart.legendFillColor || chart.legendFillHidden === true)
+    && (!chart.legendLineColor || chart.legendLineHidden === true)) return;
   ctx.save();
-  if (chart.legendFillColor) {
-    ctx.fillStyle = `#${chart.legendFillColor}`;
-    ctx.fillRect(bounds.x, bounds.y, bounds.w, bounds.h);
+  if (chart.legendFillHidden !== true && (chart.legendFill || chart.legendFillColor)) {
+    const fill = chart.legendFill
+      ? resolveFill(
+          chart.legendFill, ctx,
+          bounds.x, bounds.y, bounds.w, bounds.h,
+          shapeRotationDeg,
+        )
+      : `#${chart.legendFillColor}`;
+    if (fill) ctx.fillStyle = fill;
+    if (fill) {
+      ctx.fillRect(bounds.x, bounds.y, bounds.w, bounds.h);
+    }
   }
-  if (chart.legendLineColor && bounds.w > 0 && bounds.h > 0) {
+  if (chart.legendLineHidden !== true
+    && chart.legendLineColor && bounds.w > 0 && bounds.h > 0) {
     const width = axisLineWidthPx(chart.legendLineWidthEmu, ptToPx);
     ctx.strokeStyle = `#${chart.legendLineColor}`;
     ctx.lineWidth = width;

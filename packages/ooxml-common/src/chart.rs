@@ -457,12 +457,28 @@ pub struct ChartModel {
     /// `<c:legend><c:spPr>` explicit frame fill (hex, no `#`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend_fill_color: Option<String>,
+    /// Structured `<c:legend><c:spPr>` fill. Solid fills are also mirrored in
+    /// `legend_fill_color` for wire compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_fill: Option<ChartStyleFill>,
+    /// Explicit `<c:legend><c:spPr><a:noFill/>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_fill_hidden: Option<bool>,
+    /// A direct legend fill paint was authored, even when unresolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_fill_paint_authored: Option<bool>,
     /// `<c:legend><c:spPr><a:ln>` explicit frame stroke (hex, no `#`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend_line_color: Option<String>,
     /// `<c:legend><c:spPr><a:ln@w>` frame stroke width in EMU.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend_line_width_emu: Option<u32>,
+    /// Explicit `<c:legend><c:spPr><a:ln><a:noFill/>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_line_hidden: Option<bool>,
+    /// A direct legend line paint was authored, even when unresolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_line_paint_authored: Option<bool>,
     /// Theme heading (majorFont) Latin face — fallback for chart title / axis
     /// titles when their `<c:txPr>` supplies no `<a:latin>`. `None` when the
     /// theme is not threaded (renderer keeps sans-serif; byte-stable).
@@ -3195,32 +3211,88 @@ pub fn extract_chart_data_table(
     })
 }
 
-/// `<c:legend><c:spPr>` frame paint. The frame fill and line are independent
-/// DrawingML choices; absent or explicit `noFill` remains `None`, while an
-/// authored solid fill/stroke is resolved through the package theme.
-pub fn extract_legend_frame_style(
-    root: Node,
-    resolver: &dyn ColorResolver,
-) -> (Option<String>, Option<String>, Option<u32>) {
+#[derive(Default)]
+struct LegendFrameStyle {
+    fill_color: Option<String>,
+    fill: Option<ChartStyleFill>,
+    fill_hidden: Option<bool>,
+    fill_paint_authored: Option<bool>,
+    line_color: Option<String>,
+    line_width_emu: Option<u32>,
+    line_hidden: Option<bool>,
+    line_paint_authored: Option<bool>,
+}
+
+/// `<c:legend><c:spPr>` frame paint. Direct fill and line paint are preserved
+/// independently, including `noFill` and unresolved authored paint, so a
+/// linked Chart Style can supply only genuinely omitted properties.
+fn extract_legend_frame_style(root: Node, resolver: &dyn ColorResolver) -> LegendFrameStyle {
     let Some(legend) = root
         .descendants()
         .find(|n| n.is_element() && n.tag_name().name() == "legend")
     else {
-        return (None, None, None);
+        return LegendFrameStyle::default();
     };
-    let fill = child(legend, "spPr").and_then(|shape| {
-        if child(shape, "noFill").is_some() {
-            None
-        } else {
-            resolver.resolve_shape_fill(shape)
-        }
+    let shape = child(legend, "spPr");
+    let fill_paint = shape.and_then(|shape| parse_chart_style_paint(shape, resolver, None));
+    let fill_paint_authored = shape
+        .and_then(|shape| {
+            shape.children().find(|node| {
+                node.is_element()
+                    && matches!(
+                        node.tag_name().name(),
+                        "noFill" | "solidFill" | "gradFill" | "pattFill" | "blipFill" | "grpFill"
+                    )
+            })
+        })
+        .map(|_| true);
+    // Keep the established shape-level resolver fallback: host resolvers may
+    // resolve a transformed theme fill as an effective solid even when the
+    // lower-level color node cannot be projected independently.
+    let resolved_shape_fill = shape.and_then(|shape| {
+        (child(shape, "noFill").is_none())
+            .then(|| resolver.resolve_shape_fill(shape))
+            .flatten()
     });
+    let (fill_color, fill, fill_hidden) = match fill_paint {
+        Some(ChartStylePaint::NoFill) => (None, None, Some(true)),
+        Some(ChartStylePaint::Fill(Some(fill))) => {
+            let color = match &fill {
+                ChartStyleFill::Solid { color } => Some(color.clone()),
+                _ => resolved_shape_fill.clone(),
+            };
+            (color, Some(fill), None)
+        }
+        Some(ChartStylePaint::Fill(None)) => (
+            resolved_shape_fill.clone(),
+            resolved_shape_fill.map(|color| ChartStyleFill::Solid { color }),
+            None,
+        ),
+        None => (None, None, None),
+    };
     let (line_color, line_width, line_hidden) = extract_sp_pr_ln_style(legend, resolver);
-    (
+    let line_paint_authored = shape
+        .and_then(|shape| child(shape, "ln"))
+        .and_then(|line| {
+            line.children().find(|node| {
+                node.is_element()
+                    && matches!(
+                        node.tag_name().name(),
+                        "noFill" | "solidFill" | "gradFill" | "pattFill"
+                    )
+            })
+        })
+        .map(|_| true);
+    LegendFrameStyle {
+        fill_color,
         fill,
-        if line_hidden { None } else { line_color },
-        line_width,
-    )
+        fill_hidden,
+        fill_paint_authored,
+        line_color: if line_hidden { None } else { line_color },
+        line_width_emu: line_width,
+        line_hidden: line_hidden.then_some(true),
+        line_paint_authored,
+    }
 }
 
 // ============================================================================
@@ -5686,8 +5758,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
     let (legend_font_face, legend_font_size_hpt, legend_font_bold) =
         extract_legend_text_props(root);
     let legend_font_color = extract_legend_font_color(root, resolver);
-    let (legend_fill_color, legend_line_color, legend_line_width_emu) =
-        extract_legend_frame_style(root, resolver);
+    let legend_frame = extract_legend_frame_style(root, resolver);
     let (chart_border_color, chart_border_width_emu) = child(root, "spPr")
         .and_then(|shape| child(shape, "ln"))
         .map(|line| {
@@ -5831,9 +5902,14 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         legend_font_color,
         legend_font_size_hpt,
         legend_font_bold,
-        legend_fill_color,
-        legend_line_color,
-        legend_line_width_emu,
+        legend_fill_color: legend_frame.fill_color,
+        legend_fill: legend_frame.fill,
+        legend_fill_hidden: legend_frame.fill_hidden,
+        legend_fill_paint_authored: legend_frame.fill_paint_authored,
+        legend_line_color: legend_frame.line_color,
+        legend_line_width_emu: legend_frame.line_width_emu,
+        legend_line_hidden: legend_frame.line_hidden,
+        legend_line_paint_authored: legend_frame.line_paint_authored,
         theme_major_font_latin: resolver.theme_major_font_latin(),
         theme_minor_font_latin: resolver.theme_minor_font_latin(),
         val_axis_minor_tick_mark: Some(val_axis_minor_tick_mark),
@@ -9535,8 +9611,7 @@ pub fn parse_chart_part_with_references_and_style_parts(
     let (legend_font_face, legend_font_size_hpt, legend_font_bold) =
         extract_legend_text_props(root);
     let legend_font_color = { extract_legend_font_color(root, color_resolver) };
-    let (legend_fill_color, legend_line_color, legend_line_width_emu) =
-        extract_legend_frame_style(root, color_resolver);
+    let legend_frame = extract_legend_frame_style(root, color_resolver);
     // Theme fallback fonts: the resolver supplies the theme's major/minor Latin
     // faces (pptx keys them `+mj-lt` / `+mn-lt` in its color+font map). None
     // when the theme lacks a fontScheme. The renderer uses these when a chart
@@ -9806,9 +9881,14 @@ pub fn parse_chart_part_with_references_and_style_parts(
         legend_font_color,
         legend_font_size_hpt,
         legend_font_bold,
-        legend_fill_color,
-        legend_line_color,
-        legend_line_width_emu,
+        legend_fill_color: legend_frame.fill_color,
+        legend_fill: legend_frame.fill,
+        legend_fill_hidden: legend_frame.fill_hidden,
+        legend_fill_paint_authored: legend_frame.fill_paint_authored,
+        legend_line_color: legend_frame.line_color,
+        legend_line_width_emu: legend_frame.line_width_emu,
+        legend_line_hidden: legend_frame.line_hidden,
+        legend_line_paint_authored: legend_frame.line_paint_authored,
         theme_major_font_latin,
         theme_minor_font_latin,
         // ChartModel fields the legacy pptx `<c:chart>` path leaves unset
@@ -10133,8 +10213,13 @@ mod tests {
             legend_font_size_hpt: None,
             legend_font_bold: None,
             legend_fill_color: None,
+            legend_fill: None,
+            legend_fill_hidden: None,
+            legend_fill_paint_authored: None,
             legend_line_color: None,
             legend_line_width_emu: None,
+            legend_line_hidden: None,
+            legend_line_paint_authored: None,
             theme_major_font_latin: None,
             theme_minor_font_latin: None,
             date1904: false,
@@ -11501,8 +11586,34 @@ Subtitle</a:t></a:r></a:p>
         let serialized = serde_json::to_value(model).expect("chart serializes");
 
         assert_eq!(serialized["legendFillColor"], "DDEEFF");
+        assert_eq!(serialized["legendFill"]["fillType"], "solid");
+        assert_eq!(serialized["legendFill"]["color"], "DDEEFF");
+        assert_eq!(serialized["legendFillPaintAuthored"], true);
+        assert!(serialized.get("legendFillHidden").is_none());
         assert_eq!(serialized["legendLineColor"], "808080");
         assert_eq!(serialized["legendLineWidthEmu"], 3175);
+        assert_eq!(serialized["legendLinePaintAuthored"], true);
+        assert!(serialized.get("legendLineHidden").is_none());
+    }
+
+    #[test]
+    fn classic_legend_frame_no_fill_provenance_is_preserved() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart>
+              <c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/>
+                <c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val>
+              </c:ser></c:barChart></c:plotArea>
+              <c:legend><c:legendPos val="r"/><c:spPr>
+                <a:noFill/><a:ln><a:noFill/></a:ln>
+              </c:spPr></c:legend>
+            </c:chart></c:chartSpace>"#,
+        );
+        let model = parse_chart_part(chart_space_of(&xml).root_element(), &FixtureResolver)
+            .expect("legend chart parses");
+        assert_eq!(model.legend_fill_hidden, Some(true));
+        assert_eq!(model.legend_fill_paint_authored, Some(true));
+        assert_eq!(model.legend_line_hidden, Some(true));
+        assert_eq!(model.legend_line_paint_authored, Some(true));
     }
 
     #[test]

@@ -1368,11 +1368,11 @@ function drawLegendForLayout(
     : null;
   if (manualBox) {
     const orient = manualBox.w >= manualBox.h ? 'horizontal' : 'vertical';
-    paintLegendFrame(ctx, chart, manualBox, ptToPx);
+    paintLegendFrame(ctx, chart, manualBox, ptToPx, shapeRotationDeg);
     drawLegend(ctx, legendSeries, manualBox.x, manualBox.y, manualBox.w, manualBox.h, orient, chart.chartType, legStyle, chart.scatterStyle, varyByPoint, chart.categories, ptToPx, fillPaints, shapeRotationDeg, chart.varyColors !== false, chart, leg);
     return;
   }
-  paintLegendFrame(ctx, chart, defaultBox, ptToPx);
+  paintLegendFrame(ctx, chart, defaultBox, ptToPx, shapeRotationDeg);
   drawLegend(ctx, legendSeries, defaultBox.x, defaultBox.y, defaultBox.w, defaultBox.h,
     defaultOrientation, chart.chartType, legStyle, chart.scatterStyle, varyByPoint,
     chart.categories, ptToPx, fillPaints, shapeRotationDeg, chart.varyColors !== false, chart, leg);
@@ -5026,6 +5026,54 @@ function chartStyleRoleMarker(
   };
 }
 
+function chartStyleRoleLegend(chart: ChartModel): ChartModel {
+  const linked = chart.chartStyleRoles?.legend;
+  if (!linked) return chart;
+  let legendFill = chart.legendFill;
+  let legendFillColor = chart.legendFillColor;
+  let legendFillHidden = chart.legendFillHidden;
+  const directFillPaint = chart.legendFillPaintAuthored === true
+    || legendFill != null || legendFillColor != null || legendFillHidden === true;
+  if (!directFillPaint && linked.fillNoStyle !== true) {
+    if (linked.fillHidden === true) {
+      legendFillHidden = true;
+    } else {
+      legendFill = chartExStyleFillPaint(linked, 0);
+      legendFillColor = legendFill == null
+        ? chartExStyleColor(chart, linked, 'fill', 0, 1)
+        : null;
+    }
+  }
+
+  let legendLineColor = chart.legendLineColor;
+  let legendLineWidthEmu = chart.legendLineWidthEmu;
+  let legendLineHidden = chart.legendLineHidden;
+  const directLinePaint = chart.legendLinePaintAuthored === true
+    || legendLineColor != null || legendLineHidden === true;
+  if (linked.lineNoStyle !== true) {
+    if (!directLinePaint) {
+      if (linked.lineHidden === true) legendLineHidden = true;
+      else legendLineColor = chartExStyleColor(chart, linked, 'line', 0, 1);
+    }
+    legendLineWidthEmu ??= linked.lineWidthEmu;
+  }
+  if (legendFill === chart.legendFill
+    && legendFillColor === chart.legendFillColor
+    && legendFillHidden === chart.legendFillHidden
+    && legendLineColor === chart.legendLineColor
+    && legendLineWidthEmu === chart.legendLineWidthEmu
+    && legendLineHidden === chart.legendLineHidden) return chart;
+  return {
+    ...chart,
+    legendFill,
+    legendFillColor,
+    legendFillHidden,
+    legendLineColor,
+    legendLineWidthEmu,
+    legendLineHidden,
+  };
+}
+
 /** Materialize the linked decoration roles that an optional family renderer
  * consumes directly from `ChartSeries`. Keeping this projection in core means
  * the 2-D, 3-D, DOCX, XLSX, and PPTX paths receive one effective precedence
@@ -5040,6 +5088,7 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     && !chart.chartStyleRoles?.categoryAxis
     && !chart.chartStyleRoles?.valueAxis
     && !chart.chartStyleRoles?.dataPointMarker
+    && !chart.chartStyleRoles?.legend
     && chart.chartStyleMarkerSizePt == null
     && chart.chartStyleMarkerSymbol == null) {
     return chart;
@@ -5154,7 +5203,7 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     || valAxisLine.color !== chart.valAxisLineColor
     || valAxisLine.widthEmu !== chart.valAxisLineWidthEmu
     || (valAxisLine.hidden === true) !== chart.valAxisLineHidden;
-  return changed ? {
+  const effective = changed ? {
     ...chart,
     series,
     dataTable,
@@ -5183,6 +5232,7 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     valAxisLineWidthEmu: valAxisLine.widthEmu,
     valAxisLineHidden: valAxisLine.hidden === true,
   } : chart;
+  return chartStyleRoleLegend(effective);
 }
 
 function drawUpDownBars(
@@ -13790,7 +13840,7 @@ export function renderChart(
     // model, while `threeD` carries the authored view/depth contract.  Consume
     // that contract before ordinary dispatch; 2-D charts return false and keep
     // their existing byte-stable family paths.
-    if (threeD?.render(ctx, chart, rect, ptToPx)) {
+    if (threeD?.render(ctx, chart, rect, ptToPx, shapeRotationDeg)) {
       drawChartDisplayUnitLabels(ctx, chart, rect, ptToPx);
       drawChartTextBoxes(ctx, chart, rect, ptToPx);
       return;

@@ -1358,9 +1358,10 @@ function simpleLegend(
   ptToPx: number,
   categoryDriven = false,
   measured?: ThreeDLegendMeasure,
+  shapeRotationDeg = 0,
 ): void {
   if (!bounds) return;
-  paintLegendFrame(ctx, chart, bounds, ptToPx);
+  paintLegendFrame(ctx, chart, bounds, ptToPx, shapeRotationDeg);
   const indexedPoints = new Map<number, ChartDataPointOverride>(
     chart.series[0]?.dataPointOverrides?.map(override => [override.idx, override]) ?? [],
   );
@@ -2100,6 +2101,7 @@ function renderCartesian(
   chart: ChartModel,
   rect: ChartRect,
   ptToPx: number,
+  shapeRotationDeg: number,
 ): boolean {
   if (!chart.threeD) return false;
   const bars = chart.chartType === 'clusteredBar'
@@ -3228,7 +3230,7 @@ function renderCartesian(
   // walls, faces, lines, markers, axes, ticks and tick labels, so later scene
   // primitives cannot cross a label belonging to an earlier series.
   for (const drawLabel of deferredDataLabels) drawLabel();
-  simpleLegend(ctx, chart, legend, ptToPx, false, legendMeasure);
+  simpleLegend(ctx, chart, legend, ptToPx, false, legendMeasure, shapeRotationDeg);
   return true;
 }
 
@@ -3237,6 +3239,7 @@ function renderPie(
   chart: ChartModel,
   rect: ChartRect,
   ptToPx: number,
+  shapeRotationDeg: number,
 ): boolean {
   if (!chart.threeD || chart.chartType !== 'pie') return false;
   const series = chart.series[0];
@@ -3548,7 +3551,7 @@ function renderPie(
     ...chart,
     categories,
     series: [{ ...series, categories, dataPointColors: legendPointColors }],
-  }, legend, ptToPx, true, legendMeasure);
+  }, legend, ptToPx, true, legendMeasure, shapeRotationDeg);
   return true;
 }
 
@@ -3559,9 +3562,10 @@ export function renderSimpleThreeDChart(
   chart: ChartModel,
   rect: ChartRect,
   ptToPx: number,
+  shapeRotationDeg = 0,
 ): boolean {
   if (!chart.threeD) return false;
-  if (renderPie(ctx, chart, rect, ptToPx)) return true;
+  if (renderPie(ctx, chart, rect, ptToPx, shapeRotationDeg)) return true;
   if (!SUPPORTED_CARTESIAN_THREE_D_TYPES.has(chart.chartType)) return false;
-  return renderCartesian(ctx, chart, rect, ptToPx);
+  return renderCartesian(ctx, chart, rect, ptToPx, shapeRotationDeg);
 }

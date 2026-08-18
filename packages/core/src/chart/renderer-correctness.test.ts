@@ -2573,6 +2573,56 @@ describe('bar chart authored layout and fills', () => {
     });
   });
 
+  it('uses linked legend paint only when direct frame paint is omitted', () => {
+    const linked = recordingCtx();
+    const chart = baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A'],
+      series: [series({ name: 'Linked', values: [1] })],
+      showLegend: true,
+      legendPos: 'r',
+      legendManualLayout: {
+        xMode: 'edge', yMode: 'edge', wMode: 'factor', hMode: 'factor',
+        x: 0.1, y: 0.2, w: 0.5, h: 0.3,
+      },
+      chartStyleRoles: {
+        legend: {
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: [
+              { position: 0, color: '112233' },
+              { position: 1, color: 'DDEEFF' },
+            ],
+          }],
+          lineColors: ['808080'],
+          lineWidthEmu: 3175,
+        },
+      },
+    });
+    renderChart(linked.ctx, chart, RECT, 1, 30);
+    expect(linked.gradients).toHaveLength(1);
+    expect(linked.rects).toContainEqual({ x: 64, y: 72, w: 320, h: 108, fs: '[object Object]' });
+    expect(linked.strokeRects).toContainEqual({
+      x: 64.25, y: 72.25, w: 319.5, h: 107.5,
+      ss: '#808080', lw: 0.5, dash: [], cap: 'butt', join: 'miter',
+    });
+
+    const directNoFill = recordingCtx();
+    renderChart(directNoFill.ctx, {
+      ...chart,
+      legendFillHidden: true,
+      legendFillPaintAuthored: true,
+      legendLineHidden: true,
+      legendLinePaintAuthored: true,
+    }, RECT, 1);
+    expect(directNoFill.rects).not.toContainEqual(
+      expect.objectContaining({ x: 64, y: 72, w: 320, h: 108 }),
+    );
+    expect(directNoFill.strokeRects).not.toContainEqual(
+      expect.objectContaining({ x: 64.25, y: 72.25, w: 319.5, h: 107.5 }),
+    );
+  });
+
   it('renders scatter-series markers and labels over a reversed horizontal category axis', () => {
     const rec = recordingCtx();
     const hiddenAxis = {
