@@ -8488,6 +8488,7 @@ pub fn parse_chart_part_with_references(
         let cat_needs_theme_width = cat_ax.is_some_and(|axis| {
             !cat_axis_line_hidden
                 && cat_axis_line_width_emu.is_none()
+                && cat_axis_line_color.is_some()
                 && child(axis, "spPr")
                     .and_then(|shape| child(shape, "ln"))
                     .is_some()
@@ -8495,6 +8496,7 @@ pub fn parse_chart_part_with_references(
         let val_needs_theme_width = val_ax.is_some_and(|axis| {
             !val_axis_line_hidden
                 && val_axis_line_width_emu.is_none()
+                && val_axis_line_color.is_some()
                 && child(axis, "spPr")
                     .and_then(|shape| child(shape, "ln"))
                     .is_some()
@@ -11367,6 +11369,20 @@ Subtitle</a:t></a:r></a:p>
         assert!(no_fill_model.val_axis_line_hidden);
         assert_eq!(no_fill_model.cat_axis_line_width_emu, None);
         assert_eq!(no_fill_model.val_axis_line_width_emu, None);
+
+        for line in ["<a:ln/>", "<a:ln><a:prstDash val=\"dash\"/></a:ln>"] {
+            let unresolved_overlay = xml.replace(
+                "<a:ln><a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill></a:ln>",
+                line,
+            );
+            let unresolved_doc = chart_space_of(&unresolved_overlay);
+            let unresolved =
+                parse_chart_part(unresolved_doc.root_element(), &resolver).expect("chart parses");
+            assert_eq!(unresolved.cat_axis_line_color, None);
+            assert_eq!(unresolved.val_axis_line_color, None);
+            assert_eq!(unresolved.cat_axis_line_width_emu, None);
+            assert_eq!(unresolved.val_axis_line_width_emu, None);
+        }
     }
 
     /// (b) Combo chart: a bar series on the primary value axis plus a line
