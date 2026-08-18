@@ -7318,6 +7318,43 @@ describe('classic chart data table (CT_DTable)', () => {
     })).toEqual({ lineStrokes: 0, outlines: 0 });
   });
 
+  it('uses the linked dataTable line role only for omitted grid properties', () => {
+    const render = (lineColor?: string, roleHidden = false) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'line',
+        categories: ['Q1'],
+        series: [series({ name: 'North', values: [10], seriesType: 'line' })],
+        dataTable: {
+          showHorizontalBorder: false,
+          showVerticalBorder: false,
+          showOutline: true,
+          showKeys: false,
+          lineColor,
+        },
+        chartStyleRoles: {
+          dataTable: {
+            lineColors: ['AABBCC'],
+            lineWidthEmu: 19_050,
+            lineDash: 'dash',
+            lineHidden: roleHidden,
+          },
+        },
+      }), RECT, 1);
+      return rec.strokeRects;
+    };
+
+    const linked = render();
+    expect(linked).toContainEqual(expect.objectContaining({ ss: '#AABBCC', lw: 1.5 }));
+    expect(linked.find(rect => rect.ss === '#AABBCC')?.dash.length).toBeGreaterThan(0);
+
+    const direct = render('112233');
+    expect(direct.some(rect => rect.ss === '#112233')).toBe(true);
+    expect(direct.some(rect => rect.ss === '#AABBCC')).toBe(false);
+    expect(render(undefined, true)).toHaveLength(0);
+    expect(render('112233', true).some(rect => rect.ss === '#112233')).toBe(true);
+  });
+
   it('localizes a built-in short-date category source independently of the date-axis code', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({

@@ -100,13 +100,14 @@ status differences below are renderer-consumption gaps, not lost package data.
 | ID | Role group | Status | Notes |
 | --- | --- | --- | --- |
 | S-STYLE-001 | Shared role parsing and package wiring | Supported | Paint recipes, fixed/relative Chart Colors indices, `NoStyle`, and bounded palette expansion are retained through DOCX, XLSX, and PPTX. |
-| S-STYLE-002 | `chartArea`, `plotArea`, `legend`, `dataTable` | Partial | Roles are retained, but the corresponding frame painters do not yet consume every fallback. |
+| S-STYLE-002 | `chartArea`, `plotArea`, `legend` | Partial | Roles are retained, but the corresponding frame painters do not yet consume every fallback. |
 | S-STYLE-003 | `gridlineMinor`, tick labels, `seriesAxis` | Partial | Roles are retained; direct chart formatting may render while linked-style fallback is incomplete. |
 | S-STYLE-004 | `seriesLine`, `dropLine`, `hiLoLine`, `upBar`, `downBar` | Supported | Direct formatting wins; the linked role supplies only omitted fill/line properties. |
 | S-STYLE-005 | `errorBar`, `leaderLine` | Supported | Direct line paint and `noFill` win; the linked role supplies omitted color, width, dash, and visibility in shared 2-D and optional 3-D paths. |
 | S-STYLE-006 | `trendline` | Supported | Direct trendline paint and `noFill` win; the linked role supplies omitted color, width, dash, and visibility to the plot and legend. |
-| S-STYLE-007 | `dataLabelCallout`, `trendlineLabel` | Partial | Paint is retained; text/shape style inheritance is incomplete. |
-| S-STYLE-008 | `dataPoint3D`, `dataPointWireframe`, `floor`, `wall`, `plotArea3D` | Partial | Paint is retained; authored direct 3-D surface formatting remains authoritative where already modeled. |
+| S-STYLE-007 | `dataTable` | Supported | The linked line role supplies omitted grid color, width, dash, and `noFill`; direct table formatting remains authoritative. |
+| S-STYLE-008 | `dataLabelCallout`, `trendlineLabel` | Partial | Paint is retained; text/shape style inheritance is incomplete. |
+| S-STYLE-009 | `dataPoint3D`, `dataPointWireframe`, `floor`, `wall`, `plotArea3D` | Partial | Paint is retained; authored direct 3-D surface formatting remains authoritative where already modeled. |
 
 ## ChartEx layouts
 

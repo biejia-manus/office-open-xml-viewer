@@ -4785,7 +4785,7 @@ function chartStyleRoleLine(
     widthEmu: direct.widthEmu ?? (linkedApplies ? linked.lineWidthEmu : null),
     dash: direct.dash ?? (linkedApplies ? linked.lineDash : null),
     hidden: direct.hidden
-      ?? (linkedApplies && linked.lineHidden === true ? true : null),
+      ?? (direct.color == null && linkedApplies && linked.lineHidden === true ? true : null),
   };
 }
 
@@ -4860,26 +4860,46 @@ function chartStyleRoleTrendline(
   };
 }
 
+function chartStyleRoleDataTable(
+  chart: ChartModel,
+  direct: NonNullable<ChartModel['dataTable']>,
+): NonNullable<ChartModel['dataTable']> {
+  const linked = chartStyleRoleLine(chart, {
+    color: direct.lineColor,
+    widthEmu: direct.lineWidthEmu,
+    dash: direct.lineDash,
+    hidden: direct.lineHidden,
+  }, 'dataTable');
+  return {
+    ...direct,
+    lineColor: linked.color ?? undefined,
+    lineWidthEmu: linked.widthEmu ?? undefined,
+    lineDash: linked.dash ?? undefined,
+    lineHidden: linked.hidden ?? undefined,
+  };
+}
+
 /** Materialize the linked decoration roles that an optional family renderer
  * consumes directly from `ChartSeries`. Keeping this projection in core means
  * the 2-D, 3-D, DOCX, XLSX, and PPTX paths receive one effective precedence
  * result without teaching an optional renderer about package sidecars. */
-function applyLinkedSeriesDecorationStyles(chart: ChartModel): ChartModel {
+function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
   if (!chart.chartStyleRoles?.errorBar
     && !chart.chartStyleRoles?.leaderLine
-    && !chart.chartStyleRoles?.trendline) {
+    && !chart.chartStyleRoles?.trendline
+    && !chart.chartStyleRoles?.dataTable) {
     return chart;
   }
   let changed = false;
   const series = chart.series.map(item => {
-    const errBars = item.errBars?.map(errorBar => {
+    const errBars = chart.chartStyleRoles?.errorBar ? item.errBars?.map(errorBar => {
       const effective = chartStyleRoleErrorBar(chart, errorBar);
       changed ||= effective.color !== errorBar.color
         || effective.lineWidthEmu !== errorBar.lineWidthEmu
         || effective.dash !== errorBar.dash
         || effective.hidden !== errorBar.hidden;
       return effective;
-    });
+    }) : item.errBars;
     let seriesDataLabels = item.seriesDataLabels;
     if (seriesDataLabels && chart.chartStyleRoles?.leaderLine) {
       const effective = chartStyleRoleLeaderLine(chart, seriesDataLabels);
@@ -4896,20 +4916,29 @@ function applyLinkedSeriesDecorationStyles(chart: ChartModel): ChartModel {
         || merged.leaderLineHidden !== seriesDataLabels.leaderLineHidden;
       seriesDataLabels = merged;
     }
-    const trendLines = item.trendLines?.map(trendline => {
+    const trendLines = chart.chartStyleRoles?.trendline ? item.trendLines?.map(trendline => {
       const effective = chartStyleRoleTrendline(chart, trendline);
       changed ||= effective.lineColor !== trendline.lineColor
         || effective.lineWidthEmu !== trendline.lineWidthEmu
         || effective.lineDash !== trendline.lineDash
         || effective.lineHidden !== trendline.lineHidden;
       return effective;
-    });
+    }) : item.trendLines;
     if (errBars === item.errBars
       && seriesDataLabels === item.seriesDataLabels
       && trendLines === item.trendLines) return item;
     return { ...item, errBars, seriesDataLabels, trendLines };
   });
-  return changed ? { ...chart, series } : chart;
+  let dataTable = chart.dataTable;
+  if (dataTable && chart.chartStyleRoles?.dataTable) {
+    const effective = chartStyleRoleDataTable(chart, dataTable);
+    changed ||= effective.lineColor !== dataTable.lineColor
+      || effective.lineWidthEmu !== dataTable.lineWidthEmu
+      || effective.lineDash !== dataTable.lineDash
+      || effective.lineHidden !== dataTable.lineHidden;
+    dataTable = effective;
+  }
+  return changed ? { ...chart, series, dataTable } : chart;
 }
 
 function drawUpDownBars(
@@ -13434,7 +13463,7 @@ export function renderChart(
   ctx.save();
   try {
     chart = applyPlotVisibleOnly(chart);
-    chart = applyLinkedSeriesDecorationStyles(chart);
+    chart = applyLinkedChartStyleRoles(chart);
     const { x, y, w, h } = rect;
     const rounded = chart.roundedCorners === true;
     const cornerRadius = rounded ? CHART_SPACE_CORNER_RADIUS_PT * ptToPx : 0;
