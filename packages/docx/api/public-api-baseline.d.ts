@@ -286,6 +286,10 @@ export interface ChartModel {
     plotAreaFill?: Fill | null;
     plotAreaFillHidden?: boolean | null;
     plotAreaFillPaintAuthored?: boolean | null;
+    plotAreaLineColor?: string | null;
+    plotAreaLineWidthEmu?: number | null;
+    plotAreaLineHidden?: boolean | null;
+    plotAreaLinePaintAuthored?: boolean | null;
     chartBg: string | null;
     chartFill?: Fill | null;
     chartFillHidden?: boolean | null;
@@ -361,6 +365,8 @@ export interface ChartModel {
     themeMinorFontLatin?: string | null;
     chartBorderColor?: string | null;
     chartBorderWidthEmu?: number | null;
+    chartBorderHidden?: boolean | null;
+    chartBorderPaintAuthored?: boolean | null;
     catAxisCrosses?: string | null;
     catAxisCrossesAt?: number | null;
     valAxisCrosses?: string | null;

@@ -391,6 +391,8 @@ describe('chart-space background', () => {
               { position: 1, color: 'DDEEFF' },
             ],
           }],
+          lineColors: ['445566'],
+          lineWidthEmu: 9525,
         },
       },
     });
@@ -400,6 +402,9 @@ describe('chart-space background', () => {
     expect(linked.rects[0]).toMatchObject({
       x: 0, y: 0, w: 640, h: 360, fs: '[object Object]',
     });
+    expect(linked.strokeRects).toContainEqual(expect.objectContaining({
+      ss: '#445566', lw: 0.75,
+    }));
 
     const directNoFill = recordingCtx();
     renderChart(directNoFill.ctx, {
@@ -407,9 +412,12 @@ describe('chart-space background', () => {
       chartBg: null,
       chartFillHidden: true,
       chartFillPaintAuthored: true,
+      chartBorderHidden: true,
+      chartBorderPaintAuthored: true,
     }, RECT, 1);
     expect(directNoFill.gradients).toHaveLength(0);
     expect(directNoFill.rects).toHaveLength(0);
+    expect(directNoFill.strokeRects).toHaveLength(0);
   });
 });
 
@@ -2671,6 +2679,8 @@ describe('bar chart authored layout and fills', () => {
               { position: 1, color: 'DDEEFF' },
             ],
           }],
+          lineColors: ['445566'],
+          lineWidthEmu: 9525,
         },
       },
     });
@@ -2683,15 +2693,21 @@ describe('bar chart authored layout and fills', () => {
       { position: 1, color: 'rgba(221,238,255,1)' },
     ]);
     expect(linked.rects).toContainEqual(expect.objectContaining({ fs: '[object Object]' }));
+    expect(linked.strokeRects).toContainEqual(expect.objectContaining({
+      ss: '#445566', lw: 0.75,
+    }));
 
     const directNoFill = recordingCtx();
     renderChart(directNoFill.ctx, {
       ...chart,
       plotAreaFillHidden: true,
       plotAreaFillPaintAuthored: true,
+      plotAreaLineHidden: true,
+      plotAreaLinePaintAuthored: true,
     }, RECT, 1, 30);
     expect(directNoFill.gradients).toHaveLength(0);
     expect(directNoFill.rects).not.toContainEqual(expect.objectContaining({ fs: '[object Object]' }));
+    expect(directNoFill.strokeRects).not.toContainEqual(expect.objectContaining({ ss: '#445566' }));
   });
 
   it('renders scatter-series markers and labels over a reversed horizontal category axis', () => {

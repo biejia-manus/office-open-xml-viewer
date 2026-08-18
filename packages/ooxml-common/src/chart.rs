@@ -260,6 +260,14 @@ pub struct ChartModel {
     /// A direct plot-area fill paint was authored, even when unresolved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_area_fill_paint_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_line_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_line_width_emu: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_line_hidden: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_line_paint_authored: Option<bool>,
     pub chart_bg: Option<String>,
     /// Structured non-solid chart-space fill. Solid fills remain represented
     /// by `chart_bg` for wire compatibility.
@@ -381,6 +389,10 @@ pub struct ChartModel {
     pub chart_border_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart_border_width_emu: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_border_hidden: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_border_paint_authored: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cat_axis_crosses: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3235,6 +3247,14 @@ struct DirectShapeFill {
     paint_authored: Option<bool>,
 }
 
+#[derive(Default)]
+struct DirectShapeLine {
+    color: Option<String>,
+    width_emu: Option<u32>,
+    hidden: Option<bool>,
+    paint_authored: Option<bool>,
+}
+
 fn extract_direct_shape_fill(shape: Option<Node>, resolver: &dyn ColorResolver) -> DirectShapeFill {
     let fill_paint = shape.and_then(|shape| parse_chart_style_paint(shape, resolver, None));
     let paint_authored = shape
@@ -3280,6 +3300,29 @@ fn extract_direct_shape_fill(shape: Option<Node>, resolver: &dyn ColorResolver) 
     }
 }
 
+fn extract_direct_shape_line(node: Node, resolver: &dyn ColorResolver) -> DirectShapeLine {
+    let shape = child(node, "spPr");
+    let line = shape.and_then(|shape| child(shape, "ln"));
+    let paint_authored = line
+        .and_then(|line| {
+            line.children().find(|child| {
+                child.is_element()
+                    && matches!(
+                        child.tag_name().name(),
+                        "noFill" | "solidFill" | "gradFill" | "pattFill"
+                    )
+            })
+        })
+        .map(|_| true);
+    let (color, width_emu, no_fill) = extract_sp_pr_ln_style(node, resolver);
+    DirectShapeLine {
+        color: if no_fill { None } else { color },
+        width_emu,
+        hidden: no_fill.then_some(true),
+        paint_authored,
+    }
+}
+
 #[derive(Default)]
 struct LegendFrameStyle {
     fill_color: Option<String>,
@@ -3304,28 +3347,16 @@ fn extract_legend_frame_style(root: Node, resolver: &dyn ColorResolver) -> Legen
     };
     let shape = child(legend, "spPr");
     let direct_fill = extract_direct_shape_fill(shape, resolver);
-    let (line_color, line_width, line_hidden) = extract_sp_pr_ln_style(legend, resolver);
-    let line_paint_authored = shape
-        .and_then(|shape| child(shape, "ln"))
-        .and_then(|line| {
-            line.children().find(|node| {
-                node.is_element()
-                    && matches!(
-                        node.tag_name().name(),
-                        "noFill" | "solidFill" | "gradFill" | "pattFill"
-                    )
-            })
-        })
-        .map(|_| true);
+    let direct_line = extract_direct_shape_line(legend, resolver);
     LegendFrameStyle {
         fill_color: direct_fill.color,
         fill: direct_fill.fill,
         fill_hidden: direct_fill.hidden,
         fill_paint_authored: direct_fill.paint_authored,
-        line_color: if line_hidden { None } else { line_color },
-        line_width_emu: line_width,
-        line_hidden: line_hidden.then_some(true),
-        line_paint_authored,
+        line_color: direct_line.color,
+        line_width_emu: direct_line.width_emu,
+        line_hidden: direct_line.hidden,
+        line_paint_authored: direct_line.paint_authored,
     }
 }
 
@@ -5778,22 +5809,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         extract_legend_text_props(root);
     let legend_font_color = extract_legend_font_color(root, resolver);
     let legend_frame = extract_legend_frame_style(root, resolver);
-    let (chart_border_color, chart_border_width_emu) = child(root, "spPr")
-        .and_then(|shape| child(shape, "ln"))
-        .map(|line| {
-            if child(line, "noFill").is_some() {
-                (
-                    None,
-                    attr(&line, "w").and_then(|value| value.parse::<u32>().ok()),
-                )
-            } else {
-                (
-                    resolver.resolve_shape_fill(line),
-                    attr(&line, "w").and_then(|value| value.parse::<u32>().ok()),
-                )
-            }
-        })
-        .unwrap_or((None, None));
+    let chart_line_style = extract_direct_shape_line(root, resolver);
 
     // `<cx:catScaling gapWidth>` (chartEx) — same semantics as legacy
     // `<c:gapWidth>` but stored as a *fraction* (e.g. 0.8 ≡ 80%) instead of
@@ -5841,6 +5857,10 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         plot_area_fill: None,
         plot_area_fill_hidden: None,
         plot_area_fill_paint_authored: None,
+        plot_area_line_color: None,
+        plot_area_line_width_emu: None,
+        plot_area_line_hidden: None,
+        plot_area_line_paint_authored: None,
         chart_bg,
         chart_fill: chart_fill_style.fill,
         chart_fill_hidden: chart_fill_style.hidden,
@@ -5905,8 +5925,10 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         cat_axis_font_italic,
         val_axis_font_bold,
         val_axis_font_italic,
-        chart_border_color,
-        chart_border_width_emu,
+        chart_border_color: chart_line_style.color,
+        chart_border_width_emu: chart_line_style.width_emu,
+        chart_border_hidden: chart_line_style.hidden,
+        chart_border_paint_authored: chart_line_style.paint_authored,
         secondary_val_axis: None,
         secondary_cat_axis: None,
         // chartEx charts (waterfall/treemap/etc.) are not pie/doughnut and
@@ -8373,6 +8395,7 @@ pub fn parse_chart_part_with_references_and_style_parts(
 
     let plot_area_fill_style = extract_direct_shape_fill(child(plot_area, "spPr"), color_resolver);
     let plot_area_bg = plot_area_fill_style.color;
+    let plot_area_line_style = extract_direct_shape_line(plot_area, color_resolver);
     let data_table = extract_chart_data_table(plot_area, color_resolver);
 
     let ser_nodes: Vec<_> = plot_area
@@ -9591,13 +9614,7 @@ pub fn parse_chart_part_with_references_and_style_parts(
     // color grammar through the package theme: chart borders commonly use
     // `<a:schemeClr val="tx1">` (often with luminance transforms), not only a
     // literal srgb color. `<a:noFill/>` remains an explicit invisible border.
-    let (resolved_border_color, chart_border_width_emu, border_no_fill) =
-        extract_sp_pr_ln_style(root, color_resolver);
-    let chart_border_color = if border_no_fill {
-        None
-    } else {
-        resolved_border_color
-    };
+    let chart_line_style = extract_direct_shape_line(root, color_resolver);
 
     // `<c:date1904>` (ECMA-376 §21.2.2.38) — direct child of `<c:chartSpace>`
     // (`root`). Shared with the xlsx parser via ooxml-common so both honor the
@@ -9819,6 +9836,10 @@ pub fn parse_chart_part_with_references_and_style_parts(
         plot_area_fill: plot_area_fill_style.fill,
         plot_area_fill_hidden: plot_area_fill_style.hidden,
         plot_area_fill_paint_authored: plot_area_fill_style.paint_authored,
+        plot_area_line_color: plot_area_line_style.color,
+        plot_area_line_width_emu: plot_area_line_style.width_emu,
+        plot_area_line_hidden: plot_area_line_style.hidden,
+        plot_area_line_paint_authored: plot_area_line_style.paint_authored,
         chart_bg,
         chart_fill,
         chart_fill_hidden: chart_fill_style.hidden,
@@ -9883,8 +9904,10 @@ pub fn parse_chart_part_with_references_and_style_parts(
         cat_axis_font_italic,
         val_axis_font_bold,
         val_axis_font_italic,
-        chart_border_color,
-        chart_border_width_emu,
+        chart_border_color: chart_line_style.color,
+        chart_border_width_emu: chart_line_style.width_emu,
+        chart_border_hidden: chart_line_style.hidden,
+        chart_border_paint_authored: chart_line_style.paint_authored,
         secondary_val_axis,
         secondary_cat_axis,
         // Pie/doughnut geometry (CH8) + chart text font faces (CH10).
@@ -10148,6 +10171,10 @@ mod tests {
             plot_area_fill: None,
             plot_area_fill_hidden: None,
             plot_area_fill_paint_authored: None,
+            plot_area_line_color: None,
+            plot_area_line_width_emu: None,
+            plot_area_line_hidden: None,
+            plot_area_line_paint_authored: None,
             chart_bg: Some("FFFFFF".to_string()),
             chart_fill: None,
             chart_fill_hidden: None,
@@ -10204,6 +10231,8 @@ mod tests {
             val_axis_title_manual_layout: None,
             chart_border_color: None,
             chart_border_width_emu: None,
+            chart_border_hidden: None,
+            chart_border_paint_authored: None,
             cat_axis_crosses: None,
             cat_axis_crosses_at: None,
             val_axis_crosses: None,
@@ -11354,7 +11383,7 @@ Subtitle</a:t></a:r></a:p>
     #[test]
     fn parse_chart_part_preserves_direct_plot_area_fill_provenance() {
         let gradient = root_of(
-            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart><c:spPr><a:gradFill rotWithShape="0"><a:gsLst><a:gs pos="0"><a:srgbClr val="112233"/></a:gs><a:gs pos="100000"><a:srgbClr val="AABBCC"/></a:gs></a:gsLst><a:lin ang="2700000"/></a:gradFill></c:spPr></c:plotArea></c:chart></c:chartSpace>"#,
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart><c:spPr><a:gradFill rotWithShape="0"><a:gsLst><a:gs pos="0"><a:srgbClr val="112233"/></a:gs><a:gs pos="100000"><a:srgbClr val="AABBCC"/></a:gs></a:gsLst><a:lin ang="2700000"/></a:gradFill><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:ln></c:spPr></c:plotArea></c:chart></c:chartSpace>"#,
         );
         let model = parse_chart_part(gradient.root_element(), &FixtureResolver)
             .expect("classic chart parses");
@@ -11368,9 +11397,13 @@ Subtitle</a:t></a:r></a:p>
         ));
         assert_eq!(model.plot_area_fill_hidden, None);
         assert_eq!(model.plot_area_fill_paint_authored, Some(true));
+        assert_eq!(model.plot_area_line_color.as_deref(), Some("445566"));
+        assert_eq!(model.plot_area_line_width_emu, Some(12700));
+        assert_eq!(model.plot_area_line_hidden, None);
+        assert_eq!(model.plot_area_line_paint_authored, Some(true));
 
         let no_fill = root_of(
-            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart><c:spPr><a:noFill/></c:spPr></c:plotArea></c:chart></c:chartSpace>"#,
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart><c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr></c:plotArea></c:chart></c:chartSpace>"#,
         );
         let model = parse_chart_part(no_fill.root_element(), &FixtureResolver)
             .expect("classic chart parses");
@@ -11378,6 +11411,9 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(model.plot_area_fill, None);
         assert_eq!(model.plot_area_fill_hidden, Some(true));
         assert_eq!(model.plot_area_fill_paint_authored, Some(true));
+        assert_eq!(model.plot_area_line_color, None);
+        assert_eq!(model.plot_area_line_hidden, Some(true));
+        assert_eq!(model.plot_area_line_paint_authored, Some(true));
     }
 
     #[test]
@@ -12112,6 +12148,8 @@ Subtitle</a:t></a:r></a:p>
             .expect("line-only chart parses");
         assert_eq!(parsed.chart_bg.as_deref(), Some("FFFFFF"));
         assert_eq!(parsed.chart_fill_paint_authored, None);
+        assert_eq!(parsed.chart_border_hidden, Some(true));
+        assert_eq!(parsed.chart_border_paint_authored, Some(true));
 
         // An explicit fill choice remains authoritative.
         let no_fill = chart_xml("<c:spPr><a:noFill/></c:spPr>");

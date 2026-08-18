@@ -587,6 +587,13 @@ export interface ChartModel {
   plotAreaFillHidden?: boolean | null;
   /** A direct plot-area fill paint was authored, even when unresolved. */
   plotAreaFillPaintAuthored?: boolean | null;
+  /** Direct plot-area outline paint and width. */
+  plotAreaLineColor?: string | null;
+  plotAreaLineWidthEmu?: number | null;
+  /** Explicit plot-area outline `noFill`. */
+  plotAreaLineHidden?: boolean | null;
+  /** A direct plot-area line paint was authored, even when unresolved. */
+  plotAreaLinePaintAuthored?: boolean | null;
   /** Outer chartSpace background (hex without '#'). null when noFill/absent. */
   chartBg: string | null;
   /** Structured non-solid `<c:chartSpace><c:spPr>` fill. Solid fills retain
@@ -807,6 +814,10 @@ export interface ChartModel {
   /** `<c:chartSpace><c:spPr><a:ln@w>` border width in EMU. null = 1px hairline
    *  when a color is present. */
   chartBorderWidthEmu?: number | null;
+  /** Explicit chart-area border `noFill`. */
+  chartBorderHidden?: boolean | null;
+  /** A direct chart-area line paint was authored, even when unresolved. */
+  chartBorderPaintAuthored?: boolean | null;
   /**
    * `<c:catAx><c:crosses val>` (`autoZero` | `min` | `max`). Drives the Y
    * coordinate where the X axis is drawn. Default `autoZero` puts the X

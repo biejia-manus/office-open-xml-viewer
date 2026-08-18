@@ -3543,7 +3543,7 @@ function renderBarChart(
     ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
   }
 
-  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, shapeRotationDeg);
+  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
 
   // `axMax`/`step` (primary) and `sMin`/`sMax`/`sStep` (secondary) were computed
   // above the `pad` block so the gutters could be sized to the labels. The
@@ -5090,10 +5090,34 @@ function chartStyleRolePlotArea(chart: ChartModel): ChartModel {
         : null;
     }
   }
+
+  let plotAreaLineColor = chart.plotAreaLineColor;
+  let plotAreaLineWidthEmu = chart.plotAreaLineWidthEmu;
+  let plotAreaLineHidden = chart.plotAreaLineHidden;
+  const directLinePaint = chart.plotAreaLinePaintAuthored === true
+    || plotAreaLineColor != null || plotAreaLineHidden === true;
+  if (linked.lineNoStyle !== true) {
+    if (!directLinePaint) {
+      if (linked.lineHidden === true) plotAreaLineHidden = true;
+      else plotAreaLineColor = chartExStyleColor(chart, linked, 'line', 0, 1);
+    }
+    plotAreaLineWidthEmu ??= linked.lineWidthEmu;
+  }
   if (plotAreaFill === chart.plotAreaFill
     && plotAreaBg === chart.plotAreaBg
-    && plotAreaFillHidden === chart.plotAreaFillHidden) return chart;
-  return { ...chart, plotAreaFill, plotAreaBg, plotAreaFillHidden };
+    && plotAreaFillHidden === chart.plotAreaFillHidden
+    && plotAreaLineColor === chart.plotAreaLineColor
+    && plotAreaLineWidthEmu === chart.plotAreaLineWidthEmu
+    && plotAreaLineHidden === chart.plotAreaLineHidden) return chart;
+  return {
+    ...chart,
+    plotAreaFill,
+    plotAreaBg,
+    plotAreaFillHidden,
+    plotAreaLineColor,
+    plotAreaLineWidthEmu,
+    plotAreaLineHidden,
+  };
 }
 
 function chartStyleRoleChartArea(chart: ChartModel): ChartModel {
@@ -5117,10 +5141,34 @@ function chartStyleRoleChartArea(chart: ChartModel): ChartModel {
       chartFillHidden = null;
     }
   }
+
+  let chartBorderColor = chart.chartBorderColor;
+  let chartBorderWidthEmu = chart.chartBorderWidthEmu;
+  let chartBorderHidden = chart.chartBorderHidden;
+  const directLinePaint = chart.chartBorderPaintAuthored === true
+    || chartBorderColor != null || chartBorderHidden === true;
+  if (linked.lineNoStyle !== true) {
+    if (!directLinePaint) {
+      if (linked.lineHidden === true) chartBorderHidden = true;
+      else chartBorderColor = chartExStyleColor(chart, linked, 'line', 0, 1);
+    }
+    chartBorderWidthEmu ??= linked.lineWidthEmu;
+  }
   if (chartFill === chart.chartFill
     && chartBg === chart.chartBg
-    && chartFillHidden === chart.chartFillHidden) return chart;
-  return { ...chart, chartFill, chartBg, chartFillHidden };
+    && chartFillHidden === chart.chartFillHidden
+    && chartBorderColor === chart.chartBorderColor
+    && chartBorderWidthEmu === chart.chartBorderWidthEmu
+    && chartBorderHidden === chart.chartBorderHidden) return chart;
+  return {
+    ...chart,
+    chartFill,
+    chartBg,
+    chartFillHidden,
+    chartBorderColor,
+    chartBorderWidthEmu,
+    chartBorderHidden,
+  };
 }
 
 function paintPlotAreaFill(
@@ -5130,15 +5178,33 @@ function paintPlotAreaFill(
   y: number,
   w: number,
   h: number,
+  ptToPx: number,
   shapeRotationDeg = 0,
 ): void {
-  if (chart.plotAreaFillHidden === true) return;
-  const fill = chart.plotAreaFill
-    ? resolveFill(chart.plotAreaFill, ctx, x, y, w, h, shapeRotationDeg)
-    : chart.plotAreaBg ? `#${chart.plotAreaBg}` : null;
-  if (!fill) return;
-  ctx.fillStyle = fill;
-  ctx.fillRect(x, y, w, h);
+  if (chart.plotAreaFillHidden !== true) {
+    const fill = chart.plotAreaFill
+      ? resolveFill(chart.plotAreaFill, ctx, x, y, w, h, shapeRotationDeg)
+      : chart.plotAreaBg ? `#${chart.plotAreaBg}` : null;
+    if (fill) {
+      ctx.fillStyle = fill;
+      ctx.fillRect(x, y, w, h);
+    }
+  }
+  if (chart.plotAreaLineHidden !== true && chart.plotAreaLineColor) {
+    const lineWidth = chart.plotAreaLineWidthEmu
+      ? Math.max(0.5, chart.plotAreaLineWidthEmu / EMU_PER_PT) * ptToPx
+      : 1;
+    ctx.save();
+    ctx.strokeStyle = `#${chart.plotAreaLineColor}`;
+    ctx.lineWidth = lineWidth;
+    ctx.strokeRect(
+      x + lineWidth / 2,
+      y + lineWidth / 2,
+      Math.max(0, w - lineWidth),
+      Math.max(0, h - lineWidth),
+    );
+    ctx.restore();
+  }
 }
 
 /** Materialize the linked decoration roles that an optional family renderer
@@ -5732,7 +5798,7 @@ function renderLineChart(
     ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
   }
 
-  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, shapeRotationDeg);
+  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
 
   // Value axis is vertical → its length is the plot height (axis-length-aware
   // auto major unit, same model as the bar/column renderer). `planValueAxis`
@@ -6249,7 +6315,7 @@ function renderStockChart(
     ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
   }
 
-  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, shapeRotationDeg);
+  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
 
   // ── Value-axis extent: across every series' plotted values (the hi-lo line
   // needs both the low and high extremes). Authored bounds are retained and
@@ -7322,7 +7388,7 @@ function renderAreaChart(
     ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
   }
 
-  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, shapeRotationDeg);
+  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
 
   // Primary extent from the PRIMARY series only (secondary series live on their
   // own axis). When `sec` is null every series is primary, byte-identical to
@@ -9883,7 +9949,7 @@ function renderScatterChart(
   });
   if (pw <= 0 || ph <= 0) return;
 
-  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, shapeRotationDeg);
+  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
 
   // X / Y data extents. Secondary-group points have their own independent
   // top/right value axes and therefore must not stretch the primary scales.
@@ -13856,7 +13922,7 @@ export function renderChart(
     // `<c:chartSpace><c:spPr><a:ln><a:solidFill>` (chartBorderColor is null
     // otherwise; there is no default Excel-style frame). Width comes from
     // `<a:ln@w>` (EMU → pt → px); absent width falls back to a 1px hairline.
-    if (chart.chartBorderColor) {
+    if (chart.chartBorderHidden !== true && chart.chartBorderColor) {
       ctx.save();
       ctx.strokeStyle = `#${chart.chartBorderColor}`;
       // `<a:ln>` with no `@w` means width 0 per ECMA-376 §20.1.2.2.24, i.e. invisible;
