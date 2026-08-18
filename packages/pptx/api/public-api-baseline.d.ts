@@ -53,6 +53,14 @@ export interface Camera3d {
     zoom?: number;
     rot?: Rot3d;
 }
+interface ChartAreaGroupDecorations {
+    groupIndex: number;
+    dropLines?: ChartDecorationLineStyle | null;
+}
+interface ChartBarGroupDecorations {
+    groupIndex: number;
+    seriesLines?: ChartDecorationLineStyle[] | null;
+}
 export interface ChartDataLabelOverride {
     idx: number;
     text: string;
@@ -241,14 +249,6 @@ interface ChartLineGroupDecorations {
     hiLowLines?: ChartDecorationLineStyle | null;
     upDownBars?: ChartStockUpDownBarStyle | null;
 }
-interface ChartAreaGroupDecorations {
-    groupIndex: number;
-    dropLines?: ChartDecorationLineStyle | null;
-}
-interface ChartBarGroupDecorations {
-    groupIndex: number;
-    seriesLines?: ChartDecorationLineStyle[] | null;
-}
 export interface ChartManualLayout {
     xMode?: string;
     yMode?: string;
@@ -399,6 +399,8 @@ export interface ChartModel {
     catAxisTickLabelPos?: string | null;
     catAxisTickLabelSkip?: number | null;
     catAxisTickMarkSkip?: number | null;
+    catAxisLabelAlignment?: 'l' | 'ctr' | 'r' | string | null;
+    catAxisLabelOffsetPercent?: number | null;
     valAxisTickLabelPos?: string | null;
     catAxisLabelRotation?: number | null;
     lineGroupDecorations?: ChartLineGroupDecorations[] | null;
@@ -1369,6 +1371,8 @@ export interface SecondaryValueAxis {
     logBase?: number | null;
     orientation?: 'minMax' | 'maxMin' | string | null;
     tickLabelPos?: string | null;
+    labelAlignment?: 'l' | 'ctr' | 'r' | null;
+    labelOffsetPercent?: number | null;
     tickLabelSkip?: number | null;
     tickMarkSkip?: number | null;
     crosses?: string | null;

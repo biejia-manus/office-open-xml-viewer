@@ -22,6 +22,7 @@
 // renderer.ts; only the frame is shared.
 
 import type { ChartManualLayout, ChartModel } from '../types/chart';
+import { categoryLabelOffsetPx } from './category-spacing';
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -432,8 +433,13 @@ export function cartesianTitleBand(
  *  labels. `catAxFontPx` is the resolved category-axis label font size. Callers
  *  add the axis-title band and any bottom-legend reserve on top of this.
  *  See {@link CAT_AXIS_LABEL_BAND_FONT_FRAC}. */
-export function catAxisLabelBandH(catAxFontPx: number): number {
-  return catAxFontPx * CAT_AXIS_LABEL_BAND_FONT_FRAC;
+export function catAxisLabelBandH(
+  catAxFontPx: number,
+  labelOffsetPercent?: number | null,
+): number {
+  const defaultGap = categoryTickLabelGapPx(catAxFontPx);
+  const offsetGap = categoryLabelOffsetPx(defaultGap, labelOffsetPercent);
+  return catAxFontPx * CAT_AXIS_LABEL_BAND_FONT_FRAC + offsetGap - defaultGap;
 }
 
 /** Office's default distance from an axis rule to one line of tick-label text,

@@ -47,6 +47,8 @@ import {
 } from './chart-number-format.js';
 import { elideToWidth } from './text-elide.js';
 import {
+  categoryLabelAnchorFraction,
+  categoryLabelOffsetPx,
   categoryPositionFraction,
   resolveCategoryGapWidthPercent,
   type CategoryGapPolicy,
@@ -2371,8 +2373,13 @@ function drawSecondaryCategoryAxis(
   const labelSkip = Math.max(1, Math.floor(axis.tickLabelSkip ?? 1));
   const markSkip = Math.max(1, Math.floor(axis.tickMarkSkip ?? 1));
   const count = categories.length;
-  const atCenter = (index: number) => px0
-    + ((reversed ? count - 1 - index : index) + 0.5) / count * pw;
+  const labelAnchor = (index: number) => categoryLabelAnchorFraction(
+    index,
+    count,
+    isCrossBetween(chart),
+    reversed,
+    axis.labelAlignment,
+  );
   if (!axis.lineHidden && axis.majorTickMark !== 'none') {
     const onBoundary = isCrossBetween(chart);
     const last = onBoundary ? count : count - 1;
@@ -2396,14 +2403,19 @@ function drawSecondaryCategoryAxis(
       axis.fontItalic ?? false,
     );
     ctx.fillStyle = axis.fontColor ? `#${axis.fontColor}` : '#555';
-    ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
     const budget = Math.max(1, pw / count - 4);
+    const labelGap = categoryLabelOffsetPx(
+      categoryTickLabelGapPx(fontPx),
+      axis.labelOffsetPercent,
+    );
     for (let index = 0; index < count; index += labelSkip) {
+      const anchor = labelAnchor(index);
+      ctx.textAlign = anchor.textAlign;
       ctx.fillText(
         elideToWidth(ctx, formatCategoryLabel(categories[index], axis.formatCode, chart.date1904), budget),
-        atCenter(index),
-        py0 - categoryTickLabelGapPx(fontPx),
+        px0 + anchor.fraction * pw,
+        py0 - labelGap,
       );
     }
   }
@@ -2413,7 +2425,12 @@ function drawSecondaryCategoryAxis(
       ctx,
       axis.title,
       px0 + pw / 2,
-      py0 - (axis.tickLabelPos === 'none' ? 0 : fontPx + categoryTickLabelGapPx(fontPx))
+      py0 - (axis.tickLabelPos === 'none'
+        ? 0
+        : fontPx + categoryLabelOffsetPx(
+          categoryTickLabelGapPx(fontPx),
+          axis.labelOffsetPercent,
+        ))
         - titleFontPx / 2 - 4,
       'horizontal',
       titleFontPx,
@@ -2881,7 +2898,10 @@ function renderBarChart(
   const secondaryCatFontPx = chartTextFontSizePx(secondaryCat?.fontSizeHpt, ptToPx) ?? 9 * ptToPx;
   const secondaryCatLabelBandH = secondaryCat && !secondaryCat.hidden
     && secondaryCat.tickLabelPos !== 'none'
-    ? secondaryCatFontPx + categoryTickLabelGapPx(secondaryCatFontPx) + 2
+    ? secondaryCatFontPx + categoryLabelOffsetPx(
+      categoryTickLabelGapPx(secondaryCatFontPx),
+      secondaryCat.labelOffsetPercent,
+    ) + 2
     : 0;
   const secondaryCatTitleBandH = secondaryCat?.title
     ? axisTitleFontPx(secondaryCat.titleFontSizeHpt, ptToPx) + 6
@@ -2890,7 +2910,7 @@ function renderBarChart(
     + secondaryCatLabelBandH + secondaryCatTitleBandH;
   const padB = isH
     ? (chart.valAxisHidden ? h * 0.02 : catAxisLabelBandH(valAxLabelFontPx)) + catTitleH + legBottomH
-    : catAxisLabelBandH(catAxFontPx) + multiLevelCategoryBandH
+    : catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent) + multiLevelCategoryBandH
       + dataTableBaseH + catTitleH + legBottomH;
   const phEst = h - padT - padB;
   let horizontalCategoryLabelBandW = 0;
@@ -2910,9 +2930,12 @@ function renderBarChart(
       );
     }
     ctx.restore();
-    horizontalCategoryLabelBandW += (chart.catAxisFontSizeHpt != null
-      ? valueTickLabelGapPx(measuredHorizontalCatTickFontPx)
-      : 4) + AXIS_OUTER_TEXT_MARGIN_PT * ptToPx;
+    horizontalCategoryLabelBandW += categoryLabelOffsetPx(
+      chart.catAxisFontSizeHpt != null
+        ? valueTickLabelGapPx(measuredHorizontalCatTickFontPx)
+        : 4,
+      chart.catAxisLabelOffsetPercent,
+    ) + AXIS_OUTER_TEXT_MARGIN_PT * ptToPx;
   }
   // Auto layout keeps at least half of the frame available to the data plot;
   // labels beyond that measured budget are elided at paint time. Authored outer
@@ -3210,8 +3233,11 @@ function renderBarChart(
           ? valueTickLabelGapPx(measuredValTickFontPx)
           : 12,
         catLabelGapPx: chart.catAxisFontSizeHpt != null
-          ? categoryTickLabelGapPx(catAxFontPx)
-          : 3,
+          ? categoryLabelOffsetPx(
+            categoryTickLabelGapPx(catAxFontPx),
+            chart.catAxisLabelOffsetPercent,
+          )
+          : categoryLabelOffsetPx(3, chart.catAxisLabelOffsetPercent),
         outerTextMarginPx: AXIS_OUTER_TEXT_MARGIN_PT * ptToPx,
         valTitleBandW: valTitleW,
         catTitleBandH: catTitleH,
@@ -4163,16 +4189,26 @@ function renderBarChart(
     for (const entry of labelEntries) {
       const { raw } = entry;
       if (!isH) {
-        const lx = entry.fraction != null
-          ? px0 + entry.fraction * pw
-          : categoryCenterX(entry.categoryIndex);
-        ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+        const anchor = entry.fraction != null || entry.categoryIndex < 0
+          ? { fraction: entry.fraction ?? 0.5, textAlign: 'center' as CanvasTextAlign }
+          : categoryLabelAnchorFraction(
+            entry.categoryIndex,
+            n,
+            isCrossBetween(chart),
+            catRev,
+            chart.catAxisLabelAlignment,
+          );
+        const lx = px0 + anchor.fraction * pw;
+        ctx.textAlign = anchor.textAlign; ctx.textBaseline = 'top';
         // Rotation elides against a longer diagonal budget. Horizontal labels
         // use the measured word-wrap computed from this category slot.
         const budget = rotRad === 0 ? catSlotMaxPx : ph * 0.4;
-        const gap = chart.catAxisFontSizeHpt != null
-          ? categoryTickLabelGapPx(drawnCatTickFontPx)
-          : 3;
+        const gap = categoryLabelOffsetPx(
+          chart.catAxisFontSizeHpt != null
+            ? categoryTickLabelGapPx(drawnCatTickFontPx)
+            : 3,
+          chart.catAxisLabelOffsetPercent,
+        );
         if (rotRad === 0) {
           const lines = entry.categoryIndex >= 0
             ? (wrappedColumnCategories[entry.categoryIndex] ?? [raw])
@@ -4187,18 +4223,31 @@ function renderBarChart(
         const ly = entry.fraction != null
           ? py0 + entry.fraction * ph
           : py0 + categorySlotIndex(entry.categoryIndex) * catGap + catGap / 2;
-        ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-        const gap = chart.catAxisFontSizeHpt != null
-          ? valueTickLabelGapPx(drawnCatTickFontPx)
-          : 4;
-        ctx.fillText(elideToWidth(ctx, raw, horizLabelMaxPx), px0 - gap, ly);
+        const gap = categoryLabelOffsetPx(
+          chart.catAxisFontSizeHpt != null
+            ? valueTickLabelGapPx(drawnCatTickFontPx)
+            : 4,
+          chart.catAxisLabelOffsetPercent,
+        );
+        const boxStart = x + legLeftW + valTitleW;
+        const boxEnd = px0 - gap;
+        const alignment = chart.catAxisLabelAlignment;
+        const lx = alignment === 'l'
+          ? boxStart
+          : alignment === 'r' ? boxEnd : (boxStart + boxEnd) / 2;
+        ctx.textAlign = alignment === 'l' ? 'left' : alignment === 'r' ? 'right' : 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(elideToWidth(ctx, raw, horizLabelMaxPx), lx, ly);
       }
     }
 
     if (!isH && categoryLevels) {
-      const gap = chart.catAxisFontSizeHpt != null
-        ? categoryTickLabelGapPx(drawnCatTickFontPx)
-        : 3;
+      const gap = categoryLabelOffsetPx(
+        chart.catAxisFontSizeHpt != null
+          ? categoryTickLabelGapPx(drawnCatTickFontPx)
+          : 3,
+        chart.catAxisLabelOffsetPercent,
+      );
       const rowHeight = drawnCatTickFontPx + 4;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
@@ -4256,9 +4305,14 @@ function renderBarChart(
           const left = px0 + start / n * pw;
           const right = px0 + end / n * pw;
           const rowTop = categoryLabelAxisY + gap + levelIndex * rowHeight;
+          const alignment = chart.catAxisLabelAlignment;
+          const labelX = alignment === 'l'
+            ? left
+            : alignment === 'r' ? right : (left + right) / 2;
+          ctx.textAlign = alignment === 'l' ? 'left' : alignment === 'r' ? 'right' : 'center';
           ctx.fillText(
             elideToWidth(ctx, label, Math.max(0, right - left - 4)),
-            (left + right) / 2,
+            labelX,
             rowTop,
           );
           const bracketBottom = rowTop + drawnCatTickFontPx + 2;
@@ -4473,7 +4527,7 @@ function renderBarChart(
 
   if (dataTableLayout) {
     const tableY = py0 + ph
-      + catAxisLabelBandH(catAxFontPx)
+      + catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent)
       + multiLevelCategoryBandH
       + wrappedCategoryExtraH;
     drawChartDataTable(
@@ -4765,7 +4819,8 @@ function renderLineChart(
   // label so the topmost gridline label rides above the plot; the bottom reserves
   // PowerPoint's full category-label band (gap + line-height + margin).
   let padT = titleH + legTopH + valAxFontPx / 2 + 2;
-  const padB = catAxisLabelBandH(catAxFontPx) + catTitleH + legBottomH;
+  const padB = catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent)
+    + catTitleH + legBottomH;
   const phEst = h - padT - padB;
 
   // Secondary value-axis scale (shared helper). Its axis is the vertical right
@@ -4837,8 +4892,11 @@ function renderLineChart(
       ? valueTickLabelGapPx(valAxFontPx)
       : 6,
     catLabelGapPx: chart.catAxisFontSizeHpt != null
-      ? categoryTickLabelGapPx(catAxFontPx)
-      : 5,
+      ? categoryLabelOffsetPx(
+        categoryTickLabelGapPx(catAxFontPx),
+        chart.catAxisLabelOffsetPercent,
+      )
+      : categoryLabelOffsetPx(5, chart.catAxisLabelOffsetPercent),
     outerTextMarginPx: AXIS_OUTER_TEXT_MARGIN_PT * ptToPx,
     valTitleBandW: valTitleW,
     catTitleBandH: catTitleH,
@@ -5224,25 +5282,40 @@ function renderLineChart(
       ? dateAxisPlan.majorTicks.map(tick => ({
         label: formatCategoryLabel(String(tick.serial), chart.catAxisFormatCode, chart.date1904),
         x: px0 + tick.fraction * pw,
+        categoryIndex: -1,
       }))
       : Array.from({ length: Math.ceil(n / labelInterval) }, (_, index) => {
         const ci = index * labelInterval;
         return {
           label: formatCategoryLabel((cats[ci] ?? '').toString(), chart.catAxisFormatCode, chart.date1904),
           x: toX(ci),
+          categoryIndex: ci,
         };
       });
     for (const entry of labelEntries) {
-      const tx = entry.x;
+      const anchor = entry.categoryIndex < 0
+        ? null
+        : categoryLabelAnchorFraction(
+          entry.categoryIndex,
+          n,
+          isCrossBetween(chart),
+          catAxisReversed(chart),
+          chart.catAxisLabelAlignment,
+        );
+      const tx = anchor ? px0 + anchor.fraction * pw : entry.x;
       if (!showLabels) continue;
+      ctx.textAlign = anchor?.textAlign ?? 'center';
       ctx.fillStyle = catLabelColor;
       // §21.2.2.71: format numeric-serial categories (e.g. dateAx) via the
       // category-axis numFmt; string categories pass through unchanged.
       const label = entry.label;
       if (!label) continue;
-      const gap = chart.catAxisFontSizeHpt != null
-        ? categoryTickLabelGapPx(catAxFontPx)
-        : 5;
+      const gap = categoryLabelOffsetPx(
+        chart.catAxisFontSizeHpt != null
+          ? categoryTickLabelGapPx(catAxFontPx)
+          : 5,
+        chart.catAxisLabelOffsetPercent,
+      );
       drawRotatedCatLabel(ctx, label, tx, py0 + ph + gap, rotRad);
     }
   }
@@ -5322,7 +5395,8 @@ function renderStockChart(
   const valTitleW = axBands.valBandW;
 
   const padT = titleH + legTopH + valAxFontPx / 2 + 2;
-  const padB = catAxisLabelBandH(catAxFontPx) + catTitleH + legBottomH;
+  const padB = catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent)
+    + catTitleH + legBottomH;
 
   const pad = {
     t: padT,
@@ -5554,22 +5628,40 @@ function renderStockChart(
       ? dateAxisPlan.majorTicks.map(tick => ({
         label: formatCategoryLabel(String(tick.serial), chart.catAxisFormatCode, chart.date1904),
         x: px0 + tick.fraction * pw,
+        categoryIndex: -1,
       }))
       : Array.from({ length: Math.ceil(n / labelInterval) }, (_, index) => {
         const ci = index * labelInterval;
         return {
           label: formatCategoryLabel((cats[ci] ?? '').toString(), chart.catAxisFormatCode, chart.date1904),
           x: toX(ci),
+          categoryIndex: ci,
         };
       });
     for (const entry of labelEntries) {
-      const tx = entry.x;
+      const anchor = entry.categoryIndex < 0
+        ? null
+        : categoryLabelAnchorFraction(
+          entry.categoryIndex,
+          n,
+          isCrossBetween(chart),
+          catAxisReversed(chart),
+          chart.catAxisLabelAlignment,
+        );
+      const tx = anchor ? px0 + anchor.fraction * pw : entry.x;
       drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', py0 + ph, tx, undefined, undefined, false, chart.catAxisLineHidden, 'major', ptToPx);
       if (!showLabels) continue;
+      ctx.textAlign = anchor?.textAlign ?? 'center';
       ctx.fillStyle = catLabelColor;
       const label = entry.label;
       const budget = rotRad === 0 ? catSlotMaxPx : ph * 0.4;
-      drawRotatedCatLabel(ctx, elideToWidth(ctx, label, budget), tx, py0 + ph + 5, rotRad);
+      drawRotatedCatLabel(
+        ctx,
+        elideToWidth(ctx, label, budget),
+        tx,
+        py0 + ph + categoryLabelOffsetPx(5, chart.catAxisLabelOffsetPercent),
+        rotRad,
+      );
     }
     if (chart.catAxisMinorTickMark && chart.catAxisMinorTickMark !== 'none' && dateAxisPlan) {
       for (const tick of dateAxisPlan.minorTicks) {
@@ -5779,7 +5871,7 @@ function renderSurfaceChart(
   const pad = {
     t: titleBand.bandH + legTopH + seriesFontPx / 2,
     r: legRightW + seriesFontPx * 3.2 + 12,
-    b: catAxisLabelBandH(catFontPx) + legBottomH,
+    b: catAxisLabelBandH(catFontPx, chart.catAxisLabelOffsetPercent) + legBottomH,
     l: legLeftW + catFontPx * 1.5,
   };
   const frame = computeChartFrame(chart, x, y, w, h, ptToPx, {
@@ -6042,10 +6134,22 @@ function renderSurfaceChart(
   ctx.stroke();
   ctx.font = chartFontCss(catFontPx, chartFontFamily(chart, chart.catAxisFontFace, 'minor'));
   ctx.fillStyle = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#000000';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.textBaseline = 'top';
   for (let column = 0; column < columnCount; column++) {
-    const point = projection.project(toX(column), floorY, nearDepth);
-    ctx.fillText(categories[column] ?? '', point.x, point.y + 8);
+    const anchor = categoryLabelAnchorFraction(
+      column,
+      columnCount,
+      isCrossBetween(chart),
+      catAxisReversed(chart),
+      chart.catAxisLabelAlignment,
+    );
+    const point = projection.project(front.x + anchor.fraction * front.w, floorY, nearDepth);
+    ctx.textAlign = anchor.textAlign;
+    ctx.fillText(
+      categories[column] ?? '',
+      point.x,
+      point.y + categoryLabelOffsetPx(8, chart.catAxisLabelOffsetPercent),
+    );
   }
 
   if (!seriesAxis?.hidden) {
@@ -6198,7 +6302,8 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
   // Top: title band + half a value-axis label above the top gridline. Bottom:
   // PowerPoint's category-label band (gap + line-height + margin).
   const padT = titleH + legTopH + valAxFontPx / 2 + 2;
-  const padB = catAxisLabelBandH(catAxFontPx) + catTitleH + legBottomH;
+  const padB = catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent)
+    + catTitleH + legBottomH;
   const phEst = h - padT - padB;
 
   const secScale = computeSecondaryAxis(sec, chart.series, phEst / ptToPx);
@@ -6326,8 +6431,11 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
       ? valueTickLabelGapPx(manualValTickFontPx)
       : 6,
     catLabelGapPx: chart.catAxisFontSizeHpt != null
-      ? categoryTickLabelGapPx(catAxFontPx)
-      : 3,
+      ? categoryLabelOffsetPx(
+        categoryTickLabelGapPx(catAxFontPx),
+        chart.catAxisLabelOffsetPercent,
+      )
+      : categoryLabelOffsetPx(3, chart.catAxisLabelOffsetPercent),
     outerTextMarginPx: AXIS_OUTER_TEXT_MARGIN_PT * ptToPx,
     valTitleBandW: valTitleW,
     catTitleBandH: catTitleH,
@@ -6806,21 +6914,36 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
       ? dateAxisPlan.majorTicks.map(tick => ({
         label: formatCategoryLabel(String(tick.serial), chart.catAxisFormatCode, chart.date1904),
         x: px0 + tick.fraction * pw,
+        categoryIndex: -1,
       }))
       : Array.from({ length: Math.ceil(n / authoredSkip) }, (_, index) => {
         const ci = index * authoredSkip;
         return {
           label: formatCategoryLabel((cats[ci] ?? '').toString(), chart.catAxisFormatCode, chart.date1904),
           x: toX(ci),
+          categoryIndex: ci,
         };
       });
     for (const entry of labelEntries) {
       const label = entry.label;
       if (!label) continue;
-      const gap = chart.catAxisFontSizeHpt != null
-        ? categoryTickLabelGapPx(drawnCatTickFontPx)
-        : 3;
-      ctx.fillText(label, entry.x, py0 + ph + gap);
+      const anchor = entry.categoryIndex < 0
+        ? null
+        : categoryLabelAnchorFraction(
+          entry.categoryIndex,
+          n,
+          isCrossBetween(chart),
+          catAxisReversed(chart),
+          chart.catAxisLabelAlignment,
+        );
+      const gap = categoryLabelOffsetPx(
+        chart.catAxisFontSizeHpt != null
+          ? categoryTickLabelGapPx(drawnCatTickFontPx)
+          : 3,
+        chart.catAxisLabelOffsetPercent,
+      );
+      ctx.textAlign = anchor?.textAlign ?? 'center';
+      ctx.fillText(label, anchor ? px0 + anchor.fraction * pw : entry.x, py0 + ph + gap);
     }
   }
 
@@ -8196,9 +8319,17 @@ function renderRadarChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: C
   const plotRightX = cx2 + pw / 2;
   if (!chart.catAxisHidden && catLabelsVisible(chart)) for (let i = 0; i < n; i++) {
     const a = spoke(i);
-    const lx = cx2 + Math.cos(a) * (rd + 12);
-    const ly = cy2 + Math.sin(a) * (rd + 12);
-    const align: CanvasTextAlign = Math.cos(a) < -0.1 ? 'right' : Math.cos(a) > 0.1 ? 'left' : 'center';
+    const radialLabelOffset = categoryLabelOffsetPx(12, chart.catAxisLabelOffsetPercent);
+    const lx = cx2 + Math.cos(a) * (rd + radialLabelOffset);
+    const ly = cy2 + Math.sin(a) * (rd + radialLabelOffset);
+    const authoredAlignment = chart.catAxisLabelAlignment;
+    const align: CanvasTextAlign = authoredAlignment === 'l'
+      ? 'left'
+      : authoredAlignment === 'r'
+        ? 'right'
+        : authoredAlignment === 'ctr'
+          ? 'center'
+          : Math.cos(a) < -0.1 ? 'right' : Math.cos(a) > 0.1 ? 'left' : 'center';
     ctx.textAlign = align;
     const maxPx =
       align === 'right' ? lx - plotLeftX

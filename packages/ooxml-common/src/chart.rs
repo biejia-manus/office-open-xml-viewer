@@ -555,6 +555,15 @@ pub struct ChartModel {
     /// `<c:catAx><c:tickMarkSkip val>` (§21.2.2.206), 1-based interval.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cat_axis_tick_mark_skip: Option<u32>,
+    /// `<c:catAx><c:lblAlgn val>` (§21.2.2.90) — `"l"`, `"ctr"`, or `"r"`.
+    /// `None` preserves omission so the renderer can apply its centered default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cat_axis_label_alignment: Option<String>,
+    /// `<c:catAx|dateAx><c:lblOffset val>` (§21.2.2.91), normalized to the
+    /// schema's 0–1000 percentage value. Strict serializes the value with `%`;
+    /// Transitional also permits the legacy unsigned-integer lexical form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cat_axis_label_offset_percent: Option<u32>,
     /// `<c:valAx><c:tickLblPos val>` (§21.2.2.207).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub val_axis_tick_label_pos: Option<String>,
@@ -1383,6 +1392,10 @@ pub struct SecondaryValueAxis {
     pub tick_label_pos: Option<String>,
     /// Category-axis interval fields are also carried here when this object is
     /// used as `secondaryCatAxis` for a top/right `<c:catAx>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_alignment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_offset_percent: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tick_label_skip: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5559,6 +5572,8 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         cat_axis_tick_label_pos: None,
         cat_axis_tick_label_skip: None,
         cat_axis_tick_mark_skip: None,
+        cat_axis_label_alignment: None,
+        cat_axis_label_offset_percent: None,
         val_axis_tick_label_pos: None,
         cat_axis_label_rotation: None,
         line_group_decorations: None,
@@ -8790,6 +8805,21 @@ pub fn parse_chart_part_with_references(
             log_base: extract_axis_log_base(ax),
             orientation: extract_axis_orientation(ax),
             tick_label_pos: extract_axis_tick_label_pos(ax),
+            label_alignment: (ax.tag_name().name() == "catAx")
+                .then(|| child(ax, "lblAlgn"))
+                .flatten()
+                .and_then(|node| attr(&node, "val"))
+                .filter(|value| matches!(value.as_str(), "l" | "ctr" | "r")),
+            label_offset_percent: matches!(ax.tag_name().name(), "catAx" | "dateAx")
+                .then(|| child(ax, "lblOffset"))
+                .flatten()
+                .map(|node| {
+                    attr(&node, "val")
+                        .as_deref()
+                        .and_then(parse_unsigned_percent)
+                        .unwrap_or(100)
+                })
+                .filter(|value| *value <= 1_000),
             tick_label_skip: child(ax, "tickLblSkip")
                 .and_then(|node| node.attribute("val"))
                 .and_then(|value| value.parse::<u32>().ok())
@@ -9079,6 +9109,21 @@ pub fn parse_chart_part_with_references(
         .and_then(|skip| attr(&skip, "val"))
         .and_then(|skip| skip.parse::<u32>().ok())
         .filter(|skip| *skip > 0);
+    let cat_axis_label_alignment = real_cat_ax
+        .filter(|axis| axis.tag_name().name() == "catAx")
+        .and_then(|axis| child(axis, "lblAlgn"))
+        .and_then(|alignment| attr(&alignment, "val"))
+        .filter(|alignment| matches!(alignment.as_str(), "l" | "ctr" | "r"));
+    let cat_axis_label_offset_percent = real_cat_ax
+        .and_then(|axis| child(axis, "lblOffset"))
+        .map(|offset| {
+            attr(&offset, "val")
+                .as_deref()
+                .and_then(parse_unsigned_percent)
+                // CT_LblOffset@val defaults to 100 when the element is present.
+                .unwrap_or(100)
+        })
+        .filter(|offset| *offset <= 1_000);
     let cat_axis_tick_label_pos = cat_ax.and_then(extract_axis_tick_label_pos);
     let val_axis_tick_label_pos = val_ax.and_then(extract_axis_tick_label_pos);
     let cat_axis_label_rotation = cat_ax.and_then(extract_axis_tick_label_rotation);
@@ -9295,6 +9340,8 @@ pub fn parse_chart_part_with_references(
         cat_axis_tick_label_pos,
         cat_axis_tick_label_skip,
         cat_axis_tick_mark_skip,
+        cat_axis_label_alignment,
+        cat_axis_label_offset_percent,
         val_axis_tick_label_pos,
         cat_axis_label_rotation,
         line_group_decorations,
@@ -9588,6 +9635,8 @@ mod tests {
             cat_axis_tick_label_pos: None,
             cat_axis_tick_label_skip: None,
             cat_axis_tick_mark_skip: None,
+            cat_axis_label_alignment: None,
+            cat_axis_label_offset_percent: None,
             val_axis_tick_label_pos: None,
             cat_axis_label_rotation: None,
             line_group_decorations: None,
@@ -11779,7 +11828,8 @@ Subtitle</a:t></a:r></a:p>
               {}{}
               <c:catAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx>
               <c:valAx><c:axId val="2"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>
-              <c:catAx><c:axId val="3"/><c:axPos val="t"/><c:tickLblSkip val="2"/><c:tickMarkSkip val="3"/>
+              <c:catAx><c:axId val="3"/><c:axPos val="t"/><c:lblAlgn val="r"/><c:lblOffset val="250%"/>
+                <c:tickLblSkip val="2"/><c:tickMarkSkip val="3"/>
                 <c:title><c:tx><c:rich><a:p><a:r><a:t>Top Categories</a:t></a:r></a:p></c:rich></c:tx></c:title>
                 <c:crossAx val="4"/><c:crosses val="max"/></c:catAx>
               <c:valAx><c:axId val="4"/><c:axPos val="r"/><c:crossAx val="3"/><c:crosses val="max"/>
@@ -11796,10 +11846,53 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(model.series[1].use_secondary_axis, Some(true));
         let top = model.secondary_cat_axis.expect("top category axis");
         assert_eq!(top.title.as_deref(), Some("Top Categories"));
+        assert_eq!(top.label_alignment.as_deref(), Some("r"));
+        assert_eq!(top.label_offset_percent, Some(250));
         assert_eq!(top.tick_label_skip, Some(2));
         assert_eq!(top.tick_mark_skip, Some(3));
         let right = model.secondary_val_axis.expect("right value axis");
         assert_eq!(right.max, Some(1.0));
+    }
+
+    #[test]
+    fn parse_category_axis_label_alignment_and_offset_contracts() {
+        let parse_axis = |axis_name: &str, authored: &str| {
+            let xml = format!(
+                r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart><c:plotArea>
+                  <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+                    <c:ser><c:idx val="0"/><c:cat><c:strLit><c:pt idx="0"><c:v>A</c:v></c:pt></c:strLit></c:cat>
+                      <c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser>
+                    <c:axId val="1"/><c:axId val="2"/></c:barChart>
+                  <c:{axis_name}><c:axId val="1"/><c:axPos val="b"/>{authored}<c:crossAx val="2"/></c:{axis_name}>
+                  <c:valAx><c:axId val="2"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>
+                </c:plotArea></c:chart></c:chartSpace>"#,
+            );
+            let doc = chart_space_of(&xml);
+            parse_chart_part(doc.root_element(), &FixtureResolver).expect("axis parses")
+        };
+
+        let strict = parse_axis("catAx", r#"<c:lblAlgn val="r"/><c:lblOffset val="250%"/>"#);
+        assert_eq!(strict.cat_axis_label_alignment.as_deref(), Some("r"));
+        assert_eq!(strict.cat_axis_label_offset_percent, Some(250));
+
+        let transitional = parse_axis("catAx", r#"<c:lblAlgn val="l"/><c:lblOffset val="0"/>"#);
+        assert_eq!(transitional.cat_axis_label_alignment.as_deref(), Some("l"));
+        assert_eq!(transitional.cat_axis_label_offset_percent, Some(0));
+
+        let bare_date = parse_axis("dateAx", r#"<c:lblOffset/>"#);
+        assert_eq!(bare_date.cat_axis_label_alignment, None);
+        assert_eq!(bare_date.cat_axis_label_offset_percent, Some(100));
+
+        let invalid = parse_axis(
+            "catAx",
+            r#"<c:lblAlgn val="justify"/><c:lblOffset val="1001"/>"#,
+        );
+        assert_eq!(invalid.cat_axis_label_alignment, None);
+        assert_eq!(invalid.cat_axis_label_offset_percent, None);
+
+        let omitted = parse_axis("catAx", "");
+        assert_eq!(omitted.cat_axis_label_alignment, None);
+        assert_eq!(omitted.cat_axis_label_offset_percent, None);
     }
 
     #[test]

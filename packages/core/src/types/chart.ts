@@ -977,6 +977,10 @@ export interface ChartModel {
   catAxisTickLabelSkip?: number | null;
   /** `<c:catAx><c:tickMarkSkip val>` category-tick interval. */
   catAxisTickMarkSkip?: number | null;
+  /** `<c:catAx><c:lblAlgn val>` tick-label text alignment. */
+  catAxisLabelAlignment?: 'l' | 'ctr' | 'r' | string | null;
+  /** `<c:catAx|dateAx><c:lblOffset val>` normalized 0–1000 percentage. */
+  catAxisLabelOffsetPercent?: number | null;
   /** `<c:valAx><c:tickLblPos val>` (§21.2.2.207). "none" hides value tick labels. */
   valAxisTickLabelPos?: string | null;
   /**
@@ -1425,6 +1429,10 @@ export interface SecondaryValueAxis {
   orientation?: 'minMax' | 'maxMin' | string | null;
   /** `<c:tickLblPos>`; `none` hides tick labels without hiding gridlines. */
   tickLabelPos?: string | null;
+  /** `<c:catAx><c:lblAlgn>` when used as `secondaryCatAxis`. */
+  labelAlignment?: 'l' | 'ctr' | 'r' | null;
+  /** `<c:catAx|dateAx><c:lblOffset>` when used as `secondaryCatAxis`. */
+  labelOffsetPercent?: number | null;
   /** `<c:catAx><c:tickLblSkip>` when used as `secondaryCatAxis`. */
   tickLabelSkip?: number | null;
   /** `<c:catAx><c:tickMarkSkip>` when used as `secondaryCatAxis`. */

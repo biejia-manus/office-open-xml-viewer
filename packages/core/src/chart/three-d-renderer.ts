@@ -42,7 +42,7 @@ import {
   type ThreeDScenePoint,
 } from './three-d.js';
 import { scaleHexColor } from './material-color.js';
-import { categoryPositionFraction } from './category-spacing.js';
+import { categoryLabelOffsetPx, categoryPositionFraction } from './category-spacing.js';
 import {
   buildThreeDAreaStripMeshes,
   buildThreeDPieSectorMesh,
@@ -3045,8 +3045,11 @@ function renderCartesian(
   ctx.font = `${chart.catAxisFontItalic ? 'italic ' : ''}${chart.catAxisFontBold ? 'bold ' : ''}${categoryFontPx}px ${fontFamily(chart.catAxisFontFace)}`;
   ctx.fillStyle = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#595959';
   if (!chart.catAxisHidden && chart.catAxisTickLabelPos !== 'none') {
-    const labelOffset = projectedAxisTickLabelOffsetPx(
-      chart.catAxisMajorTickMark, chart.catAxisLineHidden, ptToPx, 6,
+    const labelOffset = categoryLabelOffsetPx(
+      projectedAxisTickLabelOffsetPx(
+        chart.catAxisMajorTickMark, chart.catAxisLineHidden, ptToPx, 6,
+      ),
+      chart.catAxisLabelOffsetPercent,
     );
     const formattedCategories = Array.from({ length: categoryCount }, (_, index) =>
       formatCategoryLabel(

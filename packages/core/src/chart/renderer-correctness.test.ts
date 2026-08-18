@@ -5411,7 +5411,7 @@ describe('CH9 — line/area consume marker detail (§21.2.2.32)', () => {
       const small = markerRecordingCtx();
       renderChart(small.ctx, baseModel({
         chartType,
-        categories: ['A', 'B'],
+        categories: ['Alpha', 'Beta'],
         series: [series({ name: 'S', values: [3, 5], showMarker: true, markerSymbol: 'square', markerSize: 4 })],
       }), RECT, 1);
       const big = markerRecordingCtx();
@@ -8917,6 +8917,81 @@ describe('CH6 — category-axis label rotation + tickLblPos (commit 2)', () => {
     const rec = rotateRecordingCtx();
     renderChart(rec.ctx, colModel({ catAxisLabelRotation: 0 }), RECT, 1);
     expect(rec.rotates.length).toBe(0);
+  });
+
+  it('honors lblAlgn inside each column category interval', () => {
+    const label = (alignment: 'l' | 'ctr' | 'r') => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, colModel({ catAxisLabelAlignment: alignment }), RECT, 1);
+      return rec.texts.find(text => text.text === 'Alpha')!;
+    };
+    const left = label('l');
+    const center = label('ctr');
+    const right = label('r');
+    expect(left.align).toBe('left');
+    expect(center.align).toBe('center');
+    expect(right.align).toBe('right');
+    expect(left.x).toBeLessThan(center.x);
+    expect(center.x).toBeLessThan(right.x);
+  });
+
+  it('honors lblAlgn in the horizontal-bar category-label gutter', () => {
+    const label = (alignment: 'l' | 'ctr' | 'r') => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'clusteredBarH',
+        categories: ['Alpha', 'Beta'],
+        series: [series({ name: 'S', values: [10, 20] })],
+        catAxisLabelAlignment: alignment,
+      }), RECT, 1);
+      return rec.texts.find(text => text.text === 'Alpha')!;
+    };
+    const left = label('l');
+    const center = label('ctr');
+    const right = label('r');
+    expect(left.align).toBe('left');
+    expect(center.align).toBe('center');
+    expect(right.align).toBe('right');
+    expect(left.x).toBeLessThan(center.x);
+    expect(center.x).toBeLessThan(right.x);
+  });
+
+  it('scales the column rule-to-label gap from the established default', () => {
+    const measure = (offset: number) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, colModel({
+        catAxisFontSizeHpt: 900,
+        catAxisLabelOffsetPercent: offset,
+        valMin: 0,
+        valMax: 40,
+      }), RECT, 1);
+      const label = rec.texts.find(text => text.text.startsWith('Al'))!;
+      const baseline = Math.max(...rec.rects.map(rect => rect.y + rect.h));
+      return label.y - baseline;
+    };
+    expect(measure(0)).toBeCloseTo(0, 6);
+    expect(measure(250)).toBeCloseTo(measure(100) * 2.5, 6);
+  });
+
+  it('scales the horizontal-bar rule-to-label gap from the established default', () => {
+    const measure = (offset: number) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'clusteredBarH',
+        categories: ['Alpha', 'Beta'],
+        series: [series({ name: 'S', values: [10, 20] })],
+        catAxisFontSizeHpt: 900,
+        catAxisLabelAlignment: 'r',
+        catAxisLabelOffsetPercent: offset,
+        valMin: 0,
+        valMax: 30,
+      }), RECT, 1);
+      const label = rec.texts.find(text => text.text.startsWith('Al'))!;
+      const plotLeft = Math.min(...rec.rects.map(rect => rect.x));
+      return plotLeft - label.x;
+    };
+    expect(measure(0)).toBeCloseTo(0, 6);
+    expect(measure(250)).toBeCloseTo(measure(100) * 2.5, 6);
   });
 
   it('wraps long horizontal category labels without discarding words', () => {
