@@ -989,6 +989,8 @@ export interface ChartModel {
   lineGroupDecorations?: ChartLineGroupDecorations[] | null;
   /** Group-owned drop lines for classic area-chart groups. */
   areaGroupDecorations?: ChartAreaGroupDecorations[] | null;
+  /** Group-owned series lines for classic bar-chart groups. */
+  barGroupDecorations?: ChartBarGroupDecorations[] | null;
   // ── Stock chart (CH13, §21.2.2.198) ──────────────────────────────────────
   /**
    * `<c:stockChart><c:hiLowLines>` presence (ECMA-376 §21.2.2.60). When true
@@ -1113,6 +1115,13 @@ export interface ChartAreaGroupDecorations {
   groupIndex: number;
   /** `<c:dropLines>` direct line paint; object presence means geometry exists. */
   dropLines?: ChartDecorationLineStyle | null;
+}
+
+export interface ChartBarGroupDecorations {
+  /** Zero-based document-order index among classic bar-chart groups. */
+  groupIndex: number;
+  /** Every authored `<c:serLines>` direct line paint, in document order. */
+  seriesLines?: ChartDecorationLineStyle[] | null;
 }
 
 export interface ChartOfPie {

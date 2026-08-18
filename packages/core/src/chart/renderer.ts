@@ -3621,6 +3621,18 @@ function renderBarChart(
     const clusterWidth = barW + (effective - 1) * clusterGap;
     return { barW, clusterGap, catStart: (categorySize - clusterWidth) / 2 };
   };
+  type BarSeriesLinePoint = {
+    categoryStart: number;
+    categoryEnd: number;
+    valueEnd: number;
+  };
+  const hasVerifiedBarSeriesLines = (chart.barGroupDecorations ?? []).some(
+    decoration => decoration.seriesLines?.length === 1,
+  );
+  const barSeriesLinePoints: Array<Array<BarSeriesLinePoint | null>> | null =
+    hasVerifiedBarSeriesLines
+      ? barSeries.map(() => new Array<BarSeriesLinePoint | null>(n).fill(null))
+      : null;
 
   // A classic combo chart may place an `<c:areaChart>` group behind a
   // `<c:barChart>` group. Area series are not bars: they share the category
@@ -3818,6 +3830,13 @@ function renderBarChart(
         const by = clamp(Math.min(y0, y1), py0, py0 + ph);
         const barBottom = clamp(Math.max(y0, y1), py0, py0 + ph);
         const barH = Math.max(0, barBottom - by);
+        if (barSeriesLinePoints && s.values[ci] != null) {
+          barSeriesLinePoints[si][ci] = {
+            categoryStart: bx,
+            categoryEnd: bx + barW,
+            valueEnd: clamp(y1, py0, py0 + ph),
+          };
+        }
         if (pointPaint !== null) {
           ctx.fillStyle = pointPaint
             ? chartExFillStyle(ctx, pointPaint, bx, by, barW, barH, color)
@@ -3904,6 +3923,13 @@ function renderBarChart(
         const bx = clamp(Math.min(x0, x1), px0, px0 + pw);
         const barRight = clamp(Math.max(x0, x1), px0, px0 + pw);
         const barL = Math.max(0, barRight - bx);
+        if (barSeriesLinePoints && s.values[ci] != null) {
+          barSeriesLinePoints[si][ci] = {
+            categoryStart: by,
+            categoryEnd: by + barW,
+            valueEnd: clamp(x1, px0, px0 + pw),
+          };
+        }
         if (pointPaint !== null) {
           ctx.fillStyle = pointPaint
             ? chartExFillStyle(ctx, pointPaint, bx, by, barL, barW, color)
@@ -3970,6 +3996,72 @@ function renderBarChart(
         if (negative) negativeOffsets.set(groupKey, negOffset + sv);
         else positiveOffsets.set(groupKey, posOffset + sv);
       }
+    }
+  }
+
+  // `CT_BarChart/serLines` uses one group-owned line style. MS-OE376
+  // 2.1.1578 defines each segment as joining adjacent data points in the same
+  // series. Office vector output resolves those points to the value-end edge of
+  // each stacked bar and clips the segment to the category gap: columns join
+  // right/left facing edges, horizontal bars join bottom/top facing edges.
+  // Missing points break the sequence instead of inventing a zero-valued end.
+  if (barSeriesLinePoints) {
+    const barSeriesByGroup = new Map<number, number[]>();
+    for (let seriesIndex = 0; seriesIndex < barSeries.length; seriesIndex++) {
+      const groupIndex = barSeries[seriesIndex].barGroupIndex ?? 0;
+      const members = barSeriesByGroup.get(groupIndex);
+      if (members) members.push(seriesIndex);
+      else barSeriesByGroup.set(groupIndex, [seriesIndex]);
+    }
+    for (const decoration of chart.barGroupDecorations ?? []) {
+      // CT_BarChart permits multiple serLines children. The single-child Office
+      // geometry is verified; precedence/association for multiple children is
+      // application-defined and remains fail-closed until its boundary output is
+      // adjudicated rather than guessing first/last/cyclic style semantics.
+      if (decoration.seriesLines?.length !== 1) {
+        continue;
+      }
+      ctx.save();
+      if (!applyDecorationLineStyle(ctx, decoration.seriesLines[0], ptToPx)) {
+        ctx.restore();
+        continue;
+      }
+      ctx.beginPath();
+      ctx.rect(px0, py0, pw, ph);
+      ctx.clip();
+      for (const seriesIndex of barSeriesByGroup.get(decoration.groupIndex) ?? []) {
+        const points = barSeriesLinePoints[seriesIndex];
+        for (let categoryIndex = 0; categoryIndex + 1 < n; categoryIndex++) {
+          const current = points[categoryIndex];
+          const next = points[categoryIndex + 1];
+          if (!current || !next) continue;
+          const currentCenter = (current.categoryStart + current.categoryEnd) / 2;
+          const nextCenter = (next.categoryStart + next.categoryEnd) / 2;
+          const forward = nextCenter >= currentCenter;
+          ctx.beginPath();
+          if (!isH) {
+            ctx.moveTo(
+              forward ? current.categoryEnd : current.categoryStart,
+              current.valueEnd,
+            );
+            ctx.lineTo(
+              forward ? next.categoryStart : next.categoryEnd,
+              next.valueEnd,
+            );
+          } else {
+            ctx.moveTo(
+              current.valueEnd,
+              forward ? current.categoryEnd : current.categoryStart,
+            );
+            ctx.lineTo(
+              next.valueEnd,
+              forward ? next.categoryStart : next.categoryEnd,
+            );
+          }
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
     }
   }
 
@@ -6432,9 +6524,13 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
   }
 
   // `CT_AreaChart` includes `dropLines` through `EG_AreaChartShared`
-  // (ECMA-376 Part 1, dml-chart.xsd). Each authored line joins the plotted
-  // area point to its category axis. Paint after the opaque area fills so the
-  // authored geometry remains visible, but before point markers and labels.
+  // (ECMA-376 Part 1, dml-chart.xsd). Office vector output establishes one
+  // drop line per category, spanning the extrema of the category-axis crossing
+  // and every plotted point in the owning group. This matters for a standard
+  // multi-series area chart (one envelope line, not one line per series) and
+  // for an interior crossing (the line spans points on both sides). Paint after
+  // the opaque area fills so the authored geometry remains visible, but before
+  // point markers and labels.
   const categoryAxisY = toY(categoryAxisCrossingValue(chart, areaPlan.min, areaPlan.max));
   const areaGroupMembers = new Map<number, Array<{ series: ChartSeries; areaIndex: number }>>();
   for (let areaIndex = 0; areaIndex < areaSeries.length; areaIndex++) {
@@ -6449,16 +6545,25 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
       continue;
     }
     const members = areaGroupMembers.get(decoration.groupIndex) ?? [];
-    for (const member of members) {
-      const yOf = yMapFor(member.series);
-      for (let categoryIndex = 0; categoryIndex < n; categoryIndex++) {
+    for (let categoryIndex = 0; categoryIndex < n; categoryIndex++) {
+      let minY = categoryAxisY;
+      let maxY = categoryAxisY;
+      let hasPoint = false;
+      for (const member of members) {
         if (member.series.values[categoryIndex] == null) continue;
-        const pointY = yOf(plottedAreaValue(member.areaIndex, categoryIndex));
-        ctx.beginPath();
-        ctx.moveTo(toX(categoryIndex), categoryAxisY);
-        ctx.lineTo(toX(categoryIndex), pointY);
-        ctx.stroke();
+        const pointY = yMapFor(member.series)(
+          plottedAreaValue(member.areaIndex, categoryIndex),
+        );
+        if (!Number.isFinite(pointY)) continue;
+        minY = Math.min(minY, pointY);
+        maxY = Math.max(maxY, pointY);
+        hasPoint = true;
       }
+      if (!hasPoint || Math.abs(maxY - minY) < 0.01) continue;
+      ctx.beginPath();
+      ctx.moveTo(toX(categoryIndex), minY);
+      ctx.lineTo(toX(categoryIndex), maxY);
+      ctx.stroke();
     }
   }
 

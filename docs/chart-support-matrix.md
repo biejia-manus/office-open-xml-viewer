@@ -56,9 +56,9 @@ observed input boundary is recorded in
 | C-LINE-005 | Multiple `lineChart` groups in one plot area | Yes | Yes | Partial | Partial | Decoration ownership is retained and consumed; other group-level line properties still require individual provenance rows. |
 | C-LINE-006 | Group-level `marker` and `smooth` defaults | Yes | Yes | Yes | Supported | Group defaults are retained; an explicit series-level marker or smooth value remains authoritative. |
 | C-AREA-001 | `areaChart` standard, stacked, percent-stacked areas | Yes | Yes | Yes | Supported | Series fill, labels, axes, and stacking are shared across hosts. |
-| C-AREA-002 | `areaChart/dropLines` | Yes | Yes | Yes | Partial | `EG_AreaChartShared` ownership, direct line paint, stacked cumulative points, and explicit category-axis crossings are implemented. Office-reference paint ordering still needs a focused fidelity fixture. |
+| C-AREA-002 | `areaChart/dropLines` | Yes | Yes | Yes | Supported | `EG_AreaChartShared` ownership and direct line paint are preserved. One envelope line per category spans the axis crossing and all standard or cumulative stacked points, with Office-verified paint order. |
 | C-BAR-001 | `barChart` direction, grouping, overlap, and gap | Yes | Yes | Yes | Supported | Each bar group retains its own provenance and geometry. |
-| C-BAR-002 | `barChart/serLines` | No | No | No | Missing | Series connector lines are separate from error bars and trendlines. |
+| C-BAR-002 | `barChart/serLines` | Yes | Yes | Yes | Partial | All group-owned line paints are preserved. A single authored element joins adjacent points at facing value-end edges for both directions; multiple-element style association remains Office-unverified and fails closed. |
 | C-STOCK-001 | Stock high-low lines and up/down bars | Yes | Yes | Yes | Partial | High-low lines and up/down bars render; stock `dropLines` is missing. |
 | C-SCATTER-001 | Scatter style, X/Y values, markers, and smoothing | Yes | Yes | Yes | Supported | Numeric axes and the six `scatterStyle` modes are represented. |
 | C-RADAR-001 | Standard, marker, and filled radar styles | Yes | Yes | Yes | Supported | Direct series paint and marker controls are consumed. |

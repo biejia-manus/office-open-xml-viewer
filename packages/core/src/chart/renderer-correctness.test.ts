@@ -9501,7 +9501,7 @@ describe('classic line-chart group decorations', () => {
 });
 
 describe('classic area-chart group drop lines', () => {
-  it('draws authored drop lines from each plotted area point to the category axis', () => {
+  it('draws one authored envelope line per category for a multi-series group', () => {
     const rec = segRecordingCtx();
     const model = baseModel({
       chartType: 'area',
@@ -9509,7 +9509,10 @@ describe('classic area-chart group drop lines', () => {
       valMin: 0,
       valMax: 30,
       valAxisMajorGridlines: false,
-      series: [series({ name: 'Area', values: [10, 20, 15], lineColor: '4472C4' })],
+      series: [
+        series({ name: 'First', values: [10, 20, 15], lineColor: '4472C4' }),
+        series({ name: 'Second', values: [15, 5, 25], lineColor: 'ED7D31' }),
+      ],
     });
     const extended = model as ChartModel & {
       areaGroupDecorations?: Array<{
@@ -9521,7 +9524,9 @@ describe('classic area-chart group drop lines', () => {
       groupIndex: 0,
       dropLines: { color: '123456', widthEmu: 12700 },
     }];
-    (extended.series[0] as ChartSeries & { areaGroupIndex?: number | null }).areaGroupIndex = 0;
+    for (const item of extended.series) {
+      (item as ChartSeries & { areaGroupIndex?: number | null }).areaGroupIndex = 0;
+    }
 
     renderChart(rec.ctx, extended, RECT, 1);
 
@@ -9531,7 +9536,7 @@ describe('classic area-chart group drop lines', () => {
       && Math.abs(segment.y1 - segment.y0) > 1
     );
     expect(dropLines).toHaveLength(3);
-    expect(new Set(dropLines.map(line => line.y0.toFixed(6))).size).toBe(1);
+    expect(new Set(dropLines.map(line => line.x0.toFixed(6))).size).toBe(3);
   });
 
   it('uses the cumulative plotted value for percent and stacked area groups', () => {
@@ -9562,14 +9567,14 @@ describe('classic area-chart group drop lines', () => {
     renderChart(rec.ctx, extended, RECT, 1);
 
     const dropLines = rec.segs.filter(segment => segment.ss === '#123456');
-    expect(dropLines).toHaveLength(2);
+    expect(dropLines).toHaveLength(1);
     const topGridlineY = Math.min(
       ...rec.segs
         .filter(segment => Math.abs(segment.y1 - segment.y0) < 0.01
           && Math.abs(segment.x1 - segment.x0) > 100)
         .map(segment => segment.y0),
     );
-    expect(Math.min(dropLines[0].y1, dropLines[1].y1)).toBeCloseTo(topGridlineY, 6);
+    expect(Math.min(dropLines[0].y0, dropLines[0].y1)).toBeCloseTo(topGridlineY, 6);
   });
 
   it('starts drop lines at an explicitly crossed category axis', () => {
@@ -9578,7 +9583,10 @@ describe('classic area-chart group drop lines', () => {
       const model = baseModel({
         chartType: 'area', categories: ['A', 'B'], valMin: 0, valMax: 30,
         catAxisCrossesAt: crossesAt, valAxisMajorGridlines: false,
-        series: [series({ name: 'Area', values: [10, 20] })],
+        series: [
+          series({ name: 'First', values: [5, 14] }),
+          series({ name: 'Second', values: [18, 22] }),
+        ],
       });
       const extended = model as ChartModel & {
         areaGroupDecorations?: Array<{
@@ -9587,7 +9595,9 @@ describe('classic area-chart group drop lines', () => {
         }>;
       };
       extended.areaGroupDecorations = [{ groupIndex: 0, dropLines: { color: '123456' } }];
-      (extended.series[0] as ChartSeries & { areaGroupIndex?: number | null }).areaGroupIndex = 0;
+      for (const item of extended.series) {
+        (item as ChartSeries & { areaGroupIndex?: number | null }).areaGroupIndex = 0;
+      }
       renderChart(rec.ctx, extended, RECT, 1);
       return rec.segs.filter(segment => segment.ss === '#123456');
     };
@@ -9596,7 +9606,122 @@ describe('classic area-chart group drop lines', () => {
     const atTen = render(10);
     expect(atZero).toHaveLength(2);
     expect(atTen).toHaveLength(2);
-    expect(atTen[0].y0).toBeLessThan(atZero[0].y0);
+    expect(Math.abs(atTen[0].y1 - atTen[0].y0))
+      .toBeLessThan(Math.abs(atZero[0].y1 - atZero[0].y0));
+  });
+});
+
+describe('classic bar-chart group series lines', () => {
+  const decorate = (model: ChartModel): ChartModel => {
+    model.barGroupDecorations = [{
+      groupIndex: 0,
+      seriesLines: [{ color: '234567', widthEmu: 19050 }],
+    }];
+    for (const item of model.series) {
+      item.barGroupIndex = 0;
+      item.barGroupGrouping = 'stacked';
+    }
+    return model;
+  };
+
+  it('joins the facing column edges for every adjacent point in each series', () => {
+    const rec = segRecordingCtx();
+    const model = decorate(baseModel({
+      chartType: 'stackedBar',
+      categories: ['A', 'B', 'C'],
+      valMin: 0,
+      valMax: 50,
+      valAxisMajorGridlines: false,
+      series: [
+        series({ name: 'First', values: [10, 20, 15], barGroupDirection: 'col' }),
+        series({ name: 'Second', values: [5, 10, 20], barGroupDirection: 'col' }),
+      ],
+    }));
+
+    renderChart(rec.ctx, model, RECT, 1);
+
+    const lines = rec.segs.filter(segment => segment.ss === '#234567');
+    expect(lines).toHaveLength(4);
+    const centers = rec.texts
+      .filter(text => ['A', 'B', 'C'].includes(text.text))
+      .map(text => text.x)
+      .sort((left, right) => left - right);
+    expect(centers).toHaveLength(3);
+    for (const line of lines) {
+      const left = Math.min(line.x0, line.x1);
+      const right = Math.max(line.x0, line.x1);
+      expect(centers.some((center, index) => index + 1 < centers.length
+        && left > center && right < centers[index + 1])).toBe(true);
+    }
+  });
+
+  it('joins facing horizontal-bar edges and keeps negative value endpoints', () => {
+    const rec = segRecordingCtx();
+    const model = decorate(baseModel({
+      chartType: 'stackedBarH',
+      categories: ['A', 'B', 'C'],
+      valMin: -40,
+      valMax: 0,
+      valAxisMajorGridlines: false,
+      series: [series({
+        name: 'Negative', values: [-10, -25, -15], barGroupDirection: 'bar',
+      })],
+    }));
+
+    renderChart(rec.ctx, model, RECT, 1);
+
+    const lines = rec.segs.filter(segment => segment.ss === '#234567');
+    expect(lines).toHaveLength(2);
+    const centers = rec.texts
+      .filter(text => ['A', 'B', 'C'].includes(text.text))
+      .map(text => text.y)
+      .sort((top, bottom) => top - bottom);
+    expect(centers).toHaveLength(3);
+    for (const line of lines) {
+      const top = Math.min(line.y0, line.y1);
+      const bottom = Math.max(line.y0, line.y1);
+      expect(centers.some((center, index) => index + 1 < centers.length
+        && top > center && bottom < centers[index + 1])).toBe(true);
+      expect(line.x0).toBeLessThan(RECT.x + RECT.w);
+      expect(line.x1).toBeLessThan(RECT.x + RECT.w);
+    }
+  });
+
+  it('breaks a series line across a missing data point', () => {
+    const rec = segRecordingCtx();
+    const model = decorate(baseModel({
+      chartType: 'stackedBar',
+      categories: ['A', 'B', 'C'],
+      valMin: 0,
+      valMax: 30,
+      valAxisMajorGridlines: false,
+      series: [series({
+        name: 'Sparse', values: [10, null, 20], barGroupDirection: 'col',
+      })],
+    }));
+
+    renderChart(rec.ctx, model, RECT, 1);
+
+    expect(rec.segs.filter(segment => segment.ss === '#234567')).toHaveLength(0);
+  });
+
+  it('keeps multiple authored series-line styles unrendered until association is verified', () => {
+    const rec = segRecordingCtx();
+    const model = decorate(baseModel({
+      chartType: 'stackedBar',
+      categories: ['A', 'B'],
+      valMin: 0,
+      valMax: 30,
+      valAxisMajorGridlines: false,
+      series: [series({ name: 'Series', values: [10, 20], barGroupDirection: 'col' })],
+    }));
+    model.barGroupDecorations![0].seriesLines!.push({ color: 'FF0000' });
+
+    renderChart(rec.ctx, model, RECT, 1);
+
+    expect(rec.segs.filter(segment =>
+      segment.ss === '#234567' || segment.ss === '#FF0000'
+    )).toHaveLength(0);
   });
 });
 

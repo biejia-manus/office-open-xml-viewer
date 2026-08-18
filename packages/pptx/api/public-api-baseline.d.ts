@@ -245,6 +245,10 @@ interface ChartAreaGroupDecorations {
     groupIndex: number;
     dropLines?: ChartDecorationLineStyle | null;
 }
+interface ChartBarGroupDecorations {
+    groupIndex: number;
+    seriesLines?: ChartDecorationLineStyle[] | null;
+}
 export interface ChartManualLayout {
     xMode?: string;
     yMode?: string;
@@ -399,6 +403,7 @@ export interface ChartModel {
     catAxisLabelRotation?: number | null;
     lineGroupDecorations?: ChartLineGroupDecorations[] | null;
     areaGroupDecorations?: ChartAreaGroupDecorations[] | null;
+    barGroupDecorations?: ChartBarGroupDecorations[] | null;
     stockHiLowLines?: boolean | null;
     stockHiLowLineColor?: string | null;
     stockUpDownBars?: boolean | null;
