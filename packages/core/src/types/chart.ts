@@ -61,6 +61,12 @@ export interface ChartSeries {
    */
   dataPointColors?: (string | null)[] | null;
   /**
+   * `<c:pieChart|doughnutChart><c:ser><c:explosion val>` default pull-out
+   * amount for every slice in this series. A point-level `dPt/explosion`
+   * overrides it for that slice.
+   */
+  explosion?: number | null;
+  /**
    * Per-data-point data-label text colors. Used by chartEx (`<cx:dataLabel idx>`)
    * to override label colour per bar — sample-2's waterfall paints negative
    * △ values in red while positive values stay black. Null inside the array =

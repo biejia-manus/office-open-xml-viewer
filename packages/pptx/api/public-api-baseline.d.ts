@@ -455,6 +455,7 @@ export interface ChartSeries {
     threeDShape?: 'box' | 'cylinder' | 'cone' | 'coneToMax' | 'pyramid' | 'pyramidToMax' | string | null;
     values: (number | null)[];
     dataPointColors?: (string | null)[] | null;
+    explosion?: number | null;
     dataLabelColors?: (string | null)[] | null;
     labelColor?: string | null;
     seriesType?: string | null;

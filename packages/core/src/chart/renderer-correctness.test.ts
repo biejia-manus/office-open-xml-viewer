@@ -7390,6 +7390,33 @@ describe('CH8 — pie / doughnut geometry', () => {
     expect(dist).toBeCloseTo(expectedOffset, 4);
   });
 
+  it('uses series explosion as the default and lets a point override it', () => {
+    const base = ringRecordingCtx();
+    renderChart(base.ctx, pieModel({
+      series: [series({ name: 'S', values: [30, 45, 25] })],
+    }), RECT, 1);
+    const rec = ringRecordingCtx();
+    renderChart(rec.ctx, pieModel({
+      series: [series({
+        name: 'S', values: [30, 45, 25], explosion: 40,
+        dataPointOverrides: [{ idx: 1, explosion: 0 }],
+      })],
+    }), RECT, 1);
+
+    const baseCenter = base.arcs[0];
+    const slice = (index: number) => rec.arcs.find(arc =>
+      arc.a0 === base.arcs[index].a0 && arc.a1 === base.arcs[index].a1
+    );
+    expect(slice(0)).toBeDefined();
+    expect(slice(1)).toBeDefined();
+    expect(Math.hypot(
+      (slice(0)?.x ?? 0) - baseCenter.x,
+      (slice(0)?.y ?? 0) - baseCenter.y,
+    )).toBeGreaterThan(1);
+    expect(slice(1)?.x).toBeCloseTo(baseCenter.x, 6);
+    expect(slice(1)?.y).toBeCloseTo(baseCenter.y, 6);
+  });
+
   it('a multi-series doughnut draws concentric rings (multiple distinct radii)', () => {
     const rec = ringRecordingCtx();
     renderChart(rec.ctx, baseModel({

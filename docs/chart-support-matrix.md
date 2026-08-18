@@ -46,7 +46,7 @@ observed input boundary is recorded in
 | C-SCATTER-001 | Scatter style, X/Y values, markers, and smoothing | Yes | Yes | Yes | Supported | Numeric axes and the six `scatterStyle` modes are represented. |
 | C-RADAR-001 | Standard, marker, and filled radar styles | Yes | Yes | Yes | Supported | Direct series paint and marker controls are consumed. |
 | C-PIE-001 | Pie/doughnut point explosion | Yes | Yes | Yes | Supported | Per-point explosion is retained. |
-| C-PIE-002 | Pie/doughnut series-level explosion | No | No | No | Missing | `CT_PieSer/explosion` is distinct from per-point `dPt/explosion`. |
+| C-PIE-002 | Pie/doughnut series-level explosion | Yes | Yes | Yes | Supported | `CT_PieSer/explosion` supplies the default; a point-level `dPt/explosion` overrides it. |
 | C-PIE-003 | First-slice angle and doughnut hole size | Yes | Yes | Yes | Supported | Authored schema bounds are preserved. |
 | C-OFPIE-001 | Pie-of-pie/bar-of-pie split, sizing, and connector geometry | Yes | Yes | Yes | Partial | Position, value, percent, and custom splits render. Automatic split selection remains application-defined. |
 | C-BUBBLE-001 | Bubble size, scale, negative bubbles, and size representation | Yes | Yes | Yes | Supported | Resource-bounded and shared across hosts. |

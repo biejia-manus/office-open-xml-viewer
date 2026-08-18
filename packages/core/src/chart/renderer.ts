@@ -6944,7 +6944,7 @@ function renderPieChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Cha
   // slider), not a spec-mandated range (see `ChartDataPointOverride.explosion`
   // in types/chart.ts). Absent / zero explosion → no offset (byte-stable).
   const explodeOffset = (ser: ChartSeries, i: number): number => {
-    const e = pointOverridesBySeries.get(ser)?.get(i)?.explosion ?? 0;
+    const e = pointOverridesBySeries.get(ser)?.get(i)?.explosion ?? ser.explosion ?? 0;
     return e > 0 ? (e / 100) * outerR : 0;
   };
 

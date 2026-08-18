@@ -946,6 +946,10 @@ pub struct ChartSeries {
     pub values: Vec<Option<f64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_point_colors: Option<Vec<Option<String>>>,
+    /// `<c:pieChart|doughnutChart><c:ser><c:explosion val>` default pull-out
+    /// amount. A point-level `dPt/explosion` overrides it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explosion: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_label_colors: Option<Vec<Option<String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4950,6 +4954,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         line_width_emu,
         three_d_shape: None,
         data_point_colors: None,
+        explosion: None,
         data_label_colors,
         categories: None,
         bubble_sizes: None,
@@ -8372,6 +8377,9 @@ pub fn parse_chart_part_with_references(
                 } else {
                     None
                 },
+                explosion: child(*ser, "explosion")
+                    .and_then(|node| node.attribute("val"))
+                    .and_then(|value| value.parse::<u32>().ok()),
                 // Legacy `<c:chart>` per-point label colors are extracted via
                 // `<c:dLbls><c:dLbl idx>` — not yet wired here; chartEx is the only
                 // path that currently consumes this separate color array.
@@ -9320,6 +9328,7 @@ mod tests {
                 three_d_shape: None,
                 values: vec![Some(1.0), None, Some(3.0)],
                 data_point_colors: None,
+                explosion: None,
                 data_label_colors: None,
                 label_color: None,
                 series_type: None,
@@ -10488,6 +10497,25 @@ Subtitle</a:t></a:r></a:p>
             extract_dpt_explosion(root_of(&without).root_element()),
             None
         );
+    }
+
+    #[test]
+    fn pie_series_explosion_is_preserved_as_the_point_default() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}">
+              <c:chart><c:plotArea><c:pieChart><c:varyColors val="1"/>
+                <c:ser><c:idx val="0"/><c:order val="0"/><c:explosion val="35"/>
+                  <c:val><c:numLit><c:ptCount val="2"/>
+                    <c:pt idx="0"><c:v>10</c:v></c:pt>
+                    <c:pt idx="1"><c:v>20</c:v></c:pt>
+                  </c:numLit></c:val>
+                </c:ser>
+              </c:pieChart></c:plotArea></c:chart>
+            </c:chartSpace>"#
+        );
+        let model = parse_chart_part(chart_space_of(&xml).root_element(), &FixtureResolver)
+            .expect("pie chart parses");
+        assert_eq!(model.series[0].explosion, Some(35));
     }
 
     // ── CH10 — chart text font faces ────────────────────────────────────────
