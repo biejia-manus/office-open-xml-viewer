@@ -6519,9 +6519,15 @@ pub fn parse_marker_block(
             resolver.resolve_shape_fill(p)
         }
     });
-    let line = sp_pr
-        .and_then(|p| child(p, "ln"))
-        .and_then(|ln| resolver.resolve_shape_fill(ln));
+    let line = sp_pr.and_then(|p| child(p, "ln")).and_then(|ln| {
+        if child(ln, "noFill").is_some() {
+            // Keep direct marker-outline noFill distinct from an omitted line
+            // so linked Chart Style fallback cannot repaint it later.
+            Some("00000000".to_string())
+        } else {
+            resolver.resolve_shape_fill(ln)
+        }
+    });
     let line_width_emu = sp_pr
         .and_then(|p| child(p, "ln"))
         .and_then(|ln| ln.attribute("w"))
@@ -13310,6 +13316,14 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(fill.as_deref(), Some("00000000"));
         assert_eq!(line.as_deref(), Some("777777"));
         assert_eq!(line_width_emu, None);
+
+        let line_no_fill = format!(
+            r#"<c:marker xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:symbol val="circle"/><c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:marker>"#
+        );
+        let d = root_of(&line_no_fill);
+        let (_, _, fill, line, _) = parse_marker_block(Some(d.root_element()), &FixtureResolver);
+        assert_eq!(fill.as_deref(), Some("FFFFFF"));
+        assert_eq!(line.as_deref(), Some("00000000"));
     }
 
     #[test]
