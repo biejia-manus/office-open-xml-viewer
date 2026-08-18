@@ -36,7 +36,12 @@ export {
 export type { XlsxMatchLocation } from './find.js';
 export type { FindHighlightColors, FindMatch, FindMatchesOptions } from '@silurus/ooxml-core';
 export type {
+  ChartAreaGroupDecorations,
+  ChartBarGroupDecorations,
+  ChartDecorationLineStyle,
   ChartLabelBox,
+  ChartLegendEntryOverride,
+  ChartLineGroupDecorations,
   ChartRect,
   ChartTextBox,
   ChartTextParagraph,
@@ -65,6 +70,7 @@ export type {
   ChartexRegionMapColors,
   ChartexValueColorStop,
   FillRect,
+  ImageFill,
   MathAccent,
   MathArray,
   MathBar,
@@ -89,7 +95,9 @@ export type {
   ChartDisplayUnits,
   ChartDisplayUnitsLabel,
   SecondaryValueAxis,
+  NoFill,
   SpaceLine,
+  TileInfo,
   ViewerContextMenuEvent,
   ZoomableViewer,
 } from '@silurus/ooxml-core';

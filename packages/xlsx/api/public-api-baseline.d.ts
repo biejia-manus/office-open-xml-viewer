@@ -164,11 +164,11 @@ export interface ChartAnchor {
     toRowOff: number;
     chart: ChartModel;
 }
-interface ChartAreaGroupDecorations {
+export interface ChartAreaGroupDecorations {
     groupIndex: number;
     dropLines?: ChartDecorationLineStyle | null;
 }
-interface ChartBarGroupDecorations {
+export interface ChartBarGroupDecorations {
     groupIndex: number;
     seriesLines?: ChartDecorationLineStyle[] | null;
 }
@@ -225,7 +225,7 @@ export interface ChartDataTable {
     lineDash?: string | null;
     lineHidden?: boolean | null;
 }
-interface ChartDecorationLineStyle {
+export interface ChartDecorationLineStyle {
     color?: string | null;
     widthEmu?: number | null;
     dash?: string | null;
@@ -356,7 +356,7 @@ export interface ChartLabelBox {
     borderColor?: string;
     borderWidthEmu?: number;
 }
-interface ChartLegendEntryOverride {
+export interface ChartLegendEntryOverride {
     idx: number;
     deleted?: boolean | null;
     fontFace?: string | null;
@@ -364,7 +364,7 @@ interface ChartLegendEntryOverride {
     fontSizeHpt?: number | null;
     fontBold?: boolean | null;
 }
-interface ChartLineGroupDecorations {
+export interface ChartLineGroupDecorations {
     groupIndex: number;
     dropLines?: ChartDecorationLineStyle | null;
     hiLowLines?: ChartDecorationLineStyle | null;
@@ -938,7 +938,7 @@ export interface ImageAnchor {
     alpha?: number;
     duotone?: Duotone;
 }
-interface ImageFill {
+export interface ImageFill {
     fillType: 'image';
     imagePath: string;
     mimeType: string;
@@ -1097,7 +1097,7 @@ export interface MergeCell {
     bottom: number;
     right: number;
 }
-interface NoFill {
+export interface NoFill {
     fillType: 'none';
 }
 export interface NumFmt {
@@ -1657,7 +1657,7 @@ export interface TableInfo {
     band2HorizontalDxf?: number;
     columns: TableColumnInfo[];
 }
-interface TileInfo {
+export interface TileInfo {
     tx: number;
     ty: number;
     sx: number;

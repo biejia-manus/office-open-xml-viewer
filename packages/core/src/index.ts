@@ -28,11 +28,16 @@ export type {
   TileInfo,
 } from './types/common';
 export type {
+  ChartAreaGroupDecorations,
+  ChartBarGroupDecorations,
   ChartDataLabelOverride,
   ChartDataTable,
   ChartDataPointOverride,
+  ChartDecorationLineStyle,
   ChartErrBars,
   ChartLabelBox,
+  ChartLegendEntryOverride,
+  ChartLineGroupDecorations,
   ChartManualLayout,
   ChartModel,
   ChartRect,

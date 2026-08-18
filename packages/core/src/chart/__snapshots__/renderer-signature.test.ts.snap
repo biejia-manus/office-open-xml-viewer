@@ -629,12 +629,10 @@ fillText "Q2" 310.65,315.95 fs=#555 font=11px sans-serif al=center bl=top
 fillText "Q3" 472.0833,315.95 fs=#555 font=11px sans-serif al=center bl=top
 set strokeStyle=#aaa
 set lineWidth=1
-setLineDash
 beginPath
 moveTo 68.5,312.95
 lineTo 552.8,312.95
 stroke ss=#aaa lw=1 dash=
-setLineDash
 setLineDash
 beginPath
 moveTo 62.2,312.95
@@ -845,12 +843,10 @@ fillText "Q2" 26.775,199.3125 fs=#555 font=11px sans-serif al=right bl=middle
 fillText "Q3" 26.775,108.5542 fs=#555 font=11px sans-serif al=right bl=middle
 set strokeStyle=#aaa
 set lineWidth=1
-setLineDash
 beginPath
 moveTo 30.775,63.175
 lineTo 30.775,335.45
 stroke ss=#aaa lw=1 dash=
-setLineDash
 setLineDash
 beginPath
 moveTo 30.775,341.75
@@ -1048,12 +1044,10 @@ arc 427.2167,131.2438,3,0,6.2832
 fill fs=#ED7D31 ga=1
 set strokeStyle=#aaa
 set lineWidth=1
-setLineDash
 beginPath
 moveTo 47.8,335.45
 lineTo 503.1,335.45
 stroke ss=#aaa lw=1 dash=
-setLineDash
 setLineDash
 beginPath
 moveTo 41.5,335.45
@@ -1132,12 +1126,10 @@ moveTo 503.1,341.75
 lineTo 503.1,335.45
 stroke ss=#aaa lw=1 dash=
 setLineDash
-setLineDash
 beginPath
 moveTo 503.1,63.175
 lineTo 503.1,335.45
 stroke ss=#aaa lw=1 dash=
-setLineDash
 set fillStyle=#555
 set textAlign=left
 set textBaseline=middle
@@ -2924,12 +2916,10 @@ fillText "Q2" 337,319.95 fs=#555 font=11px sans-serif al=center bl=top
 fillText "Q3" 534.2,319.95 fs=#555 font=11px sans-serif al=center bl=top
 set strokeStyle=#aaa
 set lineWidth=1
-setLineDash
 beginPath
 moveTo 41.2,316.95
 lineTo 632.8,316.95
 stroke ss=#aaa lw=1 dash=
-setLineDash
 setLineDash
 beginPath
 moveTo 34.9,316.95
@@ -3119,12 +3109,10 @@ fillText "Q2" 383.6,338.45 fs=#555 font=11px sans-serif al=center bl=top
 fillText "Q3" 549.7333,338.45 fs=#555 font=11px sans-serif al=center bl=top
 set strokeStyle=#aaa
 set lineWidth=1
-setLineDash
 beginPath
 moveTo 134.4,335.45
 lineTo 632.8,335.45
 stroke ss=#aaa lw=1 dash=
-setLineDash
 setLineDash
 beginPath
 moveTo 128.1,335.45

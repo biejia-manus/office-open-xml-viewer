@@ -1464,14 +1464,17 @@ function strokeAxisSegment(
   dash?: string | null,
 ): void {
   const previousDash = ctx.getLineDash?.() ?? [];
+  const resolvedDash = dashPatternForPreset(dash ?? undefined, lineWidth);
+  const dashChanged = resolvedDash.length !== previousDash.length
+    || resolvedDash.some((value, index) => value !== previousDash[index]);
   ctx.strokeStyle = color;
   ctx.lineWidth = lineWidth;
-  ctx.setLineDash(dashPatternForPreset(dash ?? undefined, lineWidth));
+  if (dashChanged) ctx.setLineDash(resolvedDash);
   ctx.beginPath();
   ctx.moveTo(x1, y1);
   ctx.lineTo(x2, y2);
   ctx.stroke();
-  ctx.setLineDash(previousDash);
+  if (dashChanged) ctx.setLineDash(previousDash);
 }
 
 function axisTickLengthPx(

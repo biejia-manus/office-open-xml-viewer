@@ -19,11 +19,16 @@ export {
 } from './selection-context';
 export type { DocxElementContextOptions } from './element-context';
 export type {
+  ChartAreaGroupDecorations,
+  ChartBarGroupDecorations,
   ChartDataLabelOverride,
   ChartDataTable,
   ChartDataPointOverride,
+  ChartDecorationLineStyle,
   ChartErrBars,
   ChartLabelBox,
+  ChartLegendEntryOverride,
+  ChartLineGroupDecorations,
   ChartManualLayout,
   ChartModel,
   ChartRect,
@@ -58,6 +63,7 @@ export type {
   Duotone,
   FillRect,
   GradientFill,
+  ImageFill,
   LegendManualLayout,
   MathAccent,
   MathArray,
@@ -82,6 +88,7 @@ export type {
   MathSvg,
   MatchRunSlice,
   PatternFill,
+  NoFill,
   SolidFill,
   ChartDisplayUnits,
   ChartDisplayUnitsLabel,
