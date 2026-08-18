@@ -3116,7 +3116,12 @@ function renderBarChart(
       ? catAxFontPx
       : Math.max(8, Math.min(11, (phEst / n) * 0.5));
     ctx.save();
-    ctx.font = `${measuredHorizontalCatTickFontPx}px ${chartFontFamily(chart, chart.catAxisFontFace, 'minor')}`;
+    ctx.font = chartFontCss(
+      measuredHorizontalCatTickFontPx,
+      chartFontFamily(chart, chart.catAxisFontFace, 'minor'),
+      chart.catAxisFontBold ?? false,
+      chart.catAxisFontItalic ?? false,
+    );
     for (const category of cats) {
       horizontalCategoryLabelBandW = Math.max(
         horizontalCategoryLabelBandW,
@@ -3361,7 +3366,12 @@ function renderBarChart(
   if (!isH && !chart.valAxisHidden) {
     // Measure with the same face the value-axis ticks draw with (below), so the
     // reserved gutter width matches the painted labels when a real face is set.
-    ctx.font = `${measuredValTickFontPx}px ${chartFontFamily(chart, chart.valAxisFontFace, 'minor')}`;
+    ctx.font = chartFontCss(
+      measuredValTickFontPx,
+      chartFontFamily(chart, chart.valAxisFontFace, 'minor'),
+      chart.valAxisFontBold ?? false,
+      chart.valAxisFontItalic ?? false,
+    );
     let wmax = 0;
     for (const val of plan.majorLines) {
       const label = formatPrimaryValueAxisTick(chart, val, primaryPercentAxis);
@@ -3587,7 +3597,12 @@ function renderBarChart(
   const drawnValTickFontPx = chart.valAxisFontSizeHpt != null
     ? valAxLabelFontPx
     : Math.max(8, Math.min(11, ph / 20));
-  ctx.font = `${drawnValTickFontPx}px ${chartFontFamily(chart, chart.valAxisFontFace, 'minor')}`;
+  ctx.font = chartFontCss(
+    drawnValTickFontPx,
+    chartFontFamily(chart, chart.valAxisFontFace, 'minor'),
+    chart.valAxisFontBold ?? false,
+    chart.valAxisFontItalic ?? false,
+  );
   // Honor `<c:valAx><c:txPr>…<a:solidFill>` when present (ECMA-376 §21.2.2.*);
   // otherwise keep the neutral gray default.
   const valLabelColor = chart.valAxisFontColor ? `#${chart.valAxisFontColor}` : '#555';
@@ -4965,27 +4980,44 @@ function chartStyleRoleSecondaryAxisLine(
   axis: SecondaryValueAxis | null | undefined,
   role: 'categoryAxis' | 'valueAxis',
 ): SecondaryValueAxis | null | undefined {
-  if (!axis || !chart.chartStyleRoles?.[role]) return axis;
+  const style = chart.chartStyleRoles?.[role];
+  if (!axis || !style) return axis;
   const line = chartStyleRoleAxisLine(
     chart, role, axis.lineColor, axis.lineWidthEmu, axis.lineDash, axis.lineHidden,
   );
   const lineHidden = line.hidden === true;
+  const fontSizeHpt = axis.fontSizeHpt ?? style.fontSizeHpt;
+  const fontBold = axis.fontBold ?? style.fontBold;
+  const fontItalic = axis.fontItalic ?? style.fontItalic;
+  const fontColor = axis.fontColor ?? style.fontColor;
+  const fontFace = axis.fontFace ?? style.fontFace;
   if (line.color === axis.lineColor
     && line.widthEmu === axis.lineWidthEmu
     && line.dash === axis.lineDash
-    && lineHidden === axis.lineHidden) return axis;
+    && lineHidden === axis.lineHidden
+    && fontSizeHpt === axis.fontSizeHpt
+    && fontBold === axis.fontBold
+    && fontItalic === axis.fontItalic
+    && fontColor === axis.fontColor
+    && fontFace === axis.fontFace) return axis;
   return {
     ...axis,
     lineColor: line.color,
     lineWidthEmu: line.widthEmu,
     lineDash: line.dash,
     lineHidden,
+    fontSizeHpt,
+    fontBold,
+    fontItalic,
+    fontColor,
+    fontFace,
   };
 }
 
 function chartStyleRoleSeriesAxis(chart: ChartModel): ChartModel {
   const axis = chart.threeD?.seriesAxis;
-  if (!axis || !chart.chartStyleRoles?.seriesAxis) return chart;
+  const style = chart.chartStyleRoles?.seriesAxis;
+  if (!axis || !style) return chart;
   const line = chartStyleRoleLine(chart, {
     color: axis.lineColor,
     widthEmu: axis.lineWidthEmu,
@@ -4993,10 +5025,20 @@ function chartStyleRoleSeriesAxis(chart: ChartModel): ChartModel {
     hidden: axis.lineHidden ? true : undefined,
   }, 'seriesAxis');
   const lineHidden = line.hidden === true;
+  const fontSizeHpt = axis.fontSizeHpt ?? style.fontSizeHpt;
+  const fontBold = axis.fontBold ?? style.fontBold;
+  const fontItalic = axis.fontItalic ?? style.fontItalic;
+  const fontColor = axis.fontColor ?? style.fontColor;
+  const fontFace = axis.fontFace ?? style.fontFace;
   if (line.color === axis.lineColor
     && line.widthEmu === axis.lineWidthEmu
     && line.dash === axis.lineDash
-    && lineHidden === axis.lineHidden) return chart;
+    && lineHidden === axis.lineHidden
+    && fontSizeHpt === axis.fontSizeHpt
+    && fontBold === axis.fontBold
+    && fontItalic === axis.fontItalic
+    && fontColor === axis.fontColor
+    && fontFace === axis.fontFace) return chart;
   return {
     ...chart,
     threeD: {
@@ -5007,6 +5049,11 @@ function chartStyleRoleSeriesAxis(chart: ChartModel): ChartModel {
         lineWidthEmu: line.widthEmu,
         lineDash: line.dash,
         lineHidden,
+        fontSizeHpt,
+        fontBold,
+        fontItalic,
+        fontColor,
+        fontFace,
       },
     },
   };
@@ -5353,6 +5400,18 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     chart.valAxisLineColor, chart.valAxisLineWidthEmu, chart.valAxisLineDash,
     chart.valAxisLineHidden,
   );
+  const catAxisStyle = chart.chartStyleRoles?.categoryAxis;
+  const valAxisStyle = chart.chartStyleRoles?.valueAxis;
+  const catAxisFontSizeHpt = chart.catAxisFontSizeHpt ?? catAxisStyle?.fontSizeHpt ?? null;
+  const catAxisFontBold = chart.catAxisFontBold ?? catAxisStyle?.fontBold;
+  const catAxisFontItalic = chart.catAxisFontItalic ?? catAxisStyle?.fontItalic;
+  const catAxisFontColor = chart.catAxisFontColor ?? catAxisStyle?.fontColor;
+  const catAxisFontFace = chart.catAxisFontFace ?? catAxisStyle?.fontFace;
+  const valAxisFontSizeHpt = chart.valAxisFontSizeHpt ?? valAxisStyle?.fontSizeHpt ?? null;
+  const valAxisFontBold = chart.valAxisFontBold ?? valAxisStyle?.fontBold;
+  const valAxisFontItalic = chart.valAxisFontItalic ?? valAxisStyle?.fontItalic;
+  const valAxisFontColor = chart.valAxisFontColor ?? valAxisStyle?.fontColor;
+  const valAxisFontFace = chart.valAxisFontFace ?? valAxisStyle?.fontFace;
   changed ||= valMajor.visible !== chart.valAxisMajorGridlines
     || valMajor.color !== chart.valAxisGridlineColor
     || valMajor.widthEmu !== chart.valAxisGridlineWidthEmu
@@ -5378,7 +5437,17 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     || valAxisLine.color !== chart.valAxisLineColor
     || valAxisLine.widthEmu !== chart.valAxisLineWidthEmu
     || valAxisLine.dash !== chart.valAxisLineDash
-    || (valAxisLine.hidden === true) !== chart.valAxisLineHidden;
+    || (valAxisLine.hidden === true) !== chart.valAxisLineHidden
+    || catAxisFontSizeHpt !== chart.catAxisFontSizeHpt
+    || catAxisFontBold !== chart.catAxisFontBold
+    || catAxisFontItalic !== chart.catAxisFontItalic
+    || catAxisFontColor !== chart.catAxisFontColor
+    || catAxisFontFace !== chart.catAxisFontFace
+    || valAxisFontSizeHpt !== chart.valAxisFontSizeHpt
+    || valAxisFontBold !== chart.valAxisFontBold
+    || valAxisFontItalic !== chart.valAxisFontItalic
+    || valAxisFontColor !== chart.valAxisFontColor
+    || valAxisFontFace !== chart.valAxisFontFace;
   const effective = changed ? {
     ...chart,
     series,
@@ -5409,6 +5478,16 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     valAxisLineWidthEmu: valAxisLine.widthEmu,
     valAxisLineDash: valAxisLine.dash,
     valAxisLineHidden: valAxisLine.hidden === true,
+    catAxisFontSizeHpt,
+    catAxisFontBold,
+    catAxisFontItalic,
+    catAxisFontColor,
+    catAxisFontFace,
+    valAxisFontSizeHpt,
+    valAxisFontBold,
+    valAxisFontItalic,
+    valAxisFontColor,
+    valAxisFontFace,
   } : chart;
   return chartStyleRoleLegend(chartStyleRolePlotArea(chartStyleRoleChartArea(
     chartStyleRoleSeriesAxis(effective),
@@ -5753,7 +5832,12 @@ function renderLineChart(
     && chart.plotAreaManualLayout.layoutTarget !== 'inner'
   ) {
     const previousFont = ctx.font;
-    ctx.font = `${valAxFontPx}px ${chartFontFamily(chart, chart.valAxisFontFace, 'minor')}`;
+    ctx.font = chartFontCss(
+      valAxFontPx,
+      chartFontFamily(chart, chart.valAxisFontFace, 'minor'),
+      chart.valAxisFontBold ?? false,
+      chart.valAxisFontItalic ?? false,
+    );
     for (const value of provisionalPlan.majorLines) {
       primaryLabelWidth = Math.max(
         primaryLabelWidth,
@@ -5890,7 +5974,12 @@ function renderLineChart(
       : (i0: number) => { const i = catRev ? n - 1 - i0 : i0; return px0 + (n === 1 ? pw / 2 : (i / (n - 1)) * pw); };
 
   if (!chart.valAxisHidden) {
-    ctx.font = `${valAxFontPx}px ${chartFontFamily(chart, chart.valAxisFontFace, 'minor')}`;
+    ctx.font = chartFontCss(
+      valAxFontPx,
+      chartFontFamily(chart, chart.valAxisFontFace, 'minor'),
+      chart.valAxisFontBold ?? false,
+      chart.valAxisFontItalic ?? false,
+    );
     ctx.textBaseline = 'middle';
     // Resolved gridline stroke (`<c:majorGridlines><c:spPr><a:ln>` or default).
     const grid = valGridStroke(chart, ptToPx);
@@ -6172,7 +6261,12 @@ function renderLineChart(
   if (!chart.catAxisHidden) {
     const catLabelColor = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#555';
     ctx.fillStyle = catLabelColor; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    ctx.font = `${catAxFontPx}px ${chartFontFamily(chart, chart.catAxisFontFace, 'minor')}`;
+    ctx.font = chartFontCss(
+      catAxFontPx,
+      chartFontFamily(chart, chart.catAxisFontFace, 'minor'),
+      chart.catAxisFontBold ?? false,
+      chart.catAxisFontItalic ?? false,
+    );
     // Tick marks and labels have independent authored skip intervals
     // (§21.2.2.205/§21.2.2.206). When tickLblSkip is absent every non-empty
     // cached category is paintable; sparse caches deliberately use blank
@@ -6408,7 +6502,12 @@ function renderStockChart(
 
   // ── Value axis: gridlines + ticks + labels (identical to the line renderer) ──
   if (!chart.valAxisHidden) {
-    ctx.font = `${valAxFontPx}px ${chartFontFamily(chart, chart.valAxisFontFace, 'minor')}`;
+    ctx.font = chartFontCss(
+      valAxFontPx,
+      chartFontFamily(chart, chart.valAxisFontFace, 'minor'),
+      chart.valAxisFontBold ?? false,
+      chart.valAxisFontItalic ?? false,
+    );
     ctx.textBaseline = 'middle';
     const grid = valGridStroke(chart, ptToPx);
     const minorGrid = valMinorGridStroke(chart, ptToPx);
@@ -6568,7 +6667,12 @@ function renderStockChart(
     const labelInterval = Math.max(1, Math.floor(chart.catAxisTickLabelSkip ?? 1));
     const catLabelColor = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#555';
     ctx.fillStyle = catLabelColor; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    ctx.font = `${catAxFontPx}px ${chartFontFamily(chart, chart.catAxisFontFace, 'minor')}`;
+    ctx.font = chartFontCss(
+      catAxFontPx,
+      chartFontFamily(chart, chart.catAxisFontFace, 'minor'),
+      chart.catAxisFontBold ?? false,
+      chart.catAxisFontItalic ?? false,
+    );
     const catSlotMaxPx = dateAxisPlan
       ? (dateAxisPlan.categoryBandFractions[0] ?? 0) * pw - 4
       : (pw / n) * labelInterval - 4;
@@ -7094,7 +7198,12 @@ function renderSurfaceChart(
     surfaceCatLineWidth,
     chart.catAxisLineDash,
   );
-  ctx.font = chartFontCss(catFontPx, chartFontFamily(chart, chart.catAxisFontFace, 'minor'));
+  ctx.font = chartFontCss(
+    catFontPx,
+    chartFontFamily(chart, chart.catAxisFontFace, 'minor'),
+    chart.catAxisFontBold ?? false,
+    chart.catAxisFontItalic ?? false,
+  );
   ctx.fillStyle = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#000000';
   ctx.textBaseline = 'top';
   for (let column = 0; column < columnCount; column++) {
@@ -7157,7 +7266,12 @@ function renderSurfaceChart(
         valueAxisWidth, chart.valAxisLineDash,
       );
       const valFontPx = axisLabelPx(chart.valAxisFontSizeHpt, h, ptToPx);
-      ctx.font = chartFontCss(valFontPx, chartFontFamily(chart, chart.valAxisFontFace, 'minor'));
+      ctx.font = chartFontCss(
+        valFontPx,
+        chartFontFamily(chart, chart.valAxisFontFace, 'minor'),
+        chart.valAxisFontBold ?? false,
+        chart.valAxisFontItalic ?? false,
+      );
       ctx.fillStyle = chart.valAxisFontColor ? `#${chart.valAxisFontColor}` : '#000000';
       const left = (valueAxisBottom.x + valueAxisTop.x) / 2 < px0 + pw / 2;
       ctx.textAlign = left ? 'right' : 'left';
@@ -7388,7 +7502,12 @@ function renderAreaChart(
     && chart.plotAreaManualLayout.layoutTarget !== 'inner'
   ) {
     const prevFont = ctx.font;
-    ctx.font = `${manualValTickFontPx}px ${chartFontFamily(chart, chart.valAxisFontFace, 'minor')}`;
+    ctx.font = chartFontCss(
+      manualValTickFontPx,
+      chartFontFamily(chart, chart.valAxisFontFace, 'minor'),
+      chart.valAxisFontBold ?? false,
+      chart.valAxisFontItalic ?? false,
+    );
     for (const value of provisionalScale.majorLines) {
       primaryLabelWidth = Math.max(
         primaryLabelWidth,
@@ -7839,7 +7958,12 @@ function renderAreaChart(
     const drawnValTickFontPx = chart.valAxisFontSizeHpt != null
       ? valAxFontPx
       : Math.max(8, Math.min(11, ph / 20));
-    ctx.font = `${drawnValTickFontPx}px ${chartFontFamily(chart, chart.valAxisFontFace, 'minor')}`;
+    ctx.font = chartFontCss(
+      drawnValTickFontPx,
+      chartFontFamily(chart, chart.valAxisFontFace, 'minor'),
+      chart.valAxisFontBold ?? false,
+      chart.valAxisFontItalic ?? false,
+    );
     ctx.textBaseline = 'middle';
     for (const v of areaPlan.majorLines) {
       const gy = toY(v);
@@ -7916,7 +8040,12 @@ function renderAreaChart(
       : Math.max(8, Math.min(11, pw / n * 0.8));
     ctx.fillStyle = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#555';
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    ctx.font = `${drawnCatTickFontPx}px ${chartFontFamily(chart, chart.catAxisFontFace, 'minor')}`;
+    ctx.font = chartFontCss(
+      drawnCatTickFontPx,
+      chartFontFamily(chart, chart.catAxisFontFace, 'minor'),
+      chart.catAxisFontBold ?? false,
+      chart.catAxisFontItalic ?? false,
+    );
     // Category labels are controlled by the authored `<c:tickLblSkip>` interval.
     // Do not add an automatic collision interval: sparse category caches often
     // deliberately leave alternating entries empty to obtain a two-year label
@@ -9430,7 +9559,12 @@ function renderRadarChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: C
   // overlapping the origin point.
   if (!chart.valAxisHidden) {
     const valAxPx = axisLabelPx(chart.valAxisFontSizeHpt, h, ptToPx);
-    ctx.font = `${chart.valAxisFontItalic ? 'italic ' : ''}${chart.valAxisFontBold ? 'bold ' : ''}${valAxPx}px ${chartFontFamily(chart, chart.valAxisFontFace, 'minor')}`;
+    ctx.font = chartFontCss(
+      valAxPx,
+      chartFontFamily(chart, chart.valAxisFontFace, 'minor'),
+      chart.valAxisFontBold ?? false,
+      chart.valAxisFontItalic ?? false,
+    );
     ctx.fillStyle = chart.valAxisFontColor ? `#${chart.valAxisFontColor}` : '#555';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
@@ -9471,7 +9605,12 @@ function renderRadarChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: C
   const radarCatFontPx = chart.catAxisFontSizeHpt != null
     ? axisLabelPx(chart.catAxisFontSizeHpt, h, ptToPx)
     : Math.max(8, Math.min(11, rd * 0.2));
-  ctx.font = `${chart.catAxisFontItalic ? 'italic ' : ''}${chart.catAxisFontBold ? 'bold ' : ''}${radarCatFontPx}px ${chartFontFamily(chart, chart.catAxisFontFace, 'minor')}`;
+  ctx.font = chartFontCss(
+    radarCatFontPx,
+    chartFontFamily(chart, chart.catAxisFontFace, 'minor'),
+    chart.catAxisFontBold ?? false,
+    chart.catAxisFontItalic ?? false,
+  );
   ctx.fillStyle = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#444';
   ctx.textBaseline = 'middle';
   // Spoke labels radiate from just outside the ring. Cap each at the room
@@ -12988,7 +13127,12 @@ function renderBoxWhiskerChart(
     // Category label (centered under the slot), word-wrapped like the other
     // cartesian renderers.
     if (!chart.catAxisHidden) {
-      ctx.font = `${catFontPx}px ${chartFontFamily(chart, chart.catAxisFontFace, 'minor')}`;
+      ctx.font = chartFontCss(
+        catFontPx,
+        chartFontFamily(chart, chart.catAxisFontFace, 'minor'),
+        chart.catAxisFontBold ?? false,
+        chart.catAxisFontItalic ?? false,
+      );
       ctx.fillStyle = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#595959';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';

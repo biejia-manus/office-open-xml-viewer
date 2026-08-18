@@ -913,7 +913,10 @@ describe('classic 3-D compatibility projection', () => {
       chartType: 'clusteredBar',
       categories: ['A'],
       chartStyleRoles: {
-        seriesAxis: { lineColors: ['654321'], lineWidthEmu: 25_400, lineDash: 'dashDot' },
+        seriesAxis: {
+          lineColors: ['654321'], lineWidthEmu: 25_400, lineDash: 'dashDot',
+          fontSizeHpt: 700, fontBold: true, fontColor: 'AABBCC', fontFace: 'Series Face',
+        },
       },
       threeD: {
         rotationX: 15, rotationY: 20, depthPercent: 100, perspective: 30,
@@ -930,6 +933,9 @@ describe('classic 3-D compatibility projection', () => {
     expect(rec.segs.some(segment =>
       segment.ss === '#654321' && segment.lw === 2 && segment.dash.length === 4
     )).toBe(true);
+    const seriesAxisLabel = rec.texts.find(text => text.text === 'North');
+    expect(seriesAxisLabel).toMatchObject({ fillStyle: '#AABBCC' });
+    expect(seriesAxisLabel?.font).toContain('bold 7px "Series Face"');
   });
 
   it('depth-sorts crossing 3-D line segments instead of painting whole series atomically', () => {
@@ -8715,7 +8721,10 @@ function segRecordingCtx(): SegRecorded {
           cx = x; cy = y;
         };
         case 'fillText': return (text: string, x: number, y: number) =>
-          texts.push({ text, x, y, align: String(state.textAlign), baseline: String(state.textBaseline) });
+          texts.push({
+            text, x, y, align: String(state.textAlign), baseline: String(state.textBaseline),
+            font: String(state.font), fillStyle: String(state.fillStyle),
+          });
         case 'createLinearGradient': case 'createRadialGradient':
           return () => ({ addColorStop() {} });
         case 'closePath': return () => { cx = mx; cy = my; };
@@ -8906,6 +8915,50 @@ describe('CH6 — axis scale model', () => {
     expect(hidden.segs.some(segment => segment.ss === '#AABBCC' || segment.ss === '#CCBBAA'))
       .toBe(false);
     expect(hidden.texts.map(text => text.text)).toEqual(expect.arrayContaining(['A', '10']));
+  });
+
+  it('uses linked axis text defaults behind direct tick-label formatting', () => {
+    const linked = segRecordingCtx();
+    renderChart(linked.ctx, lineModel({
+      valAxisMajorGridlines: false,
+      chartStyleRoles: {
+        categoryAxis: {
+          fontSizeHpt: 700, fontBold: true, fontItalic: true,
+          fontColor: 'AABBCC', fontFace: 'Linked Category',
+        },
+        valueAxis: {
+          fontSizeHpt: 800, fontBold: true, fontItalic: true,
+          fontColor: 'CCBBAA', fontFace: 'Linked Value',
+        },
+      },
+    }), RECT, 1);
+    const category = linked.texts.find(text => text.text === 'A');
+    const value = linked.texts.find(text => text.text === '10');
+    expect(category).toMatchObject({ fillStyle: '#AABBCC' });
+    expect(category?.font).toContain('italic bold 7px "Linked Category"');
+    expect(value).toMatchObject({ fillStyle: '#CCBBAA' });
+    expect(value?.font).toContain('italic bold 8px "Linked Value"');
+
+    const direct = segRecordingCtx();
+    renderChart(direct.ctx, lineModel({
+      valAxisMajorGridlines: false,
+      catAxisFontSizeHpt: 1100,
+      catAxisFontBold: false,
+      catAxisFontItalic: false,
+      catAxisFontColor: '112233',
+      catAxisFontFace: 'Direct Category',
+      chartStyleRoles: {
+        categoryAxis: {
+          fontSizeHpt: 700, fontBold: true, fontItalic: true,
+          fontColor: 'AABBCC', fontFace: 'Linked Category',
+        },
+      },
+    }), RECT, 1);
+    const directCategory = direct.texts.find(text => text.text === 'A');
+    expect(directCategory).toMatchObject({ fillStyle: '#112233' });
+    expect(directCategory?.font).toContain('11px "Direct Category"');
+    expect(directCategory?.font).not.toContain('italic');
+    expect(directCategory?.font).not.toContain('bold');
   });
 
   it('valAxisTickLabelPos="none" hides value tick labels (gridlines stay)', () => {
@@ -9150,7 +9203,10 @@ describe('CH6 — axis scale model', () => {
         majorTickMark: 'none', majorUnit: 20,
       },
       chartStyleRoles: {
-        valueAxis: { lineColors: ['654321'], lineWidthEmu: 25_400, lineDash: 'dashDot' },
+        valueAxis: {
+          lineColors: ['654321'], lineWidthEmu: 25_400, lineDash: 'dashDot',
+          fontSizeHpt: 700, fontItalic: true, fontColor: 'AABBCC', fontFace: 'Secondary Face',
+        },
       },
     }), RECT, 1);
     expect(rec.segs.some(segment =>
@@ -9158,6 +9214,11 @@ describe('CH6 — axis scale model', () => {
         && Math.abs(segment.x0 - segment.x1) < 0.5
         && segment.x0 > RECT.w * 0.75 && segment.dash.length === 4
     )).toBe(true);
+    const secondaryLabel = rec.texts.find(text =>
+      text.x > RECT.w * 0.75 && text.text === '20'
+    );
+    expect(secondaryLabel).toMatchObject({ fillStyle: '#AABBCC' });
+    expect(secondaryLabel?.font).toContain('italic 7px "Secondary Face"');
   });
 
   it('secondary tick-label visibility and font properties do not affect ticks or grids', () => {

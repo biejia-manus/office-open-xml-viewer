@@ -176,6 +176,11 @@ export interface ChartexBoxWhisker {
     series: ChartexBoxSeries[];
 }
 export interface ChartExElementStyle {
+    fontSizeHpt?: number | null;
+    fontBold?: boolean | null;
+    fontItalic?: boolean | null;
+    fontColor?: string | null;
+    fontFace?: string | null;
     fillPaints?: Array<SolidFill | GradientFill | PatternFill | null> | null;
     fillColors?: Array<string | null> | null;
     fillHidden?: boolean | null;

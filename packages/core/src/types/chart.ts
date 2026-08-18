@@ -461,6 +461,12 @@ export type ChartType =
 
 /** Effective paint for one role in an Office 2013+ Chart Style part. */
 export interface ChartExElementStyle {
+  /** Linked Chart Style text defaults (`fontRef` + `defRPr`). */
+  fontSizeHpt?: number | null;
+  fontBold?: boolean | null;
+  fontItalic?: boolean | null;
+  fontColor?: string | null;
+  fontFace?: string | null;
   /**
    * Per-color-style-index DrawingML fill recipes after `phClr` substitution.
    * Uses the same shared fill model as DrawingML shapes and cell-adjacent

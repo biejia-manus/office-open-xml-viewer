@@ -84,6 +84,18 @@ const MAX_CHART_CACHE_POINTS: usize = 1_048_576;
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartExElementStyle {
+    /// Linked Chart Style text defaults (`fontRef` + `defRPr`). Direct chart
+    /// text properties remain authoritative when the renderer composes them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size_hpt: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_face: Option<String>,
     /// Per-color-style-index DrawingML fill recipes after `phClr`
     /// substitution. Solid fills remain duplicated in `fill_colors` for wire
     /// compatibility; gradient and pattern fills are retained only here.
@@ -4340,8 +4352,16 @@ fn parse_chartex_element_style(
         Some(LineJoin::Miter { .. }) => Some("miter".to_owned()),
         None => None,
     });
+    let (font_size_hpt, font_bold, font_color, font_face) =
+        extract_chartex_style_text_props(Some(style_node), resolver);
+    let font_italic = extract_chartex_style_text_italic(Some(style_node));
 
     ChartExElementStyle {
+        font_size_hpt,
+        font_bold,
+        font_italic,
+        font_color,
+        font_face,
         fill_paints,
         fill_colors,
         fill_hidden,
@@ -15457,6 +15477,7 @@ Subtitle</a:t></a:r></a:p>
             r#"<cs:chartStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}">
               <cs:dataPointMarkerLayout symbol="diamond" size="9"/>
               <cs:chartArea><cs:spPr><a:solidFill><a:srgbClr val="112233"/></a:solidFill></cs:spPr></cs:chartArea>
+              <cs:categoryAxis><cs:defRPr sz="700" b="1" i="1"><a:solidFill><a:srgbClr val="778899"/></a:solidFill><a:latin typeface="Axis Face"/></cs:defRPr></cs:categoryAxis>
               <cs:dropLine><cs:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:ln></cs:spPr></cs:dropLine>
               <cs:gridlineMinor><cs:spPr><a:ln><a:noFill/></a:ln></cs:spPr></cs:gridlineMinor>
             </cs:chartStyle>"#,
@@ -15483,7 +15504,7 @@ Subtitle</a:t></a:r></a:p>
             Some(2)
         );
         let roles = model.chart_style_roles.expect("linked role table");
-        assert_eq!(roles.len(), 3);
+        assert_eq!(roles.len(), 4);
         assert_eq!(
             roles["chartArea"].fill_colors.as_deref(),
             Some(&[Some("112233".to_string()), Some("112233".to_string())][..]),
@@ -15497,6 +15518,14 @@ Subtitle</a:t></a:r></a:p>
             Some("445566"),
         );
         assert_eq!(roles["gridlineMinor"].line_hidden, Some(true));
+        assert_eq!(roles["categoryAxis"].font_size_hpt, Some(700));
+        assert_eq!(roles["categoryAxis"].font_bold, Some(true));
+        assert_eq!(roles["categoryAxis"].font_italic, Some(true));
+        assert_eq!(roles["categoryAxis"].font_color.as_deref(), Some("778899"));
+        assert_eq!(
+            roles["categoryAxis"].font_face.as_deref(),
+            Some("Axis Face")
+        );
     }
 
     #[test]
