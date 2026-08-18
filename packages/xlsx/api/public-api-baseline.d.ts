@@ -181,6 +181,7 @@ export interface ChartDataLabelOverride {
     showCatName?: boolean;
     showSerName?: boolean;
     showPercent?: boolean;
+    showBubbleSize?: boolean;
     deleted?: boolean;
 }
 export interface ChartDataPointOverride {
@@ -591,6 +592,7 @@ export interface ChartSeriesDataLabels {
     showCatName: boolean;
     showSerName: boolean;
     showPercent: boolean;
+    showBubbleSize?: boolean;
     position?: string;
     fontColor?: string;
     formatCode?: string;

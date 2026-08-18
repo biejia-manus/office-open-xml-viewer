@@ -350,6 +350,8 @@ export interface ChartDataLabelOverride {
   showCatName?: boolean;
   showSerName?: boolean;
   showPercent?: boolean;
+  /** `<c:showBubbleSize>` for this point; undefined inherits the series. */
+  showBubbleSize?: boolean;
   /**
    * `<c:dLbl><c:delete val="1"/>` (ECMA-376 §21.2.2.43) — the point's label is
    * removed. Distinguishes a genuine delete from a `<c:dLbl>` that only carries
@@ -378,6 +380,8 @@ export interface ChartSeriesDataLabels {
   showCatName: boolean;
   showSerName: boolean;
   showPercent: boolean;
+  /** Show the corresponding `<c:bubbleSize>` value in a bubble data label. */
+  showBubbleSize?: boolean;
   position?: string;
   fontColor?: string;
   formatCode?: string;

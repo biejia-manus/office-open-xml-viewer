@@ -5757,6 +5757,33 @@ describe('CH9 — bubble scale and numeric-X trendlines', () => {
     expect(rec.arcs.map(arc => arc.fillStyle)).toEqual(['#4472C4', '#ED7D31', '#A5A5A5']);
   });
 
+  it('composes showBubbleSize labels with point-level visibility overrides', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble',
+      categories: ['1', '2'],
+      series: [series({
+        values: [2, 3],
+        bubbleSizes: [876, 987],
+        seriesDataLabels: {
+          showVal: false,
+          showCatName: false,
+          showSerName: false,
+          showPercent: false,
+          showBubbleSize: true,
+        },
+        dataLabelOverrides: [{ idx: 0, text: '', showBubbleSize: false }],
+      })],
+      catAxisMin: 0,
+      catAxisMax: 3,
+      valMin: 0,
+      valMax: 4,
+    }), RECT, 1);
+
+    expect(rec.texts.some(text => text.text === '876')).toBe(false);
+    expect(rec.texts.some(text => text.text === '987')).toBe(true);
+  });
+
   it('keeps series noFill over varyColors while point formatting stays more specific', () => {
     const rec = markerRecordingCtx();
     renderChart(rec.ctx, baseModel({

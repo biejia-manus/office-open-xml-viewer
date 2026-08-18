@@ -9133,16 +9133,19 @@ function drawSeriesDataLabels(
     const showCatName = ovr?.showCatName ?? seriesDef?.showCatName;
     const showSerName = ovr?.showSerName ?? seriesDef?.showSerName;
     const showVal     = ovr?.showVal ?? seriesDef?.showVal;
+    const showBubbleSize = ovr?.showBubbleSize ?? seriesDef?.showBubbleSize;
     const text = effectiveDataLabelText({
       customText: ovr?.text,
       showCategory: showCatName && !useIndexX,
       showSeries: showSerName,
       showValue: showVal,
+      showBubbleSize,
       category: formatChartValWithCode(
         xv, s.catFormatCodes?.[i] ?? s.catFormatCode ?? null, date1904,
       ),
       seriesName: s.name,
       sourceValue: yv,
+      bubbleSize: s.bubbleSizes?.[i] ?? undefined,
       valueDivisor: displayUnitDivisor(valueDisplayUnits),
       formatCode: ovr?.formatCode ?? seriesDef?.formatCode ?? null,
       date1904,

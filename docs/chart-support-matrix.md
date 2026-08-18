@@ -64,7 +64,9 @@ observed input boundary is recorded in
 | C-AXIS-002 | Category `lblAlgn` and `lblOffset` | No | No | No | Missing | Default values often mask the omission; non-default values are unsupported. |
 | C-AXIS-003 | Axis crossing (`crosses`, `crossesAt`, and `crossBetween`) | Yes | Yes | Partial | Partial | Bar/column and Surface boundaries have focused coverage. Interior crossing remains inconsistent across line/area families. |
 | C-LABEL-001 | Value/category/series/percent labels, separators, leader lines, and manual layout | Yes | Yes | Yes | Supported | Per-point and series-level overrides are retained. |
-| C-LABEL-002 | `showLegendKey`, `showBubbleSize`, and `showDLblsOverMax` | No | No | No | Missing | These are independent label visibility controls. |
+| C-LABEL-002 | `showBubbleSize` | Yes | Yes | Yes | Supported | Series and point-level flags compose the authored bubble-size cache value into the label. |
+| C-LABEL-003 | `showLegendKey` | No | No | No | Missing | The label-local legend key is independent from the chart legend. |
+| C-LABEL-004 | `showDLblsOverMax` | No | No | No | Missing | Controls labels outside the value-axis maximum. |
 | C-LEGEND-001 | Position, text, fill, line, and manual layout | Yes | Yes | Yes | Supported | |
 | C-LEGEND-002 | `legend/overlay` and per-entry delete/style | No | No | No | Missing | Explicit overlay and `legendEntry` overrides are not represented. |
 | C-SPACE-001 | `roundedCorners` | No | No | No | Missing | Affects the outer chart-space shape. |

@@ -1187,6 +1187,9 @@ pub struct ChartDataLabelOverride {
     pub show_ser_name: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_percent: Option<bool>,
+    /// `<c:dLbl><c:showBubbleSize>`; absent inherits the series default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_bubble_size: Option<bool>,
     /// `<c:dLbl><c:delete val="1"/>` (§21.2.2.43) — this point's label is
     /// removed. Distinguishes a genuinely deleted label from a `<c:dLbl>` that
     /// merely carries style/flag overrides with no `<c:tx>` (both formerly
@@ -1229,6 +1232,9 @@ pub struct ChartSeriesDataLabels {
     pub show_cat_name: bool,
     pub show_ser_name: bool,
     pub show_percent: bool,
+    /// `<c:dLbls><c:showBubbleSize>` for bubble-chart data labels.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub show_bubble_size: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4490,6 +4496,7 @@ fn parse_chartex_series_labels(
         show_cat_name: bool_value("categoryName"),
         show_ser_name: bool_value("seriesName"),
         show_percent: false,
+        show_bubble_size: false,
         position: attr(&labels, "pos"),
         font_color: extract_axis_tick_label_color(labels, resolver),
         format_code: child(labels, "numFmt").and_then(|node| attr(&node, "formatCode")),
@@ -4547,6 +4554,7 @@ fn parse_chartex_series_labels(
             show_ser_name: label_visibility
                 .and_then(|node| chart_text_bool_attr(node, "seriesName")),
             show_percent: None,
+            show_bubble_size: None,
             deleted: None,
         });
     }
@@ -4582,6 +4590,7 @@ fn parse_chartex_series_labels(
                 show_cat_name: None,
                 show_ser_name: None,
                 show_percent: None,
+                show_bubble_size: None,
                 deleted: Some(true),
             });
             override_positions.insert(idx, overrides.len() - 1);
@@ -5249,6 +5258,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
             show_cat_name: visible_attr("categoryName"),
             show_ser_name: visible_attr("seriesName"),
             show_percent: false,
+            show_bubble_size: false,
             position: data_label_position.clone(),
             font_color: data_label_font_color.clone(),
             format_code: child(labels, "numFmt").and_then(|format| attr(&format, "formatCode")),
@@ -6558,6 +6568,7 @@ pub fn parse_series_data_labels(
         show_cat_name: bool_attr(d_lbls, "showCatName"),
         show_ser_name: bool_attr(d_lbls, "showSerName"),
         show_percent: bool_attr(d_lbls, "showPercent"),
+        show_bubble_size: bool_attr(d_lbls, "showBubbleSize"),
         position: position.clone(),
         font_color: font_color.clone(),
         format_code,
@@ -6673,6 +6684,7 @@ pub fn parse_series_data_labels(
             show_cat_name: opt_bool_flag("showCatName"),
             show_ser_name: opt_bool_flag("showSerName"),
             show_percent: opt_bool_flag("showPercent"),
+            show_bubble_size: opt_bool_flag("showBubbleSize"),
             // §21.2.2.43 `<c:delete>` — record genuine deletes distinctly from a
             // style-only `<c:dLbl>` so the renderer never mistakes an empty tx
             // (compose-from-flags) for a removed label.
@@ -6684,6 +6696,7 @@ pub fn parse_series_data_labels(
         || series_defaults.show_cat_name
         || series_defaults.show_ser_name
         || series_defaults.show_percent
+        || series_defaults.show_bubble_size
         || series_defaults.position.is_some()
         || series_defaults.font_color.is_some()
         || series_defaults.format_code.is_some()
@@ -12722,6 +12735,7 @@ Subtitle</a:t></a:r></a:p>
                 <c:showCatName/>
                 <c:showSerName val="0"/>
                 <c:showPercent/>
+                <c:showBubbleSize/>
               </c:dLbls>
             </c:ser>"#
         );
@@ -12735,6 +12749,7 @@ Subtitle</a:t></a:r></a:p>
             "<c:showSerName val=\"0\"/> ⇒ false"
         );
         assert!(defaults.show_percent, "bare <c:showPercent/> ⇒ true");
+        assert!(defaults.show_bubble_size, "bare <c:showBubbleSize/> ⇒ true");
     }
 
     #[test]
@@ -12768,6 +12783,7 @@ Subtitle</a:t></a:r></a:p>
                   <c:idx val="2"/>
                   <c:showPercent/>
                   <c:showCatName val="0"/>
+                  <c:showBubbleSize val="0"/>
                 </c:dLbl>
                 <c:showVal val="1"/>
               </c:dLbls>
@@ -12794,6 +12810,7 @@ Subtitle</a:t></a:r></a:p>
             "bare <c:showPercent/> ⇒ Some(true)"
         );
         assert_eq!(flags.show_cat_name, Some(false), "val=\"0\" ⇒ Some(false)");
+        assert_eq!(flags.show_bubble_size, Some(false));
     }
 
     #[test]
