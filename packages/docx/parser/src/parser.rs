@@ -11430,8 +11430,8 @@ fn docx_line_wire_properties(line: &ooxml_common::line::LineProperties) -> DocxL
             .map(|stop| ShapeLineDashSegment {
                 // CT_DashStop values are percentages of the line width
                 // (§20.1.8.17-.18); core uses the same relative unit.
-                dash: stop.dash as f64 / 100_000.0,
-                space: stop.space as f64 / 100_000.0,
+                dash: stop.dash / 100_000.0,
+                space: stop.space / 100_000.0,
             })
             .collect(),
         _ => Vec::new(),
