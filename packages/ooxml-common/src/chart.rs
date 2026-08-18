@@ -870,6 +870,10 @@ pub struct ChartDecorationLineStyle {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
 }
 
@@ -3908,22 +3912,25 @@ fn parse_chart_decoration_line_style(
     node: Node,
     resolver: &dyn ColorResolver,
 ) -> ChartDecorationLineStyle {
-    let (color, width_emu, no_fill) = extract_sp_pr_ln_style(node, resolver);
-    let dash = child(node, "spPr")
-        .and_then(|shape| child(shape, "ln"))
-        .and_then(|line| child(line, "prstDash"))
-        .and_then(|preset| attr(&preset, "val"));
-    let hidden = if no_fill {
+    let direct = extract_direct_shape_line(node, resolver);
+    let hidden = if direct.hidden == Some(true) {
         Some(true)
-    } else if color.is_some() || width_emu.is_some() || dash.is_some() {
+    } else if direct.color.is_some()
+        || direct.width_emu.is_some()
+        || direct.dash.is_some()
+        || direct.cap.is_some()
+        || direct.join.is_some()
+    {
         Some(false)
     } else {
         None
     };
     ChartDecorationLineStyle {
-        color,
-        width_emu,
-        dash,
+        color: direct.color,
+        width_emu: direct.width_emu,
+        dash: direct.dash,
+        cap: direct.cap,
+        join: direct.join,
         hidden,
     }
 }
@@ -16433,8 +16440,8 @@ Subtitle</a:t></a:r></a:p>
             <c:val><c:numCache><c:pt idx="0"><c:v>55</c:v></c:pt></c:numCache></c:val></c:ser>"#;
         let group = format!(
             r#"<c:stockChart>{hi}
-              <c:dropLines><c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="123456"/></a:solidFill><a:prstDash val="dashDot"/></a:ln></c:spPr></c:dropLines>
-              <c:hiLowLines><c:spPr><a:ln w="25400"><a:solidFill><a:srgbClr val="808080"/></a:solidFill><a:prstDash val="dot"/></a:ln></c:spPr></c:hiLowLines>
+              <c:dropLines><c:spPr><a:ln w="12700" cap="sq"><a:solidFill><a:srgbClr val="123456"/></a:solidFill><a:prstDash val="dashDot"/><a:round/></a:ln></c:spPr></c:dropLines>
+              <c:hiLowLines><c:spPr><a:ln w="25400" cap="rnd"><a:solidFill><a:srgbClr val="808080"/></a:solidFill><a:prstDash val="dot"/><a:bevel/></a:ln></c:spPr></c:hiLowLines>
             </c:stockChart>"#
         );
         let xml = chart_space_with_group(&group);
@@ -16448,6 +16455,8 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(drop_lines.color.as_deref(), Some("123456"));
         assert_eq!(drop_lines.width_emu, Some(12_700));
         assert_eq!(drop_lines.dash.as_deref(), Some("dashDot"));
+        assert_eq!(drop_lines.cap.as_deref(), Some("sq"));
+        assert_eq!(drop_lines.join.as_deref(), Some("round"));
         assert_eq!(drop_lines.hidden, Some(false));
         // hiLowLines present + its resolved line color; no upDownBars in fixture.
         assert_eq!(m.stock_hi_low_lines, Some(true));
@@ -16456,6 +16465,8 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(hi_low.color.as_deref(), Some("808080"));
         assert_eq!(hi_low.width_emu, Some(25_400));
         assert_eq!(hi_low.dash.as_deref(), Some("dot"));
+        assert_eq!(hi_low.cap.as_deref(), Some("rnd"));
+        assert_eq!(hi_low.join.as_deref(), Some("bevel"));
         assert_eq!(hi_low.hidden, Some(false));
         assert_eq!(m.stock_up_down_bars, None);
     }

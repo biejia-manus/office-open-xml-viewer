@@ -4785,6 +4785,8 @@ function applyDecorationLineStyle(
     ? axisLineWidthPx(style.widthEmu, ptToPx)
     : Math.max(1, 0.75 * ptToPx);
   ctx.setLineDash(dashPatternForPreset(style.dash ?? undefined, ctx.lineWidth));
+  ctx.lineCap = style.cap === 'rnd' ? 'round' : style.cap === 'sq' ? 'square' : 'butt';
+  ctx.lineJoin = style.join === 'round' || style.join === 'bevel' ? style.join : 'miter';
   return true;
 }
 
@@ -4800,6 +4802,8 @@ function chartStyleRoleLine(
       ?? (linkedApplies ? chartExStyleColor(chart, linked, 'line', 0, 1) : null),
     widthEmu: direct.widthEmu ?? (linkedApplies ? linked.lineWidthEmu : null),
     dash: direct.dash ?? (linkedApplies ? linked.lineDash : null),
+    cap: direct.cap ?? (linkedApplies ? linked.lineCap : null),
+    join: direct.join ?? (linkedApplies ? linked.lineJoin : null),
     hidden: direct.hidden
       ?? (direct.color == null && linkedApplies && linked.lineHidden === true ? true : null),
   };

@@ -8192,6 +8192,7 @@ function ringRecordingCtx(): RingRecorded {
   const state: Record<string, unknown> = {
     font: '10px sans-serif', fillStyle: '#000', strokeStyle: '#000', lineWidth: 1,
     textAlign: 'start', textBaseline: 'alphabetic', globalAlpha: 1,
+    lineCap: 'butt', lineJoin: 'miter',
   };
   const fontPx = (font: string): number => {
     const m = /(\d+(?:\.\d+)?)px/.exec(font);
@@ -8648,7 +8649,10 @@ describe('CH10 — chart text font faces', () => {
 
 // ── CH6 — axis scale model (gridlines / units / logBase / orientation) ───────
 
-interface Seg { x0: number; y0: number; x1: number; y1: number; ss: string; lw: number; dash: number[] }
+interface Seg {
+  x0: number; y0: number; x1: number; y1: number; ss: string; lw: number;
+  dash: number[]; cap: string; join: string;
+}
 interface SegRecorded { ctx: CanvasRenderingContext2D; segs: Seg[]; texts: TextCall[] }
 
 function strokedPolylineCtx(): {
@@ -8744,6 +8748,7 @@ function segRecordingCtx(): SegRecorded {
           segs.push({
             x0: cx, y0: cy, x1: x, y1: y,
             ss: String(state.strokeStyle), lw: Number(state.lineWidth), dash: [...dash],
+            cap: String(state.lineCap), join: String(state.lineJoin),
           });
           cx = x; cy = y;
         };
@@ -11296,11 +11301,14 @@ describe('CH13 — stock chart (high/low/close)', () => {
   it('honors complete high-low line paint, noFill, and linked Chart Style fallback', () => {
     const direct = segRecordingCtx();
     renderChart(direct.ctx, stockModel({
-      stockHiLowLineStyle: { color: 'AA0000', widthEmu: 25400, dash: 'dot' },
+      stockHiLowLineStyle: {
+        color: 'AA0000', widthEmu: 25400, dash: 'dot', cap: 'rnd', join: 'bevel',
+      },
     }), RECT, 1);
     const directLines = direct.segs.filter(segment => segment.ss === '#AA0000');
     expect(directLines).toHaveLength(3);
-    expect(directLines.every(segment => segment.lw === 2 && segment.dash.length > 0)).toBe(true);
+    expect(directLines.every(segment => segment.lw === 2 && segment.dash.length > 0
+      && segment.cap === 'round' && segment.join === 'bevel')).toBe(true);
 
     const hidden = segRecordingCtx();
     renderChart(hidden.ctx, stockModel({
@@ -11324,14 +11332,17 @@ describe('CH13 — stock chart (high/low/close)', () => {
   it('draws one styled stock drop-line envelope per category', () => {
     const rec = segRecordingCtx();
     renderChart(rec.ctx, stockModel({
-      stockDropLines: { color: '123456', widthEmu: 12700, dash: 'dashDot' },
+      stockDropLines: {
+        color: '123456', widthEmu: 12700, dash: 'dashDot', cap: 'sq', join: 'round',
+      },
     }), RECT, 1);
 
     const dropLines = rec.segs.filter(segment => segment.ss === '#123456');
     expect(dropLines).toHaveLength(3);
     expect(dropLines.every(segment => Math.abs(segment.x1 - segment.x0) < 0.01)).toBe(true);
     expect(dropLines.every(segment => Math.abs(segment.y1 - segment.y0) > 20)).toBe(true);
-    expect(dropLines.every(segment => segment.lw === 1 && segment.dash.length > 0)).toBe(true);
+    expect(dropLines.every(segment => segment.lw === 1 && segment.dash.length > 0
+      && segment.cap === 'square' && segment.join === 'round')).toBe(true);
   });
 
   it('keeps stock drop-line noFill hidden and resolves omitted paint from Chart Style', () => {
@@ -11346,12 +11357,16 @@ describe('CH13 — stock chart (high/low/close)', () => {
     renderChart(linked.ctx, stockModel({
       stockDropLines: {},
       chartStyleRoles: {
-        dropLine: { lineColors: ['AABBCC'], lineWidthEmu: 25400, lineDash: 'dash' },
+        dropLine: {
+          lineColors: ['AABBCC'], lineWidthEmu: 25400, lineDash: 'dash',
+          lineCap: 'rnd', lineJoin: 'bevel',
+        },
       },
     }), RECT, 1);
     const dropLines = linked.segs.filter(segment => segment.ss === '#AABBCC');
     expect(dropLines).toHaveLength(3);
-    expect(dropLines.every(segment => segment.lw === 2 && segment.dash.length > 0)).toBe(true);
+    expect(dropLines.every(segment => segment.lw === 2 && segment.dash.length > 0
+      && segment.cap === 'round' && segment.join === 'bevel')).toBe(true);
   });
 
   it('falls back to a default gray hi-lo line when no color is given', () => {

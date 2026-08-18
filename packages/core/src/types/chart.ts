@@ -1228,6 +1228,8 @@ export interface ChartDecorationLineStyle {
   color?: string | null;
   widthEmu?: number | null;
   dash?: string | null;
+  cap?: string | null;
+  join?: string | null;
   hidden?: boolean | null;
 }
 
