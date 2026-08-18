@@ -1104,6 +1104,8 @@ export interface ChartModel {
   // ── Stock chart (CH13, §21.2.2.198) ──────────────────────────────────────
   /** `<c:stockChart><c:dropLines>` direct DrawingML line paint. */
   stockDropLines?: ChartDecorationLineStyle | null;
+  /** `<c:stockChart><c:hiLowLines>` direct DrawingML line paint. */
+  stockHiLowLineStyle?: ChartDecorationLineStyle | null;
   /**
    * `<c:stockChart><c:hiLowLines>` presence (ECMA-376 §21.2.2.60). When true
    * the stock renderer draws a vertical line spanning each category's low↔high
@@ -1208,6 +1210,9 @@ export interface ChartStockBarPaint {
   fillHidden?: boolean | null;
   lineColor?: string | null;
   lineWidthEmu?: number | null;
+  lineDash?: string | null;
+  lineCap?: string | null;
+  lineJoin?: string | null;
   lineHidden?: boolean | null;
 }
 

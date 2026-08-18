@@ -10748,9 +10748,11 @@ describe('classic line-chart group decorations', () => {
       hiLoLine: { lineColors: ['00AA00'], lineWidthEmu: 28575 },
       upBar: {
         fillColors: ['AABBCC'], lineColors: ['112233'], lineWidthEmu: 19050,
+        lineDash: 'dash', lineCap: 'sq', lineJoin: 'round',
       },
       downBar: {
         fillColors: ['DDEEFF'], lineColors: ['445566'], lineWidthEmu: 28575,
+        lineDash: 'dot', lineCap: 'rnd', lineJoin: 'bevel',
       },
     };
 
@@ -10763,8 +10765,10 @@ describe('classic line-chart group decorations', () => {
     renderChart(bars.ctx, model, RECT, 1);
     expect(bars.rects.filter(rect => rect.fs === '#AABBCC')).toHaveLength(3);
     expect(bars.rects.filter(rect => rect.fs === '#DDEEFF')).toHaveLength(2);
-    expect(bars.strokeRects.filter(rect => rect.ss === '#112233')).toHaveLength(3);
-    expect(bars.strokeRects.filter(rect => rect.ss === '#445566')).toHaveLength(2);
+    expect(bars.strokeRects.filter(rect => rect.ss === '#112233'
+      && rect.dash.length > 0 && rect.cap === 'square' && rect.join === 'round')).toHaveLength(3);
+    expect(bars.strokeRects.filter(rect => rect.ss === '#445566'
+      && rect.dash.length > 0 && rect.cap === 'round' && rect.join === 'bevel')).toHaveLength(2);
   });
 
   it('keeps direct decoration paint above linked roles and ignores NoStyle roles', () => {
@@ -11279,6 +11283,34 @@ describe('CH13 — stock chart (high/low/close)', () => {
     expect(red.length).toBe(3);
   });
 
+  it('honors complete high-low line paint, noFill, and linked Chart Style fallback', () => {
+    const direct = segRecordingCtx();
+    renderChart(direct.ctx, stockModel({
+      stockHiLowLineStyle: { color: 'AA0000', widthEmu: 25400, dash: 'dot' },
+    }), RECT, 1);
+    const directLines = direct.segs.filter(segment => segment.ss === '#AA0000');
+    expect(directLines).toHaveLength(3);
+    expect(directLines.every(segment => segment.lw === 2 && segment.dash.length > 0)).toBe(true);
+
+    const hidden = segRecordingCtx();
+    renderChart(hidden.ctx, stockModel({
+      stockHiLowLineStyle: { hidden: true },
+      chartStyleRoles: { hiLoLine: { lineColors: ['00AA00'], lineWidthEmu: 25400 } },
+    }), RECT, 1);
+    expect(hidden.segs.some(segment => segment.ss === '#00AA00')).toBe(false);
+
+    const linked = segRecordingCtx();
+    renderChart(linked.ctx, stockModel({
+      stockHiLowLineStyle: {},
+      chartStyleRoles: {
+        hiLoLine: { lineColors: ['00AA00'], lineWidthEmu: 19050, lineDash: 'dash' },
+      },
+    }), RECT, 1);
+    const linkedLines = linked.segs.filter(segment => segment.ss === '#00AA00');
+    expect(linkedLines).toHaveLength(3);
+    expect(linkedLines.every(segment => segment.lw === 1.5 && segment.dash.length > 0)).toBe(true);
+  });
+
   it('draws one styled stock drop-line envelope per category', () => {
     const rec = segRecordingCtx();
     renderChart(rec.ctx, stockModel({
@@ -11367,9 +11399,11 @@ describe('CH13 — stock chart (high/low/close)', () => {
         gapWidthPercent: 100,
         up: {
           fillColor: '00AA00', lineColor: '006600', lineWidthEmu: 12700,
+          lineDash: 'dash', lineCap: 'sq', lineJoin: 'round',
         },
         down: {
           fillColor: 'CC0000', lineColor: '660000', lineWidthEmu: 25400,
+          lineDash: 'dot', lineCap: 'rnd', lineJoin: 'bevel',
         },
       },
       series: [
@@ -11385,8 +11419,10 @@ describe('CH13 — stock chart (high/low/close)', () => {
     expect(bars.map(rect => rect.fs)).toEqual(['#00AA00', '#CC0000']);
     expect(bars[0].w).toBeCloseTo(bars[1].w, 6);
     expect(bars[0].w).toBeGreaterThan(30);
-    expect(rec.strokeRects.some(rect => rect.ss === '#006600' && rect.lw === 1)).toBe(true);
-    expect(rec.strokeRects.some(rect => rect.ss === '#660000' && rect.lw === 2)).toBe(true);
+    expect(rec.strokeRects.some(rect => rect.ss === '#006600' && rect.lw === 1
+      && rect.dash.length > 0 && rect.cap === 'square' && rect.join === 'round')).toBe(true);
+    expect(rec.strokeRects.some(rect => rect.ss === '#660000' && rect.lw === 2
+      && rect.dash.length > 0 && rect.cap === 'round' && rect.join === 'bevel')).toBe(true);
   });
 
   it('draws three-series up/down bars and only the explicitly authored marker', () => {

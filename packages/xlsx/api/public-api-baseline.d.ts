@@ -557,6 +557,7 @@ export interface ChartModel {
     areaGroupDecorations?: ChartAreaGroupDecorations[] | null;
     barGroupDecorations?: ChartBarGroupDecorations[] | null;
     stockDropLines?: ChartDecorationLineStyle | null;
+    stockHiLowLineStyle?: ChartDecorationLineStyle | null;
     stockHiLowLines?: boolean | null;
     stockHiLowLineColor?: string | null;
     stockUpDownBars?: boolean | null;
@@ -683,6 +684,9 @@ export interface ChartStockBarPaint {
     fillHidden?: boolean | null;
     lineColor?: string | null;
     lineWidthEmu?: number | null;
+    lineDash?: string | null;
+    lineCap?: string | null;
+    lineJoin?: string | null;
     lineHidden?: boolean | null;
 }
 export interface ChartStockUpDownBarStyle {

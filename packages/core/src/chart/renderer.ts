@@ -4821,6 +4821,9 @@ function chartStyleRoleBarPaint(
     lineColor: direct.lineColor
       ?? (lineApplies ? chartExStyleColor(chart, linked, 'line', 0, 1) : null),
     lineWidthEmu: direct.lineWidthEmu ?? (lineApplies ? linked.lineWidthEmu : null),
+    lineDash: direct.lineDash ?? (lineApplies ? linked.lineDash : null),
+    lineCap: direct.lineCap ?? (lineApplies ? linked.lineCap : null),
+    lineJoin: direct.lineJoin ?? (lineApplies ? linked.lineJoin : null),
     lineHidden: direct.lineHidden
       ?? (lineApplies && linked.lineHidden === true ? true : null),
   };
@@ -5606,12 +5609,22 @@ function drawUpDownBars(
     if (!paint.lineHidden && (
       paint.lineColor != null || paint.lineWidthEmu != null || useLegacyDefaultPaint
     )) {
+      const previousDash = ctx.getLineDash();
+      const previousCap = ctx.lineCap;
+      const previousJoin = ctx.lineJoin;
       ctx.strokeStyle = `#${paint.lineColor ?? '000000'}`;
       ctx.lineWidth = paint.lineWidthEmu != null
         ? axisLineWidthPx(paint.lineWidthEmu, ptToPx)
         : Math.max(1, 0.75 * ptToPx);
-      ctx.setLineDash([]);
+      ctx.setLineDash(dashPatternForPreset(paint.lineDash ?? undefined, ctx.lineWidth));
+      ctx.lineCap = paint.lineCap === 'rnd'
+        ? 'round' : paint.lineCap === 'sq' ? 'square' : 'butt';
+      ctx.lineJoin = paint.lineJoin === 'round' || paint.lineJoin === 'bevel'
+        ? paint.lineJoin : 'miter';
       ctx.strokeRect(barX, barY, barWidth, barHeight);
+      ctx.setLineDash(previousDash);
+      ctx.lineCap = previousCap;
+      ctx.lineJoin = previousJoin;
     }
   }
 }
@@ -6652,18 +6665,27 @@ function renderStockChart(
   // `<c:hiLowLines>` line fill, else a neutral gray. ──
   const drawHiLo = (chart.stockHiLowLines ?? true) && highS != null && lowS != null;
   if (drawHiLo && highS && lowS) {
-    ctx.strokeStyle = chart.stockHiLowLineColor ? `#${chart.stockHiLowLineColor}` : '#595959';
-    ctx.lineWidth = Math.max(1, 0.75 * ptToPx);
-    ctx.setLineDash([]);
-    for (let ci = 0; ci < n; ci++) {
-      const hi = highS.values[ci];
-      const lo = lowS.values[ci];
-      if (hi == null || lo == null) continue;
-      const cx = toX(ci);
-      ctx.beginPath();
-      ctx.moveTo(cx, toY(hi));
-      ctx.lineTo(cx, toY(lo));
-      ctx.stroke();
+    const directStyle = chart.stockHiLowLineStyle ?? {
+      color: chart.stockHiLowLineColor ?? null,
+    };
+    const linkedStyle = chartStyleRoleLine(chart, directStyle, 'hiLoLine');
+    const lineStyle = linkedStyle.color == null
+      && linkedStyle.widthEmu == null
+      && linkedStyle.dash == null
+      && linkedStyle.hidden == null
+      ? { ...linkedStyle, color: '595959' }
+      : linkedStyle;
+    if (applyDecorationLineStyle(ctx, lineStyle, ptToPx)) {
+      for (let ci = 0; ci < n; ci++) {
+        const hi = highS.values[ci];
+        const lo = lowS.values[ci];
+        if (hi == null || lo == null) continue;
+        const cx = toX(ci);
+        ctx.beginPath();
+        ctx.moveTo(cx, toY(hi));
+        ctx.lineTo(cx, toY(lo));
+        ctx.stroke();
+      }
     }
   }
 
