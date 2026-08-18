@@ -22,6 +22,7 @@
 // renderer.ts; only the frame is shared.
 
 import type { ChartManualLayout, ChartModel } from '../types/chart';
+import { categoryLabelOffsetPx } from './category-spacing';
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -264,7 +265,13 @@ export function chartLegendReserve(
 
 /** Split a legend reserve into the four per-side bands (three of which are 0).
  *  Matches the `leg?.side === 'r' ? leg.reserveW : 0` idiom repeated inline. */
-export function chartLegendBands(leg: ChartLegendReserve | null): ChartLegendBands {
+export function chartLegendBands(
+  leg: ChartLegendReserve | null,
+  overlay = false,
+): ChartLegendBands {
+  // §21.2.2.132: an overlay legend keeps its automatic paint rectangle but
+  // contributes no reserved band to the plot layout.
+  if (overlay) return { legRightW: 0, legLeftW: 0, legTopH: 0, legBottomH: 0 };
   return {
     legRightW: leg?.side === 'r' ? leg.reserveW : 0,
     legLeftW: leg?.side === 'l' ? leg.reserveW : 0,
@@ -432,8 +439,13 @@ export function cartesianTitleBand(
  *  labels. `catAxFontPx` is the resolved category-axis label font size. Callers
  *  add the axis-title band and any bottom-legend reserve on top of this.
  *  See {@link CAT_AXIS_LABEL_BAND_FONT_FRAC}. */
-export function catAxisLabelBandH(catAxFontPx: number): number {
-  return catAxFontPx * CAT_AXIS_LABEL_BAND_FONT_FRAC;
+export function catAxisLabelBandH(
+  catAxFontPx: number,
+  labelOffsetPercent?: number | null,
+): number {
+  const defaultGap = categoryTickLabelGapPx(catAxFontPx);
+  const offsetGap = categoryLabelOffsetPx(defaultGap, labelOffsetPercent);
+  return catAxFontPx * CAT_AXIS_LABEL_BAND_FONT_FRAC + offsetGap - defaultGap;
 }
 
 /** Office's default distance from an axis rule to one line of tick-label text,
@@ -625,7 +637,7 @@ export function computeChartFrame(
   const legend = params.legendReserve !== undefined
     ? params.legendReserve
     : chartLegendReserve(chart, w, h, params.legendSideReserveFrac);
-  const legendBands = chartLegendBands(legend);
+  const legendBands = chartLegendBands(legend, chart.legendOverlay === true);
   const axisTitles = chartAxisTitleBands(chart, w, h, ptToPx);
 
   let px0: number, py0: number, pw: number, ph: number;

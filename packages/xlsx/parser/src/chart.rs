@@ -1,8 +1,8 @@
 use crate::read_zip_string;
 use crate::types::*;
 use crate::worksheet_reference::{
-    parse_a1_range, resolve_worksheet_reference, split_sheet_ref, ReferencedCellValue,
-    WorksheetReferenceSession,
+    parse_a1_range, resolve_worksheet_reference_with_visibility, resolve_worksheet_visibility,
+    split_sheet_ref, ReferencedCellValue, ResolvedWorksheetReference, WorksheetReferenceSession,
 };
 use crate::{
     find_rel_target_by_type, parse_rels_map, resolve_fill_color, resolve_sheet_path,
@@ -10,7 +10,7 @@ use crate::{
 };
 use ooxml_common::depth::parse_guarded;
 use ooxml_common::ns::{is_c_ns, is_r_ns, is_x_ns, is_xdr_ns};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 const CHARTEX_NS: &str = "http://schemas.microsoft.com/office/drawing/2014/chartex";
 const MAX_CHART_STYLE_FORMATS: usize = 1_048_576;
@@ -145,6 +145,7 @@ fn collect_selected_graphic_frames<'a, 'input>(
 
 pub(crate) struct ChartReferenceContext<'a, 'input, 'session> {
     pub(crate) materialized_rows: Option<&'a [Row]>,
+    pub(crate) materialized_col_hidden: Option<&'a BTreeMap<u32, bool>>,
     pub(crate) sheet_name: &'a str,
     pub(crate) sheets: &'a [SheetMeta],
     pub(crate) workbook_rels: &'a roxmltree::Document<'input>,
@@ -157,6 +158,7 @@ pub(crate) struct ChartReferenceContext<'a, 'input, 'session> {
 struct XlsxChartReferenceResolver<'archive, 'data, 'input, 'session> {
     archive: &'archive mut crate::XlsxZip,
     materialized_rows: Option<&'data [Row]>,
+    materialized_col_hidden: Option<&'data BTreeMap<u32, bool>>,
     sheet_name: &'data str,
     sheets: &'data [SheetMeta],
     workbook_rels: &'data roxmltree::Document<'input>,
@@ -164,9 +166,26 @@ struct XlsxChartReferenceResolver<'archive, 'data, 'input, 'session> {
     defined_names: &'data [DefinedName],
     number_formats: &'data ChartNumberFormatCache,
     session: &'session mut WorksheetReferenceSession,
+    visibility_cache: HashMap<String, Vec<bool>>,
 }
 
 impl XlsxChartReferenceResolver<'_, '_, '_, '_> {
+    fn resolve_cells(&mut self, formula: &str) -> Option<(String, ResolvedWorksheetReference)> {
+        let expanded = self.expand_defined_name(formula);
+        let resolved = resolve_worksheet_reference_with_visibility(
+            self.archive,
+            &expanded,
+            self.materialized_rows,
+            self.materialized_col_hidden,
+            self.sheet_name,
+            self.sheets,
+            self.workbook_rels,
+            self.shared_strings,
+            self.session,
+        )?;
+        Some((expanded, resolved))
+    }
+
     fn expand_defined_name(&self, formula: &str) -> String {
         let trimmed = formula.trim();
         self.defined_names
@@ -267,19 +286,10 @@ impl XlsxChartReferenceResolver<'_, '_, '_, '_> {
 
 impl ooxml_common::chart::ChartReferenceResolver for XlsxChartReferenceResolver<'_, '_, '_, '_> {
     fn resolve_strings(&mut self, formula: &str) -> Option<Vec<String>> {
-        let formula = self.expand_defined_name(formula);
-        resolve_worksheet_reference(
-            self.archive,
-            &formula,
-            self.materialized_rows,
-            self.sheet_name,
-            self.sheets,
-            self.workbook_rels,
-            self.shared_strings,
-            self.session,
-        )
-        .map(|values| {
-            values
+        self.resolve_cells(formula).map(|(formula, resolved)| {
+            self.visibility_cache.insert(formula, resolved.hidden);
+            resolved
+                .values
                 .into_iter()
                 .map(|value| match value {
                     ReferencedCellValue::Text(text) => text,
@@ -291,19 +301,10 @@ impl ooxml_common::chart::ChartReferenceResolver for XlsxChartReferenceResolver<
     }
 
     fn resolve_numbers(&mut self, formula: &str) -> Option<Vec<Option<f64>>> {
-        let formula = self.expand_defined_name(formula);
-        resolve_worksheet_reference(
-            self.archive,
-            &formula,
-            self.materialized_rows,
-            self.sheet_name,
-            self.sheets,
-            self.workbook_rels,
-            self.shared_strings,
-            self.session,
-        )
-        .map(|values| {
-            values
+        self.resolve_cells(formula).map(|(formula, resolved)| {
+            self.visibility_cache.insert(formula, resolved.hidden);
+            resolved
+                .values
                 .into_iter()
                 .map(|value| match value {
                     ReferencedCellValue::Number(number) => Some(number),
@@ -311,6 +312,26 @@ impl ooxml_common::chart::ChartReferenceResolver for XlsxChartReferenceResolver<
                 })
                 .collect()
         })
+    }
+
+    fn resolve_hidden(&mut self, formula: &str) -> Option<Vec<bool>> {
+        let expanded = self.expand_defined_name(formula);
+        if let Some(hidden) = self.visibility_cache.get(&expanded) {
+            return Some(hidden.clone());
+        }
+        let hidden = resolve_worksheet_visibility(
+            self.archive,
+            &expanded,
+            self.materialized_rows,
+            self.materialized_col_hidden,
+            self.sheet_name,
+            self.sheets,
+            self.workbook_rels,
+            self.shared_strings,
+            self.session,
+        )?;
+        self.visibility_cache.insert(expanded, hidden.clone());
+        Some(hidden)
     }
 
     fn resolve_number_format(&mut self, formula: &str) -> Option<String> {
@@ -663,6 +684,7 @@ pub(crate) fn load_sheet_charts(
                     let mut references = XlsxChartReferenceResolver {
                         archive,
                         materialized_rows: context.materialized_rows,
+                        materialized_col_hidden: context.materialized_col_hidden,
                         sheet_name: context.sheet_name,
                         sheets: context.sheets,
                         workbook_rels: context.workbook_rels,
@@ -670,6 +692,7 @@ pub(crate) fn load_sheet_charts(
                         defined_names: context.defined_names,
                         number_formats: context.number_formats,
                         session: context.session,
+                        visibility_cache: HashMap::new(),
                     };
                     if is_chartex {
                         ooxml_common::chart::parse_chartex_part_with_references_and_style_parts(
@@ -680,9 +703,11 @@ pub(crate) fn load_sheet_charts(
                             &mut references,
                         )
                     } else {
-                        ooxml_common::chart::parse_chart_part_with_references(
+                        ooxml_common::chart::parse_chart_part_with_references_and_style_parts(
                             chart_doc.root_element(),
                             &resolver,
+                            style_xml.as_deref(),
+                            color_style_xml.as_deref(),
                             &mut references,
                         )
                     }
@@ -694,7 +719,12 @@ pub(crate) fn load_sheet_charts(
                         color_style_xml.as_deref(),
                     )
                 } else {
-                    ooxml_common::chart::parse_chart_part(chart_doc.root_element(), &resolver)
+                    ooxml_common::chart::parse_chart_part_with_style_parts(
+                        chart_doc.root_element(),
+                        &resolver,
+                        style_xml.as_deref(),
+                        color_style_xml.as_deref(),
+                    )
                 };
                 let Some(mut chart) = chart_opt else {
                     continue;
@@ -1281,7 +1311,7 @@ mod worksheet_reference_tests {
         r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:bubbleChart><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>'التقرير'!C1</c:f></c:strRef></c:tx><c:xVal><c:numRef><c:f>'التقرير'!C2:C4</c:f></c:numRef></c:xVal><c:yVal><c:numRef><c:f>'التقرير'!D2:D4</c:f></c:numRef></c:yVal><c:bubbleSize><c:numRef><c:f>'التقرير'!E2:E4</c:f></c:numRef></c:bubbleSize></c:ser></c:bubbleChart></c:plotArea></c:chart></c:chartSpace>"#.into()
     }
 
-    fn archive_with_chart_and_data(chart_xml: &str) -> crate::XlsxZip {
+    fn archive_with_chart_and_custom_data(chart_xml: &str, data_xml: &str) -> crate::XlsxZip {
         let mut bytes = Vec::new();
         {
             let mut writer = zip::ZipWriter::new(Cursor::new(&mut bytes));
@@ -1303,12 +1333,16 @@ mod worksheet_reference_tests {
             writer
                 .start_file("xl/worksheets/sheet2.xml", options)
                 .unwrap();
-            writer.write_all(DATA_XML.as_bytes()).unwrap();
+            writer.write_all(data_xml.as_bytes()).unwrap();
             writer.start_file("xl/styles.xml", options).unwrap();
             writer.write_all(br#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="3"/></cellXfs></styleSheet>"#).unwrap();
             writer.finish().unwrap();
         }
         crate::XlsxZip::new(Cursor::new(bytes)).unwrap()
+    }
+
+    fn archive_with_chart_and_data(chart_xml: &str) -> crate::XlsxZip {
+        archive_with_chart_and_custom_data(chart_xml, DATA_XML)
     }
 
     fn sheets() -> Vec<SheetMeta> {
@@ -1349,6 +1383,7 @@ mod worksheet_reference_tests {
             "worksheets/sheet1.xml",
             Some(ChartReferenceContext {
                 materialized_rows: None,
+                materialized_col_hidden: None,
                 sheet_name: "Dashboard",
                 sheets: &sheet_metas,
                 workbook_rels: &rels,
@@ -1380,6 +1415,58 @@ mod worksheet_reference_tests {
     }
 
     #[test]
+    fn plot_visible_only_keeps_cached_values_and_resolves_hidden_rows_and_columns() {
+        let chart_xml = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:lineChart>
+          <c:ser><c:idx val="0"/><c:order val="0"/><c:cat><c:strRef><c:f>'التقرير'!A2:A4</c:f><c:strCache><c:ptCount val="3"/><c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt><c:pt idx="2"><c:v>C</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:f>'التقرير'!D2:D4</c:f><c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>20</c:v></c:pt><c:pt idx="2"><c:v>30</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>
+          <c:ser><c:idx val="1"/><c:order val="1"/><c:cat><c:strRef><c:f>'التقرير'!A2:A4</c:f><c:strCache><c:ptCount val="3"/><c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt><c:pt idx="2"><c:v>C</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:f>'التقرير'!C2:C4</c:f><c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>50</c:v></c:pt><c:pt idx="1"><c:v>60</c:v></c:pt><c:pt idx="2"><c:v>70</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>
+        </c:lineChart></c:plotArea><c:plotVisOnly/></c:chart></c:chartSpace>"#;
+        let data_xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols><col min="3" max="3" hidden="1"/></cols><sheetData><row r="2"><c r="A2" t="inlineStr"><is><t>A</t></is></c><c r="C2"><v>500</v></c><c r="D2"><v>100</v></c></row><row r="3" hidden="1"/><row r="4"><c r="A4" t="inlineStr"><is><t>C</t></is></c><c r="C4"><v>700</v></c><c r="D4"><v>300</v></c></row></sheetData></worksheet>"#;
+        let mut archive = archive_with_chart_and_custom_data(chart_xml, data_xml);
+        let rels = parse_guarded(workbook_rels_xml()).unwrap();
+        let sheet_metas = sheets();
+        let theme = vec!["#4472C4".into(); 12];
+        let mut session = WorksheetReferenceSession::default();
+        let styles = crate::styles::parse_styles(&mut archive, &theme).expect("styles");
+        let number_formats = ChartNumberFormatCache::from_styles(&styles.styles);
+        session.seed_current_sheet("Dashboard", None);
+        let charts = load_sheet_charts(
+            &mut archive,
+            "worksheets/sheet1.xml",
+            Some(ChartReferenceContext {
+                materialized_rows: None,
+                materialized_col_hidden: None,
+                sheet_name: "Dashboard",
+                sheets: &sheet_metas,
+                workbook_rels: &rels,
+                shared_strings: &[],
+                defined_names: &[],
+                number_formats: &number_formats,
+                session: &mut session,
+            }),
+            &theme,
+            (None, None),
+            None,
+        );
+        let chart = &charts[0].chart;
+        assert_eq!(chart.plot_visible_only, Some(true));
+        assert_eq!(chart.categories, vec!["A", "B", "C"]);
+        assert_eq!(chart.category_source_hidden, Some(vec![false, true, false]));
+        assert_eq!(
+            chart.series[0].values,
+            vec![Some(10.0), Some(20.0), Some(30.0)]
+        );
+        assert_eq!(
+            chart.series[0].source_hidden,
+            Some(vec![false, true, false])
+        );
+        assert_eq!(
+            chart.series[1].values,
+            vec![Some(50.0), Some(60.0), Some(70.0)]
+        );
+        assert_eq!(chart.series[1].source_hidden, Some(vec![true, true, true]));
+    }
+
+    #[test]
     fn chart_reference_resolves_source_linked_builtin_number_format() {
         let mut archive = archive_with_chart_and_data(&chart_xml(false));
         let rels = parse_guarded(workbook_rels_xml()).unwrap();
@@ -1393,6 +1480,7 @@ mod worksheet_reference_tests {
         let mut resolver = XlsxChartReferenceResolver {
             archive: &mut archive,
             materialized_rows: None,
+            materialized_col_hidden: None,
             sheet_name: "Dashboard",
             sheets: &sheet_metas,
             workbook_rels: &rels,
@@ -1400,6 +1488,7 @@ mod worksheet_reference_tests {
             defined_names: &[],
             number_formats: &number_formats,
             session: &mut session,
+            visibility_cache: HashMap::new(),
         };
         assert_eq!(
             ooxml_common::chart::ChartReferenceResolver::resolve_number_format(
@@ -1539,6 +1628,25 @@ mod chartex_tests {
         )
     }
 
+    fn classic_drawing_xml() -> String {
+        format!(
+            r#"<xdr:wsDr {NS}><xdr:twoCellAnchor>
+              <xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+              <xdr:to><xdr:col>8</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>16</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+              <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>
+              <xdr:xfrm><a:off x="0" y="0"/><a:ext cx="4000000" cy="3000000"/></xdr:xfrm>
+              <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+                <c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rIdChart"/>
+              </a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/>
+            </xdr:twoCellAnchor></xdr:wsDr>"#,
+            NS = NS,
+        )
+    }
+
+    fn classic_line_chart_xml() -> &'static str {
+        r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:lineChart><c:grouping val="standard"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>Series</c:v></c:tx><c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser><c:dropLines/></c:lineChart></c:plotArea></c:chart></c:chartSpace>"#
+    }
+
     /// Builds the same `sheet1.xml.rels` → `drawing1.xml` → `drawing1.xml.rels`
     /// → `charts/chartEx1.xml` chain Excel uses, including the Microsoft
     /// `.../2014/relationships/chartEx` relationship type.
@@ -1572,6 +1680,43 @@ mod chartex_tests {
             zw.start_file("xl/charts/colors1.xml", o).unwrap();
             zw.write_all(br#"<cs:colorStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" meth="cycle"><a:srgbClr val="336699"/></cs:colorStyle>"#).unwrap();
 
+            zw.finish().unwrap();
+        }
+        crate::XlsxZip::new(Cursor::new(buf)).unwrap()
+    }
+
+    fn archive_with_classic_chart_style() -> crate::XlsxZip {
+        let mut buf = Vec::new();
+        {
+            let mut zw = zip::ZipWriter::new(Cursor::new(&mut buf));
+            let o = SimpleFileOptions::default();
+            for (path, xml) in [
+                (
+                    "xl/worksheets/_rels/sheet1.xml.rels",
+                    r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#,
+                ),
+                ("xl/drawings/drawing1.xml", &classic_drawing_xml()),
+                (
+                    "xl/drawings/_rels/drawing1.xml.rels",
+                    r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdChart" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/></Relationships>"#,
+                ),
+                ("xl/charts/chart1.xml", classic_line_chart_xml()),
+                (
+                    "xl/charts/_rels/chart1.xml.rels",
+                    r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdStyle" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style1.xml"/><Relationship Id="rIdColors" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors1.xml"/></Relationships>"#,
+                ),
+                (
+                    "xl/charts/style1.xml",
+                    r#"<cs:chartStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cs:dropLine><cs:spPr><a:ln w="19050"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></cs:spPr></cs:dropLine></cs:chartStyle>"#,
+                ),
+                (
+                    "xl/charts/colors1.xml",
+                    r#"<cs:colorStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" meth="cycle"><a:srgbClr val="336699"/></cs:colorStyle>"#,
+                ),
+            ] {
+                zw.start_file(path, o).unwrap();
+                zw.write_all(xml.as_bytes()).unwrap();
+            }
             zw.finish().unwrap();
         }
         crate::XlsxZip::new(Cursor::new(buf)).unwrap()
@@ -1614,5 +1759,30 @@ mod chartex_tests {
             Some(ooxml_common::chart::ChartStyleFill::Pattern { fg, bg, preset })
                 if fg == "336699" && bg == "FFFFFF" && preset == "diagCross"
         ));
+    }
+
+    #[test]
+    fn classic_graphicframe_loads_linked_chart_style_roles() {
+        let mut archive = archive_with_classic_chart_style();
+        let charts = load_sheet_charts(
+            &mut archive,
+            "worksheets/sheet1.xml",
+            None,
+            &theme(),
+            (None, None),
+            None,
+        );
+        let chart = &charts.first().expect("classic chart").chart;
+        assert_eq!(chart.chart_type, "line");
+        assert_eq!(
+            chart
+                .chart_style_roles
+                .as_ref()
+                .and_then(|roles| roles.get("dropLine"))
+                .and_then(|style| style.line_colors.as_ref())
+                .and_then(|colors| colors.first())
+                .and_then(Option::as_deref),
+            Some("336699"),
+        );
     }
 }
