@@ -41,6 +41,8 @@ interface Recorded {
   strokeRects: StrokeRectCall[];
   texts: TextCall[];
   clips: Array<{ x: number; y: number; w: number; h: number }>;
+  clipCalls: number;
+  quadratics: Array<{ cpx: number; cpy: number; x: number; y: number }>;
   gradients: Array<{ args: number[]; stops: Array<{ position: number; color: string }> }>;
   arcs: Array<{ x: number; y: number; r: number }>;
   rotations: number[];
@@ -107,6 +109,8 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
   const strokeRects: StrokeRectCall[] = [];
   const texts: TextCall[] = [];
   const clips: Array<{ x: number; y: number; w: number; h: number }> = [];
+  let clipCalls = 0;
+  const quadratics: Recorded['quadratics'] = [];
   const gradients: Recorded['gradients'] = [];
   const arcs: Recorded['arcs'] = [];
   const rotations: number[] = [];
@@ -184,7 +188,7 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
         case 'rect':
           return (x: number, y: number, w: number, h: number) => { pathRect = { x, y, w, h }; };
         case 'clip':
-          return () => { if (pathRect) clips.push(pathRect); };
+          return () => { clipCalls++; if (pathRect) clips.push(pathRect); };
         case 'arc':
           return (x: number, y: number, r: number) => { arcs.push({ x, y, r }); };
         case 'save': case 'restore': case 'closePath':
@@ -202,7 +206,11 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
           };
         case 'moveTo': case 'lineTo':
           return (x: number, y: number) => { pathPoints.push({ x, y }); };
-        case 'bezierCurveTo': case 'quadraticCurveTo':
+        case 'quadraticCurveTo':
+          return (cpx: number, cpy: number, x: number, y: number) => {
+            quadratics.push({ cpx, cpy, x, y });
+          };
+        case 'bezierCurveTo':
           return () => undefined;
         case 'setLineDash':
           return (value: number[] = []) => { dash = [...value]; };
@@ -228,6 +236,8 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
     strokeRects,
     texts,
     clips,
+    get clipCalls() { return clipCalls; },
+    quadratics,
     gradients,
     arcs,
     rotations,
@@ -287,6 +297,86 @@ describe('chart-space background', () => {
     }), RECT, 1);
 
     expect(rec.rects[0]).toEqual({ x: 0, y: 0, w: 640, h: 360, fs: '#F2F2F2' });
+  });
+
+  it('clips fill and chart content to one rounded path and strokes the same geometry', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      roundedCorners: true,
+      chartBg: 'F2F2F2',
+      chartBorderColor: '0055AA',
+      chartBorderWidthEmu: 25_400,
+    }), RECT, 1);
+
+    expect(rec.clipCalls).toBe(1);
+    expect(rec.rects[0]).toEqual({ x: 0, y: 0, w: 640, h: 360, fs: '#F2F2F2' });
+    expect(rec.strokeRects).toHaveLength(0);
+    // Four corners for the outer clip plus four for the inset border.
+    expect(rec.quadratics).toHaveLength(8);
+    expect(rec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#0055AA' });
+  });
+
+  it('keeps an explicit false rectangular and preserves rounded noFill clipping', () => {
+    const sharp = recordingCtx();
+    renderChart(sharp.ctx, baseModel({
+      roundedCorners: false,
+      chartBg: 'F2F2F2',
+      chartBorderColor: '0055AA',
+    }), RECT, 1);
+    expect(sharp.clipCalls).toBe(0);
+    expect(sharp.strokeRects).toHaveLength(1);
+    expect(sharp.quadratics).toHaveLength(0);
+
+    const noFill = recordingCtx();
+    renderChart(noFill.ctx, baseModel({
+      roundedCorners: true,
+      chartBg: null,
+      chartBorderColor: '0055AA',
+    }), RECT, 1);
+    expect(noFill.clipCalls).toBe(1);
+    expect(noFill.rects).toHaveLength(0);
+    expect(noFill.quadratics).toHaveLength(8);
+  });
+
+  it('uses the shared gradient recipe inside the rounded clip and honors host rotation', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      roundedCorners: true,
+      chartFill: {
+        fillType: 'gradient',
+        stops: [
+          { position: 0, color: '112233' },
+          { position: 1, color: 'AABBCC' },
+        ],
+        angle: 90,
+        gradType: 'linear',
+        rotWithShape: false,
+      },
+    }), RECT, 1, 30);
+
+    expect(rec.clipCalls).toBe(1);
+    expect(rec.gradients).toHaveLength(1);
+    const [x1, y1, x2, y2] = rec.gradients[0].args;
+    expect((y2 - y1) / (x2 - x1)).toBeCloseTo(Math.sqrt(3), 5);
+    expect(rec.gradients[0].stops).toEqual([
+      { position: 0, color: 'rgba(17,34,51,1)' },
+      { position: 1, color: 'rgba(170,187,204,1)' },
+    ]);
+  });
+
+  it('uses the shared pattern paint inside the rounded clip', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      roundedCorners: true,
+      chartFill: {
+        fillType: 'pattern', fg: '112233', bg: 'AABBCC', preset: 'diagCross',
+      },
+    }), RECT, 1);
+
+    expect(rec.clipCalls).toBe(1);
+    expect(rec.rects[0]).toMatchObject({
+      x: 0, y: 0, w: 640, h: 360, fs: 'rgba(17,34,51,1)',
+    });
   });
 });
 

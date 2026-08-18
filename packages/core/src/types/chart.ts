@@ -6,7 +6,7 @@
 // truth for chart rendering across PPTX / XLSX (and future DrawingML charts
 // in DOCX).
 
-import type { GradientFill, PatternFill, SolidFill } from './common';
+import type { Fill, GradientFill, PatternFill, SolidFill } from './common';
 
 export interface ChartSeries {
   name: string;
@@ -552,6 +552,13 @@ export interface ChartModel {
   plotAreaBg: string | null;
   /** Outer chartSpace background (hex without '#'). null when noFill/absent. */
   chartBg: string | null;
+  /** Structured non-solid `<c:chartSpace><c:spPr>` fill. Solid fills retain
+   *  the legacy `chartBg` representation; gradient/pattern use the shared
+   *  DrawingML fill model. */
+  chartFill?: Fill | null;
+  /** `<c:chartSpace><c:roundedCorners>`; a bare element is true. Omission is
+   *  preserved and renders the ordinary rectangular chart area. */
+  roundedCorners?: boolean | null;
   /** True when `<c:legend>` is declared in the chart XML. False = no legend. */
   showLegend: boolean;
   /** Optional category/series table authored below the cartesian plot. */

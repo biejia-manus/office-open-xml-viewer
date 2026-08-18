@@ -239,6 +239,14 @@ pub struct ChartModel {
     pub val_axis_line_hidden: bool,
     pub plot_area_bg: Option<String>,
     pub chart_bg: Option<String>,
+    /// Structured non-solid chart-space fill. Solid fills remain represented
+    /// by `chart_bg` for wire compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_fill: Option<ChartStyleFill>,
+    /// `<c:chartSpace><c:roundedCorners>` (§21.2.2.159). A bare CT_Boolean is
+    /// true; omission is preserved as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rounded_corners: Option<bool>,
     pub show_legend: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_table: Option<ChartDataTable>,
@@ -3460,6 +3468,31 @@ pub fn extract_show_data_labels_over_max(root: Node) -> Option<bool> {
         .and_then(|chart| bool_child(chart, "showDLblsOverMax"))
 }
 
+/// `<c:chartSpace><c:roundedCorners>` (§21.2.2.159). The element is optional;
+/// when present without `val`, CT_Boolean's attribute default is true.
+pub fn extract_chart_space_rounded_corners(root: Node) -> Option<bool> {
+    child(root, "roundedCorners").map(|node| {
+        node.attribute("val")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(true)
+    })
+}
+
+/// Preserve structured non-solid chart-space fills through the same shared
+/// DrawingML gradient/pattern grammar used by Chart Style and ChartEx paint.
+/// Solid/noFill retain the established `chart_bg` wire representation.
+fn extract_chart_space_structured_fill(
+    root: Node,
+    resolver: &dyn ColorResolver,
+) -> Option<ChartStyleFill> {
+    let shape = child(root, "spPr")?;
+    match parse_chart_style_paint(shape, resolver, None) {
+        Some(ChartStylePaint::Fill(Some(fill @ ChartStyleFill::Gradient { .. })))
+        | Some(ChartStylePaint::Fill(Some(fill @ ChartStyleFill::Pattern { .. }))) => Some(fill),
+        _ => None,
+    }
+}
+
 pub fn extract_chart_space_border(chart_space_root: Node) -> (Option<String>, Option<u32>) {
     let Some(ln) = child(chart_space_root, "spPr").and_then(|sp| child(sp, "ln")) else {
         return (None, None);
@@ -5546,6 +5579,8 @@ pub fn parse_chartex_part_with_references_and_style_parts(
                 None => resolver.default_chart_bg(),
             }
         },
+        chart_fill: None,
+        rounded_corners: None,
         show_legend,
         data_table: None,
         cat_axis_cross_between: "between".to_string(),
@@ -8741,6 +8776,8 @@ pub fn parse_chart_part_with_references(
         },
         None => color_resolver.default_chart_bg(),
     };
+    let chart_fill = extract_chart_space_structured_fill(root, color_resolver);
+    let rounded_corners = extract_chart_space_rounded_corners(root);
 
     // <c:legend> + <c:legendPos val> — shared helper.
     let (show_legend, legend_pos) = extract_legend(root);
@@ -9327,6 +9364,8 @@ pub fn parse_chart_part_with_references(
         val_axis_hidden,
         plot_area_bg,
         chart_bg,
+        chart_fill,
+        rounded_corners,
         show_legend,
         data_table,
         cat_axis_cross_between,
@@ -9636,6 +9675,8 @@ mod tests {
             val_axis_line_hidden: false,
             plot_area_bg: None,
             chart_bg: Some("FFFFFF".to_string()),
+            chart_fill: None,
+            rounded_corners: None,
             show_legend: false,
             data_table: None,
             legend_pos: None,
@@ -10753,6 +10794,72 @@ Subtitle</a:t></a:r></a:p>
             r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"/>"#;
         let d = root_of(xml);
         assert_eq!(extract_chart_space_border(d.root_element()), (None, None));
+    }
+
+    #[test]
+    fn chart_space_rounded_corners_preserve_omission_bare_and_explicit_values() {
+        let absent = root_of(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"/>"#,
+        );
+        assert_eq!(
+            extract_chart_space_rounded_corners(absent.root_element()),
+            None
+        );
+        let bare = root_of(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:roundedCorners/></c:chartSpace>"#,
+        );
+        assert_eq!(
+            extract_chart_space_rounded_corners(bare.root_element()),
+            Some(true)
+        );
+        let explicit_false = root_of(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:roundedCorners val="false"/></c:chartSpace>"#,
+        );
+        assert_eq!(
+            extract_chart_space_rounded_corners(explicit_false.root_element()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn chart_space_structured_fill_preserves_gradient_and_pattern_recipes() {
+        let gradient = root_of(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:spPr><a:gradFill rotWithShape="0"><a:gsLst><a:gs pos="0"><a:srgbClr val="112233"/></a:gs><a:gs pos="100000"><a:srgbClr val="AABBCC"/></a:gs></a:gsLst><a:lin ang="2700000" scaled="1"/></a:gradFill></c:spPr></c:chartSpace>"#,
+        );
+        assert!(matches!(
+            extract_chart_space_structured_fill(gradient.root_element(), &StubResolver),
+            Some(ChartStyleFill::Gradient {
+                angle,
+                rot_with_shape: Some(false),
+                ..
+            }) if (angle - 45.0).abs() < 1e-9
+        ));
+
+        let pattern = root_of(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:spPr><a:pattFill prst="diagCross"><a:fgClr><a:srgbClr val="112233"/></a:fgClr><a:bgClr><a:srgbClr val="AABBCC"/></a:bgClr></a:pattFill></c:spPr></c:chartSpace>"#,
+        );
+        assert_eq!(
+            extract_chart_space_structured_fill(pattern.root_element(), &StubResolver),
+            Some(ChartStyleFill::Pattern {
+                fg: "112233".to_string(),
+                bg: "AABBCC".to_string(),
+                preset: "diagCross".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_chart_part_wires_rounded_chart_space_gradient_to_the_shared_model() {
+        let document = root_of(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:roundedCorners/><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart></c:plotArea></c:chart><c:spPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="112233"/></a:gs><a:gs pos="100000"><a:srgbClr val="AABBCC"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill></c:spPr></c:chartSpace>"#,
+        );
+        let model = parse_chart_part(document.root_element(), &FixtureResolver)
+            .expect("classic chart parses");
+        assert_eq!(model.rounded_corners, Some(true));
+        assert!(matches!(
+            model.chart_fill,
+            Some(ChartStyleFill::Gradient { .. })
+        ));
     }
 
     #[test]

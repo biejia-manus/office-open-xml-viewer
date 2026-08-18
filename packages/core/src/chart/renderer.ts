@@ -13037,6 +13037,35 @@ function drawChartTextBoxes(
 
 // ─── Background frame + dispatcher ──────────────────────────────────────────
 
+/** ECMA-376 §21.2.2.159 defines only whether chart-space corners are rounded,
+ * not the application geometry. Keep the compatibility policy isolated: a
+ * fixed 5pt radius is transform-stable, independent of chart aspect ratio, and
+ * can be replaced without touching fill/border/clip semantics if a future
+ * Office vector boundary establishes a different radius. */
+const CHART_SPACE_CORNER_RADIUS_PT = 5;
+
+function chartSpaceRoundedPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius: number,
+): void {
+  const r = Math.max(0, Math.min(radius, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
 /**
  * Render a chart (background frame + dispatch on `chartType`).
  * `rect` is in pixel coordinates on the target canvas.
@@ -13073,9 +13102,19 @@ export function renderChart(
   ctx.save();
   try {
     const { x, y, w, h } = rect;
+    const rounded = chart.roundedCorners === true;
+    const cornerRadius = rounded ? CHART_SPACE_CORNER_RADIUS_PT * ptToPx : 0;
+    if (rounded) {
+      chartSpaceRoundedPath(ctx, x, y, w, h, cornerRadius);
+      ctx.clip();
+    }
     // Only fill the outer chartSpace when chartBg is set; a null means noFill
     // (transparent) per OOXML, so the underlying slide/sheet shows through.
-    if (chart.chartBg) {
+    if (chart.chartFill) {
+      const fill = resolveFill(chart.chartFill, ctx, x, y, w, h, shapeRotationDeg);
+      if (fill) ctx.fillStyle = fill;
+      if (fill) ctx.fillRect(x, y, w, h);
+    } else if (chart.chartBg) {
       ctx.fillStyle = `#${chart.chartBg}`;
       ctx.fillRect(x, y, w, h);
     }
@@ -13095,7 +13134,19 @@ export function renderChart(
         : 1;
       // Inset by half the line width so the full stroke stays inside the rect.
       const lw = ctx.lineWidth;
-      ctx.strokeRect(x + lw / 2, y + lw / 2, w - lw, h - lw);
+      if (rounded) {
+        chartSpaceRoundedPath(
+          ctx,
+          x + lw / 2,
+          y + lw / 2,
+          Math.max(0, w - lw),
+          Math.max(0, h - lw),
+          Math.max(0, cornerRadius - lw / 2),
+        );
+        ctx.stroke();
+      } else {
+        ctx.strokeRect(x + lw / 2, y + lw / 2, w - lw, h - lw);
+      }
       ctx.restore();
     }
 
