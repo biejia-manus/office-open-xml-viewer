@@ -92,19 +92,20 @@ observed input boundary is recorded in
 
 ## Chart Style roles
 
-The shared Chart Style parser currently resolves the following roles directly:
-`axisTitle`, `categoryAxis`, `dataLabel`, `dataPoint`, `dataPointLine`,
-`dataPointMarker`, `dataPointMarkerLayout`, `gridlineMajor`, `seriesLine`,
-`title`, and `valueAxis`.
+The shared parser retains the paint-bearing `CT_ChartStyle` roles defined by
+MS-ODRAWXML §2.8.3.1 for both classic and ChartEx parts. The three hosts resolve
+the same linked `styleN.xml` and `colorsN.xml` relationships; the remaining
+status differences below are renderer-consumption gaps, not lost package data.
 
 | ID | Role group | Status | Notes |
 | --- | --- | --- | --- |
-| S-STYLE-001 | The eleven roles listed above | Partial | Fill/line grammar is shared, but not every classic family consumes every effective role. |
-| S-STYLE-002 | `chartArea`, `plotArea`, `legend`, `dataTable` | Missing | Automatic role inheritance is not retained systematically. |
-| S-STYLE-003 | `gridlineMinor`, `tickLabels`, `seriesAxis` | Missing | Direct chart formatting may still render; linked-style fallback is missing. |
-| S-STYLE-004 | `dropLine`, `hiLoLine`, `upBar`, `downBar`, `errorBar`, `leaderLine` | Missing | These roles should feed the corresponding shared geometry rather than family-local defaults. |
-| S-STYLE-005 | `dataLabelCallout`, `trendlineLabel` | Missing | Text/shape style inheritance is incomplete. |
-| S-STYLE-006 | `dataPoint3D`, `dataPointWireframe`, `floor`, `wall`, `plotArea3D` | Missing | Authored direct 3-D surface formatting remains authoritative where already modeled. |
+| S-STYLE-001 | Shared role parsing and package wiring | Supported | Paint recipes, fixed/relative Chart Colors indices, `NoStyle`, and bounded palette expansion are retained through DOCX, XLSX, and PPTX. |
+| S-STYLE-002 | `chartArea`, `plotArea`, `legend`, `dataTable` | Partial | Roles are retained, but the corresponding frame painters do not yet consume every fallback. |
+| S-STYLE-003 | `gridlineMinor`, tick labels, `seriesAxis` | Partial | Roles are retained; direct chart formatting may render while linked-style fallback is incomplete. |
+| S-STYLE-004 | `seriesLine`, `dropLine`, `hiLoLine`, `upBar`, `downBar` | Supported | Direct formatting wins; the linked role supplies only omitted fill/line properties. |
+| S-STYLE-005 | `errorBar`, `leaderLine` | Partial | Roles are retained but are not yet consumed by every classic geometry path. |
+| S-STYLE-006 | `dataLabelCallout`, `trendlineLabel` | Partial | Paint is retained; text/shape style inheritance is incomplete. |
+| S-STYLE-007 | `dataPoint3D`, `dataPointWireframe`, `floor`, `wall`, `plotArea3D` | Partial | Paint is retained; authored direct 3-D surface formatting remains authoritative where already modeled. |
 
 ## ChartEx layouts
 

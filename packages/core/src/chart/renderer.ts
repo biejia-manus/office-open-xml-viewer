@@ -3,7 +3,7 @@
 // scatter, waterfall). Ported from the xlsx implementation with pptx
 // extensions (valMin-aware axis, plotAreaBg, dataPointColors, waterfall).
 
-import type { ChartDataLabelOverride, ChartDecorationLineStyle, ChartDisplayUnits, ChartLegendEntryOverride, ChartManualLayout, ChartModel, ChartRect, ChartSeries, ChartSeriesDataLabels, ChartStockUpDownBarStyle, ChartTextBox, ChartTextRun, ChartTrendline, SecondaryValueAxis } from '../types/chart';
+import type { ChartDataLabelOverride, ChartDecorationLineStyle, ChartDisplayUnits, ChartLegendEntryOverride, ChartManualLayout, ChartModel, ChartRect, ChartSeries, ChartSeriesDataLabels, ChartStockUpDownBarStyle, ChartStyleRole, ChartTextBox, ChartTextRun, ChartTrendline, SecondaryValueAxis } from '../types/chart';
 import type { Fill } from '../types/common';
 import {
   AXIS_OUTER_TEXT_MARGIN_PT,
@@ -4244,7 +4244,10 @@ function renderBarChart(
         continue;
       }
       ctx.save();
-      if (!applyDecorationLineStyle(ctx, decoration.seriesLines[0], ptToPx)) {
+      const seriesLineStyle = chartStyleRoleLine(
+        chart, decoration.seriesLines[0], 'seriesLine',
+      );
+      if (!applyDecorationLineStyle(ctx, seriesLineStyle, ptToPx)) {
         ctx.restore();
         continue;
       }
@@ -4769,6 +4772,44 @@ function applyDecorationLineStyle(
   return true;
 }
 
+function chartStyleRoleLine(
+  chart: ChartModel,
+  direct: ChartDecorationLineStyle,
+  role: ChartStyleRole,
+): ChartDecorationLineStyle {
+  const linked = chart.chartStyleRoles?.[role];
+  const linkedApplies = linked != null && linked.lineNoStyle !== true;
+  return {
+    color: direct.color
+      ?? (linkedApplies ? chartExStyleColor(chart, linked, 'line', 0, 1) : null),
+    widthEmu: direct.widthEmu ?? (linkedApplies ? linked.lineWidthEmu : null),
+    dash: direct.dash ?? (linkedApplies ? linked.lineDash : null),
+    hidden: direct.hidden
+      ?? (linkedApplies && linked.lineHidden === true ? true : null),
+  };
+}
+
+function chartStyleRoleBarPaint(
+  chart: ChartModel,
+  direct: ChartStockUpDownBarStyle['up'],
+  role: 'upBar' | 'downBar',
+): ChartStockUpDownBarStyle['up'] {
+  const linked = chart.chartStyleRoles?.[role];
+  const fillApplies = linked != null && linked.fillNoStyle !== true;
+  const lineApplies = linked != null && linked.lineNoStyle !== true;
+  return {
+    fillColor: direct.fillColor
+      ?? (fillApplies ? chartExStyleColor(chart, linked, 'fill', 0, 1) : null),
+    fillHidden: direct.fillHidden
+      ?? (fillApplies && linked.fillHidden === true ? true : null),
+    lineColor: direct.lineColor
+      ?? (lineApplies ? chartExStyleColor(chart, linked, 'line', 0, 1) : null),
+    lineWidthEmu: direct.lineWidthEmu ?? (lineApplies ? linked.lineWidthEmu : null),
+    lineHidden: direct.lineHidden
+      ?? (lineApplies && linked.lineHidden === true ? true : null),
+  };
+}
+
 function drawUpDownBars(
   ctx: CanvasRenderingContext2D,
   startValueAt: (index: number) => number | null,
@@ -4839,9 +4880,14 @@ function drawLineGroupDecorations(
     if (decoration.upDownBars && members.length >= 2) {
       const first = members[0];
       const last = members[members.length - 1];
+      const upDownBars = {
+        ...decoration.upDownBars,
+        up: chartStyleRoleBarPaint(chart, decoration.upDownBars.up, 'upBar'),
+        down: chartStyleRoleBarPaint(chart, decoration.upDownBars.down, 'downBar'),
+      };
       drawUpDownBars(
         ctx, index => valueFor(first, index), index => valueFor(last, index), pointCount, toX,
-        yMapFor(first), yMapFor(last), slotWidth, decoration.upDownBars, ptToPx,
+        yMapFor(first), yMapFor(last), slotWidth, upDownBars, ptToPx,
         // Empty upBars/downBars paint is application-defined. The retained
         // Office observation is limited to classic Style 2; other styles keep
         // the geometry/model but do not receive a guessed white/black paint.
@@ -4849,7 +4895,10 @@ function drawLineGroupDecorations(
       );
     }
 
-    if (decoration.dropLines && applyDecorationLineStyle(ctx, decoration.dropLines, ptToPx)) {
+    const dropLineStyle = decoration.dropLines
+      ? chartStyleRoleLine(chart, decoration.dropLines, 'dropLine')
+      : null;
+    if (dropLineStyle && applyDecorationLineStyle(ctx, dropLineStyle, ptToPx)) {
       // Office paints one envelope per category, not one line per series. The
       // envelope includes the effective category-axis crossing and every
       // plotted point in the owning line group. This is observable in vector
@@ -4877,8 +4926,11 @@ function drawLineGroupDecorations(
       }
     }
 
-    if (decoration.hiLowLines && members.length >= 2
-      && applyDecorationLineStyle(ctx, decoration.hiLowLines, ptToPx)) {
+    const hiLowLineStyle = decoration.hiLowLines
+      ? chartStyleRoleLine(chart, decoration.hiLowLines, 'hiLoLine')
+      : null;
+    if (hiLowLineStyle && members.length >= 2
+      && applyDecorationLineStyle(ctx, hiLowLineStyle, ptToPx)) {
       const toY = yMapFor(members[0]);
       for (let index = 0; index < pointCount; index++) {
         let low = Infinity;
@@ -6972,7 +7024,11 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
     areaGroupMembers.set(groupIndex, members);
   }
   for (const decoration of chart.areaGroupDecorations ?? []) {
-    if (!decoration.dropLines || !applyDecorationLineStyle(ctx, decoration.dropLines, ptToPx)) {
+    if (!decoration.dropLines) {
+      continue;
+    }
+    const dropLineStyle = chartStyleRoleLine(chart, decoration.dropLines, 'dropLine');
+    if (!applyDecorationLineStyle(ctx, dropLineStyle, ptToPx)) {
       continue;
     }
     const members = areaGroupMembers.get(decoration.groupIndex) ?? [];

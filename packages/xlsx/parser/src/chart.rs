@@ -703,9 +703,11 @@ pub(crate) fn load_sheet_charts(
                             &mut references,
                         )
                     } else {
-                        ooxml_common::chart::parse_chart_part_with_references(
+                        ooxml_common::chart::parse_chart_part_with_references_and_style_parts(
                             chart_doc.root_element(),
                             &resolver,
+                            style_xml.as_deref(),
+                            color_style_xml.as_deref(),
                             &mut references,
                         )
                     }
@@ -717,7 +719,12 @@ pub(crate) fn load_sheet_charts(
                         color_style_xml.as_deref(),
                     )
                 } else {
-                    ooxml_common::chart::parse_chart_part(chart_doc.root_element(), &resolver)
+                    ooxml_common::chart::parse_chart_part_with_style_parts(
+                        chart_doc.root_element(),
+                        &resolver,
+                        style_xml.as_deref(),
+                        color_style_xml.as_deref(),
+                    )
                 };
                 let Some(mut chart) = chart_opt else {
                     continue;
@@ -1621,6 +1628,25 @@ mod chartex_tests {
         )
     }
 
+    fn classic_drawing_xml() -> String {
+        format!(
+            r#"<xdr:wsDr {NS}><xdr:twoCellAnchor>
+              <xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+              <xdr:to><xdr:col>8</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>16</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+              <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>
+              <xdr:xfrm><a:off x="0" y="0"/><a:ext cx="4000000" cy="3000000"/></xdr:xfrm>
+              <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+                <c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rIdChart"/>
+              </a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/>
+            </xdr:twoCellAnchor></xdr:wsDr>"#,
+            NS = NS,
+        )
+    }
+
+    fn classic_line_chart_xml() -> &'static str {
+        r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:lineChart><c:grouping val="standard"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>Series</c:v></c:tx><c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser><c:dropLines/></c:lineChart></c:plotArea></c:chart></c:chartSpace>"#
+    }
+
     /// Builds the same `sheet1.xml.rels` → `drawing1.xml` → `drawing1.xml.rels`
     /// → `charts/chartEx1.xml` chain Excel uses, including the Microsoft
     /// `.../2014/relationships/chartEx` relationship type.
@@ -1654,6 +1680,43 @@ mod chartex_tests {
             zw.start_file("xl/charts/colors1.xml", o).unwrap();
             zw.write_all(br#"<cs:colorStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" meth="cycle"><a:srgbClr val="336699"/></cs:colorStyle>"#).unwrap();
 
+            zw.finish().unwrap();
+        }
+        crate::XlsxZip::new(Cursor::new(buf)).unwrap()
+    }
+
+    fn archive_with_classic_chart_style() -> crate::XlsxZip {
+        let mut buf = Vec::new();
+        {
+            let mut zw = zip::ZipWriter::new(Cursor::new(&mut buf));
+            let o = SimpleFileOptions::default();
+            for (path, xml) in [
+                (
+                    "xl/worksheets/_rels/sheet1.xml.rels",
+                    r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#,
+                ),
+                ("xl/drawings/drawing1.xml", &classic_drawing_xml()),
+                (
+                    "xl/drawings/_rels/drawing1.xml.rels",
+                    r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdChart" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/></Relationships>"#,
+                ),
+                ("xl/charts/chart1.xml", classic_line_chart_xml()),
+                (
+                    "xl/charts/_rels/chart1.xml.rels",
+                    r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdStyle" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style1.xml"/><Relationship Id="rIdColors" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors1.xml"/></Relationships>"#,
+                ),
+                (
+                    "xl/charts/style1.xml",
+                    r#"<cs:chartStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cs:dropLine><cs:spPr><a:ln w="19050"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></cs:spPr></cs:dropLine></cs:chartStyle>"#,
+                ),
+                (
+                    "xl/charts/colors1.xml",
+                    r#"<cs:colorStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" meth="cycle"><a:srgbClr val="336699"/></cs:colorStyle>"#,
+                ),
+            ] {
+                zw.start_file(path, o).unwrap();
+                zw.write_all(xml.as_bytes()).unwrap();
+            }
             zw.finish().unwrap();
         }
         crate::XlsxZip::new(Cursor::new(buf)).unwrap()
@@ -1696,5 +1759,30 @@ mod chartex_tests {
             Some(ooxml_common::chart::ChartStyleFill::Pattern { fg, bg, preset })
                 if fg == "336699" && bg == "FFFFFF" && preset == "diagCross"
         ));
+    }
+
+    #[test]
+    fn classic_graphicframe_loads_linked_chart_style_roles() {
+        let mut archive = archive_with_classic_chart_style();
+        let charts = load_sheet_charts(
+            &mut archive,
+            "worksheets/sheet1.xml",
+            None,
+            &theme(),
+            (None, None),
+            None,
+        );
+        let chart = &charts.first().expect("classic chart").chart;
+        assert_eq!(chart.chart_type, "line");
+        assert_eq!(
+            chart
+                .chart_style_roles
+                .as_ref()
+                .and_then(|roles| roles.get("dropLine"))
+                .and_then(|style| style.line_colors.as_ref())
+                .and_then(|colors| colors.first())
+                .and_then(Option::as_deref),
+            Some("336699"),
+        );
     }
 }

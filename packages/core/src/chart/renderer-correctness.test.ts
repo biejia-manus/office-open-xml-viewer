@@ -10096,6 +10096,51 @@ describe('classic line-chart group decorations', () => {
     expect(new Set(outlines.map(rect => rect.w.toFixed(6))).size).toBe(1);
   });
 
+  it('fills missing line-group decoration paint from linked Chart Style roles', () => {
+    const model = decoratedLine();
+    model.lineGroupDecorations![0] = {
+      groupIndex: 0,
+      dropLines: {},
+      hiLowLines: {},
+      upDownBars: { gapWidthPercent: 150, up: {}, down: {} },
+    };
+    model.chartStyleRoles = {
+      dropLine: { lineColors: ['AA0000'], lineWidthEmu: 19050 },
+      hiLoLine: { lineColors: ['00AA00'], lineWidthEmu: 28575 },
+      upBar: {
+        fillColors: ['AABBCC'], lineColors: ['112233'], lineWidthEmu: 19050,
+      },
+      downBar: {
+        fillColors: ['DDEEFF'], lineColors: ['445566'], lineWidthEmu: 28575,
+      },
+    };
+
+    const lines = segRecordingCtx();
+    renderChart(lines.ctx, model, RECT, 1);
+    expect(lines.segs.filter(segment => segment.ss === '#AA0000')).toHaveLength(5);
+    expect(lines.segs.filter(segment => segment.ss === '#00AA00')).toHaveLength(5);
+
+    const bars = recordingCtx();
+    renderChart(bars.ctx, model, RECT, 1);
+    expect(bars.rects.filter(rect => rect.fs === '#AABBCC')).toHaveLength(3);
+    expect(bars.rects.filter(rect => rect.fs === '#DDEEFF')).toHaveLength(2);
+    expect(bars.strokeRects.filter(rect => rect.ss === '#112233')).toHaveLength(3);
+    expect(bars.strokeRects.filter(rect => rect.ss === '#445566')).toHaveLength(2);
+  });
+
+  it('keeps direct decoration paint above linked roles and ignores NoStyle roles', () => {
+    const model = decoratedLine();
+    model.chartStyleRoles = {
+      dropLine: { lineColors: ['AA0000'], lineWidthEmu: 28575 },
+      hiLoLine: { lineColors: ['00AA00'], lineNoStyle: true },
+    };
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, model, RECT, 1);
+    expect(rec.segs.filter(segment => segment.ss === '#111111')).toHaveLength(5);
+    expect(rec.segs.some(segment => segment.ss === '#AA0000')).toBe(false);
+    expect(rec.segs.some(segment => segment.ss === '#00AA00')).toBe(false);
+  });
+
   it('limits empty up/down-bar automatic paint to the observed classic Style 2 boundary', () => {
     const render = (legacyChartStyle: number | null): Recorded => {
       const rec = recordingCtx();
@@ -10402,6 +10447,25 @@ describe('classic bar-chart group series lines', () => {
     }
     return model;
   };
+
+  it('fills a missing series-line paint from the linked Chart Style role', () => {
+    const rec = segRecordingCtx();
+    const model = decorate(baseModel({
+      chartType: 'stackedBar',
+      categories: ['A', 'B', 'C'],
+      valMin: 0,
+      valMax: 50,
+      valAxisMajorGridlines: false,
+      series: [series({ values: [10, 20, 15], barGroupDirection: 'col' })],
+    }));
+    model.barGroupDecorations![0].seriesLines = [{}];
+    model.chartStyleRoles = {
+      seriesLine: { lineColors: ['765432'], lineWidthEmu: 19050 },
+    };
+
+    renderChart(rec.ctx, model, RECT, 1);
+    expect(rec.segs.filter(segment => segment.ss === '#765432')).toHaveLength(2);
+  });
 
   it('joins the facing column edges for every adjacent point in each series', () => {
     const rec = segRecordingCtx();

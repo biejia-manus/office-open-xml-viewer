@@ -481,6 +481,20 @@ export interface ChartExElementStyle {
   lineColorIndex?: number | null;
 }
 
+/**
+ * Paint-bearing `CT_ChartStyle` roles from MS-ODRAWXML §2.8.3.1. Marker
+ * layout and `extLst` have their own non-style-entry grammar and therefore do
+ * not appear in this map.
+ */
+export type ChartStyleRole =
+  | 'axisTitle' | 'categoryAxis' | 'chartArea' | 'dataLabel'
+  | 'dataLabelCallout' | 'dataPoint' | 'dataPoint3D' | 'dataPointLine'
+  | 'dataPointMarker' | 'dataPointWireframe' | 'dataTable' | 'downBar'
+  | 'dropLine' | 'errorBar' | 'floor' | 'gridlineMajor' | 'gridlineMinor'
+  | 'hiLoLine' | 'leaderLine' | 'legend' | 'plotArea' | 'plotArea3D'
+  | 'seriesAxis' | 'seriesLine' | 'title' | 'trendline'
+  | 'trendlineLabel' | 'upBar' | 'valueAxis' | 'wall';
+
 /** Authored low-to-high formatting for one classic surface-chart band. */
 export interface ChartSurfaceBandFormat {
   idx: number;
@@ -1101,6 +1115,16 @@ export interface ChartModel {
   chartexColorPalette?: Array<string | null> | null;
   /** `<cs:colorStyle meth>`; unknown methods have `cycle` semantics. */
   chartexColorStyleMethod?: string | null;
+  /**
+   * Bounded effective paint recipes for every paint-bearing linked Chart
+   * Style role. Direct chart formatting remains in its existing fields and
+   * takes precedence in the renderer; this map is a linked-style fallback.
+   */
+  chartStyleRoles?: Partial<Record<ChartStyleRole, ChartExElementStyle>> | null;
+  /** Total resolved color set associated with the linked Chart Style part. */
+  chartStyleColorPalette?: Array<string | null> | null;
+  /** `<cs:colorStyle meth>` used when selecting a linked role color. */
+  chartStyleColorMethod?: string | null;
   /** Effective `<cs:dataPoint>` style. */
   chartexDataPointStyle?: ChartExElementStyle | null;
   /** Effective `<cs:dataPointLine>` style for whiskers/median/connectors. */

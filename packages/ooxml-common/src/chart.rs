@@ -30,6 +30,7 @@
 
 use roxmltree::Node;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::text::{parse_body_pr, BodyPrDefaults};
 
@@ -45,6 +46,11 @@ const MAX_CHART_LEGEND_ENTRIES: usize = 4096;
 /// one component per stop; solid and pattern fills contribute one. This bounds
 /// the otherwise multiplicative `palette entries × gradient stops` wire model.
 const MAX_CHART_STYLE_PAINT_COMPONENTS: usize = 1_048_576;
+/// Aggregate role×palette slots retained from one linked Chart Style. Typical
+/// Office parts use 30 paint roles × 6–54 colors. Reject the entire fallback
+/// table before expansion rather than retaining an arbitrary role or palette
+/// prefix when a hostile colors part exceeds this bounded wire budget.
+const MAX_CHART_STYLE_ROLE_SLOTS: usize = 8_192;
 /// Maximum cache width accepted from `<c:ptCount>` / `<cx:lvl ptCount>`.
 /// Chart data originates in worksheet ranges, whose largest single dimension
 /// is 1,048,576 rows. Rejecting wider sparse caches prevents an XML attribute
@@ -694,6 +700,15 @@ pub struct ChartModel {
     pub chartex_color_palette: Option<Vec<Option<String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chartex_color_style_method: Option<String>,
+    /// Effective paint recipes for every paint-bearing CT_ChartStyle role
+    /// (MS-ODRAWXML §2.8.3.1). Direct formatting remains in its authored model
+    /// fields; the renderer consults this table only as a linked fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_style_roles: Option<BTreeMap<String, ChartExElementStyle>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_style_color_palette: Option<Vec<Option<String>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_style_color_method: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chartex_data_point_style: Option<ChartExElementStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4244,6 +4259,113 @@ fn parse_chart_color_style(
     Some((method, palette))
 }
 
+/// Paint-bearing CT_ChartStyle children in schema order (MS-ODRAWXML
+/// §2.8.3.1). `dataPointMarkerLayout` and `extLst` have different grammars and
+/// remain outside the style-entry table.
+const CHART_STYLE_ROLE_NAMES: [&str; 30] = [
+    "axisTitle",
+    "categoryAxis",
+    "chartArea",
+    "dataLabel",
+    "dataLabelCallout",
+    "dataPoint",
+    "dataPoint3D",
+    "dataPointLine",
+    "dataPointMarker",
+    "dataPointWireframe",
+    "dataTable",
+    "downBar",
+    "dropLine",
+    "errorBar",
+    "floor",
+    "gridlineMajor",
+    "gridlineMinor",
+    "hiLoLine",
+    "leaderLine",
+    "legend",
+    "plotArea",
+    "plotArea3D",
+    "seriesAxis",
+    "seriesLine",
+    "title",
+    "trendline",
+    "trendlineLabel",
+    "upBar",
+    "valueAxis",
+    "wall",
+];
+
+/// Number of structured-fill components that one Chart Style role expands for
+/// each Chart Colors entry. A local `spPr` fill overrides `fillRef`; otherwise
+/// the referenced theme recipe contributes its gradient stops/pattern/solid
+/// component. This intentionally runs before any role×palette expansion so a
+/// theme gradient cannot bypass the aggregate resource budget merely because
+/// it lives outside `styleN.xml`.
+fn chart_style_role_fill_component_count(
+    role: Node,
+    resolver: &dyn ColorResolver,
+) -> Option<usize> {
+    if let Some(components) = child(role, "spPr").and_then(chart_style_paint_component_count) {
+        return Some(components);
+    }
+    let Some(fill_ref) = child(role, "fillRef") else {
+        return Some(0);
+    };
+    match chart_style_fill_ref_xml(fill_ref, resolver) {
+        Some(Ok(xml)) => {
+            let document = crate::depth::parse_guarded(&xml).ok()?;
+            Some(chart_style_paint_component_count(document.root_element()).unwrap_or(0))
+        }
+        Some(Err(())) | None => Some(0),
+    }
+}
+
+fn parse_chart_style_role_table(
+    style_root: Node,
+    resolver: &dyn ColorResolver,
+    palette: Option<&[Option<String>]>,
+    color_style_method: Option<&str>,
+) -> Option<BTreeMap<String, ChartExElementStyle>> {
+    let role_nodes = style_root
+        .children()
+        .filter(|node| {
+            node.is_element() && CHART_STYLE_ROLE_NAMES.contains(&node.tag_name().name())
+        })
+        .collect::<Vec<_>>();
+    if role_nodes.is_empty() {
+        return None;
+    }
+
+    let palette_entries = palette.map_or(1, |colors| colors.len().max(1));
+    let total_slots = role_nodes.len().checked_mul(palette_entries)?;
+    if total_slots > MAX_CHART_STYLE_ROLE_SLOTS {
+        return None;
+    }
+
+    // Preflight both local and referenced-theme structured fills before any
+    // role×palette expansion. The per-role guard remains a second line of
+    // defence; this aggregate guard bounds all roles together.
+    let fill_components = role_nodes.iter().try_fold(0usize, |total, role| {
+        let components = chart_style_role_fill_component_count(*role, resolver)?;
+        total.checked_add(components.checked_mul(palette_entries)?)
+    })?;
+    if fill_components > MAX_CHART_STYLE_PAINT_COMPONENTS {
+        return None;
+    }
+
+    Some(
+        role_nodes
+            .into_iter()
+            .map(|role| {
+                let name = role.tag_name().name().to_owned();
+                let style =
+                    parse_chartex_element_style(role, resolver, palette, color_style_method);
+                (name, style)
+            })
+            .collect(),
+    )
+}
+
 // ============================================================================
 // Axis scale model (CH6) — gridlines / units / logBase / orientation / labels
 // ============================================================================
@@ -4952,44 +5074,43 @@ pub fn parse_chartex_part_with_references_and_style_parts(
     };
     let chartex_color_style_method = color_style.as_ref().map(|(method, _)| method.clone());
     let chartex_color_palette = color_style.as_ref().map(|(_, palette)| palette.clone());
-    let theme_style_palette = theme_accents
-        .as_ref()
-        .map(|colors| colors.iter().cloned().map(Some).collect::<Vec<_>>());
+    // Linked Chart Style roles apply to every classic/ChartEx family, not only
+    // the branch-colored layouts that expose `chartexAccents`. Resolve the
+    // ordinary six-color theme palette independently whenever a style part is
+    // present so `phClr` recipes are not discarded for other layouts.
+    let theme_style_palette = style_doc.as_ref().and_then(|_| {
+        let colors = (0..6)
+            .map(|index| resolver.resolve_series_accent(index))
+            .collect::<Vec<_>>();
+        colors.iter().any(Option::is_some).then_some(colors)
+    });
     let style_palette = chartex_color_palette
         .as_deref()
         .or(theme_style_palette.as_deref());
-    let chartex_data_point_style = style_element("dataPoint").map(|node| {
-        parse_chartex_element_style(
-            node,
+    let chart_style_roles = style_doc.as_ref().and_then(|document| {
+        parse_chart_style_role_table(
+            document.root_element(),
             resolver,
             style_palette,
             chartex_color_style_method.as_deref(),
         )
     });
-    let chartex_data_point_line_style = style_element("dataPointLine").map(|node| {
-        parse_chartex_element_style(
-            node,
-            resolver,
-            style_palette,
-            chartex_color_style_method.as_deref(),
-        )
-    });
-    let chartex_series_line_style = style_element("seriesLine").map(|node| {
-        parse_chartex_element_style(
-            node,
-            resolver,
-            style_palette,
-            chartex_color_style_method.as_deref(),
-        )
-    });
-    let chartex_data_point_marker_style = style_element("dataPointMarker").map(|node| {
-        parse_chartex_element_style(
-            node,
-            resolver,
-            style_palette,
-            chartex_color_style_method.as_deref(),
-        )
-    });
+    let chartex_data_point_style = chart_style_roles
+        .as_ref()
+        .and_then(|roles| roles.get("dataPoint"))
+        .cloned();
+    let chartex_data_point_line_style = chart_style_roles
+        .as_ref()
+        .and_then(|roles| roles.get("dataPointLine"))
+        .cloned();
+    let chartex_series_line_style = chart_style_roles
+        .as_ref()
+        .and_then(|roles| roles.get("seriesLine"))
+        .cloned();
+    let chartex_data_point_marker_style = chart_style_roles
+        .as_ref()
+        .and_then(|roles| roles.get("dataPointMarker"))
+        .cloned();
     let marker_layout = style_element("dataPointMarkerLayout");
     let chartex_marker_size_pt = marker_layout
         .and_then(|node| node.attribute("size"))
@@ -5766,6 +5887,9 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         chartex_region_map,
         chartex_histogram_binning,
         chartex_accents,
+        chart_style_roles,
+        chart_style_color_palette: chartex_color_palette.clone(),
+        chart_style_color_method: chartex_color_style_method.clone(),
         chartex_color_palette,
         chartex_color_style_method,
         chartex_data_point_style,
@@ -7464,7 +7588,32 @@ pub fn parse_chart_part(
     color_resolver: &dyn ColorResolver,
 ) -> Option<ChartModel> {
     let mut references = EmptyChartReferenceResolver;
-    parse_chart_part_with_references(chart_root, color_resolver, &mut references)
+    parse_chart_part_with_references_and_style_parts(
+        chart_root,
+        color_resolver,
+        None,
+        None,
+        &mut references,
+    )
+}
+
+/// Parse a legacy chart together with its optional linked Chart Style and
+/// Chart Colors parts. The sidecars are host-independent relationships; XLSX,
+/// DOCX, and PPTX all delegate them to this shared parser.
+pub fn parse_chart_part_with_style_parts(
+    chart_root: Node,
+    color_resolver: &dyn ColorResolver,
+    style_xml: Option<&str>,
+    color_style_xml: Option<&str>,
+) -> Option<ChartModel> {
+    let mut references = EmptyChartReferenceResolver;
+    parse_chart_part_with_references_and_style_parts(
+        chart_root,
+        color_resolver,
+        style_xml,
+        color_style_xml,
+        &mut references,
+    )
 }
 
 /// Parse a legacy chart with an optional package-supplied formula resolver.
@@ -7474,6 +7623,22 @@ pub fn parse_chart_part(
 pub fn parse_chart_part_with_references(
     chart_root: Node,
     color_resolver: &dyn ColorResolver,
+    references: &mut dyn ChartReferenceResolver,
+) -> Option<ChartModel> {
+    parse_chart_part_with_references_and_style_parts(
+        chart_root,
+        color_resolver,
+        None,
+        None,
+        references,
+    )
+}
+
+pub fn parse_chart_part_with_references_and_style_parts(
+    chart_root: Node,
+    color_resolver: &dyn ColorResolver,
+    style_xml: Option<&str>,
+    color_style_xml: Option<&str>,
     references: &mut dyn ChartReferenceResolver,
 ) -> Option<ChartModel> {
     let root = chart_root;
@@ -7497,6 +7662,27 @@ pub fn parse_chart_part_with_references(
             .collect::<Vec<_>>();
         (colors.len() == 6).then_some(colors)
     };
+    let style_doc = style_xml.and_then(|xml| crate::depth::parse_guarded(xml).ok());
+    let color_style = color_style_xml.and_then(|xml| parse_chart_color_style(xml, color_resolver));
+    let chart_style_color_method = color_style.as_ref().map(|(method, _)| method.clone());
+    let chart_style_color_palette = color_style.as_ref().map(|(_, palette)| palette.clone());
+    let theme_style_palette = style_doc.as_ref().and_then(|_| {
+        let colors = (0..6)
+            .map(|index| color_resolver.resolve_series_accent(index))
+            .collect::<Vec<_>>();
+        colors.iter().any(Option::is_some).then_some(colors)
+    });
+    let style_palette = chart_style_color_palette
+        .as_deref()
+        .or(theme_style_palette.as_deref());
+    let chart_style_roles = style_doc.as_ref().and_then(|document| {
+        parse_chart_style_role_table(
+            document.root_element(),
+            color_resolver,
+            style_palette,
+            chart_style_color_method.as_deref(),
+        )
+    });
 
     // Determine chart type by finding the first recognized chart element
     let find_chart = |name: &str| {
@@ -9626,6 +9812,9 @@ pub fn parse_chart_part_with_references(
         chartex_region_map: None,
         chartex_histogram_binning: None,
         chartex_accents: None,
+        chart_style_roles,
+        chart_style_color_palette,
+        chart_style_color_method,
         chartex_color_palette: None,
         chartex_color_style_method: None,
         chartex_data_point_style: None,
@@ -9928,6 +10117,9 @@ mod tests {
             chartex_region_map: None,
             chartex_histogram_binning: None,
             chartex_accents: None,
+            chart_style_roles: None,
+            chart_style_color_palette: None,
+            chart_style_color_method: None,
             chartex_color_palette: None,
             chartex_color_style_method: None,
             chartex_data_point_style: None,
@@ -14860,6 +15052,132 @@ Subtitle</a:t></a:r></a:p>
         let d = chart_space_of(&xml);
         let m = parse_chartex_part(d.root_element(), &FixtureResolver, None).expect("parses");
         assert_eq!(m.categories, vec!["FY2024 1Q"]);
+    }
+
+    #[test]
+    fn classic_chart_preserves_linked_chart_style_role_table() {
+        let chart_xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea>
+              <c:lineChart><c:ser><c:idx val="0"/><c:order val="0"/>
+                <c:cat><c:strLit><c:ptCount val="1"/><c:pt idx="0"><c:v>A</c:v></c:pt></c:strLit></c:cat>
+                <c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val>
+              </c:ser></c:lineChart>
+            </c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let style_xml = format!(
+            r#"<cs:chartStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}">
+              <cs:chartArea><cs:spPr><a:solidFill><a:srgbClr val="112233"/></a:solidFill></cs:spPr></cs:chartArea>
+              <cs:dropLine><cs:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:ln></cs:spPr></cs:dropLine>
+              <cs:gridlineMinor><cs:spPr><a:ln><a:noFill/></a:ln></cs:spPr></cs:gridlineMinor>
+            </cs:chartStyle>"#,
+        );
+        let colors_xml = format!(
+            r#"<cs:colorStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}" meth="cycle">
+              <a:srgbClr val="AA0000"/><a:srgbClr val="00AA00"/>
+            </cs:colorStyle>"#,
+        );
+        let chart_doc = root_of(&chart_xml);
+        let model = parse_chart_part_with_style_parts(
+            chart_doc.root_element(),
+            &FixtureResolver,
+            Some(&style_xml),
+            Some(&colors_xml),
+        )
+        .expect("classic chart parses");
+
+        assert_eq!(model.chart_style_color_method.as_deref(), Some("cycle"));
+        assert_eq!(
+            model.chart_style_color_palette.as_ref().map(Vec::len),
+            Some(2)
+        );
+        let roles = model.chart_style_roles.expect("linked role table");
+        assert_eq!(roles.len(), 3);
+        assert_eq!(
+            roles["chartArea"].fill_colors.as_deref(),
+            Some(&[Some("112233".to_string()), Some("112233".to_string())][..]),
+        );
+        assert_eq!(roles["dropLine"].line_width_emu, Some(12_700));
+        assert_eq!(
+            roles["dropLine"]
+                .line_colors
+                .as_ref()
+                .and_then(|colors| colors[0].as_deref()),
+            Some("445566"),
+        );
+        assert_eq!(roles["gridlineMinor"].line_hidden, Some(true));
+    }
+
+    #[test]
+    fn linked_chart_style_role_table_fails_closed_before_oversized_expansion() {
+        let roles = CHART_STYLE_ROLE_NAMES
+            .iter()
+            .map(|name| format!("<cs:{name}><cs:spPr><a:solidFill><a:srgbClr val=\"112233\"/></a:solidFill></cs:spPr></cs:{name}>"))
+            .collect::<String>();
+        let style_xml = format!(
+            r#"<cs:chartStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}">{roles}</cs:chartStyle>"#,
+        );
+        let colors = (0..300)
+            .map(|index| format!("<a:srgbClr val=\"{:06X}\"/>", index))
+            .collect::<String>();
+        let colors_xml = format!(
+            r#"<cs:colorStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}" meth="cycle">{colors}</cs:colorStyle>"#,
+        );
+        let style_doc = root_of(&style_xml);
+        let (_, palette) = parse_chart_color_style(&colors_xml, &FixtureResolver)
+            .expect("bounded color style parses");
+        assert!(parse_chart_style_role_table(
+            style_doc.root_element(),
+            &FixtureResolver,
+            Some(&palette),
+            Some("cycle"),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn linked_chart_style_role_table_counts_referenced_theme_gradients() {
+        let roles = CHART_STYLE_ROLE_NAMES
+            .iter()
+            .map(|name| {
+                format!(
+                    "<cs:{name}><cs:fillRef idx=\"1\"><cs:styleClr val=\"auto\"/></cs:fillRef></cs:{name}>"
+                )
+            })
+            .collect::<String>();
+        let style_xml = format!(
+            r#"<cs:chartStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}">{roles}</cs:chartStyle>"#,
+        );
+        let colors = (0..273)
+            .map(|index| format!("<a:srgbClr val=\"{:06X}\"/>", index))
+            .collect::<String>();
+        let colors_xml = format!(
+            r#"<cs:colorStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}" meth="cycle">{colors}</cs:colorStyle>"#,
+        );
+        let stops = (0..129)
+            .map(|index| {
+                format!(
+                    "<a:gs pos=\"{}\"><a:schemeClr val=\"phClr\"/></a:gs>",
+                    index * 100_000 / 128
+                )
+            })
+            .collect::<String>();
+        let theme_xml = format!(
+            r#"<a:theme xmlns:a="{A_NS}"><a:themeElements><a:fmtScheme name="bounded"><a:fillStyleLst><a:gradFill><a:gsLst>{stops}</a:gsLst><a:lin ang="0"/></a:gradFill></a:fillStyleLst><a:lnStyleLst/><a:effectStyleLst/><a:bgFillStyleLst/></a:fmtScheme></a:themeElements></a:theme>"#,
+        );
+        let resolver = FormatSchemeFixtureResolver {
+            format_scheme: crate::theme::ThemeFormatScheme::parse(&theme_xml),
+        };
+        let style_doc = root_of(&style_xml);
+        let (_, palette) =
+            parse_chart_color_style(&colors_xml, &resolver).expect("color style parses");
+
+        assert!(parse_chart_style_role_table(
+            style_doc.root_element(),
+            &resolver,
+            Some(&palette),
+            Some("cycle"),
+        )
+        .is_none());
     }
 
     // ── CH15: chartEx structured layout parsing ──────────────────────────────
