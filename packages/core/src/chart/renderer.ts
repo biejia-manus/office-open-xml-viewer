@@ -3,7 +3,7 @@
 // scatter, waterfall). Ported from the xlsx implementation with pptx
 // extensions (valMin-aware axis, plotAreaBg, dataPointColors, waterfall).
 
-import type { ChartDataLabelOverride, ChartDisplayUnits, ChartManualLayout, ChartModel, ChartRect, ChartSeries, ChartSeriesDataLabels, ChartTextBox, ChartTextRun, ChartTrendline, SecondaryValueAxis } from '../types/chart';
+import type { ChartDataLabelOverride, ChartDecorationLineStyle, ChartDisplayUnits, ChartManualLayout, ChartModel, ChartRect, ChartSeries, ChartSeriesDataLabels, ChartStockUpDownBarStyle, ChartTextBox, ChartTextRun, ChartTrendline, SecondaryValueAxis } from '../types/chart';
 import type { Fill } from '../types/common';
 import {
   AXIS_OUTER_TEXT_MARGIN_PT,
@@ -4200,6 +4200,13 @@ function renderBarChart(
   }
 
   if (lineSeries.length > 0 && !isH) {
+    drawLineGroupDecorations(
+      ctx, chart, n, categoryCenterX,
+      series => sec && series.useSecondaryAxis === true ? toYSecondarySeries : toYPrimaryLine,
+      () => primaryCatAxisY,
+      (series, index) => series.values[index] ?? null,
+      catGap, ptToPx,
+    );
     if (dateAxisPlan) {
       ctx.save();
       ctx.beginPath();
@@ -4410,6 +4417,137 @@ function renderBarChart(
 // ═══════════════════════════════════════════════════════════════════════════
 // Line chart
 // ═══════════════════════════════════════════════════════════════════════════
+
+function applyDecorationLineStyle(
+  ctx: CanvasRenderingContext2D,
+  style: ChartDecorationLineStyle,
+  ptToPx: number,
+): boolean {
+  if (style.hidden === true) return false;
+  ctx.strokeStyle = `#${style.color ?? '000000'}`;
+  ctx.lineWidth = style.widthEmu != null
+    ? axisLineWidthPx(style.widthEmu, ptToPx)
+    : Math.max(1, 0.75 * ptToPx);
+  ctx.setLineDash(dashPatternForPreset(style.dash ?? undefined, ctx.lineWidth));
+  return true;
+}
+
+function drawUpDownBars(
+  ctx: CanvasRenderingContext2D,
+  startValueAt: (index: number) => number | null,
+  endValueAt: (index: number) => number | null,
+  pointCount: number,
+  toX: (index: number) => number,
+  toYStart: (value: number) => number,
+  toYEnd: (value: number) => number,
+  slotWidth: number,
+  style: ChartStockUpDownBarStyle,
+  ptToPx: number,
+  useLegacyDefaultPaint: boolean,
+): void {
+  const gapPercent = Number.isFinite(style.gapWidthPercent) && style.gapWidthPercent >= 0
+    ? style.gapWidthPercent
+    : 150;
+  const barWidth = Math.max(0, slotWidth / (1 + gapPercent / 100));
+  for (let index = 0; index < pointCount; index++) {
+    const start = startValueAt(index);
+    const end = endValueAt(index);
+    if (start == null || end == null || !Number.isFinite(start) || !Number.isFinite(end)) continue;
+    const startY = toYStart(start);
+    const endY = toYEnd(end);
+    const barHeight = Math.abs(endY - startY);
+    if (!(barWidth > 0) || !(barHeight > 0) || !Number.isFinite(barHeight)) continue;
+    const paint = end >= start ? style.up : style.down;
+    const defaultFill = end >= start ? 'FFFFFF' : '000000';
+    const barX = toX(index) - barWidth / 2;
+    const barY = Math.min(startY, endY);
+    if (!paint.fillHidden && (paint.fillColor != null || useLegacyDefaultPaint)) {
+      ctx.fillStyle = `#${paint.fillColor ?? defaultFill}`;
+      ctx.fillRect(barX, barY, barWidth, barHeight);
+    }
+    if (!paint.lineHidden && (
+      paint.lineColor != null || paint.lineWidthEmu != null || useLegacyDefaultPaint
+    )) {
+      ctx.strokeStyle = `#${paint.lineColor ?? '000000'}`;
+      ctx.lineWidth = paint.lineWidthEmu != null
+        ? axisLineWidthPx(paint.lineWidthEmu, ptToPx)
+        : Math.max(1, 0.75 * ptToPx);
+      ctx.setLineDash([]);
+      ctx.strokeRect(barX, barY, barWidth, barHeight);
+    }
+  }
+}
+
+function drawLineGroupDecorations(
+  ctx: CanvasRenderingContext2D,
+  chart: ChartModel,
+  pointCount: number,
+  toX: (index: number) => number,
+  yMapFor: (series: ChartSeries) => (value: number) => number,
+  categoryAxisYFor: (series: ChartSeries) => number,
+  valueFor: (series: ChartSeries, index: number) => number | null,
+  slotWidth: number,
+  ptToPx: number,
+): void {
+  for (const decoration of chart.lineGroupDecorations ?? []) {
+    let members = chart.series.filter(series => series.lineGroupIndex === decoration.groupIndex);
+    // Hand-authored callers predating line-group provenance still represent a
+    // single ordinary line group as the whole series list.
+    if (members.length === 0 && decoration.groupIndex === 0
+      && ['line', 'stackedLine', 'stackedLinePct'].includes(chart.chartType)) {
+      members = chart.series.filter(series => series.seriesType == null || series.seriesType === 'line');
+    }
+    if (members.length === 0) continue;
+
+    if (decoration.upDownBars && members.length >= 2) {
+      const first = members[0];
+      const last = members[members.length - 1];
+      drawUpDownBars(
+        ctx, index => valueFor(first, index), index => valueFor(last, index), pointCount, toX,
+        yMapFor(first), yMapFor(last), slotWidth, decoration.upDownBars, ptToPx,
+        // Empty upBars/downBars paint is application-defined. The retained
+        // Office observation is limited to classic Style 2; other styles keep
+        // the geometry/model but do not receive a guessed white/black paint.
+        chart.legacyChartStyle === 2,
+      );
+    }
+
+    if (decoration.dropLines && applyDecorationLineStyle(ctx, decoration.dropLines, ptToPx)) {
+      for (const series of members) {
+        const toY = yMapFor(series);
+        const axisY = categoryAxisYFor(series);
+        for (let index = 0; index < pointCount; index++) {
+          const value = valueFor(series, index);
+          if (value == null || !Number.isFinite(value)) continue;
+          ctx.beginPath();
+          ctx.moveTo(toX(index), axisY);
+          ctx.lineTo(toX(index), toY(value));
+          ctx.stroke();
+        }
+      }
+    }
+
+    if (decoration.hiLowLines && members.length >= 2
+      && applyDecorationLineStyle(ctx, decoration.hiLowLines, ptToPx)) {
+      const toY = yMapFor(members[0]);
+      for (let index = 0; index < pointCount; index++) {
+        let low = Infinity;
+        let high = -Infinity;
+        for (const series of members) {
+          const value = valueFor(series, index);
+          if (value == null || !Number.isFinite(value)) continue;
+          low = Math.min(low, value);
+          high = Math.max(high, value);
+        }
+        if (!Number.isFinite(low) || !Number.isFinite(high)) continue;
+        ctx.beginPath();
+        ctx.moveTo(toX(index), toY(low));
+        ctx.lineTo(toX(index), toY(high));
+        ctx.stroke();
+      }
+    }
+  }
+}
 
 function renderLineChart(
   ctx: CanvasRenderingContext2D,
@@ -4759,6 +4897,27 @@ function renderLineChart(
     ctx.strokeStyle = primaryValLine.color; ctx.lineWidth = primaryValLine.width;
     ctx.beginPath(); ctx.moveTo(px0, py0); ctx.lineTo(px0, py0 + ph); ctx.stroke();
   }
+
+  // CT_LineChart owns drop lines, high-low lines, and up/down bars at the
+  // group level (ECMA-376 §21.2.2 EG_LineChartShared / CT_LineChart). Paint
+  // this background geometry before the series so authored lines and markers
+  // remain on top, as in Office. Group provenance prevents a second line group
+  // in a combo chart from inheriting the first group's decorations.
+  const decorationSlotWidth = dateAxisPlan
+    ? (dateAxisPlan.categoryBandFractions[0] ?? 0) * pw
+    : between ? pw / n : n > 1 ? pw / (n - 1) : pw;
+  const lineSeriesIndex = new Map(
+    chart.series.map((series, seriesIndex) => [series, seriesIndex]),
+  );
+  drawLineGroupDecorations(
+    ctx, chart, n, toX, yMapFor,
+    () => py0 + ph,
+    (series, index) => {
+      const seriesIndex = lineSeriesIndex.get(series);
+      return seriesIndex != null ? plotted(seriesIndex, index) : null;
+    },
+    decorationSlotWidth, ptToPx,
+  );
 
   // Line width and marker size come from OOXML in points (<a:ln w=EMU> /
   // <c:marker><c:size val=pt>). Omitted series strokes keep the PowerPoint
@@ -5173,47 +5332,24 @@ function renderStockChart(
     ctx.beginPath(); ctx.moveTo(px0, py0); ctx.lineTo(px0, py0 + ph); ctx.stroke();
   }
 
-  // ── First/last-series up-down bars (§21.2.2.218/227). The gap is expressed as a
-  // percentage of one bar width, so slot = bar + gap and
-  // bar = slot / (1 + gap/100). Direct upBars/downBars shape formatting is
-  // authoritative; the schema defaults are white up bars and black down bars
-  // with a black outline.
+  // ── First/last-series up-down bars (§21.2.2.218/227). Shared with ordinary
+  // line-chart up/down bars so gap geometry and direct paint cannot drift.
   if (chart.stockUpDownBars && upDownStartS && upDownEndS) {
-    const style = chart.stockUpDownBarStyle;
-    const gapPercent = style?.gapWidthPercent != null
-      && Number.isFinite(style.gapWidthPercent)
-      && style.gapWidthPercent >= 0
-      ? style.gapWidthPercent
-      : 150;
-    const slotW = dateAxisPlan
+    const style = chart.stockUpDownBarStyle ?? {
+      gapWidthPercent: 150,
+      up: {},
+      down: {},
+    };
+    const slotWidth = dateAxisPlan
       ? (dateAxisPlan.categoryBandFractions[0] ?? 0) * pw
       : between ? pw / n : n > 1 ? pw / (n - 1) : pw;
-    const barW = Math.max(0, slotW / (1 + gapPercent / 100));
-    for (let ci = 0; ci < n; ci++) {
-      const start = upDownStartS.values[ci];
-      const end = upDownEndS.values[ci];
-      if (start == null || end == null || !Number.isFinite(start) || !Number.isFinite(end)) continue;
-      const yStart = toY(start);
-      const yEnd = toY(end);
-      const barH = Math.abs(yEnd - yStart);
-      if (!(barW > 0) || !(barH > 0) || !Number.isFinite(barH)) continue;
-      const paint = end >= start ? style?.up : style?.down;
-      const defaultFill = end >= start ? 'FFFFFF' : '000000';
-      const bx = toX(ci) - barW / 2;
-      const by = Math.min(yStart, yEnd);
-      if (!paint?.fillHidden) {
-        ctx.fillStyle = `#${paint?.fillColor ?? defaultFill}`;
-        ctx.fillRect(bx, by, barW, barH);
-      }
-      if (!paint?.lineHidden) {
-        ctx.strokeStyle = `#${paint?.lineColor ?? '000000'}`;
-        ctx.lineWidth = paint?.lineWidthEmu != null
-          ? axisLineWidthPx(paint.lineWidthEmu, ptToPx)
-          : Math.max(1, 0.75 * ptToPx);
-        ctx.setLineDash([]);
-        ctx.strokeRect(bx, by, barW, barH);
-      }
-    }
+    drawUpDownBars(
+      ctx,
+      index => upDownStartS.values[index] ?? null,
+      index => upDownEndS.values[index] ?? null,
+      n, toX, toY, toY,
+      slotWidth, style, ptToPx, true,
+    );
   }
 
   // ── Hi-lo lines: vertical Low↔High per category. Drawn when the file declares

@@ -9332,6 +9332,120 @@ describe('ofPie secondary plots (§21.2.2.126)', () => {
   });
 });
 
+describe('classic line-chart group decorations', () => {
+  const decoratedLine = (): ChartModel => baseModel({
+    chartType: 'line',
+    categories: ['Day1', 'Day2', 'Day3', 'Day4', 'Day5'],
+    valMin: 0,
+    valMax: 150,
+    valAxisMajorGridlines: false,
+    series: [
+      series({
+        name: 'Open', values: [100, 110, 105, 120, 115],
+        lineGroupIndex: 0, showMarker: false, lineColor: '4472C4',
+      }),
+      series({
+        name: 'Close', values: [115, 105, 125, 110, 130],
+        lineGroupIndex: 0, showMarker: false, lineColor: 'ED7D31',
+      }),
+    ],
+    lineGroupDecorations: [{
+      groupIndex: 0,
+      dropLines: { color: '111111', widthEmu: 9525 },
+      hiLowLines: { color: '222222', widthEmu: 12700 },
+      upDownBars: {
+        gapWidthPercent: 150,
+        up: { fillColor: 'EEEEEE', lineColor: '333333', lineWidthEmu: 9525 },
+        down: { fillColor: '444444', lineColor: '333333', lineWidthEmu: 9525 },
+      },
+    }],
+  });
+
+  it('draws drop lines and high-low lines behind the owning line group', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, decoratedLine(), RECT, 1);
+    const vertical = (color: string): Seg[] => rec.segs.filter(segment =>
+      segment.ss === color && Math.abs(segment.x1 - segment.x0) < 0.01
+      && Math.abs(segment.y1 - segment.y0) > 1
+    );
+    expect(vertical('#111111')).toHaveLength(10);
+    expect(vertical('#222222')).toHaveLength(5);
+    const firstDecoration = rec.segs.findIndex(segment => segment.ss === '#111111');
+    const firstSeries = rec.segs.findIndex(segment => segment.ss === '#4472C4');
+    expect(firstDecoration).toBeGreaterThanOrEqual(0);
+    expect(firstSeries).toBeGreaterThan(firstDecoration);
+  });
+
+  it('places stacked decorations at the plotted cumulative series values', () => {
+    const rec = segRecordingCtx();
+    const model = decoratedLine();
+    model.chartType = 'stackedLine';
+    model.series[0].values = [10, 20, 30, 40, 50];
+    model.series[1].values = [30, 40, 20, 10, 5];
+    model.lineGroupDecorations![0].dropLines = null;
+    model.lineGroupDecorations![0].upDownBars = null;
+    renderChart(rec.ctx, model, RECT, 1);
+
+    const firstBlue = rec.segs.find(segment => segment.ss === '#4472C4');
+    const firstOrange = rec.segs.find(segment => segment.ss === '#ED7D31');
+    const firstHiLow = rec.segs.find(segment =>
+      segment.ss === '#222222' && Math.abs(segment.x1 - segment.x0) < 0.01
+    );
+    expect(firstBlue).toBeDefined();
+    expect(firstOrange).toBeDefined();
+    expect(firstHiLow).toBeDefined();
+    const plottedSeriesYs = [firstBlue!.y0, firstOrange!.y0].sort((a, b) => a - b);
+    const decorationYs = [firstHiLow!.y0, firstHiLow!.y1].sort((a, b) => a - b);
+    expect(decorationYs[0]).toBeCloseTo(plottedSeriesYs[0], 6);
+    expect(decorationYs[1]).toBeCloseTo(plottedSeriesYs[1], 6);
+  });
+
+  it('draws direct up/down bar paint with the authored gap geometry', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, decoratedLine(), RECT, 1);
+    expect(rec.rects.filter(rect => rect.fs === '#EEEEEE')).toHaveLength(3);
+    expect(rec.rects.filter(rect => rect.fs === '#444444')).toHaveLength(2);
+    const outlines = rec.strokeRects.filter(rect => rect.ss === '#333333');
+    expect(outlines).toHaveLength(5);
+    expect(new Set(outlines.map(rect => rect.w.toFixed(6))).size).toBe(1);
+  });
+
+  it('limits empty up/down-bar automatic paint to the observed classic Style 2 boundary', () => {
+    const render = (legacyChartStyle: number | null): Recorded => {
+      const rec = recordingCtx();
+      const model = decoratedLine();
+      model.legacyChartStyle = legacyChartStyle;
+      model.lineGroupDecorations![0].upDownBars = {
+        gapWidthPercent: 150, up: {}, down: {},
+      };
+      renderChart(rec.ctx, model, RECT, 1);
+      return rec;
+    };
+    const styleTwo = render(2);
+    expect(styleTwo.rects.filter(rect => rect.fs === '#FFFFFF')).toHaveLength(3);
+    expect(styleTwo.rects.filter(rect => rect.fs === '#000000')).toHaveLength(2);
+
+    const unresolvedStyle = render(null);
+    expect(unresolvedStyle.rects.filter(rect =>
+      rect.fs === '#FFFFFF' || rect.fs === '#000000'
+    )).toHaveLength(0);
+    expect(unresolvedStyle.strokeRects).toHaveLength(0);
+  });
+
+  it('keeps decorations scoped to their owning line group', () => {
+    const rec = segRecordingCtx();
+    const model = decoratedLine();
+    model.series.push(series({
+      name: 'Other group', values: [50, 55, 60, 65, 70],
+      lineGroupIndex: 1, showMarker: false, lineColor: '70AD47',
+    }));
+    renderChart(rec.ctx, model, RECT, 1);
+    expect(rec.segs.filter(segment =>
+      segment.ss === '#111111' && Math.abs(segment.x1 - segment.x0) < 0.01
+    )).toHaveLength(10);
+  });
+});
+
 describe('CH13 — stock chart (high/low/close)', () => {
   // High/Low/Close over three dates. Value axis 0..70 so the plot geometry is
   // easy to reason about.

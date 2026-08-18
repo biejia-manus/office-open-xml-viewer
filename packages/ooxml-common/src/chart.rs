@@ -562,6 +562,11 @@ pub struct ChartModel {
     /// tick-label rotation. `None`/0 = horizontal (byte-stable).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cat_axis_label_rotation: Option<i32>,
+    /// Group-owned decorations for each classic `<c:lineChart>` /
+    /// `<c:line3DChart>` in plot-area document order. Keeping the owner group
+    /// prevents combo charts or multiple line groups from sharing decorations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_group_decorations: Option<Vec<ChartLineGroupDecorations>>,
     // ── Stock chart (CH13, §21.2.2.198) ──────────────────────────────────────
     /// `<c:stockChart><c:hiLowLines>` (§21.2.2.80) presence. When `Some(true)`
     /// the stock renderer draws a vertical line spanning each category's
@@ -690,6 +695,35 @@ pub struct ChartStockUpDownBarStyle {
     pub gap_width_percent: f64,
     pub up: ChartStockBarPaint,
     pub down: ChartStockBarPaint,
+}
+
+/// Direct DrawingML line paint for group-owned chart decoration geometry.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartDecorationLineStyle {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_emu: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
+}
+
+/// Decorations authored on one classic line-chart group. `group_index` is the
+/// zero-based document-order index among line groups, matching
+/// `ChartSeries::line_group_index`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartLineGroupDecorations {
+    pub group_index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_lines: Option<ChartDecorationLineStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hi_low_lines: Option<ChartDecorationLineStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub up_down_bars: Option<ChartStockUpDownBarStyle>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -918,6 +952,10 @@ pub struct ChartSeries {
     pub label_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub series_type: Option<String>,
+    /// Document-order index of the owning classic line-chart group. Group
+    /// decorations are resolved through `ChartModel::line_group_decorations`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_group_index: Option<u32>,
     /// Document-order index of the owning classic bar-chart group. This keeps
     /// separately authored overlay groups distinct after the shared model
     /// flattens plot-area series.
@@ -3419,6 +3457,66 @@ fn extract_sp_pr_ln_style(
     (color, width, no_fill)
 }
 
+fn parse_chart_decoration_line_style(
+    node: Node,
+    resolver: &dyn ColorResolver,
+) -> ChartDecorationLineStyle {
+    let (color, width_emu, no_fill) = extract_sp_pr_ln_style(node, resolver);
+    let dash = child(node, "spPr")
+        .and_then(|shape| child(shape, "ln"))
+        .and_then(|line| child(line, "prstDash"))
+        .and_then(|preset| attr(&preset, "val"));
+    let hidden = if no_fill {
+        Some(true)
+    } else if color.is_some() || width_emu.is_some() || dash.is_some() {
+        Some(false)
+    } else {
+        None
+    };
+    ChartDecorationLineStyle {
+        color,
+        width_emu,
+        dash,
+        hidden,
+    }
+}
+
+fn parse_chart_up_down_bar_paint(
+    bar: Option<Node>,
+    resolver: &dyn ColorResolver,
+) -> ChartStockBarPaint {
+    let Some(bar) = bar else {
+        return ChartStockBarPaint::default();
+    };
+    let sp_pr = child(bar, "spPr");
+    let (line_color, line_width_emu, line_hidden) = extract_sp_pr_ln_style(bar, resolver);
+    ChartStockBarPaint {
+        fill_color: sp_pr.and_then(|shape| resolver.resolve_shape_fill(shape)),
+        fill_hidden: sp_pr
+            .and_then(|shape| child(shape, "noFill"))
+            .is_some()
+            .then_some(true),
+        line_color,
+        line_width_emu,
+        line_hidden: line_hidden.then_some(true),
+    }
+}
+
+fn parse_chart_up_down_bar_style(
+    node: Node,
+    resolver: &dyn ColorResolver,
+) -> ChartStockUpDownBarStyle {
+    ChartStockUpDownBarStyle {
+        gap_width_percent: child(node, "gapWidth")
+            .and_then(|value| value.attribute("val"))
+            .and_then(|value| value.trim_end_matches('%').parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .unwrap_or(150.0),
+        up: parse_chart_up_down_bar_paint(child(node, "upBars"), resolver),
+        down: parse_chart_up_down_bar_paint(child(node, "downBars"), resolver),
+    }
+}
+
 /// Resolve a color inside a chart-style recipe. `phClr` is the branch/series
 /// accent supplied by the style reference; fixed scheme colors keep resolving
 /// through the host theme. DrawingML color transforms remain on the authored
@@ -4861,6 +4959,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         cat_format_codes: None,
         label_color: None,
         series_type: None,
+        line_group_index: None,
         bar_group_index: None,
         bar_group_direction: None,
         bar_group_grouping: None,
@@ -5418,6 +5517,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         cat_axis_tick_mark_skip: None,
         val_axis_tick_label_pos: None,
         cat_axis_label_rotation: None,
+        line_group_decorations: None,
         stock_hi_low_lines: None,
         stock_hi_low_line_color: None,
         stock_up_down_bars: None,
@@ -7219,33 +7319,8 @@ pub fn parse_chart_part_with_references(
                 .and_then(|fill| color_resolver.resolve_solid_fill(fill));
             let up_down_node = stock.and_then(|s| child(s, "upDownBars"));
             let up_down = up_down_node.is_some();
-            let parse_bar_paint = |bar: Option<Node>| -> ChartStockBarPaint {
-                let Some(bar) = bar else {
-                    return ChartStockBarPaint::default();
-                };
-                let sp_pr = child(bar, "spPr");
-                let (line_color, line_width_emu, line_hidden) =
-                    extract_sp_pr_ln_style(bar, color_resolver);
-                ChartStockBarPaint {
-                    fill_color: sp_pr.and_then(|shape| color_resolver.resolve_shape_fill(shape)),
-                    fill_hidden: sp_pr
-                        .and_then(|shape| child(shape, "noFill"))
-                        .is_some()
-                        .then_some(true),
-                    line_color,
-                    line_width_emu,
-                    line_hidden: line_hidden.then_some(true),
-                }
-            };
-            let up_down_style = up_down_node.map(|node| ChartStockUpDownBarStyle {
-                gap_width_percent: child(node, "gapWidth")
-                    .and_then(|value| value.attribute("val"))
-                    .and_then(|value| value.trim_end_matches('%').parse::<f64>().ok())
-                    .filter(|value| value.is_finite() && *value >= 0.0)
-                    .unwrap_or(150.0),
-                up: parse_bar_paint(child(node, "upBars")),
-                down: parse_bar_paint(child(node, "downBars")),
-            });
+            let up_down_style =
+                up_down_node.map(|node| parse_chart_up_down_bar_style(node, color_resolver));
             (
                 Some(hi_low.is_some()),
                 hi_low_color,
@@ -7686,6 +7761,34 @@ pub fn parse_chart_part_with_references(
             node.is_element() && matches!(node.tag_name().name(), "barChart" | "bar3DChart")
         })
         .collect();
+    let line_group_nodes: Vec<_> = plot_area
+        .children()
+        .filter(|node| {
+            node.is_element() && matches!(node.tag_name().name(), "lineChart" | "line3DChart")
+        })
+        .collect();
+    let parsed_line_group_decorations: Vec<_> = line_group_nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(group_index, group)| {
+            let drop_lines = child(*group, "dropLines")
+                .map(|node| parse_chart_decoration_line_style(node, color_resolver));
+            let hi_low_lines = child(*group, "hiLowLines")
+                .map(|node| parse_chart_decoration_line_style(node, color_resolver));
+            let up_down_bars = child(*group, "upDownBars")
+                .map(|node| parse_chart_up_down_bar_style(node, color_resolver));
+            (drop_lines.is_some() || hi_low_lines.is_some() || up_down_bars.is_some()).then_some(
+                ChartLineGroupDecorations {
+                    group_index: group_index as u32,
+                    drop_lines,
+                    hi_low_lines,
+                    up_down_bars,
+                },
+            )
+        })
+        .collect();
+    let line_group_decorations =
+        (!parsed_line_group_decorations.is_empty()).then_some(parsed_line_group_decorations);
 
     if ser_nodes.is_empty() {
         return None;
@@ -7759,6 +7862,12 @@ pub fn parse_chart_part_with_references(
             let series_type = group
                 .map(|p| p.tag_name().name())
                 .and_then(group_series_type);
+            let line_group_index = group.and_then(|owner| {
+                line_group_nodes
+                    .iter()
+                    .position(|candidate| *candidate == owner)
+                    .map(|index| index as u32)
+            });
             let bar_group_index = group.and_then(|owner| {
                 bar_group_nodes
                     .iter()
@@ -8275,6 +8384,7 @@ pub fn parse_chart_part_with_references(
                 cat_format_codes,
                 label_color,
                 series_type,
+                line_group_index,
                 bar_group_index,
                 bar_group_direction,
                 bar_group_grouping,
@@ -9084,6 +9194,7 @@ pub fn parse_chart_part_with_references(
         cat_axis_tick_mark_skip,
         val_axis_tick_label_pos,
         cat_axis_label_rotation,
+        line_group_decorations,
         stock_hi_low_lines,
         stock_hi_low_line_color,
         stock_up_down_bars,
@@ -9212,6 +9323,7 @@ mod tests {
                 data_label_colors: None,
                 label_color: None,
                 series_type: None,
+                line_group_index: None,
                 bar_group_index: None,
                 bar_group_direction: None,
                 bar_group_grouping: None,
@@ -9371,6 +9483,7 @@ mod tests {
             cat_axis_tick_mark_skip: None,
             val_axis_tick_label_pos: None,
             cat_axis_label_rotation: None,
+            line_group_decorations: None,
             stock_hi_low_lines: None,
             stock_hi_low_line_color: None,
             stock_up_down_bars: None,
@@ -14853,6 +14966,53 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(style.down.fill_hidden, Some(true));
         assert_eq!(style.down.line_hidden, Some(true));
         assert_eq!(style.down.line_width_emu, Some(25400));
+    }
+
+    #[test]
+    fn parse_chart_part_line_group_preserves_drop_hi_low_and_up_down_geometry() {
+        let series = |index: u32, name: &str, value: i32| {
+            format!(
+                r#"<c:ser><c:idx val="{index}"/><c:order val="{index}"/><c:tx><c:v>{name}</c:v></c:tx>
+              <c:cat><c:strLit><c:pt idx="0"><c:v>A</c:v></c:pt></c:strLit></c:cat>
+              <c:val><c:numLit><c:pt idx="0"><c:v>{value}</c:v></c:pt></c:numLit></c:val></c:ser>"#
+            )
+        };
+        let first = format!(
+            r#"<c:lineChart><c:grouping val="standard"/>{}{}
+              <c:dropLines><c:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="111111"/></a:solidFill><a:prstDash val="dash"/></a:ln></c:spPr></c:dropLines>
+              <c:hiLowLines><c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="222222"/></a:solidFill></a:ln></c:spPr></c:hiLowLines>
+              <c:upDownBars><c:gapWidth val="80"/><c:upBars><c:spPr><a:solidFill><a:srgbClr val="EEEEEE"/></a:solidFill></c:spPr></c:upBars><c:downBars><c:spPr><a:solidFill><a:srgbClr val="333333"/></a:solidFill></c:spPr></c:downBars></c:upDownBars>
+            </c:lineChart>"#,
+            series(0, "First", 10),
+            series(1, "Last", 20),
+        );
+        let second = format!(
+            r#"<c:lineChart><c:grouping val="standard"/>{}</c:lineChart>"#,
+            series(2, "Second group", 30),
+        );
+        let xml = chart_space_with_group(&format!("{first}{second}"));
+        let document = chart_space_of(&xml);
+        let model =
+            parse_chart_part(document.root_element(), &FixtureResolver).expect("line chart");
+
+        assert_eq!(model.series[0].line_group_index, Some(0));
+        assert_eq!(model.series[1].line_group_index, Some(0));
+        assert_eq!(model.series[2].line_group_index, Some(1));
+        let groups = model.line_group_decorations.expect("line decorations");
+        assert_eq!(groups.len(), 1);
+        let group = &groups[0];
+        assert_eq!(group.group_index, 0);
+        let drop = group.drop_lines.as_ref().expect("drop lines");
+        assert_eq!(drop.color.as_deref(), Some("111111"));
+        assert_eq!(drop.width_emu, Some(9525));
+        assert_eq!(drop.dash.as_deref(), Some("dash"));
+        let hi_low = group.hi_low_lines.as_ref().expect("hi-low lines");
+        assert_eq!(hi_low.color.as_deref(), Some("222222"));
+        assert_eq!(hi_low.width_emu, Some(12700));
+        let up_down = group.up_down_bars.as_ref().expect("up/down bars");
+        assert_eq!(up_down.gap_width_percent, 80.0);
+        assert_eq!(up_down.up.fill_color.as_deref(), Some("EEEEEE"));
+        assert_eq!(up_down.down.fill_color.as_deref(), Some("333333"));
     }
 
     #[test]

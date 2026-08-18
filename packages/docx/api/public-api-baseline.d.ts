@@ -103,6 +103,12 @@ export interface ChartDataTable {
     lineWidthEmu?: number | null;
     lineHidden?: boolean | null;
 }
+interface ChartDecorationLineStyle {
+    color?: string | null;
+    widthEmu?: number | null;
+    dash?: string | null;
+    hidden?: boolean | null;
+}
 export interface ChartDisplayUnits {
     divisor: number;
     builtInUnit?: string | null;
@@ -218,6 +224,12 @@ export interface ChartLabelBox {
     fill?: string;
     borderColor?: string;
     borderWidthEmu?: number;
+}
+interface ChartLineGroupDecorations {
+    groupIndex: number;
+    dropLines?: ChartDecorationLineStyle | null;
+    hiLowLines?: ChartDecorationLineStyle | null;
+    upDownBars?: ChartStockUpDownBarStyle | null;
 }
 export interface ChartManualLayout {
     xMode?: string;
@@ -371,6 +383,7 @@ export interface ChartModel {
     catAxisTickMarkSkip?: number | null;
     valAxisTickLabelPos?: string | null;
     catAxisLabelRotation?: number | null;
+    lineGroupDecorations?: ChartLineGroupDecorations[] | null;
     stockHiLowLines?: boolean | null;
     stockHiLowLineColor?: string | null;
     stockUpDownBars?: boolean | null;
@@ -457,6 +470,7 @@ export interface ChartSeries {
     dataLabelColors?: (string | null)[] | null;
     labelColor?: string | null;
     seriesType?: string | null;
+    lineGroupIndex?: number | null;
     barGroupIndex?: number | null;
     barGroupDirection?: 'bar' | 'col' | string | null;
     barGroupGrouping?: 'standard' | 'clustered' | 'stacked' | 'percentStacked' | string | null;
