@@ -89,6 +89,20 @@ export interface ChartDataPointOverride {
     markerLineWidthEmu?: number;
     explosion?: number;
 }
+export interface ChartDataTable {
+    showHorizontalBorder: boolean;
+    showVerticalBorder: boolean;
+    showOutline: boolean;
+    showKeys: boolean;
+    fontSizeHpt?: number | null;
+    fontFace?: string | null;
+    fontColor?: string | null;
+    fontBold?: boolean | null;
+    fontItalic?: boolean | null;
+    lineColor?: string | null;
+    lineWidthEmu?: number | null;
+    lineHidden?: boolean | null;
+}
 export interface ChartDisplayUnits {
     divisor: number;
     builtInUnit?: string | null;
@@ -219,8 +233,10 @@ export interface ChartManualLayout {
 export interface ChartModel {
     chartType: ChartType;
     title: string | null;
+    titleRichRuns?: ChartTextRun[] | null;
     titlePresent?: boolean;
     categories: string[];
+    categoryLevels?: string[][] | null;
     series: ChartSeries[];
     chartTextBoxes?: ChartTextBox[] | null;
     varyColors?: boolean | null;
@@ -236,6 +252,7 @@ export interface ChartModel {
     plotAreaBg: string | null;
     chartBg: string | null;
     showLegend: boolean;
+    dataTable?: ChartDataTable | null;
     legendPos: 'r' | 'l' | 't' | 'b' | 'tr' | null;
     catAxisCrossBetween: 'between' | 'midCat' | string;
     valAxisMajorTickMark: 'cross' | 'out' | 'in' | 'none' | string;
@@ -340,6 +357,11 @@ export interface ChartModel {
     valAxisMinorUnit?: number | null;
     catAxisMajorUnit?: number | null;
     catAxisMinorUnit?: number | null;
+    catAxisIsDate?: boolean | null;
+    catAxisBaseTimeUnit?: 'days' | 'months' | 'years' | string | null;
+    catAxisMajorTimeUnit?: 'days' | 'months' | 'years' | string | null;
+    catAxisMinorTimeUnit?: 'days' | 'months' | 'years' | string | null;
+    catAxisNoMultiLevelLabels?: boolean | null;
     valAxisLogBase?: number | null;
     catAxisLogBase?: number | null;
     valAxisOrientation?: 'minMax' | 'maxMin' | string | null;
@@ -353,6 +375,8 @@ export interface ChartModel {
     stockHiLowLineColor?: string | null;
     stockUpDownBars?: boolean | null;
     stockUpDownBarStyle?: ChartStockUpDownBarStyle | null;
+    surfaceWireframe?: boolean | null;
+    surfaceBandFormats?: ChartSurfaceBandFormat[] | null;
     ofPie?: ChartOfPie | null;
     threeD?: ChartThreeD | null;
     chartexBox?: ChartexBoxWhisker | null;
@@ -415,6 +439,13 @@ export interface ChartSeries {
     chartexFormatIdx?: number | null;
     color: string | null;
     fillPattern?: PatternFill | null;
+    invertIfNegative?: boolean | null;
+    automaticNegativeStyle?: boolean | null;
+    invertedFill?: SolidFill | GradientFill | PatternFill | null;
+    invertedFillHidden?: boolean | null;
+    invertedLineColor?: string | null;
+    invertedLineWidthEmu?: number | null;
+    invertedLineHidden?: boolean | null;
     chartexStyle?: ChartExElementStyle | null;
     lineColor?: string | null;
     lineWidthEmu?: number | null;
@@ -424,11 +455,15 @@ export interface ChartSeries {
     dataLabelColors?: (string | null)[] | null;
     labelColor?: string | null;
     seriesType?: string | null;
+    barGroupIndex?: number | null;
+    barGroupGapWidth?: number | null;
+    barGroupOverlap?: number | null;
     useSecondaryAxis?: boolean | null;
     categories?: string[] | null;
     showMarker?: boolean | null;
     valFormatCode?: string | null;
     catFormatCode?: string | null;
+    catFormatBuiltinId?: number | null;
     catFormatCodes?: (string | null)[] | null;
     markerSymbol?: string | null;
     markerSize?: number | null;
@@ -473,6 +508,14 @@ export interface ChartStockUpDownBarStyle {
     up: ChartStockBarPaint;
     down: ChartStockBarPaint;
 }
+export interface ChartSurfaceBandFormat {
+    idx: number;
+    fill?: SolidFill | GradientFill | PatternFill | null;
+    fillHidden?: boolean | null;
+    lineColor?: string | null;
+    lineWidthEmu?: number | null;
+    lineHidden?: boolean | null;
+}
 export interface ChartTextBox {
     x: number;
     y: number;
@@ -494,6 +537,7 @@ export interface ChartTextRun {
     text: string;
     fontSizeHpt?: number | null;
     bold?: boolean | null;
+    italic?: boolean | null;
     color?: string | null;
     fontFace?: string | null;
 }
@@ -549,6 +593,7 @@ export interface ChartThreeDSurface {
     lineHidden?: boolean | null;
 }
 export interface ChartTrendline {
+    name?: string | null;
     trendlineType: string;
     order?: number | null;
     period?: number | null;
@@ -559,6 +604,8 @@ export interface ChartTrendline {
     dispEq?: boolean | null;
     labelManualLayout?: ChartManualLayout | null;
     labelText?: string | null;
+    labelFormatCode?: string | null;
+    labelFormatSourceLinked?: boolean | null;
     labelFontSizeHpt?: number | null;
     labelFontBold?: boolean | null;
     labelFontItalic?: boolean | null;
@@ -571,7 +618,7 @@ export interface ChartTrendline {
     lineDash?: string | null;
     lineHidden?: boolean | null;
 }
-export type ChartType = 'line' | 'stackedLine' | 'stackedLinePct' | 'clusteredBar' | 'clusteredBarH' | 'stackedBar' | 'stackedBarH' | 'stackedBarPct' | 'stackedBarHPct' | 'area' | 'stackedArea' | 'stackedAreaPct' | 'pie' | 'doughnut' | 'scatter' | 'bubble' | 'radar' | 'waterfall' | 'stock' | 'boxWhisker' | 'sunburst' | 'treemap' | string;
+export type ChartType = 'line' | 'stackedLine' | 'stackedLinePct' | 'clusteredBar' | 'clusteredBarH' | 'stackedBar' | 'stackedBarH' | 'stackedBarPct' | 'stackedBarHPct' | 'area' | 'stackedArea' | 'stackedAreaPct' | 'pie' | 'doughnut' | 'scatter' | 'bubble' | 'radar' | 'waterfall' | 'stock' | 'surface' | 'surface3D' | 'boxWhisker' | 'sunburst' | 'treemap' | string;
 export type CollectPageRunsOptions = Pick<RenderPageOptions, 'width' | 'currentDate'>;
 export interface ColSpec {
     widthPt: number;

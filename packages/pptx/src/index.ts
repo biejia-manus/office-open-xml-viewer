@@ -30,6 +30,7 @@ export {
 export type {
   ArrowEnd,
   ChartDataLabelOverride,
+  ChartDataTable,
   ChartDataPointOverride,
   ChartErrBars,
   ChartLabelBox,
@@ -38,6 +39,7 @@ export type {
   ChartSeriesDataLabels,
   ChartStockBarPaint,
   ChartStockUpDownBarStyle,
+  ChartSurfaceBandFormat,
   ChartTextBox,
   ChartTextParagraph,
   ChartTextRun,
