@@ -109,6 +109,7 @@ status differences below are renderer-consumption gaps, not lost package data.
 | S-STYLE-008 | `gridlineMajor`, `gridlineMinor` | Supported | Linked line fallback applies to enabled primary and secondary gridlines; direct paint and `noFill` retain precedence. |
 | S-STYLE-009 | `dataLabelCallout`, `trendlineLabel` | Partial | Paint is retained; text/shape style inheritance is incomplete. |
 | S-STYLE-010 | `dataPoint3D`, `dataPointWireframe`, `floor`, `wall`, `plotArea3D` | Partial | Paint is retained; authored direct 3-D surface formatting remains authoritative where already modeled. |
+| S-STYLE-011 | `dataPointMarker` and marker layout | Partial | Linked solid marker fill, outline, width, and `noFill` apply to classic marker-bearing series; ChartEx box markers also consume the role. Structured marker fills and classic marker-layout fallback remain incomplete. |
 
 ## ChartEx layouts
 

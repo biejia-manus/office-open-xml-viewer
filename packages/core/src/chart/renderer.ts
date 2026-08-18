@@ -4978,6 +4978,43 @@ function chartStyleRoleSecondaryAxisLine(
   };
 }
 
+function isClassicMarkerSeries(chart: ChartModel, series: ChartSeries): boolean {
+  const family = series.seriesType ?? chart.chartType;
+  return family === 'line'
+    || family === 'stackedLine'
+    || family === 'stackedLinePct'
+    || family === 'scatter'
+    || family === 'radar'
+    || family === 'stock';
+}
+
+function chartStyleRoleMarker(
+  chart: ChartModel,
+  direct: ChartSeries,
+  index: number,
+  count: number,
+): ChartSeries {
+  const linked = chart.chartStyleRoles?.dataPointMarker;
+  if (!linked || !isClassicMarkerSeries(chart, direct)
+    || direct.showMarker === false || direct.markerSymbol === 'none') return direct;
+  const fillApplies = linked.fillNoStyle !== true;
+  const lineApplies = linked.lineNoStyle !== true;
+  const markerFill = direct.markerFill
+    ?? (fillApplies && linked.fillHidden === true
+      ? '00000000'
+      : fillApplies ? chartExStyleColor(chart, linked, 'fill', index, count) : null);
+  const markerLine = direct.markerLine
+    ?? (lineApplies && linked.lineHidden === true
+      ? '00000000'
+      : lineApplies ? chartExStyleColor(chart, linked, 'line', index, count) : null);
+  const markerLineWidthEmu = direct.markerLineWidthEmu
+    ?? (lineApplies ? linked.lineWidthEmu : null);
+  if (markerFill === direct.markerFill
+    && markerLine === direct.markerLine
+    && markerLineWidthEmu === direct.markerLineWidthEmu) return direct;
+  return { ...direct, markerFill, markerLine, markerLineWidthEmu };
+}
+
 /** Materialize the linked decoration roles that an optional family renderer
  * consumes directly from `ChartSeries`. Keeping this projection in core means
  * the 2-D, 3-D, DOCX, XLSX, and PPTX paths receive one effective precedence
@@ -4990,11 +5027,14 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     && !chart.chartStyleRoles?.gridlineMajor
     && !chart.chartStyleRoles?.gridlineMinor
     && !chart.chartStyleRoles?.categoryAxis
-    && !chart.chartStyleRoles?.valueAxis) {
+    && !chart.chartStyleRoles?.valueAxis
+    && !chart.chartStyleRoles?.dataPointMarker) {
     return chart;
   }
   let changed = false;
-  const series = chart.series.map(item => {
+  const series = chart.series.map((sourceItem, seriesIndex) => {
+    const item = chartStyleRoleMarker(chart, sourceItem, seriesIndex, chart.series.length);
+    changed ||= item !== sourceItem;
     const errBars = chart.chartStyleRoles?.errorBar ? item.errBars?.map(errorBar => {
       const effective = chartStyleRoleErrorBar(chart, errorBar);
       changed ||= effective.color !== errorBar.color

@@ -5690,6 +5690,61 @@ describe('CH9 — line/area consume marker detail (§21.2.2.32)', () => {
     expect(blueStrokes.every(stroke => stroke.lineWidth === 2)).toBe(true);
   });
 
+  it('uses linked dataPointMarker paint behind direct classic-marker formatting', () => {
+    const linked = ringRecordingCtx();
+    renderChart(linked.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      catAxisHidden: true,
+      valAxisHidden: true,
+      series: [series({
+        values: [3, 5], showMarker: true, markerSymbol: 'circle', lineHidden: true,
+      })],
+      chartStyleRoles: {
+        dataPointMarker: {
+          fillColors: ['AABBCC'], lineColors: ['CCBBAA'], lineWidthEmu: 19_050,
+        },
+      },
+    }), RECT, 1);
+    expect(linked.fills.filter(fill => fill === '#AABBCC')).toHaveLength(2);
+    expect(linked.strokes.filter(stroke =>
+      stroke.strokeStyle === '#CCBBAA' && stroke.lineWidth === 1.5
+    )).toHaveLength(2);
+
+    const direct = ringRecordingCtx();
+    renderChart(direct.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A'],
+      catAxisHidden: true,
+      valAxisHidden: true,
+      series: [series({
+        values: [3], showMarker: true, markerSymbol: 'circle', lineHidden: true,
+        markerFill: '112233', markerLine: '332211',
+      })],
+      chartStyleRoles: {
+        dataPointMarker: { fillHidden: true, lineHidden: true },
+      },
+    }), RECT, 1);
+    expect(direct.fills).toContain('#112233');
+    expect(direct.strokes.some(stroke => stroke.strokeStyle === '#332211')).toBe(true);
+  });
+
+  it('keeps the marker role off bubble points, which have no classic CT_Marker', () => {
+    const rec = ringRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble',
+      categories: ['1'],
+      catAxisHidden: true,
+      valAxisHidden: true,
+      series: [series({ values: [3], categories: ['1'], bubbleSizes: [10] })],
+      chartStyleRoles: {
+        dataPointMarker: { fillColors: ['AABBCC'], lineColors: ['CCBBAA'] },
+      },
+    }), RECT, 1);
+    expect(rec.fills).not.toContain('#AABBCC');
+    expect(rec.strokes.some(stroke => stroke.strokeStyle === '#CCBBAA')).toBe(false);
+  });
+
   it('does not revive a noFill series line in the legend from its width or dash', () => {
     const rec = strokedPolylineCtx();
     renderChart(rec.ctx, baseModel({
