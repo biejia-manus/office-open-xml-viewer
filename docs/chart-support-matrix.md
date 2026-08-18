@@ -50,7 +50,7 @@ observed input boundary is recorded in
 | ID | Family / property | Parser | Model | Renderer | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | C-LINE-001 | `lineChart` standard, stacked, percent-stacked lines | Yes | Yes | Yes | Supported | Includes markers, smoothing, blank-cell policy, data labels, error bars, and trendlines. |
-| C-LINE-002 | `lineChart/dropLines` | Yes | Yes | Partial | Partial | Direct line paint and owning line group are retained; geometry paints below its series. The current line renderer targets its bottom category axis, so an authored interior category-axis crossing remains open. |
+| C-LINE-002 | `lineChart/dropLines` | Yes | Yes | Yes | Supported | One owning-group envelope per category spans the effective category-axis crossing and all plotted group points. Interior crossings and paint order are Office-verified. |
 | C-LINE-003 | `lineChart/hiLowLines` | Yes | Yes | Yes | Supported | Valid on ordinary line charts as well as stock charts. |
 | C-LINE-004 | `lineChart/upDownBars` | Yes | Yes | Yes | Partial | Direct paint is supported. Empty-paint automatic white/black styling is limited to the retained legacy Style 2 observation. |
 | C-LINE-005 | Multiple `lineChart` groups in one plot area | Yes | Yes | Partial | Partial | Decoration ownership is retained and consumed; other group-level line properties still require individual provenance rows. |
@@ -78,17 +78,17 @@ observed input boundary is recorded in
 | ID | Property | Parser | Model | Renderer | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | C-AXIS-001 | Linear/date/log axes, authored bounds and units | Yes | Yes | Yes | Partial | Fractional month/year date-axis units require an Office compatibility boundary. |
-| C-AXIS-002 | Category `lblAlgn` and `lblOffset` | No | No | No | Missing | Default values often mask the omission; non-default values are unsupported. |
-| C-AXIS-003 | Axis crossing (`crosses`, `crossesAt`, and `crossBetween`) | Yes | Yes | Partial | Partial | Bar/column and Surface boundaries have focused coverage. Interior crossing remains inconsistent across line/area families. |
+| C-AXIS-002 | Category `lblAlgn` and `lblOffset` | Yes | Yes | Yes | Supported | Category/date and auxiliary category axes retain both properties; the shared renderer applies interval alignment and the specified percentage of its family-specific default label gap. |
+| C-AXIS-003 | Axis crossing (`crosses`, `crossesAt`, and `crossBetween`) | Yes | Yes | Partial | Partial | Bar/column, line, area, and Surface use one effective crossing for axis geometry, ticks, labels, and group decorations. Remaining numeric-X and arbitrary combination boundaries are still under audit. |
 | C-LABEL-001 | Value/category/series/percent labels, separators, leader lines, and manual layout | Yes | Yes | Yes | Supported | Per-point and series-level overrides are retained. |
 | C-LABEL-002 | `showBubbleSize` | Yes | Yes | Yes | Supported | Series and point-level flags compose the authored bubble-size cache value into the label. |
-| C-LABEL-003 | `showLegendKey` | No | No | No | Missing | The label-local legend key is independent from the chart legend. |
-| C-LABEL-004 | `showDLblsOverMax` | No | No | No | Missing | Controls labels outside the value-axis maximum. |
+| C-LABEL-003 | `showLegendKey` | Yes | Yes | Yes | Supported | Series- and point-level flags use the effective series/point key paint in bounded, rich, callout, and manually positioned labels. |
+| C-LABEL-004 | `showDLblsOverMax` | Yes | Yes | Yes | Supported | Labels beyond the effective primary or secondary value-axis maximum are suppressed consistently, including stacked endpoints and classic 3-D Cartesian charts. |
 | C-LEGEND-001 | Position, text, fill, line, and manual layout | Yes | Yes | Yes | Supported | |
-| C-LEGEND-002 | `legend/overlay` and per-entry delete/style | No | No | No | Missing | Explicit overlay and `legendEntry` overrides are not represented. |
-| C-SPACE-001 | `roundedCorners` | No | No | No | Missing | Affects the outer chart-space shape. |
-| C-SPACE-002 | `plotVisOnly` hidden-source behavior | No | No | No | Missing | Formula/cache resolution can currently mask the omission. |
-| C-TABLE-001 | Plot-area data table content and borders | Yes | Yes | Partial | Partial | Bar/column layout consumes it. Shared placement for all axis-based classic families remains open. |
+| C-LEGEND-002 | `legend/overlay` and per-entry delete/style | Yes | Yes | Yes | Supported | Overlay legends do not reserve plot space; source-indexed deletion and text overrides share one measured legend model in 2-D and 3-D paths. |
+| C-SPACE-001 | `roundedCorners` | Yes | Yes | Yes | Supported | The authored flag applies one bounded Office-compatible outer geometry to fill, clipping, and border; structured chart-space fill remains authoritative. |
+| C-SPACE-002 | `plotVisOnly` hidden-source behavior | Yes | Yes | Yes | Supported | Worksheet row/column visibility is projected over caches before shared layout, stacking, labels, legends, and extent planning. |
+| C-TABLE-001 | Plot-area data table content and borders | Yes | Yes | Yes | Supported | One measured layout serves column, horizontal bar, line, area, stock, and combination charts. Scatter's authored table is ignored according to the retained Office boundary. |
 
 ## Chart Style roles
 

@@ -4850,17 +4850,30 @@ function drawLineGroupDecorations(
     }
 
     if (decoration.dropLines && applyDecorationLineStyle(ctx, decoration.dropLines, ptToPx)) {
-      for (const series of members) {
-        const toY = yMapFor(series);
-        const axisY = categoryAxisYFor(series);
-        for (let index = 0; index < pointCount; index++) {
+      // Office paints one envelope per category, not one line per series. The
+      // envelope includes the effective category-axis crossing and every
+      // plotted point in the owning line group. This is observable in vector
+      // output for both ordinary and interior crossings; painting per-series
+      // segments produces coincident seams and the wrong visible endpoints.
+      for (let index = 0; index < pointCount; index++) {
+        let minY = Infinity;
+        let maxY = -Infinity;
+        let hasPoint = false;
+        for (const series of members) {
           const value = valueFor(series, index);
           if (value == null || !Number.isFinite(value)) continue;
-          ctx.beginPath();
-          ctx.moveTo(toX(index), axisY);
-          ctx.lineTo(toX(index), toY(value));
-          ctx.stroke();
+          const pointY = yMapFor(series)(value);
+          const axisY = categoryAxisYFor(series);
+          if (!Number.isFinite(pointY) || !Number.isFinite(axisY)) continue;
+          minY = Math.min(minY, pointY, axisY);
+          maxY = Math.max(maxY, pointY, axisY);
+          hasPoint = true;
         }
+        if (!hasPoint || Math.abs(maxY - minY) < 0.01) continue;
+        ctx.beginPath();
+        ctx.moveTo(toX(index), minY);
+        ctx.lineTo(toX(index), maxY);
+        ctx.stroke();
       }
     }
 
@@ -4886,13 +4899,22 @@ function drawLineGroupDecorations(
   }
 }
 
-function categoryAxisCrossingValue(chart: ChartModel, min: number, max: number): number {
-  if (chart.catAxisCrossesAt != null && Number.isFinite(chart.catAxisCrossesAt)) {
-    return clamp(chart.catAxisCrossesAt, min, max);
+function axisCrossingValue(
+  crossesAt: number | null | undefined,
+  crosses: string | null | undefined,
+  min: number,
+  max: number,
+): number {
+  if (crossesAt != null && Number.isFinite(crossesAt)) {
+    return clamp(crossesAt, min, max);
   }
-  if (chart.catAxisCrosses === 'max') return max;
-  if (chart.catAxisCrosses === 'min') return min;
+  if (crosses === 'max') return max;
+  if (crosses === 'min') return min;
   return clamp(0, min, max);
+}
+
+function categoryAxisCrossingValue(chart: ChartModel, min: number, max: number): number {
+  return axisCrossingValue(chart.catAxisCrossesAt, chart.catAxisCrosses, min, max);
 }
 
 function renderLineChart(
@@ -5181,6 +5203,19 @@ function renderLineChart(
   const toYSecondary = secScale ? secScale.makeToY(py0, ph) : toY;
   const yMapFor = (s: ChartSeries): ((v: number) => number) =>
     isSecondarySeries(s) ? toYSecondary : toY;
+  const primaryCategoryAxisY = toY(
+    categoryAxisCrossingValue(chart, plan.min, plan.max),
+  );
+  const secondaryCategoryAxisY = sec && secScale
+    ? toYSecondary(axisCrossingValue(
+      chart.secondaryCatAxis?.crossesAt,
+      chart.secondaryCatAxis?.crosses,
+      secScale.min,
+      secScale.max,
+    ))
+    : primaryCategoryAxisY;
+  const categoryAxisYFor = (series: ChartSeries): number =>
+    isSecondarySeries(series) ? secondaryCategoryAxisY : primaryCategoryAxisY;
   const primaryCatLine = resolveAxisLine(chart.catAxisLineColor, chart.catAxisLineWidthEmu, ptToPx);
   const primaryValLine = resolveAxisLine(chart.valAxisLineColor, chart.valAxisLineWidthEmu, ptToPx);
   const primaryCatTickColor = chart.catAxisLineColor != null ? primaryCatLine.color : undefined;
@@ -5260,7 +5295,10 @@ function renderLineChart(
   // suppressing the rule and tick marks while retaining labels/gridlines.
   if (!chart.catAxisHidden && !chart.catAxisLineHidden) {
     ctx.strokeStyle = primaryCatLine.color; ctx.lineWidth = primaryCatLine.width;
-    ctx.beginPath(); ctx.moveTo(px0, py0 + ph); ctx.lineTo(px0 + pw, py0 + ph); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(px0, primaryCategoryAxisY);
+    ctx.lineTo(px0 + pw, primaryCategoryAxisY);
+    ctx.stroke();
   }
   if (!chart.valAxisHidden && !chart.valAxisLineHidden) {
     ctx.strokeStyle = primaryValLine.color; ctx.lineWidth = primaryValLine.width;
@@ -5280,7 +5318,7 @@ function renderLineChart(
   );
   drawLineGroupDecorations(
     ctx, chart, n, toX, yMapFor,
-    () => py0 + ph,
+    categoryAxisYFor,
     (series, index) => {
       const seriesIndex = lineSeriesIndex.get(series);
       return seriesIndex != null ? plotted(seriesIndex, index) : null;
@@ -5486,12 +5524,12 @@ function renderLineChart(
       ? dateAxisPlan.majorTicks.map(tick => px0 + tick.fraction * pw)
       : Array.from({ length: Math.ceil(n / tickInterval) }, (_, index) => toX(index * tickInterval));
     for (const tx of majorTickXs) {
-      drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', py0 + ph, tx, primaryCatTickColor, primaryCatTickWidth, false, chart.catAxisLineHidden, 'major', ptToPx);
+      drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', primaryCategoryAxisY, tx, primaryCatTickColor, primaryCatTickWidth, false, chart.catAxisLineHidden, 'major', ptToPx);
     }
     if (chart.catAxisMinorTickMark && chart.catAxisMinorTickMark !== 'none' && dateAxisPlan) {
       for (const tick of dateAxisPlan.minorTicks) {
         drawAxisTick(
-          ctx, chart.catAxisMinorTickMark, 'cat', py0 + ph,
+          ctx, chart.catAxisMinorTickMark, 'cat', primaryCategoryAxisY,
           px0 + tick.fraction * pw, primaryCatTickColor, primaryCatTickWidth,
           false, chart.catAxisLineHidden, 'minor', ptToPx,
         );
@@ -5538,7 +5576,11 @@ function renderLineChart(
           : 5,
         chart.catAxisLabelOffsetPercent,
       );
-      drawRotatedCatLabel(ctx, label, tx, py0 + ph + gap, rotRad);
+      const labelPosition = chart.catAxisTickLabelPos ?? 'nextTo';
+      const labelAxisY = labelPosition === 'nextTo'
+        ? primaryCategoryAxisY
+        : labelPosition === 'high' ? py0 : py0 + ph;
+      drawRotatedCatLabel(ctx, label, tx, labelAxisY + gap, rotRad);
     }
   }
 
@@ -6767,6 +6809,19 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
   const toYSecondary = secScale ? secScale.makeToY(py0, ph) : toY;
   const yMapFor = (s: ChartSeries): ((v: number) => number) =>
     isSecondarySeries(s) ? toYSecondary : toY;
+  const primaryCategoryAxisY = toY(
+    categoryAxisCrossingValue(chart, areaPlan.min, areaPlan.max),
+  );
+  const secondaryCategoryAxisY = sec && secScale
+    ? toYSecondary(axisCrossingValue(
+      chart.secondaryCatAxis?.crossesAt,
+      chart.secondaryCatAxis?.crosses,
+      secScale.min,
+      secScale.max,
+    ))
+    : primaryCategoryAxisY;
+  const categoryAxisYFor = (series: ChartSeries): number =>
+    isSecondarySeries(series) ? secondaryCategoryAxisY : primaryCategoryAxisY;
 
   // Axis line colour/weight from `<c:*Ax><c:spPr><a:ln>` (EMU → px at scale),
   // mirroring the bar/line renderers. Office leaves the value-axis rule off by
@@ -6908,7 +6963,6 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
   // for an interior crossing (the line spans points on both sides). Paint after
   // the opaque area fills so the authored geometry remains visible, but before
   // point markers and labels.
-  const categoryAxisY = toY(categoryAxisCrossingValue(chart, areaPlan.min, areaPlan.max));
   const areaGroupMembers = new Map<number, Array<{ series: ChartSeries; areaIndex: number }>>();
   for (let areaIndex = 0; areaIndex < areaSeries.length; areaIndex++) {
     const series = areaSeries[areaIndex].series;
@@ -6923,17 +6977,18 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
     }
     const members = areaGroupMembers.get(decoration.groupIndex) ?? [];
     for (let categoryIndex = 0; categoryIndex < n; categoryIndex++) {
-      let minY = categoryAxisY;
-      let maxY = categoryAxisY;
+      let minY = Infinity;
+      let maxY = -Infinity;
       let hasPoint = false;
       for (const member of members) {
         if (member.series.values[categoryIndex] == null) continue;
         const pointY = yMapFor(member.series)(
           plottedAreaValue(member.areaIndex, categoryIndex),
         );
-        if (!Number.isFinite(pointY)) continue;
-        minY = Math.min(minY, pointY);
-        maxY = Math.max(maxY, pointY);
+        const axisY = categoryAxisYFor(member.series);
+        if (!Number.isFinite(pointY) || !Number.isFinite(axisY)) continue;
+        minY = Math.min(minY, pointY, axisY);
+        maxY = Math.max(maxY, pointY, axisY);
         hasPoint = true;
       }
       if (!hasPoint || Math.abs(maxY - minY) < 0.01) continue;
@@ -7129,7 +7184,10 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
   // gives it a colour, matching the bar/line renderers.
   if (!chart.catAxisHidden && !chart.catAxisLineHidden) {
     ctx.strokeStyle = catLineColor; ctx.lineWidth = catLineW;
-    ctx.beginPath(); ctx.moveTo(px0, py0 + ph); ctx.lineTo(px0 + pw, py0 + ph); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(px0, primaryCategoryAxisY);
+    ctx.lineTo(px0 + pw, primaryCategoryAxisY);
+    ctx.stroke();
   }
   if (!chart.valAxisHidden && !chart.valAxisLineHidden && chart.valAxisLineColor != null) {
     ctx.strokeStyle = valLineColor; ctx.lineWidth = valLineW;
@@ -7142,18 +7200,18 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
     if (dateAxisPlan) {
       for (const tick of dateAxisPlan.majorTicks) {
         drawAxisTick(
-          ctx, chart.catAxisMajorTickMark, 'cat', py0 + ph,
+          ctx, chart.catAxisMajorTickMark, 'cat', primaryCategoryAxisY,
           px0 + tick.fraction * pw, catLineColor, catLineW,
           false, chart.catAxisLineHidden, 'major', ptToPx,
         );
       }
     } else if (between) {
       for (let ci = 0; ci <= n; ci += tickSkip) {
-        drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', py0 + ph, px0 + (ci / n) * pw, catLineColor, catLineW, false, chart.catAxisLineHidden, 'major', ptToPx);
+        drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', primaryCategoryAxisY, px0 + (ci / n) * pw, catLineColor, catLineW, false, chart.catAxisLineHidden, 'major', ptToPx);
       }
     } else {
       for (let ci = 0; ci < n; ci += tickSkip) {
-        drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', py0 + ph, toX(ci), catLineColor, catLineW, false, chart.catAxisLineHidden, 'major', ptToPx);
+        drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', primaryCategoryAxisY, toX(ci), catLineColor, catLineW, false, chart.catAxisLineHidden, 'major', ptToPx);
       }
     }
   }
@@ -7165,7 +7223,7 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
   ) {
     for (const tick of dateAxisPlan.minorTicks) {
       drawAxisTick(
-        ctx, chart.catAxisMinorTickMark, 'cat', py0 + ph,
+        ctx, chart.catAxisMinorTickMark, 'cat', primaryCategoryAxisY,
         px0 + tick.fraction * pw, catLineColor, catLineW,
         false, chart.catAxisLineHidden, 'minor', ptToPx,
       );
@@ -7222,7 +7280,11 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
         chart.catAxisLabelOffsetPercent,
       );
       ctx.textAlign = anchor?.textAlign ?? 'center';
-      ctx.fillText(label, anchor ? px0 + anchor.fraction * pw : entry.x, py0 + ph + gap);
+      const labelPosition = chart.catAxisTickLabelPos ?? 'nextTo';
+      const labelAxisY = labelPosition === 'nextTo'
+        ? primaryCategoryAxisY
+        : labelPosition === 'high' ? py0 : py0 + ph;
+      ctx.fillText(label, anchor ? px0 + anchor.fraction * pw : entry.x, labelAxisY + gap);
     }
   }
 

@@ -10052,7 +10052,9 @@ describe('classic line-chart group decorations', () => {
       segment.ss === color && Math.abs(segment.x1 - segment.x0) < 0.01
       && Math.abs(segment.y1 - segment.y0) > 1
     );
-    expect(vertical('#111111')).toHaveLength(10);
+    // Office vector output has one group-owned envelope per category. It does
+    // not paint one coincident drop line for every member series.
+    expect(vertical('#111111')).toHaveLength(5);
     expect(vertical('#222222')).toHaveLength(5);
     const firstDecoration = rec.segs.findIndex(segment => segment.ss === '#111111');
     const firstSeries = rec.segs.findIndex(segment => segment.ss === '#4472C4');
@@ -10126,7 +10128,62 @@ describe('classic line-chart group decorations', () => {
     renderChart(rec.ctx, model, RECT, 1);
     expect(rec.segs.filter(segment =>
       segment.ss === '#111111' && Math.abs(segment.x1 - segment.x0) < 0.01
-    )).toHaveLength(10);
+    )).toHaveLength(5);
+  });
+
+  it('uses one interior crossing for the axis, labels, and drop-line envelopes', () => {
+    const rec = segRecordingCtx();
+    const model = decoratedLine();
+    model.catAxisCrossesAt = 75;
+    model.catAxisLineColor = 'ABCDEF';
+    model.catAxisMajorTickMark = 'none';
+    model.series[0].values = [100, 110, 105, 120, 115];
+    model.series[1].values = [115, 105, 125, 110, 130];
+
+    renderChart(rec.ctx, model, RECT, 1);
+
+    const axis = rec.segs.find(segment =>
+      segment.ss === '#ABCDEF'
+      && Math.abs(segment.y1 - segment.y0) < 0.01
+      && Math.abs(segment.x1 - segment.x0) > 100
+    );
+    expect(axis).toBeDefined();
+    const dropLines = rec.segs.filter(segment =>
+      segment.ss === '#111111'
+      && Math.abs(segment.x1 - segment.x0) < 0.01
+      && Math.abs(segment.y1 - segment.y0) > 1
+    );
+    expect(dropLines).toHaveLength(5);
+    for (const line of dropLines) {
+      expect(Math.max(line.y0, line.y1)).toBeCloseTo(axis!.y0, 6);
+    }
+    const categoryLabels = rec.texts.filter(text => text.text.startsWith('Day'));
+    expect(categoryLabels).toHaveLength(5);
+    expect(categoryLabels.every(text => text.y > axis!.y0)).toBe(true);
+  });
+
+  it('keeps low category labels at the plot edge when the axis crosses inside', () => {
+    const render = (position: 'nextTo' | 'low'): { axisY: number; labelY: number } => {
+      const rec = segRecordingCtx();
+      const model = decoratedLine();
+      model.catAxisCrossesAt = 75;
+      model.catAxisLineColor = 'ABCDEF';
+      model.catAxisTickLabelPos = position;
+      model.catAxisMajorTickMark = 'none';
+      renderChart(rec.ctx, model, RECT, 1);
+      const axis = rec.segs.find(segment =>
+        segment.ss === '#ABCDEF' && Math.abs(segment.y1 - segment.y0) < 0.01
+      );
+      const label = rec.texts.find(text => text.text === 'Day1');
+      expect(axis).toBeDefined();
+      expect(label).toBeDefined();
+      return { axisY: axis!.y0, labelY: label!.y };
+    };
+
+    const nextTo = render('nextTo');
+    const low = render('low');
+    expect(nextTo.labelY).toBeGreaterThan(nextTo.axisY);
+    expect(low.labelY).toBeGreaterThan(nextTo.labelY);
   });
 });
 
@@ -10238,6 +10295,34 @@ describe('classic area-chart group drop lines', () => {
     expect(atTen).toHaveLength(2);
     expect(Math.abs(atTen[0].y1 - atTen[0].y0))
       .toBeLessThan(Math.abs(atZero[0].y1 - atZero[0].y0));
+  });
+
+  it('moves the visible axis, ticks, and next-to labels to the same interior crossing', () => {
+    const rec = segRecordingCtx();
+    const model = baseModel({
+      chartType: 'area', categories: ['A', 'B'], valMin: 0, valMax: 30,
+      catAxisCrossesAt: 10, catAxisLineColor: 'ABCDEF',
+      catAxisMajorTickMark: 'out', valAxisMajorGridlines: false,
+      series: [series({ values: [18, 22] })],
+    });
+    renderChart(rec.ctx, model, RECT, 1);
+
+    const axis = rec.segs.find(segment =>
+      segment.ss === '#ABCDEF'
+      && Math.abs(segment.y1 - segment.y0) < 0.01
+      && Math.abs(segment.x1 - segment.x0) > 100
+    );
+    expect(axis).toBeDefined();
+    const ticks = rec.segs.filter(segment =>
+      segment.ss === '#ABCDEF'
+      && Math.abs(segment.x1 - segment.x0) < 0.01
+      && Math.abs(segment.y1 - segment.y0) > 0
+    );
+    expect(ticks.length).toBeGreaterThan(0);
+    expect(ticks.every(tick => Math.min(tick.y0, tick.y1) >= axis!.y0 - 0.01)).toBe(true);
+    const labels = rec.texts.filter(text => text.text === 'A' || text.text === 'B');
+    expect(labels).toHaveLength(2);
+    expect(labels.every(text => text.y > axis!.y0)).toBe(true);
   });
 });
 
