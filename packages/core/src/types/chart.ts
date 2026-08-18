@@ -1131,6 +1131,10 @@ export interface ChartModel {
   chartStyleColorPalette?: Array<string | null> | null;
   /** `<cs:colorStyle meth>` used when selecting a linked role color. */
   chartStyleColorMethod?: string | null;
+  /** Linked `dataPointMarkerLayout@size`, in points (2..72). */
+  chartStyleMarkerSizePt?: number | null;
+  /** Linked `dataPointMarkerLayout@symbol` for marker-bearing data points. */
+  chartStyleMarkerSymbol?: string | null;
   /** Effective `<cs:dataPoint>` style. */
   chartexDataPointStyle?: ChartExElementStyle | null;
   /** Effective `<cs:dataPointLine>` style for whiskers/median/connectors. */
@@ -1139,9 +1143,9 @@ export interface ChartModel {
   chartexSeriesLineStyle?: ChartExElementStyle | null;
   /** Effective `<cs:dataPointMarker>` style for raw/outlier/mean markers. */
   chartexDataPointMarkerStyle?: ChartExElementStyle | null;
-  /** Chart Style `dataPointMarkerLayout@size`, in points (2..72). */
+  /** Legacy ChartEx alias for `chartStyleMarkerSizePt`. */
   chartexMarkerSizePt?: number | null;
-  /** Chart Style `dataPointMarkerLayout@symbol`. */
+  /** Legacy ChartEx alias for `chartStyleMarkerSymbol`. */
   chartexMarkerSymbol?: string | null;
   /** `<cx:series><cx:layoutPr><cx:visibility connectorLines>` for waterfall. */
   chartexConnectorLines?: boolean | null;

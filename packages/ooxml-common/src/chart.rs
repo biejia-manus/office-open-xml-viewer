@@ -710,6 +710,10 @@ pub struct ChartModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart_style_color_method: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_style_marker_size_pt: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_style_marker_symbol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chartex_data_point_style: Option<ChartExElementStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chartex_data_point_line_style: Option<ChartExElementStyle>,
@@ -5139,6 +5143,8 @@ pub fn parse_chartex_part_with_references_and_style_parts(
     let chartex_marker_symbol = marker_layout
         .and_then(|node| node.attribute("symbol"))
         .map(ToOwned::to_owned);
+    let chart_style_marker_size_pt = chartex_marker_size_pt;
+    let chart_style_marker_symbol = chartex_marker_symbol.clone();
     // [MS-ODRAWXML] CT_SeriesElementVisibilities: an authored false value
     // suppresses waterfall connector lines. Keep omission as `None` so the
     // renderer can preserve the layout's ordinary default without fabricating
@@ -5912,6 +5918,8 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         chart_style_roles,
         chart_style_color_palette: chartex_color_palette.clone(),
         chart_style_color_method: chartex_color_style_method.clone(),
+        chart_style_marker_size_pt,
+        chart_style_marker_symbol,
         chartex_color_palette,
         chartex_color_style_method,
         chartex_data_point_style,
@@ -7741,6 +7749,16 @@ pub fn parse_chart_part_with_references_and_style_parts(
             chart_style_color_method.as_deref(),
         )
     });
+    let marker_layout = style_doc
+        .as_ref()
+        .and_then(|document| child(document.root_element(), "dataPointMarkerLayout"));
+    let chart_style_marker_size_pt = marker_layout
+        .and_then(|node| node.attribute("size"))
+        .and_then(|value| value.parse::<u8>().ok())
+        .filter(|value| (2..=72).contains(value));
+    let chart_style_marker_symbol = marker_layout
+        .and_then(|node| node.attribute("symbol"))
+        .map(ToOwned::to_owned);
 
     // Determine chart type by finding the first recognized chart element
     let find_chart = |name: &str| {
@@ -9873,6 +9891,8 @@ pub fn parse_chart_part_with_references_and_style_parts(
         chart_style_roles,
         chart_style_color_palette,
         chart_style_color_method,
+        chart_style_marker_size_pt,
+        chart_style_marker_symbol,
         chartex_color_palette: None,
         chartex_color_style_method: None,
         chartex_data_point_style: None,
@@ -10178,6 +10198,8 @@ mod tests {
             chart_style_roles: None,
             chart_style_color_palette: None,
             chart_style_color_method: None,
+            chart_style_marker_size_pt: None,
+            chart_style_marker_symbol: None,
             chartex_color_palette: None,
             chartex_color_style_method: None,
             chartex_data_point_style: None,
@@ -15180,6 +15202,7 @@ Subtitle</a:t></a:r></a:p>
         );
         let style_xml = format!(
             r#"<cs:chartStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}">
+              <cs:dataPointMarkerLayout symbol="diamond" size="9"/>
               <cs:chartArea><cs:spPr><a:solidFill><a:srgbClr val="112233"/></a:solidFill></cs:spPr></cs:chartArea>
               <cs:dropLine><cs:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:ln></cs:spPr></cs:dropLine>
               <cs:gridlineMinor><cs:spPr><a:ln><a:noFill/></a:ln></cs:spPr></cs:gridlineMinor>
@@ -15200,6 +15223,8 @@ Subtitle</a:t></a:r></a:p>
         .expect("classic chart parses");
 
         assert_eq!(model.chart_style_color_method.as_deref(), Some("cycle"));
+        assert_eq!(model.chart_style_marker_size_pt, Some(9));
+        assert_eq!(model.chart_style_marker_symbol.as_deref(), Some("diamond"));
         assert_eq!(
             model.chart_style_color_palette.as_ref().map(Vec::len),
             Some(2)
@@ -15522,6 +15547,8 @@ Subtitle</a:t></a:r></a:p>
         assert!(!m.val_axis_line_hidden);
         assert_eq!(m.val_axis_gridline_color.as_deref(), Some("D9D9D9"));
         assert_eq!(m.val_axis_gridline_width_emu, Some(9525));
+        assert_eq!(m.chart_style_marker_size_pt, Some(5));
+        assert_eq!(m.chart_style_marker_symbol.as_deref(), Some("circle"));
         assert!(
             m.chartex_box
                 .as_ref()

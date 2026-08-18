@@ -154,6 +154,7 @@ export interface ChartErrBars {
     color?: string;
     lineWidthEmu?: number;
     dash?: string;
+    hidden?: boolean;
 }
 export interface ChartexBoxSeries {
     name: string;
@@ -441,6 +442,11 @@ export interface ChartModel {
     chartexAccents?: string[] | null;
     chartexColorPalette?: Array<string | null> | null;
     chartexColorStyleMethod?: string | null;
+    chartStyleRoles?: Partial<Record<ChartStyleRole, ChartExElementStyle>> | null;
+    chartStyleColorPalette?: Array<string | null> | null;
+    chartStyleColorMethod?: string | null;
+    chartStyleMarkerSizePt?: number | null;
+    chartStyleMarkerSymbol?: string | null;
     chartexDataPointStyle?: ChartExElementStyle | null;
     chartexDataPointLineStyle?: ChartExElementStyle | null;
     chartexSeriesLineStyle?: ChartExElementStyle | null;
@@ -536,6 +542,8 @@ export interface ChartSeriesDataLabels {
     showLeaderLines?: boolean;
     leaderLineColor?: string;
     leaderLineWidthEmu?: number;
+    leaderLineHidden?: boolean;
+    leaderLineDash?: string;
 }
 export interface ChartStockBarPaint {
     fillColor?: string | null;
@@ -549,6 +557,7 @@ export interface ChartStockUpDownBarStyle {
     up: ChartStockBarPaint;
     down: ChartStockBarPaint;
 }
+type ChartStyleRole = 'axisTitle' | 'categoryAxis' | 'chartArea' | 'dataLabel' | 'dataLabelCallout' | 'dataPoint' | 'dataPoint3D' | 'dataPointLine' | 'dataPointMarker' | 'dataPointWireframe' | 'dataTable' | 'downBar' | 'dropLine' | 'errorBar' | 'floor' | 'gridlineMajor' | 'gridlineMinor' | 'hiLoLine' | 'leaderLine' | 'legend' | 'plotArea' | 'plotArea3D' | 'seriesAxis' | 'seriesLine' | 'title' | 'trendline' | 'trendlineLabel' | 'upBar' | 'valueAxis' | 'wall';
 export interface ChartSurfaceBandFormat {
     idx: number;
     fill?: SolidFill | GradientFill | PatternFill | null;

@@ -5729,6 +5729,37 @@ describe('CH9 — line/area consume marker detail (§21.2.2.32)', () => {
     expect(direct.strokes.some(stroke => stroke.strokeStyle === '#332211')).toBe(true);
   });
 
+  it('uses linked marker layout only when a classic marker omits symbol and size', () => {
+    const linked = markerRecordingCtx();
+    renderChart(linked.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      catAxisHidden: true,
+      valAxisHidden: true,
+      series: [series({ values: [3, 5], showMarker: true, lineHidden: true })],
+      chartStyleMarkerSymbol: 'square',
+      chartStyleMarkerSizePt: 12,
+    }), RECT, 1);
+    expect(linked.fillRects).toHaveLength(2);
+    expect(linked.fillRects.every(rect => rect.w === 12 && rect.h === 12)).toBe(true);
+
+    const direct = markerRecordingCtx();
+    renderChart(direct.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A'],
+      catAxisHidden: true,
+      valAxisHidden: true,
+      series: [series({
+        values: [3], showMarker: true, lineHidden: true,
+        markerSymbol: 'square', markerSize: 4,
+      })],
+      chartStyleMarkerSymbol: 'diamond',
+      chartStyleMarkerSizePt: 12,
+    }), RECT, 1);
+    expect(direct.fillRects).toHaveLength(1);
+    expect(direct.fillRects[0]).toMatchObject({ w: 4, h: 4 });
+  });
+
   it('keeps the marker role off bubble points, which have no classic CT_Marker', () => {
     const rec = ringRecordingCtx();
     renderChart(rec.ctx, baseModel({

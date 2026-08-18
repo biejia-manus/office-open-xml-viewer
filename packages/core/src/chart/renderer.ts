@@ -4995,24 +4995,35 @@ function chartStyleRoleMarker(
   count: number,
 ): ChartSeries {
   const linked = chart.chartStyleRoles?.dataPointMarker;
-  if (!linked || !isClassicMarkerSeries(chart, direct)
+  if (!isClassicMarkerSeries(chart, direct)
     || direct.showMarker === false || direct.markerSymbol === 'none') return direct;
-  const fillApplies = linked.fillNoStyle !== true;
-  const lineApplies = linked.lineNoStyle !== true;
+  const fillApplies = linked != null && linked.fillNoStyle !== true;
+  const lineApplies = linked != null && linked.lineNoStyle !== true;
   const markerFill = direct.markerFill
-    ?? (fillApplies && linked.fillHidden === true
+    ?? (fillApplies && linked?.fillHidden === true
       ? '00000000'
-      : fillApplies ? chartExStyleColor(chart, linked, 'fill', index, count) : null);
+      : fillApplies && linked ? chartExStyleColor(chart, linked, 'fill', index, count) : null);
   const markerLine = direct.markerLine
-    ?? (lineApplies && linked.lineHidden === true
+    ?? (lineApplies && linked?.lineHidden === true
       ? '00000000'
-      : lineApplies ? chartExStyleColor(chart, linked, 'line', index, count) : null);
+      : lineApplies && linked ? chartExStyleColor(chart, linked, 'line', index, count) : null);
   const markerLineWidthEmu = direct.markerLineWidthEmu
-    ?? (lineApplies ? linked.lineWidthEmu : null);
+    ?? (lineApplies ? linked?.lineWidthEmu : null);
+  const markerSize = direct.markerSize ?? chart.chartStyleMarkerSizePt;
+  const markerSymbol = direct.markerSymbol ?? chart.chartStyleMarkerSymbol;
   if (markerFill === direct.markerFill
     && markerLine === direct.markerLine
-    && markerLineWidthEmu === direct.markerLineWidthEmu) return direct;
-  return { ...direct, markerFill, markerLine, markerLineWidthEmu };
+    && markerLineWidthEmu === direct.markerLineWidthEmu
+    && markerSize === direct.markerSize
+    && markerSymbol === direct.markerSymbol) return direct;
+  return {
+    ...direct,
+    markerFill,
+    markerLine,
+    markerLineWidthEmu,
+    markerSize,
+    markerSymbol,
+  };
 }
 
 /** Materialize the linked decoration roles that an optional family renderer
@@ -5028,7 +5039,9 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     && !chart.chartStyleRoles?.gridlineMinor
     && !chart.chartStyleRoles?.categoryAxis
     && !chart.chartStyleRoles?.valueAxis
-    && !chart.chartStyleRoles?.dataPointMarker) {
+    && !chart.chartStyleRoles?.dataPointMarker
+    && chart.chartStyleMarkerSizePt == null
+    && chart.chartStyleMarkerSymbol == null) {
     return chart;
   }
   let changed = false;
@@ -12618,7 +12631,7 @@ function renderBoxWhiskerChart(
       // the box/whiskers when cx:visibility@nonoutliers is enabled.
       if (s.showNonoutliers) {
         const pR = observationMarkerRadiusPx;
-        const pointSymbol = chart.chartexMarkerSymbol ?? 'circle';
+        const pointSymbol = chart.chartStyleMarkerSymbol ?? chart.chartexMarkerSymbol ?? 'circle';
         for (const point of stats.inner) {
           if (pointSymbol === 'none') continue;
           const markerLineVisible = applySeriesLine(markerStyle, markerEdge ?? edge);
@@ -12670,7 +12683,7 @@ function renderBoxWhiskerChart(
 
       // Outlier dots.
       if (s.showOutliers) {
-        const pointSymbol = chart.chartexMarkerSymbol ?? 'circle';
+        const pointSymbol = chart.chartStyleMarkerSymbol ?? chart.chartexMarkerSymbol ?? 'circle';
         const oR = observationMarkerRadiusPx;
         for (const o of stats.outliers) {
           if (pointSymbol === 'none') continue;
