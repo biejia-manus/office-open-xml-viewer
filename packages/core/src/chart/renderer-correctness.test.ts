@@ -5990,6 +5990,88 @@ describe('CH9 — bubble scale and numeric-X trendlines', () => {
   });
 });
 
+describe('classic data-label legend keys (§21.2.2.179)', () => {
+  const baseChart = (): ChartModel => ({
+    chartType: 'clusteredBar',
+    categories: ['A', 'B'],
+    series: [{
+      name: 'Series 1',
+      values: [10, 20],
+      color: '4472C4',
+      seriesDataLabels: {
+        showVal: true,
+        showCatName: false,
+        showSerName: false,
+        showPercent: false,
+        showLegendKey: true,
+      },
+    }],
+    showLegend: false,
+  } as ChartModel);
+
+  it('paints the resolved series key beside each column label', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseChart(), { x: 0, y: 0, w: 500, h: 300 }, 1);
+
+    const keys = rec.rects.filter(rect =>
+      Math.abs(rect.w - 7) < 0.01 && Math.abs(rect.h - 7) < 0.01 && rect.fs === '#4472C4'
+    );
+    expect(keys).toHaveLength(2);
+    const labels = rec.texts.filter(call =>
+      (call.text === '10' || call.text === '20') && call.fillStyle === '#333'
+    );
+    expect(labels).toHaveLength(2);
+    expect(keys.every(key => labels.some(text =>
+      text.x > key.x + key.w && text.x - (key.x + key.w) <= 5
+    ))).toBe(true);
+  });
+
+  it('supports a key-only label and a per-point false override', () => {
+    const chart = baseChart();
+    const series = chart.series[0];
+    series.seriesDataLabels = {
+      showVal: false,
+      showCatName: false,
+      showSerName: false,
+      showPercent: false,
+      showLegendKey: true,
+    };
+    series.dataLabelOverrides = [{ idx: 1, text: '', showLegendKey: false }];
+    const rec = recordingCtx();
+    renderChart(rec.ctx, chart, { x: 0, y: 0, w: 500, h: 300 }, 1);
+
+    expect(rec.rects.filter(rect =>
+      Math.abs(rect.w - 7) < 0.01 && Math.abs(rect.h - 7) < 0.01 && rect.fs === '#4472C4'
+    )).toHaveLength(1);
+  });
+
+  it('uses the effective per-slice color for pie label keys', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, {
+      chartType: 'pie',
+      categories: ['A', 'B'],
+      series: [{
+        name: 'Series 1',
+        values: [1, 1],
+        color: '4472C4',
+        dataPointColors: ['FF0000', '00FF00'],
+        seriesDataLabels: {
+          showVal: false,
+          showCatName: true,
+          showSerName: false,
+          showPercent: false,
+          showLegendKey: true,
+          position: 'ctr',
+        },
+      }],
+      showLegend: false,
+    } as ChartModel, { x: 0, y: 0, w: 500, h: 300 }, 1);
+
+    const keys = rec.rects.filter(rect => Math.abs(rect.w - 7) < 0.01 && Math.abs(rect.h - 7) < 0.01);
+    expect(keys.map(rect => rect.fs)).toEqual(expect.arrayContaining(['#FF0000', '#00FF00']));
+  });
+});
+
 describe('CH9 — line/area per-point data labels (§21.2.2.45)', () => {
   for (const chartType of ['line', 'area'] as const) {
     it(`${chartType}: dataLabelOverrides render custom text at the point, and delete (empty) skips it`, () => {

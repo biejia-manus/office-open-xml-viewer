@@ -51,6 +51,16 @@ export function categoryLabelAnchorFraction(
   reversed: boolean,
   alignment: CategoryLabelAlignment,
 ): CategoryLabelAnchor {
+  // Omission preserves the chart family's established tick anchor. In
+  // particular, a mid-category axis labels the endpoint tick itself; treating
+  // omission as an authored `ctr` would instead move the end labels halfway
+  // into their neighbouring intervals.
+  if (alignment == null) {
+    return {
+      fraction: categoryPositionFraction(index, count, between, reversed),
+      textAlign: 'center',
+    };
+  }
   const last = Math.max(0, count - 1);
   const safeIndex = Number.isFinite(index) ? Math.max(0, Math.min(last, index)) : 0;
   let start: number;

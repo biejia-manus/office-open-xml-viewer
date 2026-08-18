@@ -808,6 +808,15 @@ interface LegendEntry {
   outlineJoin: string | null;
 }
 
+/** The legend key embedded in a classic data label (`<c:showLegendKey>`).
+ * Styling is the same resolved {@link LegendEntry} used by the chart legend;
+ * only placement belongs to the data-label layout. */
+interface DataLabelLegendKey {
+  entry: LegendEntry;
+  ptToPx: number;
+  shapeRotationDeg: number;
+}
+
 /** Build the legend entries for a chart. Pie/doughnut legends are
  *  category-driven (one row per data point of the first series, labeled by
  *  category); every other chart type is series-driven (one row per series). */
@@ -839,7 +848,12 @@ function buildLegendEntries(
         marker: null, // pie/doughnut/varyColors keys are always filled swatches.
         swatchStyle: legendSwatchStyle(chartType),
         fillPaint: point?.fillHidden === true
-          ? null : i < fillPaints.length ? fillPaints[i] : undefined,
+          ? null
+          : point?.color || first?.dataPointColors?.[i]
+            ? undefined
+            : i < fillPaints.length
+              ? fillPaints[i]
+              : first?.fillPattern ?? undefined,
         outlineColor: lineVisible ? (point?.lineColor ?? first?.lineColor ?? null) : null,
         outlineWidthEmu: lineVisible
           ? (point?.lineWidthEmu ?? first?.lineWidthEmu ?? null) : null,
@@ -878,6 +892,32 @@ function buildLegendEntries(
       outlineJoin: lineVisible ? (s.chartexStyle?.lineJoin ?? null) : null,
     };
   });
+}
+
+/** Resolve data-label keys through the chart's existing legend-style pipeline.
+ * ECMA-376 §21.2.2.179 only requires the corresponding legend key to be shown;
+ * it does not define a second paint model. Category-driven families therefore
+ * use the point entry, while every other family uses its series entry. */
+function createDataLabelLegendKeyResolver(
+  chart: ChartModel,
+  ptToPx: number,
+  shapeRotationDeg = 0,
+): (seriesIndex: number, pointIndex: number) => DataLabelLegendKey | undefined {
+  const categoryDriven = chartVariesColorsByPoint(chart)
+    || legendIsCategoryDriven(chart.chartType);
+  const entries = buildLegendEntries(
+    chart.series,
+    chart.chartType,
+    chart.scatterStyle,
+    chartVariesColorsByPoint(chart),
+    chart.categories,
+    [],
+    chart.varyColors !== false,
+  );
+  return (seriesIndex, pointIndex) => {
+    const entry = entries[categoryDriven ? pointIndex : seriesIndex];
+    return entry ? { entry, ptToPx, shapeRotationDeg } : undefined;
+  };
 }
 
 /** Resolved legend text styling (CH10). `fontFamily` already carries the
@@ -2669,6 +2709,7 @@ function drawBarDataLabel(
   manualLayout?: ChartDataLabelOverride['manualLayout'],
   negative = false,
   rich?: RichDataLabelOptions,
+  legendKey?: DataLabelLegendKey,
 ): void {
   const rect = orient === 'vertical'
     ? { x: bx, y: by, w: barW, h: barL }
@@ -2683,6 +2724,7 @@ function drawBarDataLabel(
     manualLayout,
     layoutReferenceRect,
     rich,
+    legendKey,
   );
 }
 
@@ -2743,6 +2785,7 @@ function renderBarChart(
   const areaSeries = chart.series.filter(s => s.seriesType === 'area');
   const scatterSeries = chart.series.filter(s => s.seriesType === 'scatter');
   const sourceSeriesIndices = new Map(chart.series.map((series, index) => [series, index]));
+  const dataLabelLegendKey = createDataLabelLegendKeyResolver(chart, ptToPx);
 
   // Combo charts (bar + line) may bind the line series to a SECONDARY value
   // axis drawn on the right (ECMA-376 §21.2.2.* — a second `<c:valAx>` with
@@ -3933,6 +3976,9 @@ function renderBarChart(
               labelFont,
               bold,
             ),
+            label.showLegendKey
+              ? dataLabelLegendKey(sourceSeriesIndices.get(s) ?? si, ci)
+              : undefined,
           );
         }
       } else {
@@ -4015,6 +4061,9 @@ function renderBarChart(
               labelFont,
               bold,
             ),
+            label.showLegendKey
+              ? dataLabelLegendKey(sourceSeriesIndices.get(s) ?? si, ci)
+              : undefined,
           );
         }
       }
@@ -4234,8 +4283,10 @@ function renderBarChart(
         const alignment = chart.catAxisLabelAlignment;
         const lx = alignment === 'l'
           ? boxStart
-          : alignment === 'r' ? boxEnd : (boxStart + boxEnd) / 2;
-        ctx.textAlign = alignment === 'l' ? 'left' : alignment === 'r' ? 'right' : 'center';
+          : alignment === 'ctr' ? (boxStart + boxEnd) / 2 : boxEnd;
+        // Horizontal bars historically right-align omitted category labels in
+        // the left gutter. `lblAlgn` only replaces that default when authored.
+        ctx.textAlign = alignment === 'l' ? 'left' : alignment === 'ctr' ? 'center' : 'right';
         ctx.textBaseline = 'middle';
         ctx.fillText(elideToWidth(ctx, raw, horizLabelMaxPx), lx, ly);
       }
@@ -4706,6 +4757,7 @@ function renderLineChart(
   const { x, y, w, h } = r;
   const cats = chartCategories(chart);
   const n = cats.length; if (n === 0) return;
+  const dataLabelLegendKey = createDataLabelLegendKeyResolver(chart, ptToPx);
 
   // stackedLine (`<c:grouping val="stacked">`) draws each series at the running
   // sum of the series below it; stackedLinePct (`percentStacked`) normalizes
@@ -5183,6 +5235,7 @@ function renderLineChart(
           },
           face => chartFontFamily(chart, face, 'minor'),
           isSecondarySeries(s) ? sec?.displayUnits : chart.valAxisDisplayUnits,
+          ci => dataLabelLegendKey(si, ci),
         );
       });
     }
@@ -6235,6 +6288,7 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
   const { x, y, w, h } = r;
   const cats = chartCategories(chart);
   const n = cats.length; if (n === 0) return;
+  const dataLabelLegendKey = createDataLabelLegendKeyResolver(chart, ptToPx);
   // A plot area can contain both `<c:areaChart>` and `<c:lineChart>` groups.
   // Only the ordered area-group series participate in the filled stack; line
   // series share the axes but remain independent overlays (§21.2.2.145).
@@ -6746,6 +6800,7 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
         undefined,
         face => chartFontFamily(chart, face, 'minor'),
         isSecondarySeries(s) ? sec?.displayUnits : chart.valAxisDisplayUnits,
+        ci => dataLabelLegendKey(chartIndex, ci),
       );
     }
   }
@@ -6812,6 +6867,7 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
       undefined,
       face => chartFontFamily(chart, face, 'minor'),
       isSecondarySeries(s) ? sec?.displayUnits : chart.valAxisDisplayUnits,
+      ci => dataLabelLegendKey(chartIndex, ci),
     );
     drawSeriesTrendlines(
       ctx, s, stroke, toX, yOf, ptToPx, undefined,
@@ -7365,6 +7421,10 @@ function drawPieRichLabels(
 ): void {
   const overrides = s.dataLabelOverrides ?? [];
   const overridesByIndex = indexPointOverrides(overrides);
+  const dataLabelLegendKey = createDataLabelLegendKeyResolver(
+    { ...chart, series: [{ ...s, categories: cats }] },
+    ptToPx,
+  );
   const calloutIndices = new Set<number>();
   for (let index = 0; index < vals.length; index++) {
     const override = overridesByIndex.get(index);
@@ -7405,6 +7465,7 @@ function drawPieRichLabels(
     const showSerName = ov?.showSerName ?? def.showSerName;
     const showVal     = ov?.showVal ?? def.showVal;
     const showPercent = ov?.showPercent ?? def.showPercent;
+    const showLegendKey = ov?.showLegendKey ?? def.showLegendKey ?? false;
     // §21.2.2.35 label composition. A per-point custom `<c:tx>` (non-empty
     // override text) wins outright; otherwise compose from the resolved flags.
     // Positioning is handled below (§21.2.2.48 `dLblPos`). Percent is the
@@ -7424,7 +7485,8 @@ function drawPieRichLabels(
       date1904: chart.date1904 ?? false,
       separator: ov?.separator ?? def.separator,
     });
-    if (!text) continue;
+    const legendKey = showLegendKey ? dataLabelLegendKey(0, i) : undefined;
+    if (!text && !legendKey) continue;
     const pos = ov?.position ?? def.position ?? 'bestFit';
     const outside = pos === 'outEnd';
     const sizeHpt = ov?.fontSizeHpt ?? def.fontSizeHpt;
@@ -7455,6 +7517,7 @@ function drawPieRichLabels(
         ov.manualLayout,
         { x: chartX, y: chartY, w: chartW, h: chartH },
         rich,
+        legendKey,
       );
       continue;
     }
@@ -7469,20 +7532,25 @@ function drawPieRichLabels(
         lineHeight, value => ctx.measureText(value).width,
       );
       if (rich && !richBlock) continue;
-      if (!richBlock && fittedLines.length === 0) continue;
+      if (!richBlock && fittedLines.length === 0 && !legendKey) continue;
       const textW = richBlock?.width ?? fittedLines.reduce(
         (max, line) => Math.max(max, ctx.measureText(line).width), 0,
       );
       const textH = richBlock?.height
         ?? (sizePx + Math.max(0, fittedLines.length - 1) * lineHeight);
+      const keyW = legendKey
+        ? (legendSwatchWidths([legendKey.entry], sizePx, ptToPx)[0] ?? 0)
+        : 0;
+      const keyH = legendKey ? legendSwatchHeight(legendKey.entry, sizePx, ptToPx) : 0;
       outsideLabels.push(createPieOutsideLabel(
         fittedLines, midAngle, cx2, cy2, outerR,
-        Math.min(textW, Math.max(0, chartW - sizePx)),
-        Math.min(textH, Math.max(0, chartH - sizePx)),
+        Math.min(keyW + (text ? LEGEND_SWATCH_TEXT_GAP : 0) + textW, Math.max(0, chartW - sizePx)),
+        Math.min(Math.max(keyH, textH), Math.max(0, chartH - sizePx)),
         lineHeight, sizePx, bold ?? false,
         fontColor ? `#${fontColor}` : '#333',
         labelFont,
         richBlock ?? undefined,
+        legendKey,
       ));
       continue;
     }
@@ -7532,6 +7600,7 @@ function drawPieRichLabels(
       undefined,
       { x: chartX, y: chartY, w: chartW, h: chartH },
       rich,
+      legendKey,
     );
   }
 
@@ -7548,6 +7617,7 @@ function drawPieRichLabels(
 interface PieOutsideLabel {
   lines: string[];
   rich?: RichDataLabelBlock;
+  legendKey?: DataLabelLegendKey;
   rimX: number;
   rimY: number;
   boxW: number;
@@ -7612,6 +7682,7 @@ function createPieOutsideLabel(
   fontColor: string,
   font: string,
   rich?: RichDataLabelBlock,
+  legendKey?: DataLabelLegendKey,
 ): PieOutsideLabel {
   const clearance = fontPx * 0.5;
   const distance = outsideLabelRadialDistance(
@@ -7620,7 +7691,7 @@ function createPieOutsideLabel(
   const cxBox = pieCx + Math.cos(midAngle) * distance;
   const cyBox = pieCy + Math.sin(midAngle) * distance;
   return {
-    lines, rich,
+    lines, rich, legendKey,
     rimX: pieCx + Math.cos(midAngle) * outerR,
     rimY: pieCy + Math.sin(midAngle) * outerR,
     boxW, boxH, lineHeight, fontPx, bold, fontColor, font,
@@ -7714,17 +7785,68 @@ function drawPieOutsideLabels(
   }
 
   for (const label of labels) {
-    if (label.rich) {
-      paintRichDataLabelBlock(ctx, label.rich, label.cxBox, label.cyBox);
+    if (!label.legendKey) {
+      if (label.rich) {
+        paintRichDataLabelBlock(ctx, label.rich, label.cxBox, label.cyBox);
+        continue;
+      }
+      ctx.font = `${label.bold ? 'bold ' : ''}${label.fontPx}px ${label.font}`;
+      ctx.fillStyle = label.fontColor;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const firstY = label.cyBox - ((label.lines.length - 1) * label.lineHeight) / 2;
+      for (let i = 0; i < label.lines.length; i++) {
+        ctx.fillText(label.lines[i], label.cxBox, firstY + i * label.lineHeight);
+      }
       continue;
     }
     ctx.font = `${label.bold ? 'bold ' : ''}${label.fontPx}px ${label.font}`;
+    const keyWidth = label.legendKey
+      ? (legendSwatchWidths([label.legendKey.entry], label.fontPx, label.legendKey.ptToPx)[0] ?? 0)
+      : 0;
+    const keyHeight = label.legendKey
+      ? legendSwatchHeight(label.legendKey.entry, label.fontPx, label.legendKey.ptToPx)
+      : 0;
+    const textWidth = label.rich?.width ?? label.lines.reduce(
+      (max, line) => Math.max(max, ctx.measureText(line).width), 0,
+    );
+    const gap = label.legendKey && (label.rich || label.lines.length > 0)
+      ? LEGEND_SWATCH_TEXT_GAP
+      : 0;
+    const contentWidth = keyWidth + gap + textWidth;
+    const contentLeft = label.cxBox - contentWidth / 2;
+    if (label.legendKey) {
+      drawLegendSwatch(
+        ctx,
+        label.legendKey.entry.swatchStyle,
+        label.legendKey.entry.color,
+        contentLeft,
+        label.cyBox - keyHeight / 2,
+        keyWidth,
+        keyHeight,
+        label.legendKey.entry.marker,
+        label.legendKey.entry.fillPaint,
+        label.legendKey.entry.outlineColor,
+        label.legendKey.entry.outlineWidthEmu,
+        label.legendKey.entry.outlineDash,
+        label.legendKey.entry.outlineCap,
+        label.legendKey.entry.outlineJoin,
+        label.legendKey.ptToPx,
+        label.legendKey.shapeRotationDeg,
+      );
+    }
+    if (label.rich) {
+      paintRichDataLabelBlock(
+        ctx, label.rich, contentLeft + keyWidth + gap, label.cyBox, 'left', 'middle',
+      );
+      continue;
+    }
     ctx.fillStyle = label.fontColor;
-    ctx.textAlign = 'center';
+    ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     const firstY = label.cyBox - ((label.lines.length - 1) * label.lineHeight) / 2;
     for (let i = 0; i < label.lines.length; i++) {
-      ctx.fillText(label.lines[i], label.cxBox, firstY + i * label.lineHeight);
+      ctx.fillText(label.lines[i], contentLeft + keyWidth + gap, firstY + i * label.lineHeight);
     }
   }
   ctx.restore();
@@ -7735,6 +7857,7 @@ function drawPieOutsideLabels(
 interface PieCalloutLabel {
   lines: string[];
   rich?: RichDataLabelBlock;
+  legendKey?: DataLabelLegendKey;
   lineHeight: number;
   /** Slice mid-angle (canvas radians) — the leader-line target direction. */
   midAngle: number;
@@ -7788,6 +7911,7 @@ function drawPieCalloutLabels(
   indices: ReadonlySet<number>,
   overridesByIndex: ReadonlyMap<number, ChartDataLabelOverride>,
 ): void {
+  const dataLabelLegendKey = createDataLabelLegendKeyResolver(chart, ptToPx);
   const findOverride = (i: number): ChartDataLabelOverride | undefined =>
     overridesByIndex.get(i);
 
@@ -7821,6 +7945,7 @@ function drawPieCalloutLabels(
     const showSerName = ov?.showSerName ?? def.showSerName;
     const showVal     = ov?.showVal ?? def.showVal;
     const showPercent = ov?.showPercent ?? def.showPercent;
+    const showLegendKey = ov?.showLegendKey ?? def.showLegendKey ?? false;
     // Per-point overrides (font colour/size/bold + box), else series defaults.
     const fontPx = chartTextFontSizePx(ov?.fontSizeHpt, ptToPx) ?? baseFontPx;
     const bold = ov?.fontBold ?? def.fontBold ?? false;
@@ -7852,7 +7977,8 @@ function drawPieCalloutLabels(
       separator: ov?.separator ?? def.separator,
       defaultSeparator: '\n',
     });
-    if (!text) continue;
+    const legendKey = showLegendKey ? dataLabelLegendKey(0, i) : undefined;
+    if (!text && !legendKey) continue;
     const richOptions = customRichDataLabelOptions(chart, ov, ptToPx, labelFont, bold);
 
     const padX = Math.max(4, fontPx * 0.45);
@@ -7871,11 +7997,16 @@ function drawPieCalloutLabels(
       lineH,
       value => ctx.measureText(value).width,
     );
-    if (!rich && lines.length === 0) continue;
+    if (!rich && lines.length === 0 && !legendKey) continue;
     let textW = rich?.width ?? 0;
     if (!rich) for (const ln of lines) textW = Math.max(textW, ctx.measureText(ln).width);
-    let boxW = Math.min(textW + padX * 2, boundsW);
-    let boxH = rich?.height ?? (lines.length * lineH - lineGap);
+    const keyW = legendKey
+      ? (legendSwatchWidths([legendKey.entry], fontPx, ptToPx)[0] ?? 0)
+      : 0;
+    const keyH = legendKey ? legendSwatchHeight(legendKey.entry, fontPx, ptToPx) : 0;
+    const keyGap = legendKey && text ? LEGEND_SWATCH_TEXT_GAP : 0;
+    let boxW = Math.min(keyW + keyGap + textW + padX * 2, boundsW);
+    let boxH = Math.max(keyH, rich?.height ?? (lines.length > 0 ? lines.length * lineH - lineGap : 0));
     boxH = Math.min(boxH + padY * 2, boundsH);
 
     const rimX = cx2 + Math.cos(midAngle) * outerR;
@@ -7904,12 +8035,12 @@ function drawPieCalloutLabels(
       if (!rich) {
         lines = fitDataLabelLines(
           text,
-          Math.max(0, boxW - padX * 2),
+          Math.max(0, boxW - padX * 2 - keyW - keyGap),
           Math.max(0, boxH - padY * 2),
           lineH,
           value => ctx.measureText(value).width,
         );
-        if (lines.length === 0) continue;
+        if (lines.length === 0 && !legendKey) continue;
       }
       cxBox = manual.rect.x + manual.rect.w / 2;
       cyBox = manual.rect.y + manual.rect.h / 2;
@@ -7939,15 +8070,15 @@ function drawPieCalloutLabels(
       if (!rich) {
         lines = fitDataLabelLines(
           text,
-          Math.max(0, sliceBounds.w - padX * 2),
+          Math.max(0, sliceBounds.w - padX * 2 - keyW - keyGap),
           Math.max(0, sliceBounds.h - padY * 2),
           lineH,
           value => ctx.measureText(value).width,
         );
-        if (lines.length === 0) continue;
+        if (lines.length === 0 && !legendKey) continue;
         textW = lines.reduce((width, line) => Math.max(width, ctx.measureText(line).width), 0);
-        boxW = textW + padX * 2;
-        boxH = lines.length * lineH - lineGap + padY * 2;
+        boxW = keyW + keyGap + textW + padX * 2;
+        boxH = Math.max(keyH, lines.length > 0 ? lines.length * lineH - lineGap : 0) + padY * 2;
       } else {
         boxW = Math.min(boxW, sliceBounds.w);
         boxH = Math.min(boxH, sliceBounds.h);
@@ -7978,7 +8109,7 @@ function drawPieCalloutLabels(
     }
 
     labels.push({
-      lines, rich: rich ?? undefined, lineHeight: lineH, midAngle, rimX, rimY, boxW, boxH, cxBox, cyBox,
+      lines, rich: rich ?? undefined, legendKey, lineHeight: lineH, midAngle, rimX, rimY, boxW, boxH, cxBox, cyBox,
       leftSide, fontColor, boxFill, boxBorder, boxBorderPx, fontPx, bold, font: labelFont, inside, manualClip,
     });
   }
@@ -8126,24 +8257,79 @@ function drawPieCalloutLabels(
     }
     // Text: centred, stacked lines. A custom rich body uses the same bounded
     // inline block that measured the box, keeping measurement and paint exact.
+    if (!l.legendKey) {
+      if (l.rich) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(bx, by, l.boxW, l.boxH);
+        ctx.clip();
+        paintRichDataLabelBlock(ctx, l.rich, l.cxBox, l.cyBox);
+        ctx.restore();
+        if (l.manualClip) ctx.restore();
+        continue;
+      }
+      ctx.font = `${l.bold ? 'bold ' : ''}${l.fontPx}px ${l.font}`;
+      ctx.fillStyle = l.fontColor;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const lineGap = l.lineHeight - l.fontPx;
+      const blockTop = l.cyBox
+        - (l.lines.length * l.lineHeight - lineGap) / 2 + l.fontPx / 2;
+      for (let li = 0; li < l.lines.length; li++) {
+        ctx.fillText(l.lines[li], l.cxBox, blockTop + li * l.lineHeight);
+      }
+      if (l.manualClip) ctx.restore();
+      continue;
+    }
+    const keyWidth = l.legendKey
+      ? (legendSwatchWidths([l.legendKey.entry], l.fontPx, l.legendKey.ptToPx)[0] ?? 0)
+      : 0;
+    const keyHeight = l.legendKey
+      ? legendSwatchHeight(l.legendKey.entry, l.fontPx, l.legendKey.ptToPx)
+      : 0;
+    const keyGap = l.legendKey && (l.rich || l.lines.length > 0) ? LEGEND_SWATCH_TEXT_GAP : 0;
+    const textWidth = l.rich?.width ?? l.lines.reduce(
+      (width, line) => Math.max(width, ctx.measureText(line).width), 0,
+    );
+    const contentLeft = l.cxBox - (keyWidth + keyGap + textWidth) / 2;
+    if (l.legendKey) {
+      drawLegendSwatch(
+        ctx,
+        l.legendKey.entry.swatchStyle,
+        l.legendKey.entry.color,
+        contentLeft,
+        l.cyBox - keyHeight / 2,
+        keyWidth,
+        keyHeight,
+        l.legendKey.entry.marker,
+        l.legendKey.entry.fillPaint,
+        l.legendKey.entry.outlineColor,
+        l.legendKey.entry.outlineWidthEmu,
+        l.legendKey.entry.outlineDash,
+        l.legendKey.entry.outlineCap,
+        l.legendKey.entry.outlineJoin,
+        l.legendKey.ptToPx,
+        l.legendKey.shapeRotationDeg,
+      );
+    }
     if (l.rich) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(bx, by, l.boxW, l.boxH);
       ctx.clip();
-      paintRichDataLabelBlock(ctx, l.rich, l.cxBox, l.cyBox);
+      paintRichDataLabelBlock(ctx, l.rich, contentLeft + keyWidth + keyGap, l.cyBox, 'left', 'middle');
       ctx.restore();
       if (l.manualClip) ctx.restore();
       continue;
     }
     ctx.font = `${l.bold ? 'bold ' : ''}${l.fontPx}px ${l.font}`;
     ctx.fillStyle = l.fontColor;
-    ctx.textAlign = 'center';
+    ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     const lineGap = l.lineHeight - l.fontPx;
     const blockTop = l.cyBox - (l.lines.length * l.lineHeight - lineGap) / 2 + l.fontPx / 2;
     for (let li = 0; li < l.lines.length; li++) {
-      ctx.fillText(l.lines[li], l.cxBox, blockTop + li * l.lineHeight);
+      ctx.fillText(l.lines[li], contentLeft + keyWidth + keyGap, blockTop + li * l.lineHeight);
     }
     if (l.manualClip) ctx.restore();
   }
@@ -8468,6 +8654,7 @@ function visibleBubbleSize(chart: ChartModel, value: number | null | undefined):
 
 type ScatterSeriesLayer = {
   series: ChartSeries;
+  seriesIndex: number;
   fallbackColor: string;
   cats: string[];
   pointOverrides: Map<number, NonNullable<ChartSeries['dataPointOverrides']>[number]>;
@@ -8493,6 +8680,7 @@ function makeScatterSeriesLayer(
 ): ScatterSeriesLayer {
   return {
     series,
+    seriesIndex: index,
     fallbackColor: chartColor(index, series),
     cats: series.categories ?? chart.categories,
     pointOverrides: new Map((series.dataPointOverrides ?? []).map(point => [point.idx, point])),
@@ -8560,6 +8748,7 @@ function drawScatterSeriesLayer(
   const drawSmooth = style === 'smooth' || style === 'smoothMarker' || style === 'smoothNoMarker';
   const hideMarkersByStyle = style === 'lineNoMarker' || style === 'smoothNoMarker';
   const layers = entries.map(({ series, index }) => makeScatterSeriesLayer(chart, series, index));
+  const dataLabelLegendKey = createDataLabelLegendKeyResolver(chart, ptToPx);
   const bubbleScale = isBubble
     ? bubbleSizeToDiameterScale(chart, layers, useIndexX, pw, ph)
     : 0;
@@ -8651,7 +8840,7 @@ function drawScatterSeriesLayer(
     }
   }
 
-  for (const { series: s, cats } of layers) {
+  for (const { series: s, seriesIndex, cats } of layers) {
     drawSeriesDataLabels(
       ctx,
       s,
@@ -8668,6 +8857,7 @@ function drawScatterSeriesLayer(
       layoutReferenceRect,
       face => chartFontFamily(chart, face, 'minor'),
       valueDisplayUnits,
+      pointIndex => dataLabelLegendKey(seriesIndex, pointIndex),
     );
   }
 
@@ -9392,6 +9582,7 @@ function drawSeriesDataLabels(
   layoutReferenceRect: DataLabelRect = bounds,
   richFontFamilyForFace?: (face: string) => string,
   valueDisplayUnits?: ChartDisplayUnits | null,
+  legendKeyAt?: (pointIndex: number) => DataLabelLegendKey | undefined,
 ): void {
   const overrides = s.dataLabelOverrides ?? [];
   const overridesByIndex = indexPointOverrides(overrides);
@@ -9411,6 +9602,7 @@ function drawSeriesDataLabels(
     const showSerName = ovr?.showSerName ?? seriesDef?.showSerName;
     const showVal     = ovr?.showVal ?? seriesDef?.showVal;
     const showBubbleSize = ovr?.showBubbleSize ?? seriesDef?.showBubbleSize;
+    const showLegendKey = ovr?.showLegendKey ?? seriesDef?.showLegendKey ?? false;
     const text = effectiveDataLabelText({
       customText: ovr?.text,
       showCategory: showCatName && !useIndexX,
@@ -9428,7 +9620,8 @@ function drawSeriesDataLabels(
       date1904,
       separator: ovr?.separator ?? seriesDef?.separator,
     });
-    if (!text) continue;
+    const legendKey = showLegendKey ? legendKeyAt?.(i) : undefined;
+    if (!text && !legendKey) continue;
     const pos = ovr?.position ?? seriesDef?.position ?? defaultPos;
     const sizeHpt = ovr?.fontSizeHpt ?? seriesDef?.fontSizeHpt;
     const fontSizePx = chartTextFontSizePx(sizeHpt, ptToPx)
@@ -9446,6 +9639,7 @@ function drawSeriesDataLabels(
       ovr?.richRuns,
       ptToPx,
       richFontFamilyForFace,
+      legendKey,
     );
   }
 }
@@ -9469,6 +9663,7 @@ function drawDataLabelText(
   richRuns?: readonly ChartTextRun[],
   ptToPx = 1,
   richFontFamilyForFace?: (face: string) => string,
+  legendKey?: DataLabelLegendKey,
 ): void {
   ctx.save();
   ctx.font = `${bold ? 'bold ' : ''}${fontSizePx}px ${fontFamily}`;
@@ -9490,6 +9685,7 @@ function drawDataLabelText(
           fontFamilyForFace: richFontFamilyForFace,
         }
       : undefined,
+    legendKey,
   );
   ctx.restore();
 }
@@ -9525,8 +9721,16 @@ function drawBoundedDataLabelText(
   manualLayout?: ChartDataLabelOverride['manualLayout'],
   layoutReferenceRect: DataLabelRect = bounds,
   rich?: RichDataLabelOptions,
+  legendKey?: DataLabelLegendKey,
 ): void {
-  if (!text || !Number.isFinite(fontSizePx) || fontSizePx <= 0) return;
+  if ((!text && !legendKey) || !Number.isFinite(fontSizePx) || fontSizePx <= 0) return;
+  if (legendKey) {
+    drawBoundedDataLabelWithLegendKey(
+      ctx, text, anchor, bounds, fontSizePx, color, manualLayout,
+      layoutReferenceRect, rich, legendKey,
+    );
+    return;
+  }
   if (rich) {
     const block = resolveRichDataLabelBlock(ctx, rich, fontSizePx, color);
     if (!block) return;
@@ -9582,6 +9786,122 @@ function drawBoundedDataLabelText(
       : placement.y;
   for (let index = 0; index < lines.length; index++) {
     ctx.fillText(lines[index], placement.x, firstY + index * lineHeight);
+  }
+  ctx.restore();
+}
+
+/** Measure and paint a data-label legend key and its optional text as one
+ * bounded block. Existing legend swatch geometry is reused verbatim, while the
+ * shared data-label placement resolver owns clipping and manual layout. */
+function drawBoundedDataLabelWithLegendKey(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  anchor: DataLabelAnchor,
+  bounds: DataLabelRect,
+  fontSizePx: number,
+  color: string,
+  manualLayout: ChartDataLabelOverride['manualLayout'] | undefined,
+  layoutReferenceRect: DataLabelRect,
+  rich: RichDataLabelOptions | undefined,
+  legendKey: DataLabelLegendKey,
+): void {
+  const { entry, ptToPx, shapeRotationDeg } = legendKey;
+  const keyWidth = legendSwatchWidths([entry], fontSizePx, ptToPx)[0] ?? 0;
+  const keyHeight = legendSwatchHeight(entry, fontSizePx, ptToPx);
+  const gap = text ? LEGEND_SWATCH_TEXT_GAP : 0;
+  const richBlock = text && rich
+    ? resolveRichDataLabelBlock(ctx, rich, fontSizePx, color)
+    : null;
+  if (text && rich && !richBlock) return;
+  const lineHeight = fontSizePx * 1.15;
+  const sourceLines = text && !richBlock
+    ? boundDataLabelText(text).value.split(/\r?\n/)
+    : [];
+  const sourceTextWidth = richBlock?.width ?? sourceLines.reduce(
+    (max, line) => Math.max(max, ctx.measureText(line).width), 0,
+  );
+  const sourceTextHeight = richBlock?.height
+    ?? (sourceLines.length > 0 ? Math.max(lineHeight, sourceLines.length * lineHeight) : 0);
+  let placement = resolveDataLabelPlacement(
+    anchor,
+    bounds,
+    { w: keyWidth + gap + sourceTextWidth, h: Math.max(keyHeight, sourceTextHeight) },
+    fontSizePx,
+    manualLayout,
+    layoutReferenceRect,
+  );
+  if (!placement) return;
+
+  let lines = sourceLines;
+  if (text && !richBlock) {
+    lines = fitDataLabelLines(
+      text,
+      Math.max(0, placement.maxWidth - keyWidth - gap),
+      placement.maxHeight,
+      lineHeight,
+      value => ctx.measureText(value).width,
+    );
+    if (lines.length === 0) return;
+  }
+  const textWidth = richBlock?.width ?? lines.reduce(
+    (max, line) => Math.max(max, ctx.measureText(line).width), 0,
+  );
+  const textHeight = richBlock?.height ?? (lines.length * lineHeight);
+  const totalWidth = keyWidth + gap + textWidth;
+  const totalHeight = Math.max(keyHeight, textHeight);
+  placement = resolveDataLabelPlacement(
+    anchor, bounds, { w: totalWidth, h: totalHeight }, fontSizePx, manualLayout,
+    layoutReferenceRect,
+  );
+  if (!placement) return;
+
+  const left = placement.textAlign === 'left'
+    ? placement.x
+    : placement.textAlign === 'right'
+      ? placement.x - totalWidth
+      : placement.x - totalWidth / 2;
+  const top = placement.textBaseline === 'top'
+    ? placement.y
+    : placement.textBaseline === 'bottom'
+      ? placement.y - totalHeight
+      : placement.y - totalHeight / 2;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(placement.clip.x, placement.clip.y, placement.clip.w, placement.clip.h);
+  ctx.clip();
+  drawLegendSwatch(
+    ctx,
+    entry.swatchStyle,
+    entry.color,
+    left,
+    top + (totalHeight - keyHeight) / 2,
+    keyWidth,
+    keyHeight,
+    entry.marker,
+    entry.fillPaint,
+    entry.outlineColor,
+    entry.outlineWidthEmu,
+    entry.outlineDash,
+    entry.outlineCap,
+    entry.outlineJoin,
+    ptToPx,
+    shapeRotationDeg,
+  );
+  if (text) {
+    const textX = left + keyWidth + gap;
+    if (richBlock) {
+      paintRichDataLabelBlock(
+        ctx, richBlock, textX, top + (totalHeight - textHeight) / 2, 'left', 'top',
+      );
+    } else {
+      ctx.fillStyle = color;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      const firstY = top + (totalHeight - textHeight) / 2;
+      for (let index = 0; index < lines.length; index++) {
+        ctx.fillText(lines[index], textX, firstY + index * lineHeight);
+      }
+    }
   }
   ctx.restore();
 }
@@ -9787,6 +10107,7 @@ function drawCategoryDataLabels(
   markerGapAt?: (index: number) => number,
   richFontFamilyForFace?: (face: string) => string,
   valueDisplayUnits?: ChartDisplayUnits | null,
+  legendKeyAt?: (pointIndex: number) => DataLabelLegendKey | undefined,
 ): boolean {
   const overrides = s.dataLabelOverrides ?? [];
   const overridesByIndex = indexPointOverrides(overrides);
@@ -9805,6 +10126,7 @@ function drawCategoryDataLabels(
     const showSerName = ovr?.showSerName ?? seriesDef?.showSerName;
     const showVal     = ovr?.showVal ?? seriesDef?.showVal;
     const showPercent = ovr?.showPercent ?? seriesDef?.showPercent;
+    const showLegendKey = ovr?.showLegendKey ?? seriesDef?.showLegendKey ?? false;
     const text = effectiveDataLabelText({
       customText: ovr?.text,
       showCategory: showCatName,
@@ -9820,7 +10142,8 @@ function drawCategoryDataLabels(
       date1904,
       separator: ovr?.separator ?? seriesDef?.separator,
     });
-    if (!text) continue;
+    const legendKey = showLegendKey ? legendKeyAt?.(ci) : undefined;
+    if (!text && !legendKey) continue;
     const pos = ovr?.position ?? seriesDef?.position ?? defaultPos;
     const sizeHpt = ovr?.fontSizeHpt ?? seriesDef?.fontSizeHpt;
     const fontSizePx = chartTextFontSizePx(sizeHpt, ptToPx)
@@ -9839,6 +10162,7 @@ function drawCategoryDataLabels(
       ovr?.richRuns,
       ptToPx,
       richFontFamilyForFace,
+      legendKey,
     );
   }
   return true;
@@ -9852,6 +10176,7 @@ type ChartExStyle = NonNullable<ChartModel['chartexDataPointStyle']>;
 
 interface ResolvedChartExLabel {
   text: string;
+  showLegendKey: boolean;
   position?: string;
   fontColor?: string;
   fontSizeHpt?: number;
@@ -9908,6 +10233,7 @@ function resolveChartExLabel(
     ?? definition?.showPercent
     ?? defaults.showPercent
     ?? false;
+  const showLegendKey = override?.showLegendKey ?? definition?.showLegendKey ?? false;
   const authoredFormatCode = override?.formatCode
     ?? definition?.formatCode
     ?? chart.dataLabelFormatCode
@@ -9928,9 +10254,10 @@ function resolveChartExLabel(
     date1904: chart.date1904,
     separator: override?.separator ?? definition?.separator,
   });
-  if (!text) return null;
+  if (!text && !showLegendKey) return null;
   return {
     text,
+    showLegendKey,
     position: override?.position ?? definition?.position,
     fontColor: override?.fontColor ?? definition?.fontColor,
     fontSizeHpt: override?.fontSizeHpt ?? definition?.fontSizeHpt,

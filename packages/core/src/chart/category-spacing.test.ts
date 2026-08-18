@@ -46,11 +46,22 @@ describe('categoryLabelAnchorFraction', () => {
     });
   });
 
-  it('defaults unknown or omitted alignment to centered', () => {
+  it('preserves the category tick anchor when alignment is omitted', () => {
     expect(categoryLabelAnchorFraction(0, 1, true, false, undefined)).toEqual({
       fraction: 0.5,
       textAlign: 'center',
     });
+    expect(categoryLabelAnchorFraction(0, 3, false, false, undefined)).toEqual({
+      fraction: 0,
+      textAlign: 'center',
+    });
+    expect(categoryLabelAnchorFraction(2, 3, false, true, null)).toEqual({
+      fraction: 0,
+      textAlign: 'center',
+    });
+  });
+
+  it('defaults unknown authored alignment tokens to centered', () => {
     expect(categoryLabelAnchorFraction(0, 1, true, false, 'future')).toEqual({
       fraction: 0.5,
       textAlign: 'center',
