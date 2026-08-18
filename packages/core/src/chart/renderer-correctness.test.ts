@@ -9,7 +9,10 @@
 
 import { describe, it, expect } from 'vitest';
 import type { ChartModel, ChartSeries, ChartRect } from '../types/chart';
-import { renderChart as renderChartCore } from './renderer.js';
+import {
+  classicMarkerPaintWorkCount,
+  renderChart as renderChartCore,
+} from './renderer.js';
 import { renderSimpleThreeDChart } from './three-d-renderer.js';
 import { formatChartValWithCode } from './chart-number-format.js';
 import { BOX_WHISKER_SLOT_GUTTER_FRACTION } from './box-whisker.js';
@@ -1349,6 +1352,81 @@ describe('classic 3-D compatibility projection', () => {
     },
   );
 
+  it('charges data-label legend keys to the chart-wide marker paint budget', () => {
+    const rec = recordingCtx();
+    const count = 256;
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: Array.from({ length: count }, (_, index) => String(index)),
+      series: [series({
+        values: Array.from({ length: count }, (_, index) => index + 1),
+        showMarker: true, markerSymbol: 'circle',
+        markerFillPaint: {
+          fillType: 'gradient', gradType: 'linear', angle: 0,
+          stops: Array.from({ length: 2049 }, (_, index) => ({
+            position: index / 2048,
+            color: '112233',
+          })),
+        },
+        seriesDataLabels: {
+          showVal: true,
+          showCatName: false,
+          showSerName: false,
+          showPercent: false,
+          showLegendKey: true,
+        },
+      })],
+    }), RECT, 1);
+    expect(rec.texts.some(text => text.text === '(too many data points)')).toBe(true);
+    expect(rec.gradients).toHaveLength(0);
+  });
+
+  it('does not charge a marker key for an inapplicable scatter data table', () => {
+    const count = 256;
+    const markerFillPaint = {
+      fillType: 'gradient' as const, gradType: 'linear' as const, angle: 0,
+      stops: Array.from({ length: 4096 }, (_, index) => ({
+        position: index / 4095,
+        color: '112233',
+      })),
+    };
+    const model = baseModel({
+      chartType: 'scatter',
+      categories: Array.from({ length: count }, (_, index) => String(index + 1)),
+      dataTable: {
+        showHorizontalBorder: false,
+        showVerticalBorder: false,
+        showOutline: false,
+        showKeys: true,
+      },
+      series: [series({
+        values: Array.from({ length: count }, (_, index) => index + 1),
+        showMarker: true, markerSymbol: 'circle', markerFillPaint,
+      })],
+    });
+    expect(classicMarkerPaintWorkCount(model)).toBe(1_048_576);
+  });
+
+  it('charges the normal legend marker after plot marker work', () => {
+    const count = 256;
+    const model = baseModel({
+      chartType: 'line', showLegend: true,
+      categories: Array.from({ length: count }, (_, index) => String(index)),
+      series: [series({
+        values: Array.from({ length: count }, (_, index) => index + 1),
+        showMarker: true, markerSymbol: 'circle',
+        markerFillPaint: {
+          fillType: 'gradient', gradType: 'linear', angle: 0,
+          stops: Array.from({ length: 4096 }, (_, index) => ({
+            position: index / 4095,
+            color: '112233',
+          })),
+        },
+      })],
+    });
+    expect(classicMarkerPaintWorkCount(model)).toBeGreaterThan(1_048_576);
+  });
+
   it('does not fabricate a cap for zero-height 3-D shapes and folds unknown shapes to box', () => {
     const coloredFaceCount = (shape: string, value: number) => {
       const rec = recordingCtx();
@@ -1708,6 +1786,70 @@ describe('classic 3-D compatibility projection', () => {
     expect(rec.paintEvents.filter(event =>
       event.kind === 'stroke' && event.strokeStyle === '#FF0000'
     )).toHaveLength(2);
+  });
+
+  it('projects structured 3-D line-marker fills through the shared paint model', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A', 'B'],
+      threeD: { rotationX: 15, rotationY: 20 },
+      series: [series({
+        values: [10, 20], showMarker: true, markerSymbol: 'circle', markerSize: 7,
+        markerFillPaint: {
+          fillType: 'gradient', gradType: 'linear', angle: 0,
+          stops: [
+            { position: 0, color: '112233' },
+            { position: 1, color: 'DDEEFF' },
+          ],
+        },
+      })],
+    }), RECT, 1);
+    expect(rec.gradients).toHaveLength(2);
+    expect(rec.gradients.every(gradient => gradient.stops.length === 2)).toBe(true);
+  });
+
+  it('keeps direct point marker paint authoritative over a 3-D series noFill', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A', 'B'],
+      threeD: { rotationX: 15, rotationY: 20 },
+      series: [series({
+        values: [10, 20], showMarker: true, markerSymbol: 'circle',
+        markerFill: '00000000',
+        dataPointOverrides: [{
+          idx: 1,
+          markerFillPaint: {
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: [
+              { position: 0, color: '112233' },
+              { position: 1, color: 'DDEEFF' },
+            ],
+          },
+        }],
+      })],
+    }), RECT, 1);
+    expect(rec.gradients).toHaveLength(1);
+  });
+
+  it('uses the structured 3-D line marker in its legend key', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A'], showLegend: true, legendPos: 'r',
+      threeD: { rotationX: 15, rotationY: 20 },
+      series: [series({
+        name: 'Gradient marker', values: [10], showMarker: true,
+        markerSymbol: 'circle',
+        markerFillPaint: {
+          fillType: 'gradient', gradType: 'linear', angle: 0,
+          stops: [
+            { position: 0, color: '112233' },
+            { position: 1, color: 'DDEEFF' },
+          ],
+        },
+      })],
+    }), RECT, 1);
+    // One gradient belongs to the plotted marker and one to the legend marker.
+    expect(rec.gradients).toHaveLength(2);
   });
 
   it('skips missing 3-D line points instead of inventing zero markers or labels', () => {
@@ -5923,6 +6065,278 @@ describe('CH9 — line/area consume marker detail (§21.2.2.32)', () => {
     expect(direct.fills).toContain('#112233');
     expect(direct.strokes.some(stroke => stroke.strokeStyle === '#332211')).toBe(true);
   });
+
+  it('renders structured marker fills with direct point paint taking precedence', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      catAxisHidden: true,
+      valAxisHidden: true,
+      series: [series({
+        values: [3, 5], showMarker: true, markerSymbol: 'circle', lineHidden: true,
+        markerFillPaint: {
+          fillType: 'gradient', gradType: 'linear', angle: 0,
+          stops: [
+            { position: 0, color: '112233' },
+            { position: 1, color: 'DDEEFF' },
+          ],
+        },
+        dataPointOverrides: [{ idx: 1, markerFill: 'ABCDEF' }],
+      })],
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(1);
+    expect(rec.gradients[0].stops).toEqual([
+      { position: 0, color: 'rgba(17,34,51,1)' },
+      { position: 1, color: 'rgba(221,238,255,1)' },
+    ]);
+  });
+
+  it.each([
+    { seriesType: 'line', markerSymbol: 'square' },
+    { seriesType: 'area', markerSymbol: 'circle' },
+  ] as const)(
+    'uses the shared marker path for a $seriesType overlay in a bar combo',
+    ({ seriesType, markerSymbol }) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'clusteredBar', categories: ['A', 'B'],
+        catAxisHidden: true, valAxisHidden: true,
+        series: [
+          series({ name: 'Bars', values: [2, 4], seriesType: 'bar' }),
+          series({
+            name: 'Overlay', values: [3, 5], seriesType,
+            showMarker: true, markerSymbol, markerSize: 12,
+            markerFillPaint: {
+              fillType: 'gradient', gradType: 'linear', angle: 0,
+              stops: [
+                { position: 0, color: '112233' },
+                { position: 1, color: 'DDEEFF' },
+              ],
+            },
+          }),
+        ],
+      }), RECT, 1);
+      expect(rec.gradients).toHaveLength(2);
+      if (markerSymbol === 'square') {
+        expect(rec.rects.filter(rect => rect.w === 12 && rect.h === 12)).toHaveLength(2);
+      }
+    },
+  );
+
+  it('uses linked structured dataPointMarker fill only when direct paint is omitted', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A'],
+      catAxisHidden: true,
+      valAxisHidden: true,
+      series: [series({
+        values: [3], showMarker: true, markerSymbol: 'circle', lineHidden: true,
+      })],
+      chartStyleRoles: {
+        dataPointMarker: {
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 90,
+            stops: [
+              { position: 0, color: '010203' },
+              { position: 1, color: 'FDFEFF' },
+            ],
+          }],
+        },
+      },
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(1);
+    expect(rec.gradients[0].stops).toEqual([
+      { position: 0, color: 'rgba(1,2,3,1)' },
+      { position: 1, color: 'rgba(253,254,255,1)' },
+    ]);
+  });
+
+  it('does not replace authored unresolved marker paint with linked style paint', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A'],
+      catAxisHidden: true, valAxisHidden: true,
+      series: [series({
+        values: [3], showMarker: true, markerSymbol: 'circle', lineHidden: true,
+        markerFillPaintAuthored: true,
+      })],
+      chartStyleRoles: {
+        dataPointMarker: {
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 90,
+            stops: [
+              { position: 0, color: '010203' },
+              { position: 1, color: 'FDFEFF' },
+            ],
+          }],
+        },
+      },
+    }), RECT, 1);
+    expect(rec.gradients).toHaveLength(0);
+  });
+
+  it('does not replace an unsupported linked marker fill with automatic color', () => {
+    for (const directProvenance of [undefined, false]) {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'line', categories: ['A'],
+        catAxisHidden: true, valAxisHidden: true,
+        series: [series({
+          values: [3], showMarker: true, markerSymbol: 'circle', lineHidden: true,
+          markerFillPaintAuthored: directProvenance,
+        })],
+        chartStyleRoles: {
+          dataPointMarker: { fillPaintAuthored: true },
+        },
+      }), RECT, 1);
+      expect(rec.gradients).toHaveLength(0);
+      expect(rec.paintEvents.some(event =>
+        event.kind === 'fill' && event.fillStyle === '#4472C4'
+      )).toBe(false);
+      expect(rec.paintEvents).toContainEqual({ kind: 'fill', fillStyle: '#00000000' });
+    }
+  });
+
+  it('fails closed when an unresolved series marker paint omits the symbol', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A'],
+      catAxisHidden: true, valAxisHidden: true,
+      series: [series({
+        values: [3], showMarker: true, lineHidden: true,
+        markerFillPaintAuthored: true,
+      })],
+    }), RECT, 1);
+    expect(rec.paintEvents.some(event =>
+      event.kind === 'fill' && event.fillStyle === '#4472C4'
+    )).toBe(false);
+    expect(rec.paintEvents).toContainEqual({ kind: 'fill', fillStyle: '#00000000' });
+  });
+
+  it('keeps point-zero formatting out of the series legend marker', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A'], showLegend: true,
+      catAxisHidden: true, valAxisHidden: true,
+      series: [series({
+        name: 'Series', values: [3], showMarker: true, markerSymbol: 'circle',
+        lineHidden: true, dataPointColors: ['FF0000'],
+        markerFillPaint: {
+          fillType: 'gradient', gradType: 'linear', angle: 0,
+          stops: [
+            { position: 0, color: '112233' },
+            { position: 1, color: 'DDEEFF' },
+          ],
+        },
+      })],
+    }), RECT, 1);
+    // Point 0 is red, while the legend represents the series-level gradient.
+    expect(rec.gradients).toHaveLength(1);
+    expect(rec.gradients[0].stops).toEqual([
+      { position: 0, color: 'rgba(17,34,51,1)' },
+      { position: 1, color: 'rgba(221,238,255,1)' },
+    ]);
+  });
+
+  it('allows a direct point marker to override a disabled series marker', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A', 'B'],
+      catAxisHidden: true, valAxisHidden: true,
+      series: [series({
+        values: [3, 5], showMarker: false, markerSymbol: 'none', lineHidden: true,
+        dataPointOverrides: [{
+          idx: 1, markerSymbol: 'circle',
+          markerFillPaint: {
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: [
+              { position: 0, color: '112233' },
+              { position: 1, color: 'DDEEFF' },
+            ],
+          },
+        }],
+      })],
+    }), RECT, 1);
+    expect(rec.gradients).toHaveLength(1);
+  });
+
+  it('rejects marker gradients beyond the bounded Canvas stop budget', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A'],
+      series: [series({
+        values: [3], showMarker: true, markerSymbol: 'circle',
+        markerFillPaint: {
+          fillType: 'gradient', gradType: 'linear', angle: 0,
+          stops: Array.from({ length: 4097 }, (_, index) => ({
+            position: index / 4096,
+            color: '112233',
+          })),
+        },
+      })],
+    }), RECT, 1);
+    expect(rec.texts.some(text => text.text === '(too many data points)')).toBe(true);
+    expect(rec.gradients).toHaveLength(0);
+  });
+
+  it('charges structured marker paint only for visible sparse points', () => {
+    const rec = recordingCtx();
+    const count = 10_000;
+    const values: Array<number | null> = new Array(count).fill(null);
+    values[count - 1] = 3;
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: Array.from({ length: count }, (_, index) => String(index)),
+      catAxisHidden: true, valAxisHidden: true,
+      series: [series({
+        values, showMarker: true, markerSymbol: 'circle', lineHidden: true,
+        markerFillPaint: {
+          fillType: 'gradient', gradType: 'linear', angle: 0,
+          stops: Array.from({ length: 4096 }, (_, index) => ({
+            position: index / 4095,
+            color: '112233',
+          })),
+        },
+      })],
+    }), RECT, 1);
+    expect(rec.texts.some(text => text.text === '(too many data points)')).toBe(false);
+    expect(rec.gradients).toHaveLength(1);
+    expect(rec.gradients[0].stops).toHaveLength(4096);
+  });
+
+  it.each([
+    { chartType: 'scatter', scatterStyle: 'lineNoMarker' },
+    { chartType: 'radar', radarStyle: 'filled' },
+  ] as const)(
+    'does not charge suppressed $chartType markers to the paint budget',
+    ({ chartType, ...style }) => {
+      const rec = recordingCtx();
+      const count = 257;
+      renderChart(rec.ctx, baseModel({
+        chartType,
+        ...style,
+        categories: Array.from({ length: count }, (_, index) => String(index + 1)),
+        catAxisHidden: true, valAxisHidden: true,
+        series: [series({
+          values: Array.from({ length: count }, (_, index) => index + 1),
+          showMarker: true, markerSymbol: 'circle',
+          markerFillPaint: {
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: Array.from({ length: 4096 }, (_, index) => ({
+              position: index / 4095,
+              color: '112233',
+            })),
+          },
+        })],
+      }), RECT, 1);
+      expect(rec.texts.some(text => text.text === '(too many data points)')).toBe(false);
+      expect(rec.gradients).toHaveLength(0);
+    },
+  );
 
   it('uses linked marker layout only when a classic marker omits symbol and size', () => {
     const linked = markerRecordingCtx();
@@ -11374,6 +11788,30 @@ describe('CH13 — stock chart (high/low/close)', () => {
     // stockHiLowLineColor omitted → renderer default '#595959'.
     renderChart(rec.ctx, stockModel({ stockHiLowLineColor: null }), RECT, 1);
     expect(hiLoLines(rec.segs).length).toBe(3);
+  });
+
+  it('honors a stock-series point marker override without changing sibling ticks', () => {
+    const rec = recordingCtx();
+    const model = stockModel();
+    model.series[2] = series({
+      name: 'Close', values: [32, 35, 34],
+      dataPointOverrides: [{
+        idx: 1, markerSymbol: 'circle', markerSize: 7,
+        markerLine: 'AA0000', markerLineWidthEmu: 25400,
+        markerFillPaint: {
+          fillType: 'gradient', gradType: 'linear', angle: 0,
+          stops: [
+            { position: 0, color: '112233' },
+            { position: 1, color: 'DDEEFF' },
+          ],
+        },
+      }],
+    });
+    renderChart(rec.ctx, model, RECT, 1);
+    expect(rec.gradients).toHaveLength(1);
+    expect(rec.paintEvents.some(event =>
+      event.kind === 'stroke' && event.strokeStyle === '#AA0000'
+    )).toBe(true);
   });
 
   it('draws authored stock-chart minor ticks', () => {

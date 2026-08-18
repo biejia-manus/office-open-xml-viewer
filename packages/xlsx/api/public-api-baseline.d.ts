@@ -204,6 +204,8 @@ export interface ChartDataPointOverride {
     markerSymbol?: string;
     markerSize?: number;
     markerFill?: string;
+    markerFillPaint?: Fill | null;
+    markerFillPaintAuthored?: boolean | null;
     markerLine?: string;
     markerLineWidthEmu?: number;
     explosion?: number;
@@ -286,6 +288,7 @@ export interface ChartExElementStyle {
     fillPaints?: Array<SolidFill | GradientFill | PatternFill | null> | null;
     fillColors?: Array<string | null> | null;
     fillHidden?: boolean | null;
+    fillPaintAuthored?: boolean | null;
     fillNoStyle?: boolean | null;
     lineColors?: Array<string | null> | null;
     lineWidthEmu?: number | null;
@@ -649,6 +652,8 @@ export interface ChartSeries {
     markerSymbol?: string | null;
     markerSize?: number | null;
     markerFill?: string | null;
+    markerFillPaint?: Fill | null;
+    markerFillPaintAuthored?: boolean | null;
     markerLine?: string | null;
     markerLineWidthEmu?: number | null;
     dataPointOverrides?: ChartDataPointOverride[] | null;

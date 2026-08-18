@@ -7,6 +7,15 @@ import type {
   ChartRect,
   ChartSeries,
 } from '../types/chart.js';
+import type { Fill } from '../types/common.js';
+import {
+  effectiveMarkerSymbol,
+  hasVisiblePointMarkerOverride,
+  markerFillColorFor,
+  markerFillPaintFor,
+  seriesMarkerFillColor,
+  seriesMarkerFillPaint,
+} from './marker-style.js';
 
 /** Stable bundle-audit marker. Re-exported only by the opt-in package entry so
  * build verification can prove the mesh/camera implementation is absent from
@@ -66,6 +75,7 @@ import {
 } from './three-d-stroke.js';
 import { buildThreeDOutlineTopology } from './three-d-outline.js';
 import { paintLegendFrame } from './legend-frame.js';
+import { resolveFill } from '../shape/paint.js';
 
 interface ThreeDLegendTextStyle {
   fontPx: number;
@@ -801,6 +811,8 @@ function paintThreeDMarker(
   fill: string,
   line: string,
   lineWidth: number,
+  fillPaint: Fill | null | undefined = undefined,
+  shapeRotationDeg = 0,
 ): void {
   if (!(size > 0) || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
   const radius = size / 2;
@@ -865,8 +877,15 @@ function paintThreeDMarker(
       ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
       break;
   }
-  if (fill !== 'transparent') {
-    ctx.fillStyle = fill;
+  const resolved = fillPaint === undefined
+    ? (fill === 'transparent' ? null : fill)
+    : fillPaint == null
+      ? null
+      : resolveFill(
+          fillPaint, ctx, point.x - radius, point.y - radius, size, size, shapeRotationDeg,
+        );
+  if (resolved != null) {
+    ctx.fillStyle = resolved;
     ctx.fill();
   }
   ctx.strokeStyle = line;
@@ -1351,6 +1370,53 @@ function drawThreeDSeriesAxis(
   }
 }
 
+function paintThreeDLineLegendKey(
+  ctx: CanvasRenderingContext2D,
+  series: ChartSeries,
+  color: string,
+  x: number,
+  y: number,
+  key: number,
+  ptToPx: number,
+  shapeRotationDeg: number,
+): void {
+  if (series.lineHidden !== true) {
+    const lineWidth = series.lineWidthEmu != null
+      ? Math.max(0.5, series.lineWidthEmu / EMU_PER_PT * ptToPx)
+      : Math.max(1, 2 * ptToPx);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + key, y);
+    ctx.strokeStyle = series.lineColor ? `#${series.lineColor}` : scaleHexColor(color, 0.70);
+    ctx.lineWidth = lineWidth;
+    ctx.setLineDash(pptxPresetDashArray(series.chartexStyle?.lineDash ?? 'solid', lineWidth));
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (series.showMarker !== true || series.markerSymbol === 'none') return;
+  const symbol = series.markerSymbol ?? 'circle';
+  const fill = seriesMarkerFillColor(series, color.replace(/^#/, ''));
+  const fillCss = fill === '00000000'
+    ? 'transparent' : fill.startsWith('#') ? fill : `#${fill}`;
+  const markerLine = series.markerLine ?? series.lineColor ?? color.replace(/^#/, '');
+  const lineCss = markerLine === '00000000'
+    ? 'rgba(0,0,0,0)' : markerLine.startsWith('#') ? markerLine : `#${markerLine}`;
+  const markerLineWidth = series.markerLineWidthEmu != null
+    ? Math.max(0.25, series.markerLineWidthEmu / EMU_PER_PT * ptToPx)
+    : Math.max(0.75, ptToPx);
+  paintThreeDMarker(
+    ctx,
+    { x: x + key / 2, y },
+    symbol,
+    Math.min(key, Math.max(2, (series.markerSize ?? 5) * ptToPx)),
+    fillCss,
+    lineCss,
+    markerLineWidth,
+    seriesMarkerFillPaint(series),
+    shapeRotationDeg,
+  );
+}
+
 function simpleLegend(
   ctx: CanvasRenderingContext2D,
   chart: ChartModel,
@@ -1429,21 +1495,10 @@ function simpleLegend(
         ctx.font = textStyle.font;
         const available = Math.max(0, widths[position] - key - 4);
         const lineKey = !categoryDriven && chart.chartType.toLowerCase().includes('line');
-        if (lineKey && entry.series?.lineHidden !== true) {
-          const lineWidth = entry.series?.lineWidthEmu != null
-            ? Math.max(0.5, entry.series.lineWidthEmu / EMU_PER_PT * ptToPx)
-            : Math.max(1, 2 * ptToPx);
-          ctx.beginPath();
-          ctx.moveTo(itemX, rowY);
-          ctx.lineTo(itemX + key, rowY);
-          ctx.strokeStyle = entry.series?.lineColor
-            ? `#${entry.series.lineColor}` : scaleHexColor(entry.color, 0.70);
-          ctx.lineWidth = lineWidth;
-          ctx.setLineDash(pptxPresetDashArray(
-            entry.series?.chartexStyle?.lineDash ?? 'solid', lineWidth,
-          ));
-          ctx.stroke();
-          ctx.setLineDash([]);
+        if (lineKey && entry.series) {
+          paintThreeDLineLegendKey(
+            ctx, entry.series, entry.color, itemX, rowY, key, ptToPx, shapeRotationDeg,
+          );
         } else {
           if (entry.color !== 'transparent') {
             ctx.fillStyle = entry.color;
@@ -1496,21 +1551,10 @@ function simpleLegend(
     if (rowTop + itemHeight > bounds.y + bounds.h + 1e-6) break;
     const cy = rowTop + itemHeight / 2;
     const lineKey = !categoryDriven && chart.chartType.toLowerCase().includes('line');
-    if (lineKey) {
-      const lineWidth = entry.series?.lineWidthEmu != null
-        ? Math.max(0.5, entry.series.lineWidthEmu / EMU_PER_PT * ptToPx)
-        : Math.max(1, 2 * ptToPx);
-      if (entry.series?.lineHidden !== true) {
-        ctx.beginPath();
-        ctx.moveTo(bounds.x + 4, cy);
-        ctx.lineTo(bounds.x + 4 + key, cy);
-        ctx.strokeStyle = entry.series?.lineColor
-          ? `#${entry.series.lineColor}` : scaleHexColor(entry.color, 0.70);
-        ctx.lineWidth = lineWidth;
-        ctx.setLineDash(pptxPresetDashArray(entry.series?.chartexStyle?.lineDash ?? 'solid', lineWidth));
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
+    if (lineKey && entry.series) {
+      paintThreeDLineLegendKey(
+        ctx, entry.series, entry.color, bounds.x + 4, cy, key, ptToPx, shapeRotationDeg,
+      );
     } else {
       if (entry.color !== 'transparent') {
         ctx.fillStyle = entry.color;
@@ -2962,19 +3006,25 @@ function renderCartesian(
           );
         }
       }
-      const hasMarkerOverride = series.dataPointOverrides?.some(override =>
-        override.markerSymbol != null && override.markerSymbol !== 'none'
-      ) === true;
-      if (chart.chartType.toLowerCase().includes('line') && (series.showMarker === true || hasMarkerOverride)) {
+      const seriesMarkersVisible = series.showMarker === true && series.markerSymbol !== 'none';
+      if (chart.chartType.toLowerCase().includes('line')
+        && (seriesMarkersVisible || hasVisiblePointMarkerOverride(series))) {
         for (let categoryIndex = 0; categoryIndex < points.length; categoryIndex++) {
           const point = points[categoryIndex];
           if (!point) continue;
           const override = pointOverrides[seriesIndex].get(categoryIndex);
-          const symbol = override?.markerSymbol
-            ?? (series.showMarker === true ? series.markerSymbol ?? 'circle' : 'none');
+          const symbol = effectiveMarkerSymbol(
+            series, override, 'circle', seriesMarkersVisible,
+          );
           if (symbol === 'none') continue;
           const sizePt = override?.markerSize ?? series.markerSize ?? 5;
-          const markerFill = override?.markerFill ?? series.markerFill ?? series.color ?? PALETTE[seriesIndex % PALETTE.length];
+          const markerFill = markerFillColorFor(
+            series,
+            override,
+            categoryIndex,
+            series.color ?? PALETTE[seriesIndex % PALETTE.length],
+          );
+          const markerFillPaint = markerFillPaintFor(series, override, categoryIndex);
           const markerLine = override?.markerLine ?? series.markerLine ?? series.lineColor ?? series.color
             ?? PALETTE[seriesIndex % PALETTE.length];
           const markerLineWidth = (override?.markerLineWidthEmu ?? series.markerLineWidthEmu) != null
@@ -2986,6 +3036,7 @@ function renderCartesian(
               ctx, point, symbol, Math.max(2, sizePt) * ptToPx,
               markerFill === '00000000' ? 'transparent' : `#${markerFill}`,
               `#${markerLine}`, markerLineWidth,
+              markerFillPaint, shapeRotationDeg,
             ));
         }
       }

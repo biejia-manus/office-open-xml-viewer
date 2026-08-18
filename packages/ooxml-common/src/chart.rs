@@ -46,6 +46,13 @@ const MAX_CHART_LEGEND_ENTRIES: usize = 4096;
 /// one component per stop; solid and pattern fills contribute one. This bounds
 /// the otherwise multiplicative `palette entries × gradient stops` wire model.
 const MAX_CHART_STYLE_PAINT_COMPONENTS: usize = 1_048_576;
+/// A single marker gradient is replayed once per visible data point. Keep one
+/// authored recipe bounded before `parse_grad_fill` allocates/sorts its stop
+/// list; the aggregate chart budget below then bounds all retained recipes.
+const MAX_CHART_MARKER_GRADIENT_STOPS: usize = 4096;
+/// Aggregate direct marker-paint components retained by one chart. This is an
+/// availability boundary, not a visual compatibility rule.
+const MAX_CHART_MARKER_PAINT_COMPONENTS: usize = MAX_CHART_STYLE_PAINT_COMPONENTS;
 /// Aggregate role×palette slots retained from one linked Chart Style. Typical
 /// Office parts use 30 paint roles × 6–54 colors. Reject the entire fallback
 /// table before expansion rather than retaining an arbitrary role or palette
@@ -105,6 +112,11 @@ pub struct ChartExElementStyle {
     pub fill_colors: Option<Vec<Option<String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_hidden: Option<bool>,
+    /// A linked fill recipe was authored, even when its DrawingML paint is not
+    /// representable by the current shared fill model (for example blipFill or
+    /// grpFill). Consumers must not replace it with an automatic color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_paint_authored: Option<bool>,
     /// The linked Chart Style selected the `NoStyle` fill recipe rather than
     /// an authored `<a:noFill>`. Semantic chart marks may supply their default
     /// fill in this case; an explicit no-fill must remain transparent.
@@ -1194,6 +1206,10 @@ pub struct ChartSeries {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marker_fill: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker_fill_paint: Option<ChartStyleFill>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker_fill_paint_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marker_line: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marker_line_width_emu: Option<u32>,
@@ -1310,6 +1326,10 @@ pub struct ChartDataPointOverride {
     pub marker_size: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marker_fill: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker_fill_paint: Option<ChartStyleFill>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker_fill_paint_authored: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marker_line: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4245,6 +4265,23 @@ fn classic_style_two_axis_line_width_emu(resolver: &dyn ColorResolver) -> Option
         .and_then(|width| u32::try_from(width).ok())
 }
 
+/// Whether a shape property block authors any DrawingML fill choice.  This is
+/// deliberately broader than the structured fills currently representable by
+/// `ChartStylePaint`: an unsupported local fill still overrides `fillRef` and
+/// must fail closed instead of reviving an inherited theme fill.
+fn shape_has_fill_choice(sp_pr: Node) -> bool {
+    [
+        "noFill",
+        "solidFill",
+        "gradFill",
+        "pattFill",
+        "blipFill",
+        "grpFill",
+    ]
+    .iter()
+    .any(|name| child(sp_pr, name).is_some())
+}
+
 fn parse_chartex_element_style(
     style_node: Node,
     resolver: &dyn ColorResolver,
@@ -4273,11 +4310,9 @@ fn parse_chartex_element_style(
     let fill_recipe_xml = fill_recipe.as_ref().and_then(|recipe| recipe.as_ref().ok());
     let fill_recipe_doc = fill_recipe_xml.and_then(|xml| roxmltree::Document::parse(xml).ok());
     let local_sp_pr = child(style_node, "spPr");
-    let local_fill_authored = local_sp_pr.is_some_and(|sp_pr| {
-        ["noFill", "solidFill", "gradFill", "pattFill"]
-            .iter()
-            .any(|name| child(sp_pr, name).is_some())
-    });
+    let local_fill_authored = local_sp_pr.is_some_and(shape_has_fill_choice);
+    let fill_paint_authored =
+        (local_fill_authored || matches!(fill_recipe.as_ref(), Some(Ok(_)))).then_some(true);
     let fill_no_style =
         (matches!(fill_recipe.as_ref(), Some(Err(()))) && !local_fill_authored).then_some(true);
     let line_recipe = line_ref.and_then(|reference| chart_style_line_ref_xml(reference, resolver));
@@ -4286,15 +4321,19 @@ fn parse_chartex_element_style(
     .then_some(true);
     let line_recipe_xml = line_recipe.as_ref().and_then(|recipe| recipe.as_ref().ok());
     let line_recipe_doc = line_recipe_xml.and_then(|xml| roxmltree::Document::parse(xml).ok());
-    let fill_component_count = local_sp_pr
-        .and_then(chart_style_paint_component_count)
-        .or_else(|| match fill_recipe.as_ref() {
+    let fill_component_count = if local_fill_authored {
+        local_sp_pr
+            .and_then(chart_style_paint_component_count)
+            .or(Some(0))
+    } else {
+        match fill_recipe.as_ref() {
             Some(Err(())) => Some(0),
             Some(Ok(_)) => fill_recipe_doc
                 .as_ref()
                 .and_then(|document| chart_style_paint_component_count(document.root_element())),
             None => None,
-        });
+        }
+    };
     let fill_entry_count = placeholders.len().min(MAX_CHART_COLOR_STYLE_ENTRIES);
     let parsed_fill_entries = chart_style_paint_entry_limit(
         fill_component_count,
@@ -4313,9 +4352,12 @@ fn parse_chartex_element_style(
         }
         let placeholder =
             chart_style_placeholder(fill_ref, resolver, *accent, accents, color_style_method);
-        let paint = local_sp_pr
-            .and_then(|sp_pr| parse_chart_style_paint(sp_pr, resolver, placeholder.as_deref()))
-            .or_else(|| match fill_recipe.as_ref() {
+        let local_paint = local_sp_pr
+            .and_then(|sp_pr| parse_chart_style_paint(sp_pr, resolver, placeholder.as_deref()));
+        let paint = if local_fill_authored {
+            local_paint
+        } else {
+            local_paint.or_else(|| match fill_recipe.as_ref() {
                 Some(Err(())) => Some(ChartStylePaint::NoFill),
                 Some(Ok(_)) => fill_recipe_doc.as_ref().and_then(|document| {
                     parse_chart_style_paint(
@@ -4325,13 +4367,15 @@ fn parse_chartex_element_style(
                     )
                 }),
                 None => None,
-            });
+            })
+        };
         fills.push(paint);
     }
-    let fill_hidden = fills
-        .iter()
-        .all(|paint| matches!(paint, Some(ChartStylePaint::NoFill)))
-        .then_some(true);
+    let fill_hidden = (fills.iter().any(Option::is_some)
+        && fills
+            .iter()
+            .all(|paint| matches!(paint, Some(ChartStylePaint::NoFill))))
+    .then_some(true);
     let fill_paints = (!fill_hidden.unwrap_or(false))
         .then(|| {
             fills
@@ -4433,6 +4477,7 @@ fn parse_chartex_element_style(
         fill_paints,
         fill_colors,
         fill_hidden,
+        fill_paint_authored,
         fill_no_style,
         line_colors,
         line_width_emu,
@@ -4544,8 +4589,10 @@ fn chart_style_role_fill_component_count(
     role: Node,
     resolver: &dyn ColorResolver,
 ) -> Option<usize> {
-    if let Some(components) = child(role, "spPr").and_then(chart_style_paint_component_count) {
-        return Some(components);
+    if let Some(sp_pr) = child(role, "spPr") {
+        if shape_has_fill_choice(sp_pr) {
+            return Some(chart_style_paint_component_count(sp_pr).unwrap_or(0));
+        }
     }
     let Some(fill_ref) = child(role, "fillRef") else {
         return Some(0);
@@ -4972,6 +5019,8 @@ fn parse_chartex_data_point_overrides(
                 marker_symbol: None,
                 marker_size: None,
                 marker_fill: None,
+                marker_fill_paint: None,
+                marker_fill_paint_authored: None,
                 marker_line: None,
                 marker_line_width_emu: None,
                 explosion: None,
@@ -5565,6 +5614,8 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         marker_symbol: None,
         marker_size: None,
         marker_fill: None,
+        marker_fill_paint: None,
+        marker_fill_paint_authored: None,
         marker_line: None,
         marker_line_width_emu: None,
         data_point_overrides: {
@@ -6730,16 +6781,19 @@ fn parse_chartex_treemap(
 // the rich per-series fields for both pptx and xlsx.
 // ============================================================================
 
-/// Parse `<c:marker>` into `(symbol, size, fill, line, line_width_emu)` — colors are hex without
-/// `#`. ECMA-376 §21.2.2.32 / §21.2.2.34. Fill and line come from `<c:spPr>`
-/// nested inside the marker, resolved via the full DrawingML color grammar
-/// ([`ColorResolver::resolve_shape_fill`]). `size` is the point value parsed as
-/// an integer (matching Excel's `<c:size val>` unsignedByte) then widened to
-/// `f64` for the shared model.
+/// Parse `<c:marker>` into `(symbol, size, fill, fill_paint,
+/// fill_paint_authored, line, line_width_emu)`. ECMA-376 §21.2.2.32 /
+/// §21.2.2.34 use the full DrawingML
+/// shape-property fill grammar for marker paint, so the shared structured fill
+/// is retained in addition to the legacy resolved solid color. `size` is the
+/// point value parsed as an integer (matching Excel's `<c:size val>`
+/// unsignedByte) then widened to `f64` for the shared model.
 pub type ParsedMarkerBlock = (
     Option<String>,
     Option<f64>,
     Option<String>,
+    Option<ChartStyleFill>,
+    Option<bool>,
     Option<String>,
     Option<u32>,
 );
@@ -6748,8 +6802,24 @@ pub fn parse_marker_block(
     marker_node: Option<Node>,
     resolver: &dyn ColorResolver,
 ) -> ParsedMarkerBlock {
+    let mut paint_budget = MAX_CHART_MARKER_PAINT_COMPONENTS;
+    let mut paint_budget_exceeded = false;
+    parse_marker_block_with_budget(
+        marker_node,
+        resolver,
+        &mut paint_budget,
+        &mut paint_budget_exceeded,
+    )
+}
+
+fn parse_marker_block_with_budget(
+    marker_node: Option<Node>,
+    resolver: &dyn ColorResolver,
+    paint_budget: &mut usize,
+    paint_budget_exceeded: &mut bool,
+) -> ParsedMarkerBlock {
     let Some(mk) = marker_node else {
-        return (None, None, None, None, None);
+        return (None, None, None, None, None, None, None);
     };
     let symbol = child(mk, "symbol")
         .and_then(|n| n.attribute("val"))
@@ -6759,16 +6829,53 @@ pub fn parse_marker_block(
         .and_then(|v| v.parse::<u32>().ok())
         .map(|v| v as f64);
     let sp_pr = child(mk, "spPr");
-    let fill = sp_pr.and_then(|p| {
-        if child(p, "noFill").is_some() {
-            // The renderer accepts 8-digit RRGGBBAA, so preserve an explicit
-            // marker noFill as a transparent paint instead of collapsing it
-            // into the same None used for an unspecified, inherited fill.
-            Some("00000000".to_string())
-        } else {
-            resolver.resolve_shape_fill(p)
+    // Count stops before resolving colors or collecting/sorting the gradient.
+    // An over-budget direct paint remains authored for precedence purposes but
+    // is not expanded into the wire model.
+    let component_count = sp_pr
+        .and_then(chart_style_paint_component_count)
+        .unwrap_or(0);
+    let within_recipe_limit = component_count <= MAX_CHART_MARKER_GRADIENT_STOPS;
+    let within_chart_budget = component_count <= *paint_budget;
+    let direct_fill = if within_recipe_limit && within_chart_budget {
+        *paint_budget -= component_count;
+        extract_direct_shape_fill(sp_pr, resolver)
+    } else {
+        *paint_budget_exceeded = true;
+        DirectShapeFill {
+            paint_authored: sp_pr
+                .and_then(|shape| {
+                    shape.children().find(|node| {
+                        node.is_element()
+                            && matches!(
+                                node.tag_name().name(),
+                                "noFill"
+                                    | "solidFill"
+                                    | "gradFill"
+                                    | "pattFill"
+                                    | "blipFill"
+                                    | "grpFill"
+                            )
+                    })
+                })
+                .map(|_| true),
+            ..Default::default()
         }
-    });
+    };
+    let fill = if direct_fill.hidden == Some(true) {
+        // The renderer accepts 8-digit RRGGBBAA, so preserve an explicit
+        // marker noFill as a transparent paint instead of collapsing it into
+        // the same None used for an unspecified, inherited fill.
+        Some("00000000".to_string())
+    } else {
+        direct_fill.color
+    };
+    // A resolved solid already has the compact legacy `markerFill` wire field.
+    // Retain the structured union only when it carries geometry/pattern data;
+    // this keeps existing solid-marker output byte-stable.
+    let fill_paint = direct_fill
+        .fill
+        .filter(|fill| !matches!(fill, ChartStyleFill::Solid { .. }));
     let line = sp_pr.and_then(|p| child(p, "ln")).and_then(|ln| {
         if child(ln, "noFill").is_some() {
             // Keep direct marker-outline noFill distinct from an omitted line
@@ -6782,7 +6889,15 @@ pub fn parse_marker_block(
         .and_then(|p| child(p, "ln"))
         .and_then(|ln| ln.attribute("w"))
         .and_then(|value| value.parse::<u32>().ok());
-    (symbol, size, fill, line, line_width_emu)
+    (
+        symbol,
+        size,
+        fill,
+        fill_paint,
+        direct_fill.paint_authored,
+        line,
+        line_width_emu,
+    )
 }
 
 fn parse_series_pattern_fill(
@@ -6808,6 +6923,22 @@ pub fn parse_data_point_overrides(
     ser_node: Node,
     resolver: &dyn ColorResolver,
 ) -> Vec<ChartDataPointOverride> {
+    let mut paint_budget = MAX_CHART_MARKER_PAINT_COMPONENTS;
+    let mut paint_budget_exceeded = false;
+    parse_data_point_overrides_with_budget(
+        ser_node,
+        resolver,
+        &mut paint_budget,
+        &mut paint_budget_exceeded,
+    )
+}
+
+fn parse_data_point_overrides_with_budget(
+    ser_node: Node,
+    resolver: &dyn ColorResolver,
+    paint_budget: &mut usize,
+    paint_budget_exceeded: &mut bool,
+) -> Vec<ChartDataPointOverride> {
     let mut result = Vec::new();
     for dpt in ser_node
         .children()
@@ -6820,8 +6951,15 @@ pub fn parse_data_point_overrides(
         let (color, fill_hidden, line_color, line_width_emu, line_dash, line_hidden) =
             parse_data_point_shape(dpt, resolver);
         let mk = child(dpt, "marker");
-        let (marker_symbol, marker_size, marker_fill, marker_line, marker_line_width_emu) =
-            parse_marker_block(mk, resolver);
+        let (
+            marker_symbol,
+            marker_size,
+            marker_fill,
+            marker_fill_paint,
+            marker_fill_paint_authored,
+            marker_line,
+            marker_line_width_emu,
+        ) = parse_marker_block_with_budget(mk, resolver, paint_budget, paint_budget_exceeded);
         let explosion = extract_dpt_explosion(dpt);
         result.push(ChartDataPointOverride {
             idx,
@@ -6834,6 +6972,8 @@ pub fn parse_data_point_overrides(
             marker_symbol,
             marker_size,
             marker_fill,
+            marker_fill_paint,
+            marker_fill_paint_authored,
             marker_line,
             marker_line_width_emu,
             explosion,
@@ -8678,6 +8818,12 @@ pub fn parse_chart_part_with_references_and_style_parts(
     // keeps per-series colors when several series share the axes); captured
     // here so the per-series closure can gate the accent fill on it.
     let series_count = ser_nodes.len();
+    // Direct marker gradients are replayed for data points by the Canvas
+    // renderer. Share one component budget across every series and point in
+    // this chart so many individually-valid recipes cannot amplify the wire
+    // model without bound.
+    let mut marker_paint_budget = MAX_CHART_MARKER_PAINT_COMPONENTS;
+    let mut marker_paint_budget_exceeded = false;
 
     let series: Vec<ChartSeries> = ser_nodes
         .iter()
@@ -8995,23 +9141,30 @@ pub fn parse_chart_part_with_references_and_style_parts(
             // populate indexed scatter-marker overrides without
             // double-representing pie slice fills.
             let data_point_overrides: Vec<ChartDataPointOverride> =
-                parse_data_point_overrides(*ser, color_resolver)
-                    .into_iter()
-                    .filter(|o| {
-                        o.color.is_some()
-                            || o.fill_hidden.is_some()
-                            || o.line_color.is_some()
-                            || o.line_width_emu.is_some()
-                            || o.line_dash.is_some()
-                            || o.line_hidden.is_some()
-                            || o.marker_symbol.is_some()
-                            || o.marker_size.is_some()
-                            || o.marker_fill.is_some()
-                            || o.marker_line.is_some()
-                            || o.marker_line_width_emu.is_some()
-                            || o.explosion.is_some()
-                    })
-                    .collect();
+                parse_data_point_overrides_with_budget(
+                    *ser,
+                    color_resolver,
+                    &mut marker_paint_budget,
+                    &mut marker_paint_budget_exceeded,
+                )
+                .into_iter()
+                .filter(|o| {
+                    o.color.is_some()
+                        || o.fill_hidden.is_some()
+                        || o.line_color.is_some()
+                        || o.line_width_emu.is_some()
+                        || o.line_dash.is_some()
+                        || o.line_hidden.is_some()
+                        || o.marker_symbol.is_some()
+                        || o.marker_size.is_some()
+                        || o.marker_fill.is_some()
+                        || o.marker_fill_paint.is_some()
+                        || o.marker_fill_paint_authored.is_some()
+                        || o.marker_line.is_some()
+                        || o.marker_line_width_emu.is_some()
+                        || o.explosion.is_some()
+                })
+                .collect();
 
             // Series value number format from `<c:val>…<c:numCache><c:formatCode>`.
             // Used for data labels when `<c:dLbls>` carries no explicit `<c:numFmt>`
@@ -9114,8 +9267,20 @@ pub fn parse_chart_part_with_references_and_style_parts(
                 .filter(|owner| owner.tag_name().name() == "lineChart")
                 .and_then(|owner| bool_child(owner, "smooth"));
             let marker_node = child(*ser, "marker");
-            let (marker_symbol, marker_size, marker_fill, marker_line, marker_line_width_emu) =
-                parse_marker_block(marker_node, color_resolver);
+            let (
+                marker_symbol,
+                marker_size,
+                marker_fill,
+                marker_fill_paint,
+                marker_fill_paint_authored,
+                marker_line,
+                marker_line_width_emu,
+            ) = parse_marker_block_with_budget(
+                marker_node,
+                color_resolver,
+                &mut marker_paint_budget,
+                &mut marker_paint_budget_exceeded,
+            );
             let show_marker = match (&marker_symbol, series_is_scatter_like) {
                 (Some(sym), _) => sym != "none",
                 (None, true) => true,
@@ -9278,6 +9443,8 @@ pub fn parse_chart_part_with_references_and_style_parts(
                 marker_symbol,
                 marker_size,
                 marker_fill,
+                marker_fill_paint,
+                marker_fill_paint_authored,
                 marker_line,
                 marker_line_width_emu,
                 data_point_overrides: if data_point_overrides.is_empty() {
@@ -9310,6 +9477,14 @@ pub fn parse_chart_part_with_references_and_style_parts(
             }
         })
         .collect();
+
+    // Structured marker paints are replayed once per visible point. Refuse the
+    // chart atomically when their aggregate recipe budget is exceeded instead
+    // of retaining an input-order-dependent prefix and silently making the
+    // remaining authored markers transparent.
+    if marker_paint_budget_exceeded {
+        return None;
+    }
 
     // Auto-title (ECMA-376 §21.2.2.7 `<c:autoTitleDeleted>`). When the chart has
     // no explicit title text but auto-titling is enabled, Word synthesizes a
@@ -10294,6 +10469,8 @@ mod tests {
                 marker_symbol: None,
                 marker_size: None,
                 marker_fill: None,
+                marker_fill_paint: None,
+                marker_fill_paint_authored: None,
                 marker_line: None,
                 marker_line_width_emu: None,
                 data_point_overrides: None,
@@ -13684,11 +13861,13 @@ Subtitle</a:t></a:r></a:p>
             </c:marker>"#
         );
         let d = root_of(&xml);
-        let (symbol, size, fill, line, line_width_emu) =
+        let (symbol, size, fill, fill_paint, fill_authored, line, line_width_emu) =
             parse_marker_block(Some(d.root_element()), &FixtureResolver);
         assert_eq!(symbol.as_deref(), Some("circle"));
         assert_eq!(size, Some(6.0));
         assert_eq!(fill.as_deref(), Some("FF0000"));
+        assert_eq!(fill_paint, None);
+        assert_eq!(fill_authored, Some(true));
         assert_eq!(line.as_deref(), Some("4472C4"));
         assert_eq!(line_width_emu, Some(25400));
     }
@@ -13697,7 +13876,7 @@ Subtitle</a:t></a:r></a:p>
     fn parse_marker_block_none_node_returns_all_none() {
         assert_eq!(
             parse_marker_block(None, &FixtureResolver),
-            (None, None, None, None, None)
+            (None, None, None, None, None, None, None)
         );
     }
 
@@ -13705,11 +13884,13 @@ Subtitle</a:t></a:r></a:p>
     fn parse_marker_block_symbol_none_no_sppr() {
         let xml = format!(r#"<c:marker xmlns:c="{C_NS}"><c:symbol val="none"/></c:marker>"#);
         let d = root_of(&xml);
-        let (symbol, size, fill, line, line_width_emu) =
+        let (symbol, size, fill, fill_paint, fill_authored, line, line_width_emu) =
             parse_marker_block(Some(d.root_element()), &FixtureResolver);
         assert_eq!(symbol.as_deref(), Some("none"));
         assert_eq!(size, None);
         assert_eq!(fill, None);
+        assert_eq!(fill_paint, None);
+        assert_eq!(fill_authored, None);
         assert_eq!(line, None);
         assert_eq!(line_width_emu, None);
     }
@@ -13723,9 +13904,11 @@ Subtitle</a:t></a:r></a:p>
             </c:marker>"#
         );
         let d = root_of(&xml);
-        let (_, _, fill, line, line_width_emu) =
+        let (_, _, fill, fill_paint, fill_authored, line, line_width_emu) =
             parse_marker_block(Some(d.root_element()), &FixtureResolver);
         assert_eq!(fill.as_deref(), Some("00000000"));
+        assert_eq!(fill_paint, None);
+        assert_eq!(fill_authored, Some(true));
         assert_eq!(line.as_deref(), Some("777777"));
         assert_eq!(line_width_emu, None);
 
@@ -13733,9 +13916,118 @@ Subtitle</a:t></a:r></a:p>
             r#"<c:marker xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:symbol val="circle"/><c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:marker>"#
         );
         let d = root_of(&line_no_fill);
-        let (_, _, fill, line, _) = parse_marker_block(Some(d.root_element()), &FixtureResolver);
+        let (_, _, fill, fill_paint, fill_authored, line, _) =
+            parse_marker_block(Some(d.root_element()), &FixtureResolver);
         assert_eq!(fill.as_deref(), Some("FFFFFF"));
+        assert_eq!(fill_paint, None);
+        assert_eq!(fill_authored, Some(true));
         assert_eq!(line.as_deref(), Some("00000000"));
+    }
+
+    #[test]
+    fn parse_marker_block_preserves_structured_pattern_fill() {
+        let xml = format!(
+            r#"<c:marker xmlns:c="{C_NS}" xmlns:a="{A_NS}">
+              <c:symbol val="diamond"/>
+              <c:spPr><a:pattFill prst="pct30">
+                <a:fgClr><a:srgbClr val="112233"/></a:fgClr>
+                <a:bgClr><a:srgbClr val="DDEEFF"/></a:bgClr>
+              </a:pattFill></c:spPr>
+            </c:marker>"#
+        );
+        let d = root_of(&xml);
+        let (_, _, fill, fill_paint, fill_authored, _, _) =
+            parse_marker_block(Some(d.root_element()), &FixtureResolver);
+        assert_eq!(fill, None);
+        assert_eq!(fill_authored, Some(true));
+        assert_eq!(
+            fill_paint,
+            Some(ChartStyleFill::Pattern {
+                fg: "112233".to_string(),
+                bg: "DDEEFF".to_string(),
+                preset: "pct30".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_marker_block_keeps_unresolved_picture_fill_authored() {
+        let xml = format!(
+            r#"<c:marker xmlns:c="{C_NS}" xmlns:a="{A_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <c:symbol val="picture"/>
+              <c:spPr><a:blipFill><a:blip r:embed="rId1"/><a:stretch/></a:blipFill></c:spPr>
+            </c:marker>"#
+        );
+        let d = root_of(&xml);
+        let (_, _, fill, fill_paint, fill_authored, _, _) =
+            parse_marker_block(Some(d.root_element()), &FixtureResolver);
+        assert_eq!(fill, None);
+        assert_eq!(fill_paint, None);
+        assert_eq!(fill_authored, Some(true));
+    }
+
+    #[test]
+    fn parse_marker_block_rejects_gradient_beyond_resource_ceiling_before_expansion() {
+        let stops = (0..=MAX_CHART_MARKER_GRADIENT_STOPS)
+            .map(|index| format!(r#"<a:gs pos="{}"><a:srgbClr val="112233"/></a:gs>"#, index))
+            .collect::<String>();
+        let xml = format!(
+            r#"<c:marker xmlns:c="{C_NS}" xmlns:a="{A_NS}">
+              <c:symbol val="circle"/>
+              <c:spPr><a:gradFill><a:gsLst>{stops}</a:gsLst></a:gradFill></c:spPr>
+            </c:marker>"#
+        );
+        let d = root_of(&xml);
+        let (_, _, fill, fill_paint, fill_authored, _, _) =
+            parse_marker_block(Some(d.root_element()), &FixtureResolver);
+        assert_eq!(fill, None);
+        assert_eq!(fill_paint, None);
+        assert_eq!(fill_authored, Some(true));
+    }
+
+    #[test]
+    fn point_marker_paint_budget_reports_aggregate_overflow() {
+        let xml = format!(
+            r#"<c:ser xmlns:c="{C_NS}" xmlns:a="{A_NS}">
+              <c:dPt><c:idx val="0"/><c:marker><c:symbol val="circle"/><c:spPr>
+                <a:pattFill prst="pct20"><a:fgClr><a:srgbClr val="112233"/></a:fgClr>
+                  <a:bgClr><a:srgbClr val="DDEEFF"/></a:bgClr></a:pattFill>
+              </c:spPr></c:marker></c:dPt>
+              <c:dPt><c:idx val="1"/><c:marker><c:symbol val="circle"/><c:spPr>
+                <a:pattFill prst="pct30"><a:fgClr><a:srgbClr val="445566"/></a:fgClr>
+                  <a:bgClr><a:srgbClr val="AABBCC"/></a:bgClr></a:pattFill>
+              </c:spPr></c:marker></c:dPt>
+            </c:ser>"#
+        );
+        let document = root_of(&xml);
+        let mut component_budget = 1;
+        let mut paint_budget_exceeded = false;
+        let _points = parse_data_point_overrides_with_budget(
+            document.root_element(),
+            &FixtureResolver,
+            &mut component_budget,
+            &mut paint_budget_exceeded,
+        );
+        assert!(paint_budget_exceeded);
+        assert_eq!(component_budget, 0);
+    }
+
+    #[test]
+    fn parse_chart_part_atomically_rejects_marker_paint_budget_overflow() {
+        let stops = (0..=MAX_CHART_MARKER_GRADIENT_STOPS)
+            .map(|index| format!(r#"<a:gs pos="{}"><a:srgbClr val="112233"/></a:gs>"#, index))
+            .collect::<String>();
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart><c:plotArea>
+              <c:lineChart><c:ser><c:idx val="0"/><c:marker><c:symbol val="circle"/>
+                <c:spPr><a:gradFill><a:gsLst>{stops}</a:gsLst></a:gradFill></c:spPr>
+              </c:marker><c:cat><c:strCache><c:pt idx="0"><c:v>A</c:v></c:pt></c:strCache></c:cat>
+              <c:val><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:val>
+              </c:ser></c:lineChart>
+            </c:plotArea></c:chart></c:chartSpace>"#
+        );
+        let document = chart_space_of(&xml);
+        assert!(parse_chart_part(document.root_element(), &FixtureResolver).is_none());
     }
 
     #[test]
@@ -15646,6 +15938,74 @@ Subtitle</a:t></a:r></a:p>
     }
 
     #[test]
+    fn linked_marker_style_preserves_unsupported_fill_provenance() {
+        let chart_xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea>
+              <c:lineChart><c:ser><c:idx val="0"/><c:order val="0"/>
+                <c:cat><c:strLit><c:ptCount val="1"/><c:pt idx="0"><c:v>A</c:v></c:pt></c:strLit></c:cat>
+                <c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val>
+              </c:ser></c:lineChart>
+            </c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let unsupported_style_xml = format!(
+            r#"<cs:chartStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}">
+              <cs:dataPointMarker>
+                <cs:fillRef idx="1"><cs:styleClr val="auto"/></cs:fillRef>
+                <cs:spPr><a:blipFill/></cs:spPr>
+              </cs:dataPointMarker>
+            </cs:chartStyle>"#,
+        );
+        let inherited_style_xml = format!(
+            r#"<cs:chartStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}">
+              <cs:dataPointMarker>
+                <cs:fillRef idx="1"><cs:styleClr val="auto"/></cs:fillRef>
+              </cs:dataPointMarker>
+            </cs:chartStyle>"#,
+        );
+        let theme_xml = format!(
+            r#"<a:theme xmlns:a="{A_NS}"><a:themeElements>
+              <a:fmtScheme name="Office">
+                <a:fillStyleLst>
+                  <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+                </a:fillStyleLst>
+                <a:lnStyleLst/><a:effectStyleLst/><a:bgFillStyleLst/>
+              </a:fmtScheme>
+            </a:themeElements></a:theme>"#,
+        );
+        let resolver = FormatSchemeFixtureResolver {
+            format_scheme: crate::theme::ThemeFormatScheme::parse(&theme_xml),
+        };
+        let document = root_of(&chart_xml);
+        let model = parse_chart_part_with_style_parts(
+            document.root_element(),
+            &resolver,
+            Some(&unsupported_style_xml),
+            None,
+        )
+        .expect("classic chart parses");
+        let role = &model.chart_style_roles.expect("linked roles")["dataPointMarker"];
+        assert_eq!(role.fill_paint_authored, Some(true));
+        assert_eq!(role.fill_hidden, None);
+        assert_eq!(role.fill_colors, None);
+        assert_eq!(role.fill_paints, None);
+
+        let inherited_model = parse_chart_part_with_style_parts(
+            document.root_element(),
+            &resolver,
+            Some(&inherited_style_xml),
+            None,
+        )
+        .expect("classic chart with inherited marker fill parses");
+        let inherited_role =
+            &inherited_model.chart_style_roles.expect("linked roles")["dataPointMarker"];
+        assert_eq!(inherited_role.fill_paint_authored, Some(true));
+        assert!(inherited_role
+            .fill_colors
+            .as_ref()
+            .is_some_and(|colors| colors.iter().any(Option::is_some)));
+    }
+
+    #[test]
     fn linked_chart_style_role_table_fails_closed_before_oversized_expansion() {
         let roles = CHART_STYLE_ROLE_NAMES
             .iter()
@@ -15716,6 +16076,34 @@ Subtitle</a:t></a:r></a:p>
             Some("cycle"),
         )
         .is_none());
+
+        // A local fill choice has higher precedence than fillRef even when the
+        // local grammar is not representable. It therefore contributes no
+        // inherited gradient work to the aggregate preflight.
+        let locally_overridden_roles = CHART_STYLE_ROLE_NAMES
+            .iter()
+            .map(|name| {
+                format!(
+                    "<cs:{name}><cs:fillRef idx=\"1\"><cs:styleClr val=\"auto\"/></cs:fillRef><cs:spPr><a:blipFill/></cs:spPr></cs:{name}>"
+                )
+            })
+            .collect::<String>();
+        let locally_overridden_style_xml = format!(
+            r#"<cs:chartStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}">{locally_overridden_roles}</cs:chartStyle>"#,
+        );
+        let locally_overridden_style_doc = root_of(&locally_overridden_style_xml);
+        let table = parse_chart_style_role_table(
+            locally_overridden_style_doc.root_element(),
+            &resolver,
+            Some(&palette),
+            Some("cycle"),
+        )
+        .expect("unsupported local fills suppress inherited gradient work");
+        assert!(table
+            .values()
+            .all(|style| style.fill_paint_authored == Some(true)
+                && style.fill_colors.is_none()
+                && style.fill_paints.is_none()));
     }
 
     // ── CH15: chartEx structured layout parsing ──────────────────────────────
@@ -16409,8 +16797,14 @@ Subtitle</a:t></a:r></a:p>
         let styled_series = r#"<c:ser><c:idx val="0"/>
           <c:spPr><a:ln cap="rnd"><a:solidFill><a:srgbClr val="123456"/></a:solidFill>
             <a:prstDash val="dash"/><a:round/></a:ln></c:spPr>
+          <c:marker><c:symbol val="circle"/><c:spPr><a:pattFill prst="pct20">
+            <a:fgClr><a:srgbClr val="112233"/></a:fgClr><a:bgClr><a:srgbClr val="DDEEFF"/></a:bgClr>
+          </a:pattFill></c:spPr></c:marker>
           <c:dPt><c:idx val="0"/><c:spPr><a:ln w="25400"><a:solidFill>
-            <a:srgbClr val="ABCDEF"/></a:solidFill><a:prstDash val="dot"/></a:ln></c:spPr></c:dPt>
+            <a:srgbClr val="ABCDEF"/></a:solidFill><a:prstDash val="dot"/></a:ln></c:spPr>
+            <c:marker><c:symbol val="diamond"/><c:spPr><a:pattFill prst="pct30">
+              <a:fgClr><a:srgbClr val="445566"/></a:fgClr><a:bgClr><a:srgbClr val="AABBCC"/></a:bgClr>
+            </a:pattFill></c:spPr></c:marker></c:dPt>
           <c:cat><c:strRef><c:strCache><c:pt idx="0"><c:v>A</c:v></c:pt></c:strCache></c:strRef></c:cat>
           <c:val><c:numRef><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:numRef></c:val>
         </c:ser>"#;
@@ -16425,10 +16819,28 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(style.line_dash.as_deref(), Some("dash"));
         assert_eq!(style.line_cap.as_deref(), Some("rnd"));
         assert_eq!(style.line_join.as_deref(), Some("round"));
+        assert_eq!(
+            styled.series[0].marker_fill_paint,
+            Some(ChartStyleFill::Pattern {
+                fg: "112233".to_string(),
+                bg: "DDEEFF".to_string(),
+                preset: "pct20".to_string(),
+            })
+        );
+        assert_eq!(styled.series[0].marker_fill_paint_authored, Some(true));
         let point = &styled.series[0].data_point_overrides.as_ref().unwrap()[0];
         assert_eq!(point.line_color.as_deref(), Some("ABCDEF"));
         assert_eq!(point.line_width_emu, Some(25400));
         assert_eq!(point.line_dash.as_deref(), Some("dot"));
+        assert_eq!(
+            point.marker_fill_paint,
+            Some(ChartStyleFill::Pattern {
+                fg: "445566".to_string(),
+                bg: "AABBCC".to_string(),
+                preset: "pct30".to_string(),
+            })
+        );
+        assert_eq!(point.marker_fill_paint_authored, Some(true));
     }
 
     /// §21.2.2.198 stockChart → `stock` (its high/low/close series flow through

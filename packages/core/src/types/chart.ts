@@ -160,6 +160,13 @@ export interface ChartSeries {
   /** `<c:marker><c:spPr>` fill as 6/8-digit resolved hex (no `#`); transparent
    *  `00000000` represents an explicit `<a:noFill/>`. */
   markerFill?: string | null;
+  /** Structured `<c:marker><c:spPr>` fill. Direct solid, gradient, and pattern
+   * paints share the DrawingML fill model used by shapes and chart regions. */
+  markerFillPaint?: Fill | null;
+  /** A direct marker fill was authored even when its color could not be
+   * resolved or its grammar is not represented by the current marker model.
+   * This keeps a less-specific linked Chart Style from replacing it. */
+  markerFillPaintAuthored?: boolean | null;
   /** `<c:marker><c:spPr><a:ln><a:solidFill>` resolved hex (no `#`). */
   markerLine?: string | null;
   /** `<c:marker><c:spPr><a:ln w>` marker-outline width in EMU. */
@@ -296,6 +303,11 @@ export interface ChartDataPointOverride {
   markerSymbol?: string;
   markerSize?: number;
   markerFill?: string;
+  /** Direct point-marker structured fill. */
+  markerFillPaint?: Fill | null;
+  /** Direct point marker-fill provenance; retained independently from the
+   * resolved paint so unsupported/unresolved paint still wins precedence. */
+  markerFillPaintAuthored?: boolean | null;
   markerLine?: string;
   /** Direct point marker-outline width in EMU. */
   markerLineWidthEmu?: number;
@@ -476,6 +488,8 @@ export interface ChartExElementStyle {
   /** Per-color-style-index fills after `phClr` substitution and transforms. */
   fillColors?: Array<string | null> | null;
   fillHidden?: boolean | null;
+  /** Linked fill was authored even when its paint is currently unsupported. */
+  fillPaintAuthored?: boolean | null;
   /** Linked Chart Style uses `NoStyle`, not an authored no-fill paint. */
   fillNoStyle?: boolean | null;
   /** Per-color-style-index outlines after `phClr` substitution/transforms. */

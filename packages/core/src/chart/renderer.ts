@@ -6,6 +6,17 @@
 import type { ChartDataLabelOverride, ChartDecorationLineStyle, ChartDisplayUnits, ChartLegendEntryOverride, ChartManualLayout, ChartModel, ChartRect, ChartSeries, ChartSeriesDataLabels, ChartStockUpDownBarStyle, ChartStyleRole, ChartTextBox, ChartTextRun, ChartTrendline, SecondaryValueAxis } from '../types/chart';
 import type { Fill } from '../types/common';
 import {
+  effectiveMarkerSymbol,
+  hasVisiblePointMarkerOverride,
+  markersSuppressedByChartStyle,
+  markerFillColorFor,
+  markerFillPaintFor,
+  markerPaintComponents,
+  seriesMarkerFillColor,
+  seriesMarkerFillPaint,
+  seriesLegendMarkerIsVisible,
+} from './marker-style.js';
+import {
   AXIS_OUTER_TEXT_MARGIN_PT,
   computeChartFrame,
   cartesianTitleBand,
@@ -647,6 +658,7 @@ function legendSwatchStyle(chartType: string | undefined): LegendSwatchStyle {
 interface LegendMarker {
   symbol: string;
   fill: string;
+  fillPaint?: Fill | null;
   line: string | null;
   lineWidthEmu: number | null;
   /** True when the plotted series draws both a connecting line and markers. */
@@ -692,19 +704,17 @@ function legendMarkerFor(
     family === 'stackedLinePct' || isStock;
   const isScatter = family === 'scatter';
   if (!isLineFamily && !isScatter) return null;
-  if (isScatter && (scatterStyle === 'lineNoMarker' || scatterStyle === 'smoothNoMarker')) return null;
+  if (!seriesLegendMarkerIsVisible(chartType, scatterStyle, s)) return null;
   const symbol = s.markerSymbol ?? (isStock ? 'none' : 'circle');
-  // `markerSymbol: "none"` means the series plots no marker at all; there is no
-  // glyph to show, so fall back to the (line) swatch rather than invent one.
-  if (symbol === 'none' || s.showMarker === false) return null;
   const base = chartColor(entryIndex, s); // '#RRGGBB'
-  const fill = s.markerFill ?? base.replace(/^#/, '');
+  const fill = seriesMarkerFillColor(s, base.replace(/^#/, ''));
   const withLine = isScatter
     ? scatterSeriesDrawsLine('scatter', scatterStyle, s)
     : s.lineHidden !== true;
   return {
     symbol,
     fill,
+    fillPaint: seriesMarkerFillPaint(s),
     line: s.markerLine ?? null,
     lineWidthEmu: s.markerLineWidthEmu ?? null,
     withLine,
@@ -738,6 +748,7 @@ function drawLegendSwatch(
     drawMarker(
       ctx, x + w / 2, y + h / 2, marker.symbol, h * 0.58, marker.fill, marker.line, 1,
       marker.lineWidthEmu != null ? axisLineWidthPx(marker.lineWidthEmu, ptToPx) : undefined,
+      marker.fillPaint, shapeRotationDeg,
     );
     return;
   }
@@ -764,6 +775,7 @@ function drawLegendSwatch(
         drawMarker(
           ctx, x + w / 2, y + h / 2, marker.symbol, h * 0.58, marker.fill, marker.line, 1,
           marker.lineWidthEmu != null ? axisLineWidthPx(marker.lineWidthEmu, ptToPx) : undefined,
+          marker.fillPaint, shapeRotationDeg,
         );
       }
       return;
@@ -787,6 +799,7 @@ function drawLegendSwatch(
       drawMarker(
         ctx, x + w / 2, y + h / 2, marker.symbol, h * 0.58, marker.fill, marker.line, 1,
         marker.lineWidthEmu != null ? axisLineWidthPx(marker.lineWidthEmu, ptToPx) : undefined,
+        marker.fillPaint, shapeRotationDeg,
       );
     }
     ctx.restore();
@@ -3870,6 +3883,7 @@ function renderBarChart(
   // this mixed-family layout.
   for (let si = 0; si < areaSeries.length; si++) {
     const series = areaSeries[si];
+    const pointOverrides = indexPointOverrides(series.dataPointOverrides);
     const color = chartColor(sourceSeriesIndices.get(series) ?? si, series);
     const yOf = sec && series.useSecondaryAxis === true
       ? toYSecondarySeries
@@ -3922,6 +3936,39 @@ function renderBarChart(
       run.push({ x: categoryCenterX(ci), y: yOf(value ?? 0) });
     }
     paintRun();
+
+    const seriesMarkersVisible = (series.showMarker === true || seriesHasMarkerDetail(series))
+      && series.markerSymbol !== 'none';
+    if (seriesMarkersVisible || hasVisiblePointMarkerOverride(series)) {
+      const markerRadius = Math.max(2, 2.5 * ptToPx);
+      for (let ci = 0; ci < n; ci++) {
+        const value = series.values[ci];
+        if (value == null) continue;
+        const point = pointOverrides.get(ci);
+        const symbol = effectiveMarkerSymbol(series, point, 'circle', seriesMarkersVisible);
+        if (symbol === 'none') continue;
+        const markerX = categoryCenterX(ci);
+        const markerY = yOf(value);
+        if (seriesHasMarkerDetail(series)) {
+          const lineWidthEmu = point?.markerLineWidthEmu ?? series.markerLineWidthEmu;
+          drawMarker(
+            ctx, markerX, markerY, symbol,
+            point?.markerSize ?? series.markerSize ?? 5,
+            markerFillColorFor(series, point, ci, color),
+            point?.markerLine ?? series.markerLine ?? null,
+            ptToPx,
+            lineWidthEmu != null ? axisLineWidthPx(lineWidthEmu, ptToPx) : undefined,
+            markerFillPaintFor(series, point, ci),
+            shapeRotationDeg,
+          );
+        } else {
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(markerX, markerY, markerRadius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
   }
 
   for (let ci = 0; ci < n; ci++) {
@@ -4571,6 +4618,7 @@ function renderBarChart(
     }
     for (let si = 0; si < lineSeries.length; si++) {
       const s = lineSeries[si];
+      const pointOverrides = indexPointOverrides(s.dataPointOverrides);
       const color = chartColor(barSeries.length + si, s);
       // Series bound to the secondary axis map through its scale; others use
       // the primary (bar) value axis.
@@ -4621,14 +4669,34 @@ function renderBarChart(
       }
       flushRun();
       if (paintLine) ctx.stroke();
-      if (s.showMarker !== false) {
+      const seriesMarkersVisible = s.showMarker !== false && s.markerSymbol !== 'none';
+      const drawMarkers = seriesMarkersVisible || hasVisiblePointMarkerOverride(s);
+      const hasMarkerDetail = seriesHasMarkerDetail(s);
+      if (drawMarkers) {
         for (let ci = 0; ci < n; ci++) {
           const v = s.values[ci];
           if (v == null) continue;
           const lx = categoryCenterX(ci);
           const ly = yOf(v);
-          ctx.fillStyle = color;
-          ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI * 2); ctx.fill();
+          const point = pointOverrides.get(ci);
+          const symbol = effectiveMarkerSymbol(s, point, 'circle', seriesMarkersVisible);
+          if (symbol === 'none') continue;
+          if (hasMarkerDetail) {
+            const lineWidthEmu = point?.markerLineWidthEmu ?? s.markerLineWidthEmu;
+            drawMarker(
+              ctx, lx, ly, symbol,
+              point?.markerSize ?? s.markerSize ?? 5,
+              markerFillColorFor(s, point, ci, color),
+              point?.markerLine ?? s.markerLine ?? null,
+              ptToPx,
+              lineWidthEmu != null ? axisLineWidthPx(lineWidthEmu, ptToPx) : undefined,
+              markerFillPaintFor(s, point, ci),
+              shapeRotationDeg,
+            );
+          } else {
+            ctx.fillStyle = color;
+            ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI * 2); ctx.fill();
+          }
         }
       }
       // Trendlines (`<c:trendline>`, §21.2.2.211) for the combo line series.
@@ -4718,6 +4786,8 @@ function renderBarChart(
         chart.scatterStyle ?? 'marker',
         { x, y, w, h },
         yScale.max,
+        undefined,
+        shapeRotationDeg,
       );
     }
   }
@@ -5110,6 +5180,9 @@ function isClassicMarkerSeries(chart: ChartModel, series: ChartSeries): boolean 
   return family === 'line'
     || family === 'stackedLine'
     || family === 'stackedLinePct'
+    || family === 'area'
+    || family === 'stackedArea'
+    || family === 'stackedAreaPct'
     || family === 'scatter'
     || family === 'radar'
     || family === 'stock';
@@ -5123,13 +5196,30 @@ function chartStyleRoleMarker(
 ): ChartSeries {
   const linked = chart.chartStyleRoles?.dataPointMarker;
   if (!isClassicMarkerSeries(chart, direct)
-    || direct.showMarker === false || direct.markerSymbol === 'none') return direct;
+    || ((direct.showMarker === false || direct.markerSymbol === 'none')
+      && !hasVisiblePointMarkerOverride(direct))) return direct;
   const fillApplies = linked != null && linked.fillNoStyle !== true;
   const lineApplies = linked != null && linked.lineNoStyle !== true;
+  const directFillAuthored = direct.markerFillPaintAuthored === true
+    || direct.markerFill != null || direct.markerFillPaint !== undefined;
   const markerFill = direct.markerFill
-    ?? (fillApplies && linked?.fillHidden === true
+    ?? (!directFillAuthored && fillApplies && linked?.fillHidden === true
       ? '00000000'
-      : fillApplies && linked ? chartExStyleColor(chart, linked, 'fill', index, count) : null);
+      : !directFillAuthored && fillApplies && linked
+        ? chartExStyleColor(chart, linked, 'fill', index, count) : null);
+  const linkedFillPaint = !directFillAuthored && fillApplies && linked
+    ? chartExStylePaintDecision(chart, linked, index, count)
+    : undefined;
+  const markerFillPaint = direct.markerFillPaint !== undefined
+    ? direct.markerFillPaint
+    : linkedFillPaint?.fillType === 'gradient' || linkedFillPaint?.fillType === 'pattern'
+      ? linkedFillPaint
+      : undefined;
+  const markerFillPaintAuthored = directFillAuthored
+    ? direct.markerFillPaintAuthored
+    : fillApplies && linked?.fillPaintAuthored === true
+      ? true
+      : undefined;
   const markerLine = direct.markerLine
     ?? (lineApplies && linked?.lineHidden === true
       ? '00000000'
@@ -5139,6 +5229,8 @@ function chartStyleRoleMarker(
   const markerSize = direct.markerSize ?? chart.chartStyleMarkerSizePt;
   const markerSymbol = direct.markerSymbol ?? chart.chartStyleMarkerSymbol;
   if (markerFill === direct.markerFill
+    && markerFillPaint === direct.markerFillPaint
+    && markerFillPaintAuthored === direct.markerFillPaintAuthored
     && markerLine === direct.markerLine
     && markerLineWidthEmu === direct.markerLineWidthEmu
     && markerSize === direct.markerSize
@@ -5146,6 +5238,8 @@ function chartStyleRoleMarker(
   return {
     ...direct,
     markerFill,
+    markerFillPaint,
+    markerFillPaintAuthored,
     markerLine,
     markerLineWidthEmu,
     markerSize,
@@ -6229,7 +6323,8 @@ function renderLineChart(
     // ECMA-376 §21.2.2.32 — when the series resolves to no marker, skip the
     // data-point dots but keep data labels. Markers / labels pin to the plotted
     // (cumulative) value so they ride the stacked line, not the raw datum.
-    const drawMarkers = s.showMarker !== false;
+    const seriesMarkersVisible = s.showMarker !== false && s.markerSymbol !== 'none';
+    const drawMarkers = seriesMarkersVisible || hasVisiblePointMarkerOverride(s);
     // Series carrying explicit `<c:marker>` detail route through drawMarker
     // (symbol/size/fill/line + per-point `<c:dPt>` overrides). Series without
     // any detail keep the historical fixed-circle fast path unchanged
@@ -6265,7 +6360,7 @@ function renderLineChart(
             if (!drawMarkers) return 0;
             if (!hasMarkerDetail) return markerR;
             const dpt = pointOverrides.get(ci);
-            const symbol = dpt?.markerSymbol ?? s.markerSymbol ?? 'circle';
+            const symbol = effectiveMarkerSymbol(s, dpt, 'circle', seriesMarkersVisible);
             if (symbol === 'none') return 0;
             return ((dpt?.markerSize ?? s.markerSize ?? 5) / 2) * ptToPx;
           },
@@ -6287,15 +6382,16 @@ function renderLineChart(
       if (drawMarkers) {
         if (hasMarkerDetail) {
           const dpt = pointOverrides.get(ci);
-          const symbol = (dpt?.markerSymbol ?? s.markerSymbol ?? 'circle');
+          const symbol = effectiveMarkerSymbol(s, dpt, 'circle', seriesMarkersVisible);
           if (symbol !== 'none') {
             const sizePt = dpt?.markerSize ?? s.markerSize ?? 5;
-            const fill = dpt?.markerFill ?? dpt?.color ?? s.markerFill ?? color;
+            const fill = markerFillColorFor(s, dpt, ci, color);
             const line = dpt?.markerLine ?? s.markerLine ?? null;
             const lineWidthEmu = dpt?.markerLineWidthEmu ?? s.markerLineWidthEmu;
             drawMarker(
               ctx, toX(ci), yOf(pv), symbol, sizePt, fill, line, ptToPx,
               lineWidthEmu != null ? axisLineWidthPx(lineWidthEmu, ptToPx) : undefined,
+              markerFillPaintFor(s, dpt, ci), shapeRotationDeg,
             );
           }
         } else {
@@ -6713,20 +6809,36 @@ function renderStockChart(
   ): void => {
     if (!s) return;
     const color = chartColor(seriesIndex, s);
-    const symbol = s.markerSymbol ?? null;
-    const hasExplicitMarker = symbol != null && symbol !== 'none' && seriesHasMarkerDetail(s);
+    const pointOverrides = indexPointOverrides(s.dataPointOverrides);
+    const seriesMarkerVisible = s.markerSymbol != null && s.markerSymbol !== 'none'
+      && seriesHasMarkerDetail(s);
     const tickLen = Math.max(3, (pw / n) * 0.22);
     for (let ci = 0; ci < n; ci++) {
       const v = s.values[ci];
       if (v == null) continue;
       const cx = toX(ci);
       const cy = toY(v);
-      if (symbol === 'none') continue;
+      const point = pointOverrides.get(ci);
+      if (point?.markerSymbol === 'none' || (point?.markerSymbol == null && s.markerSymbol === 'none')) {
+        continue;
+      }
+      const hasExplicitMarker = seriesMarkerVisible
+        || (point?.markerSymbol != null && point.markerSymbol !== 'none');
       if (hasExplicitMarker) {
+        const symbol = point?.markerSymbol ?? s.markerSymbol ?? 'circle';
         drawMarker(
           ctx, cx, cy, symbol as string,
-          s.markerSize ?? 3, s.markerFill ?? color, s.markerLine ?? null, ptToPx,
-          s.markerLineWidthEmu != null ? axisLineWidthPx(s.markerLineWidthEmu, ptToPx) : undefined,
+          point?.markerSize ?? s.markerSize ?? 3,
+          markerFillColorFor(s, point, ci, color),
+          point?.markerLine ?? s.markerLine ?? null,
+          ptToPx,
+          (point?.markerLineWidthEmu ?? s.markerLineWidthEmu) != null
+            ? axisLineWidthPx(
+                (point?.markerLineWidthEmu ?? s.markerLineWidthEmu) as number,
+                ptToPx,
+              )
+            : undefined,
+          markerFillPaintFor(s, point, ci), shapeRotationDeg,
         );
         continue;
       }
@@ -7937,21 +8049,24 @@ function renderAreaChart(
       }
       // Markers only when the series opts in (`<c:marker>` symbol/size/… — area
       // charts default to NO markers, so nothing fires without explicit detail).
-      if (s.showMarker === true || seriesHasMarkerDetail(s)) {
+      const seriesMarkersVisible = (s.showMarker === true || seriesHasMarkerDetail(s))
+        && s.markerSymbol !== 'none';
+      if (seriesMarkersVisible || hasVisiblePointMarkerOverride(s)) {
         for (let ci = 0; ci < n; ci++) {
           if (s.values[ci] == null) continue;
           const dpt = pointOverrides.get(ci);
-          const symbol = (dpt?.markerSymbol ?? s.markerSymbol ?? 'circle');
+          const symbol = effectiveMarkerSymbol(s, dpt, 'circle', seriesMarkersVisible);
           if (symbol === 'none') continue;
           const px = toX(ci); const py = yOf(plottedOf(ci));
           if (seriesHasMarkerDetail(s)) {
             const sizePt = dpt?.markerSize ?? s.markerSize ?? 5;
-            const fill = dpt?.markerFill ?? dpt?.color ?? s.markerFill ?? color;
+            const fill = markerFillColorFor(s, dpt, ci, color);
             const line = dpt?.markerLine ?? s.markerLine ?? null;
             const lineWidthEmu = dpt?.markerLineWidthEmu ?? s.markerLineWidthEmu;
             drawMarker(
               ctx, px, py, symbol, sizePt, fill, line, ptToPx,
               lineWidthEmu != null ? axisLineWidthPx(lineWidthEmu, ptToPx) : undefined,
+              markerFillPaintFor(s, dpt, ci), shapeRotationDeg,
             );
           } else {
             ctx.fillStyle = color;
@@ -8026,20 +8141,23 @@ function renderAreaChart(
         ctx, s, chartStyleRoleErrorBar(chart, eb), n, toX, yOf, plottedOf, stroke,
       );
     }
-    if (s.showMarker === true || seriesHasMarkerDetail(s)) {
+    const seriesMarkersVisible = (s.showMarker === true || seriesHasMarkerDetail(s))
+      && s.markerSymbol !== 'none';
+    if (seriesMarkersVisible || hasVisiblePointMarkerOverride(s)) {
       for (let ci = 0; ci < n; ci++) {
         const value = s.values[ci];
         if (value == null) continue;
         const dpt = pointOverrides.get(ci);
-        const symbol = dpt?.markerSymbol ?? s.markerSymbol ?? 'circle';
+        const symbol = effectiveMarkerSymbol(s, dpt, 'circle', seriesMarkersVisible);
         if (symbol === 'none') continue;
         drawMarker(
           ctx, toX(ci), yOf(value), symbol, dpt?.markerSize ?? s.markerSize ?? 5,
-          dpt?.markerFill ?? dpt?.color ?? s.markerFill ?? stroke,
+          markerFillColorFor(s, dpt, ci, stroke),
           dpt?.markerLine ?? s.markerLine ?? null, ptToPx,
           (dpt?.markerLineWidthEmu ?? s.markerLineWidthEmu) != null
             ? axisLineWidthPx((dpt?.markerLineWidthEmu ?? s.markerLineWidthEmu) as number, ptToPx)
             : undefined,
+          markerFillPaintFor(s, dpt, ci), shapeRotationDeg,
         );
       }
     }
@@ -9558,7 +9676,13 @@ function drawPieCalloutLabels(
 // Radar / Spider chart
 // ═══════════════════════════════════════════════════════════════════════════
 
-function renderRadarChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: ChartRect, ptToPx: number): void {
+function renderRadarChart(
+  ctx: CanvasRenderingContext2D,
+  chart: ChartModel,
+  r: ChartRect,
+  ptToPx: number,
+  shapeRotationDeg = 0,
+): void {
   const { x, y, w, h } = r;
   const cats = chartCategories(chart);
   const n = cats.length; if (n < 3) return;
@@ -9764,7 +9888,9 @@ function renderRadarChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: C
   // A chart may set radarStyle="marker" while every series carries
   // `<c:marker><c:symbol val="none"/>`, in which case Office draws
   // lines only — no dots.
-  const filled = chart.radarStyle === 'filled';
+  const filled = markersSuppressedByChartStyle(
+    'radar', chart.chartType, chart.scatterStyle, chart.radarStyle,
+  );
   const markerRadius = Math.max(2, rd * 0.025);
   for (let si = 0; si < chart.series.length; si++) {
     const s = chart.series[si];
@@ -9823,21 +9949,23 @@ function renderRadarChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: C
     // explicitly carries `<c:marker><c:symbol val="none"/>`, the parser
     // sets showMarker=false — respect that even for radarStyle="marker"
     // charts (the chart-level style is the default; series overrides win).
-    if (!filled && s.showMarker !== false && s.markerSymbol !== 'none') {
+    const seriesMarkersVisible = !filled && s.showMarker !== false && s.markerSymbol !== 'none';
+    if (!filled && (seriesMarkersVisible || hasVisiblePointMarkerOverride(s))) {
       const pointOverrides = indexPointOverrides(s.dataPointOverrides);
       for (let pointIndex = 0; pointIndex < pts.length; pointIndex++) {
         const pt = pts[pointIndex];
         if (pt == null) continue;
         const point = pointOverrides.get(pointIndex);
-        const symbol = point?.markerSymbol ?? s.markerSymbol ?? 'circle';
+        const symbol = effectiveMarkerSymbol(s, point, 'circle', seriesMarkersVisible);
         if (symbol === 'none') continue;
         const size = point?.markerSize ?? s.markerSize ?? Math.max(4, markerRadius * 2 / ptToPx);
-        const fill = point?.markerFill ?? s.markerFill ?? color;
+        const fill = markerFillColorFor(s, point, pointIndex, color);
         const line = point?.markerLine ?? s.markerLine ?? null;
         const lineWidth = point?.markerLineWidthEmu ?? s.markerLineWidthEmu;
         drawMarker(
           ctx, pt[0], pt[1], symbol, size, fill, line, ptToPx,
           lineWidth != null ? axisLineWidthPx(lineWidth, ptToPx) : 1,
+          markerFillPaintFor(s, point, pointIndex), shapeRotationDeg,
         );
       }
     }
@@ -9896,11 +10024,7 @@ function scatterPointFill(
   index: number,
   fallbackColor: string,
 ): string {
-  return point?.markerFill
-    ?? point?.color
-    ?? series.dataPointColors?.[index]
-    ?? series.markerFill
-    ?? fallbackColor;
+  return markerFillColorFor(series, point, index, fallbackColor);
 }
 
 function makeScatterSeriesLayer(
@@ -9974,10 +10098,13 @@ function drawScatterSeriesLayer(
   layoutReferenceRect: DataLabelRect,
   valueAxisMaximum: number,
   valueDisplayUnits?: ChartDisplayUnits | null,
+  shapeRotationDeg = 0,
 ): void {
   const drawLines = style === 'line' || style === 'lineMarker' || style === 'lineNoMarker';
   const drawSmooth = style === 'smooth' || style === 'smoothMarker' || style === 'smoothNoMarker';
-  const hideMarkersByStyle = style === 'lineNoMarker' || style === 'smoothNoMarker';
+  const hideMarkersByStyle = markersSuppressedByChartStyle(
+    'scatter', chart.chartType, style, chart.radarStyle,
+  );
   const layers = entries.map(({ series, index }) => makeScatterSeriesLayer(chart, series, index));
   const dataLabelLegendKey = createDataLabelLegendKeyResolver(chart, ptToPx);
   const bubbleScale = isBubble
@@ -10039,17 +10166,17 @@ function drawScatterSeriesLayer(
   }
 
   for (const { series: s, fallbackColor, cats, pointOverrides } of layers) {
-    const hideMarkers = hideMarkersByStyle
-      || s.showMarker === false
-      || (typeof s.markerSymbol === 'string' && s.markerSymbol === 'none');
-    if (!hideMarkers) {
+    const seriesMarkersVisible = !hideMarkersByStyle
+      && s.showMarker !== false
+      && s.markerSymbol !== 'none';
+    if (seriesMarkersVisible || (!hideMarkersByStyle && hasVisiblePointMarkerOverride(s))) {
       for (let ci = 0; ci < s.values.length; ci++) {
         const yv = s.values[ci];
         if (yv == null) continue;
         const xv = scatterXValue(cats, ci, useIndexX);
         if (xv == null) continue;
         const dpt = pointOverrides.get(ci);
-        const symbol = dpt?.markerSymbol ?? s.markerSymbol ?? 'circle';
+        const symbol = effectiveMarkerSymbol(s, dpt, 'circle', seriesMarkersVisible);
         if (symbol === 'none') continue;
         let sizePt = dpt?.markerSize ?? s.markerSize ?? 5;
         if (isBubble) {
@@ -10069,7 +10196,10 @@ function drawScatterSeriesLayer(
         const lineWidthPx = lineWidthEmu != null
           ? axisLineWidthPx(lineWidthEmu, ptToPx)
           : undefined;
-        drawMarker(ctx, toX(xv), toY(yv), symbol, sizePt, fill, line, ptToPx, lineWidthPx);
+        drawMarker(
+          ctx, toX(xv), toY(yv), symbol, sizePt, fill, line, ptToPx, lineWidthPx,
+          markerFillPaintFor(s, dpt, ci), shapeRotationDeg,
+        );
       }
     }
   }
@@ -10542,6 +10672,7 @@ function renderScatterChart(
     px0, py0, pw, ph, ptToPx, isBubble, style, { x, y, w, h },
     yAxisPlan.max,
     chart.valAxisDisplayUnits,
+    shapeRotationDeg,
   );
   if (secondaryEntries.length > 0 && secondaryXPlan && secondaryYPlan) {
     drawScatterSeriesLayer(
@@ -10549,6 +10680,7 @@ function renderScatterChart(
       px0, py0, pw, ph, ptToPx, isBubble, style, { x, y, w, h },
       secondaryYPlan.max,
       secondaryY?.displayUnits,
+      shapeRotationDeg,
     );
   }
 
@@ -10628,8 +10760,8 @@ function renderScatterChart(
  *  is 5). `fill` and `line` are hex strings; a leading `#` is tolerated so
  *  callers that route through `chartColor` (which returns `#RRGGBB`)
  *  don't end up double-prefixing into an invalid `##RRGGBB`. `line` may
- *  be null in which case no outline is drawn. `picture` falls back to a
- *  square because we don't ship the embedded image yet. */
+ *  be null in which case no outline is drawn. `picture` fails closed because
+ *  the chart model does not yet carry the marker image relationship. */
 function drawMarker(
   ctx: CanvasRenderingContext2D,
   cx: number, cy: number,
@@ -10639,13 +10771,22 @@ function drawMarker(
   line: string | null,
   ptToPx: number,
   lineWidthPx: number = 1,
+  /** undefined uses `fill`; null is authored noFill. */
+  fillPaint: Fill | null | undefined = undefined,
+  shapeRotationDeg = 0,
 ): void {
   const sizePx = Math.max(2, sizePt * ptToPx);
   const half = sizePx / 2;
   const fillCss = fill.startsWith('#') ? fill : `#${fill}`;
   const lineCss = line ? (line.startsWith('#') ? line : `#${line}`) : null;
   ctx.save();
-  ctx.fillStyle = fillCss;
+  ctx.fillStyle = fillPaint === undefined
+    ? fillCss
+    : (fillPaint == null
+        ? 'rgba(0,0,0,0)'
+        : resolveFill(
+            fillPaint, ctx, cx - half, cy - half, sizePx, sizePx, shapeRotationDeg,
+          ) ?? 'rgba(0,0,0,0)');
   if (lineCss) {
     ctx.strokeStyle = lineCss;
     ctx.lineWidth = lineWidthPx;
@@ -10678,7 +10819,7 @@ function drawMarker(
       break;
     }
     case 'x': {
-      ctx.strokeStyle = fillCss;
+      ctx.strokeStyle = ctx.fillStyle;
       ctx.lineWidth = Math.max(1, sizePx * 0.18);
       ctx.beginPath();
       ctx.moveTo(cx - half, cy - half); ctx.lineTo(cx + half, cy + half);
@@ -10687,7 +10828,7 @@ function drawMarker(
       break;
     }
     case 'plus': {
-      ctx.strokeStyle = fillCss;
+      ctx.strokeStyle = ctx.fillStyle;
       ctx.lineWidth = Math.max(1, sizePx * 0.18);
       ctx.beginPath();
       ctx.moveTo(cx - half, cy); ctx.lineTo(cx + half, cy);
@@ -10720,7 +10861,10 @@ function drawMarker(
       ctx.fillRect(cx - half, cy - dh / 2, sizePx, dh);
       break;
     }
-    case 'picture':
+    case 'picture': {
+      ctx.restore();
+      return;
+    }
     case 'circle':
     default: {
       ctx.beginPath();
@@ -11205,6 +11349,8 @@ function seriesHasMarkerDetail(s: ChartSeries): boolean {
     s.markerSymbol != null ||
     s.markerSize != null ||
     s.markerFill != null ||
+    s.markerFillPaint !== undefined ||
+    s.markerFillPaintAuthored === true ||
     s.markerLine != null ||
     s.markerLineWidthEmu != null ||
     (s.dataPointOverrides != null && s.dataPointOverrides.length > 0)
@@ -11800,6 +11946,11 @@ function chartExLegendSeries(
 // Refuse an oversized paint atomically instead of drawing a misleading prefix.
 // This is an availability boundary, not an automatic chart-layout heuristic.
 const MAX_CANVAS_CHART_POINTS = 10_000;
+// Marker gradients are resolved for each painted marker. Bound both one
+// recipe and the chart-wide stop registrations so a valid public model cannot
+// turn a bounded point count into unbounded synchronous Canvas work.
+const MAX_CANVAS_MARKER_GRADIENT_STOPS = 4_096;
+const MAX_CANVAS_MARKER_PAINT_COMPONENTS = 1_048_576;
 // The package parser already applies its XML-depth ceiling. Keep the same kind
 // of stack-safety boundary for caller-constructed public ChartModel objects.
 const MAX_CANVAS_HIERARCHY_DEPTH = 512;
@@ -11840,6 +11991,141 @@ function classicCanvasPointCount(chart: ChartModel): number | null {
       return MAX_CANVAS_CHART_POINTS + 1;
     }
     total += points;
+  }
+  return total;
+}
+
+function classicMarkerPointIsPainted(
+  chart: ChartModel,
+  series: ChartSeries,
+  family: string,
+  index: number,
+  scatterHasNumericX: boolean,
+): boolean {
+  const value = series.values[index];
+  let painted = value != null;
+  if (!painted && (family === 'line' || family === 'stackedLine'
+    || family === 'stackedLinePct')) {
+    const renderedByLineFamily = chart.chartType === 'line'
+      || chart.chartType === 'stackedLine' || chart.chartType === 'stackedLinePct';
+    painted = renderedByLineFamily
+      && (chart.chartType !== 'line' || chart.dispBlanksAs === 'zero');
+  }
+  if (!painted) return false;
+  if (family === 'scatter' && scatterHasNumericX) {
+    const category = (series.categories ?? chart.categories)[index];
+    if (category == null || !Number.isFinite(Number.parseFloat(category))) return false;
+  }
+  if (family === 'scatter' && chart.chartType === 'bubble') {
+    return (chart.bubbleScale ?? 100) > 0
+      && visibleBubbleSize(chart, series.bubbleSizes?.[index]) != null;
+  }
+  return true;
+}
+
+function dataLabelLegendKeyCount(
+  chart: ChartModel,
+  series: ChartSeries,
+  family: string,
+  pointCount: number,
+  scatterHasNumericX: boolean,
+): number {
+  if (!series.seriesDataLabels && !(series.dataLabelOverrides?.length)) return 0;
+  const overrides = indexPointOverrides(series.dataLabelOverrides);
+  let count = 0;
+  for (let index = 0; index < pointCount; index++) {
+    const point = overrides.get(index);
+    if (point?.deleted === true) continue;
+    if ((point?.showLegendKey ?? series.seriesDataLabels?.showLegendKey ?? false) !== true) continue;
+    if (!classicMarkerPointIsPainted(chart, series, family, index, scatterHasNumericX)) continue;
+    count++;
+  }
+  return count;
+}
+
+/** @internal Exported for resource-boundary regression tests; package entry
+ * points do not expose the renderer module as public API. */
+export function classicMarkerPaintWorkCount(chart: ChartModel): number | null {
+  if (!CLASSIC_CANVAS_POINT_FAMILIES.has(chart.chartType)) return null;
+  const scatterHasNumericX = chart.series.some(series => {
+    const family = series.seriesType ?? chart.chartType;
+    if (family !== 'scatter') return false;
+    return (series.categories ?? chart.categories).some(category =>
+      Number.isFinite(Number.parseFloat(category))
+    );
+  });
+  const dataTableMarkerKeysVisible = chartHasDataTable(chart)
+    && chartCategories(chart).length > 0
+    && chart.dataTable?.showKeys === true;
+  let total = 0;
+  const chargePaint = (paint: Fill | null | undefined, repetitions = 1): boolean => {
+    if (repetitions <= 0 || paint == null) return true;
+    const components = markerPaintComponents(paint);
+    if (paint.fillType === 'gradient' && components > MAX_CANVAS_MARKER_GRADIENT_STOPS) {
+      return false;
+    }
+    if (!Number.isSafeInteger(repetitions)
+      || components > Math.floor((MAX_CANVAS_MARKER_PAINT_COMPONENTS - total) / repetitions)) {
+      return false;
+    }
+    total += components * repetitions;
+    return true;
+  };
+  for (let seriesIndex = 0; seriesIndex < chart.series.length; seriesIndex++) {
+    const series = chart.series[seriesIndex];
+    const family = series.seriesType ?? chart.chartType;
+    const markerFamily = family === 'line' || family === 'stackedLine'
+      || family === 'stackedLinePct' || family === 'area'
+      || family === 'stackedArea' || family === 'stackedAreaPct'
+      || family === 'scatter' || family === 'radar' || family === 'stock';
+    if (!markerFamily) continue;
+    // Family-level style choices override every series marker. Keep the
+    // availability preflight on the same path as the painters: filled radar
+    // never paints markers, and the two no-marker scatter styles suppress even
+    // point-local marker overrides. Bubble geometry is unaffected by the
+    // scatter style token and therefore remains chargeable.
+    if (markersSuppressedByChartStyle(
+      family, chart.chartType, chart.scatterStyle, chart.radarStyle,
+    )) continue;
+    const areaFamily = family === 'area' || family === 'stackedArea'
+      || family === 'stackedAreaPct';
+    const seriesVisible = areaFamily
+      ? (series.showMarker === true || seriesHasMarkerDetail(series))
+        && series.markerSymbol !== 'none'
+      : family === 'stock'
+        ? series.markerSymbol != null && series.markerSymbol !== 'none'
+        : series.showMarker !== false && series.markerSymbol !== 'none';
+    if (!seriesVisible && !hasVisiblePointMarkerOverride(series)) continue;
+    const pointCount = Math.max(
+      series.values.length,
+      series.categories?.length ?? 0,
+      chart.categories.length,
+    );
+    const overrides = indexPointOverrides(series.dataPointOverrides);
+    for (let index = 0; index < pointCount; index++) {
+      if (!classicMarkerPointIsPainted(
+        chart, series, family, index, scatterHasNumericX,
+      )) continue;
+      const point = overrides.get(index);
+      if (effectiveMarkerSymbol(series, point, 'circle', seriesVisible) === 'none') continue;
+      const paint = markerFillPaintFor(series, point, index);
+      if (!chargePaint(paint)) return MAX_CANVAS_MARKER_PAINT_COMPONENTS + 1;
+    }
+
+    if (seriesLegendMarkerIsVisible(chart.chartType, chart.scatterStyle, series)) {
+      let repeatedKeys = 0;
+      const legendEntryDeleted = chart.legendEntries?.some(entry =>
+        entry.idx === seriesIndex && entry.deleted === true
+      ) === true;
+      if (chart.showLegend && !legendEntryDeleted) repeatedKeys++;
+      if (dataTableMarkerKeysVisible) repeatedKeys++;
+      repeatedKeys += dataLabelLegendKeyCount(
+        chart, series, family, pointCount, scatterHasNumericX,
+      );
+      if (!chargePaint(seriesMarkerFillPaint(series), repeatedKeys)) {
+        return MAX_CANVAS_MARKER_PAINT_COMPONENTS + 1;
+      }
+    }
   }
   return total;
 }
@@ -13179,6 +13465,8 @@ function renderBoxWhiskerChart(
               markerLineVisible ? (markerEdge ? `#${markerEdge}` : edge) : null,
               ptToPx,
               ctx.lineWidth,
+              markerFillPaint,
+              shapeRotationDeg,
             );
           }
         }
@@ -13231,6 +13519,8 @@ function renderBoxWhiskerChart(
               markerLineVisible ? (markerEdge ? `#${markerEdge}` : edge) : null,
               ptToPx,
               ctx.lineWidth,
+              markerFillPaint,
+              shapeRotationDeg,
             );
           }
         }
@@ -14300,13 +14590,22 @@ export function renderChart(
     }
 
     const classicPointCount = classicCanvasPointCount(chart);
+    const classicMarkerPaintWork = classicPointCount != null
+      && classicPointCount <= MAX_CANVAS_CHART_POINTS
+      ? classicMarkerPaintWorkCount(chart) : null;
     const classicThreeDWork = classicThreeDWorkCount(chart, threeD);
     if (
-      (classicPointCount != null || classicThreeDWork != null)
+      (classicPointCount != null || classicMarkerPaintWork != null || classicThreeDWork != null)
       && rejectOversizedCanvasChart(
         ctx,
         rect,
-        Math.max(classicPointCount ?? 0, classicThreeDWork ?? 0),
+        Math.max(
+          classicPointCount ?? 0,
+          classicMarkerPaintWork != null
+            && classicMarkerPaintWork > MAX_CANVAS_MARKER_PAINT_COMPONENTS
+            ? MAX_CANVAS_CHART_POINTS + 1 : 0,
+          classicThreeDWork ?? 0,
+        ),
       )
     ) {
       drawChartTextBoxes(ctx, chart, rect, ptToPx);
@@ -14350,7 +14649,7 @@ export function renderChart(
       case 'doughnut':
         renderPieChart(ctx, chart, rect, true, ptToPx); break;
       case 'radar':
-        renderRadarChart(ctx, chart, rect, ptToPx); break;
+        renderRadarChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'scatter':
       case 'bubble':
         renderScatterChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
