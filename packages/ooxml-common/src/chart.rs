@@ -204,6 +204,8 @@ pub struct ChartDataTable {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_width_emu: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_dash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_hidden: Option<bool>,
 }
 
@@ -3123,7 +3125,10 @@ pub fn extract_legend_font_color(root: Node, resolver: &dyn ColorResolver) -> Op
 /// Parse the optional classic-chart data table (`CT_DTable`). Each border/key
 /// child is a CT_Boolean: a present bare element means true, while omission
 /// means that feature is not requested. Text and line properties use the same
-/// DrawingML grammar as the surrounding chart.
+/// DrawingML grammar as the surrounding chart. Office applies `spPr/a:ln` to
+/// the table grid but does not paint an authored `spPr` fill behind the cells;
+/// preserve the effective grid stroke rather than treating the table as a
+/// generic filled shape.
 pub fn extract_chart_data_table(
     plot_area: Node,
     resolver: &dyn ColorResolver,
@@ -3142,6 +3147,10 @@ pub fn extract_chart_data_table(
         })
     });
     let (line_color, line_width_emu, line_hidden) = extract_sp_pr_ln_style(table, resolver);
+    let line_dash = child(table, "spPr")
+        .and_then(|shape| child(shape, "ln"))
+        .and_then(|line| child(line, "prstDash"))
+        .and_then(|dash| attr(&dash, "val"));
     Some(ChartDataTable {
         show_horizontal_border: bool_child(table, "showHorzBorder").unwrap_or(false),
         show_vertical_border: bool_child(table, "showVertBorder").unwrap_or(false),
@@ -3156,6 +3165,7 @@ pub fn extract_chart_data_table(
         font_italic: text_props.and_then(|props| chart_text_bool_attr(props, "i")),
         line_color,
         line_width_emu,
+        line_dash,
         line_hidden: line_hidden.then_some(true),
     })
 }
@@ -12521,7 +12531,7 @@ Subtitle</a:t></a:r></a:p>
                   <c:showVertBorder val="0"/>
                   <c:showOutline val="1"/>
                   <c:showKeys val="1"/>
-                  <c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:ln></c:spPr>
+                  <c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill><a:prstDash val="dash"/></a:ln></c:spPr>
                   <c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1000" b="1" i="1"><a:solidFill><a:srgbClr val="112233"/></a:solidFill><a:latin typeface="Aptos"/></a:defRPr></a:pPr></a:p></c:txPr>
                 </c:dTable>
               </c:plotArea></c:chart>
@@ -12541,6 +12551,7 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(table.font_italic, Some(true));
         assert_eq!(table.line_color.as_deref(), Some("445566"));
         assert_eq!(table.line_width_emu, Some(12700));
+        assert_eq!(table.line_dash.as_deref(), Some("dash"));
     }
 
     /// `c:invertIfNegative` and the Office 2010 alternate fill extension are

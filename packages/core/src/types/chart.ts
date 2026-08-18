@@ -504,6 +504,7 @@ export interface ChartDataTable {
   fontItalic?: boolean | null;
   lineColor?: string | null;
   lineWidthEmu?: number | null;
+  lineDash?: string | null;
   lineHidden?: boolean | null;
 }
 

@@ -81,6 +81,7 @@ export interface ChartDataLabelOverride {
     showSerName?: boolean;
     showPercent?: boolean;
     showBubbleSize?: boolean;
+    showLegendKey?: boolean;
     deleted?: boolean;
 }
 export interface ChartDataPointOverride {
@@ -110,6 +111,7 @@ export interface ChartDataTable {
     fontItalic?: boolean | null;
     lineColor?: string | null;
     lineWidthEmu?: number | null;
+    lineDash?: string | null;
     lineHidden?: boolean | null;
 }
 interface ChartDecorationLineStyle {
@@ -234,6 +236,14 @@ export interface ChartLabelBox {
     borderColor?: string;
     borderWidthEmu?: number;
 }
+interface ChartLegendEntryOverride {
+    idx: number;
+    deleted?: boolean | null;
+    fontFace?: string | null;
+    fontColor?: string | null;
+    fontSizeHpt?: number | null;
+    fontBold?: boolean | null;
+}
 interface ChartLineGroupDecorations {
     groupIndex: number;
     dropLines?: ChartDecorationLineStyle | null;
@@ -257,6 +267,7 @@ export interface ChartModel {
     titleRichRuns?: ChartTextRun[] | null;
     titlePresent?: boolean;
     categories: string[];
+    categorySourceHidden?: boolean[] | null;
     categoryLevels?: string[][] | null;
     series: ChartSeries[];
     chartTextBoxes?: ChartTextBox[] | null;
@@ -272,9 +283,14 @@ export interface ChartModel {
     valAxisLineHidden: boolean;
     plotAreaBg: string | null;
     chartBg: string | null;
+    chartFill?: Fill | null;
+    roundedCorners?: boolean | null;
+    plotVisibleOnly?: boolean | null;
     showLegend: boolean;
     dataTable?: ChartDataTable | null;
     legendPos: 'r' | 'l' | 't' | 'b' | 'tr' | null;
+    legendOverlay?: boolean | null;
+    legendEntries?: ChartLegendEntryOverride[] | null;
     catAxisCrossBetween: 'between' | 'midCat' | string;
     valAxisMajorTickMark: 'cross' | 'out' | 'in' | 'none' | string;
     catAxisMajorTickMark: 'cross' | 'out' | 'in' | 'none' | string;
@@ -358,6 +374,7 @@ export interface ChartModel {
     holeSize?: number | null;
     firstSliceAngle?: number | null;
     dispBlanksAs?: string | null;
+    showDataLabelsOverMax?: boolean | null;
     valAxisMajorGridlines?: boolean | null;
     catAxisMajorGridlines?: boolean | null;
     valAxisGridlineColor?: string | null;
@@ -479,6 +496,7 @@ export interface ChartSeries {
     lineWidthEmu?: number | null;
     threeDShape?: 'box' | 'cylinder' | 'cone' | 'coneToMax' | 'pyramid' | 'pyramidToMax' | string | null;
     values: (number | null)[];
+    sourceHidden?: boolean[] | null;
     dataPointColors?: (string | null)[] | null;
     explosion?: number | null;
     dataLabelColors?: (string | null)[] | null;
@@ -518,6 +536,7 @@ export interface ChartSeriesDataLabels {
     showSerName: boolean;
     showPercent: boolean;
     showBubbleSize?: boolean;
+    showLegendKey?: boolean;
     position?: string;
     fontColor?: string;
     formatCode?: string;
@@ -1085,6 +1104,7 @@ export interface FieldRun {
     highlight?: string | null;
     emphasisMark?: EmphasisMark;
 }
+type Fill = SolidFill | NoFill | GradientFill | PatternFill | ImageFill;
 export interface FillRect {
     l?: number;
     t?: number;
@@ -1155,6 +1175,15 @@ export type HyperlinkTarget = {
     ref: string;
     slideIndex?: number;
 };
+interface ImageFill {
+    fillType: 'image';
+    imagePath: string;
+    mimeType: string;
+    fillRect?: FillRect;
+    tile?: TileInfo;
+    alpha?: number;
+    duotone?: Duotone;
+}
 export interface ImageRun {
     imagePath: string;
     mimeType: string;
@@ -1352,6 +1381,9 @@ export interface MathSvg {
     widthEm: number;
     ascentEm: number;
     descentEm: number;
+}
+interface NoFill {
+    fillType: 'none';
 }
 export interface NoteRef {
     kind: 'footnote' | 'endnote' | string;

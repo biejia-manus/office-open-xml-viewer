@@ -7189,6 +7189,7 @@ describe('classic chart data table (CT_DTable)', () => {
         fontSizeHpt: 1000,
         lineColor: '445566',
         lineWidthEmu: 12700,
+        lineDash: 'dash',
       },
     }), RECT, 1);
 
@@ -7200,7 +7201,45 @@ describe('classic chart data table (CT_DTable)', () => {
     expect(text).toContain('Jan-25');
     expect(text).toContain('Feb-25');
     expect(rec.strokeRects.some(rect => rect.ss === '#445566')).toBe(true);
+    expect(rec.strokeRects.find(rect => rect.ss === '#445566')?.dash.length).toBeGreaterThan(0);
     expect(rec.arcs.length).toBeGreaterThan(0); // line-series key marker
+  });
+
+  it('honors each authored border switch and an explicit noFill line independently', () => {
+    const render = (over: Partial<NonNullable<ChartModel['dataTable']>>) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'line',
+        categories: ['Q1', 'Q2'],
+        series: [series({ name: 'North', values: [10, 15], seriesType: 'line' })],
+        dataTable: {
+          showHorizontalBorder: false,
+          showVerticalBorder: false,
+          showOutline: false,
+          showKeys: false,
+          lineColor: '123ABC',
+          ...over,
+        },
+      }), RECT, 1);
+      return {
+        lineStrokes: rec.paintEvents.filter(
+          event => event.kind === 'stroke' && event.strokeStyle === '#123ABC',
+        ).length,
+        outlines: rec.strokeRects.filter(rect => rect.ss === '#123ABC').length,
+      };
+    };
+
+    const baseline = render({});
+    expect(baseline.outlines).toBe(0);
+    expect(render({ showHorizontalBorder: true }).lineStrokes).toBeGreaterThan(baseline.lineStrokes);
+    expect(render({ showVerticalBorder: true }).lineStrokes).toBeGreaterThan(baseline.lineStrokes);
+    expect(render({ showOutline: true }).outlines).toBe(1);
+    expect(render({
+      showHorizontalBorder: true,
+      showVerticalBorder: true,
+      showOutline: true,
+      lineHidden: true,
+    })).toEqual({ lineStrokes: 0, outlines: 0 });
   });
 
   it('localizes a built-in short-date category source independently of the date-axis code', () => {
@@ -7219,7 +7258,146 @@ describe('classic chart data table (CT_DTable)', () => {
       },
     }), RECT, 1);
     expect(rec.texts.some(text => text.text.includes('2025'))).toBe(true);
-    expect(rec.texts.some(text => text.text === 'Jan-25')).toBe(true);
+    expect(rec.texts.some(text => text.text === 'Jan-25')).toBe(false);
+  });
+
+  it.each(['line', 'area', 'stock'] as const)(
+    'uses the shared measured data-table path for %s charts',
+    chartType => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType,
+        categories: ['Q1', 'Q2'],
+        series: [
+          series({ name: 'North', values: [10, 15], seriesType: chartType }),
+          series({ name: 'South', values: [18, 13], seriesType: chartType }),
+          ...(chartType === 'stock'
+            ? [series({ name: 'Close', values: [14, 17], seriesType: 'stock' })]
+            : []),
+        ],
+        dataTable: {
+          showHorizontalBorder: true,
+          showVerticalBorder: true,
+          showOutline: true,
+          showKeys: true,
+          lineColor: 'C00000',
+          lineDash: 'dash',
+        },
+      }), RECT, 1);
+
+      const text = rec.texts.map(call => call.text);
+      expect(text).toContain('North');
+      expect(text).toContain('South');
+      expect(text).toContain('Q1');
+      expect(text).toContain('10');
+      expect(rec.strokeRects.some(rect => rect.ss === '#C00000')).toBe(true);
+    },
+  );
+
+  it('suppresses the duplicate category-axis labels when the table owns the category header', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['Q1', 'Q2'],
+      series: [series({ name: 'North', values: [10, 15], seriesType: 'line' })],
+      dataTable: {
+        showHorizontalBorder: true,
+        showVerticalBorder: true,
+        showOutline: true,
+        showKeys: true,
+      },
+    }), RECT, 1);
+
+    expect(rec.texts.filter(call => call.text === 'Q1')).toHaveLength(1);
+    expect(rec.texts.filter(call => call.text === 'Q2')).toHaveLength(1);
+  });
+
+  it('keeps horizontal-bar category labels and uses the Office table row order', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBarH',
+      categories: ['Q1', 'Q2'],
+      series: [
+        series({ name: 'North', values: [10, 15], seriesType: 'bar' }),
+        series({ name: 'South', values: [18, 13], seriesType: 'bar' }),
+      ],
+      dataTable: {
+        showHorizontalBorder: true,
+        showVerticalBorder: true,
+        showOutline: true,
+        showKeys: true,
+      },
+    }), RECT, 1);
+
+    expect(rec.texts.filter(call => call.text === 'Q1')).toHaveLength(2);
+    const names = rec.texts
+      .map(call => call.text)
+      .filter(text => text === 'North' || text === 'South');
+    expect(names.slice(0, 2)).toEqual(['South', 'North']);
+  });
+
+  it('attaches the shared table to an authored inner plot with a secondary-axis series', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['Q1', 'Q2'],
+      series: [
+        series({ name: 'Primary', values: [10, 15], seriesType: 'line' }),
+        series({
+          name: 'Secondary', values: [100, 150], seriesType: 'line', useSecondaryAxis: true,
+        }),
+      ],
+      secondaryValAxis: {
+        min: 0,
+        max: 200,
+        title: null,
+        hidden: false,
+        lineHidden: false,
+        majorTickMark: 'out',
+      },
+      plotAreaBg: 'ABCDEF',
+      plotAreaManualLayout: {
+        layoutTarget: 'inner',
+        xMode: 'factor',
+        yMode: 'factor',
+        wMode: 'factor',
+        hMode: 'factor',
+        x: 0.18,
+        y: 0.12,
+        w: 0.7,
+        h: 0.48,
+      },
+      dataTable: {
+        showHorizontalBorder: true,
+        showVerticalBorder: true,
+        showOutline: true,
+        showKeys: true,
+      },
+    }), RECT, 1);
+
+    const plot = rec.rects.find(rect => rect.fs === '#ABCDEF');
+    const header = rec.texts.find(call => call.text === 'Q1');
+    expect(plot).toBeDefined();
+    expect(header?.y).toBeGreaterThanOrEqual((plot?.y ?? 0) + (plot?.h ?? 0));
+    expect(rec.texts.some(call => call.text === 'Primary')).toBe(true);
+    expect(rec.texts.some(call => call.text === 'Secondary')).toBe(true);
+  });
+
+  it('does not invent a data table for scatter because Office ignores CT_DTable on scatter plots', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'scatter',
+      categories: ['1', '2'],
+      series: [series({ name: 'North', values: [10, 15], seriesType: 'scatter' })],
+      dataTable: {
+        showHorizontalBorder: true,
+        showVerticalBorder: true,
+        showOutline: true,
+        showKeys: true,
+      },
+    }), RECT, 1);
+
+    expect(rec.texts.some(call => call.text === 'North')).toBe(false);
   });
 });
 

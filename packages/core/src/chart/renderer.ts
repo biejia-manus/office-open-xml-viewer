@@ -394,13 +394,31 @@ type ChartDataTableLayout = {
   totalHeight: number;
 };
 
+/** Office only paints a classic chart data table for category-axis families.
+ * CT_DTable is syntactically allowed under plotArea, but an authored table on
+ * an XY scatter plot is ignored (confirmed with an Office vector boundary).
+ * Keeping this gate beside the shared layout prevents family renderers from
+ * inventing different applicability rules. */
+function chartHasDataTable(chart: ChartModel): boolean {
+  return chart.dataTable != null && chart.chartType !== 'scatter';
+}
+
+function chartDataTableRows(chart: ChartModel): Array<{ series: ChartSeries; sourceIndex: number }> {
+  const horizontal = chart.chartType === 'clusteredBarH'
+    || chart.chartType === 'stackedBarH'
+    || chart.chartType === 'stackedBarHPct';
+  const rows = chart.series.map((series, sourceIndex) => ({ series, sourceIndex }));
+  return horizontal ? rows.reverse() : rows;
+}
+
 /** Minimum data-table band reserved before the final plot width is known. The
  * header starts as one line; after `computeChartFrame` the measured category
  * cell width may add wrapped lines and the caller shrinks the plot by exactly
  * that measured delta. */
 function chartDataTableBaseHeight(chart: ChartModel, ptToPx: number): number {
-  if (!chart.dataTable) return 0;
-  const fontPx = chartTextFontSizePx(chart.dataTable.fontSizeHpt, ptToPx) ?? 9 * ptToPx;
+  const table = chartHasDataTable(chart) ? chart.dataTable : null;
+  if (!table) return 0;
+  const fontPx = chartTextFontSizePx(table.fontSizeHpt, ptToPx) ?? 9 * ptToPx;
   const lineHeight = Math.max(1, fontPx * 1.2);
   const rowHeight = lineHeight + 4 * ptToPx;
   return (chart.series.length + 1) * rowHeight;
@@ -411,7 +429,7 @@ function chartDataTableHeaderWidth(
   chart: ChartModel,
   ptToPx: number,
 ): number {
-  const table = chart.dataTable;
+  const table = chartHasDataTable(chart) ? chart.dataTable : null;
   if (!table) return 0;
   const fontPx = chartTextFontSizePx(table.fontSizeHpt, ptToPx) ?? 9 * ptToPx;
   const face = chartFontFamily(chart, table.fontFace, 'minor');
@@ -433,7 +451,7 @@ function measureChartDataTable(
   categoryWidth: number,
   ptToPx: number,
 ): ChartDataTableLayout | null {
-  const table = chart.dataTable;
+  const table = chartHasDataTable(chart) ? chart.dataTable : null;
   if (!table) return null;
   const fontPx = chartTextFontSizePx(table.fontSizeHpt, ptToPx) ?? 9 * ptToPx;
   const lineHeight = Math.max(1, fontPx * 1.2);
@@ -461,7 +479,7 @@ function measureChartDataTable(
     headerLines,
     headerHeight,
     rowHeight,
-    totalHeight: headerHeight + chart.series.length * rowHeight,
+    totalHeight: headerHeight + chartDataTableRows(chart).length * rowHeight,
   };
 }
 
@@ -480,8 +498,9 @@ function drawChartDataTable(
   ptToPx: number,
 ): void {
   const table = chart.dataTable;
-  if (!table || !layout || chart.categories.length === 0) return;
+  if (!table || !layout) return;
   const categories = chartCategories(chart);
+  if (categories.length === 0) return;
   const categoryWidth = plotWidth / categories.length;
   const face = chartFontFamily(chart, table.fontFace, 'minor');
   const font = chartFontCss(
@@ -500,6 +519,14 @@ function drawChartDataTable(
   const tableX = plotX - headerWidth;
   const tableWidth = headerWidth + plotWidth;
   const tableBottom = tableY + layout.totalHeight;
+  const tableRows = chartDataTableRows(chart);
+  const keyEntries = buildLegendEntries(
+    chart.series,
+    chart.chartType,
+    chart.scatterStyle,
+    false,
+    chart.categories,
+  );
   ctx.beginPath();
   ctx.rect(tableX, tableY, tableWidth, layout.totalHeight);
   ctx.clip();
@@ -517,8 +544,8 @@ function drawChartDataTable(
     });
   }
 
-  for (let seriesIndex = 0; seriesIndex < chart.series.length; seriesIndex++) {
-    const series = chart.series[seriesIndex];
+  for (let seriesIndex = 0; seriesIndex < tableRows.length; seriesIndex++) {
+    const { series, sourceIndex } = tableRows[seriesIndex];
     const rowTop = tableY + layout.headerHeight + seriesIndex * layout.rowHeight;
     const rowCenter = rowTop + layout.rowHeight / 2;
     if (headerWidth > 0) {
@@ -530,26 +557,27 @@ function drawChartDataTable(
         rowCenter,
       );
       if (table.showKeys && keyWidth > 0) {
-        const color = chartColor(seriesIndex, series);
         const keyX = tableX + 3 * ptToPx;
-        if (series.seriesType === 'line' || chart.chartType === 'line') {
-          ctx.strokeStyle = series.lineColor ? `#${series.lineColor}` : color;
-          ctx.lineWidth = series.lineWidthEmu != null
-            ? axisLineWidthPx(series.lineWidthEmu, ptToPx)
-            : Math.max(1, 1.5 * ptToPx);
-          ctx.beginPath();
-          ctx.moveTo(keyX, rowCenter);
-          ctx.lineTo(keyX + keyWidth, rowCenter);
-          ctx.stroke();
-          if (series.showMarker !== false) {
-            ctx.fillStyle = series.markerFill ? `#${series.markerFill}` : color;
-            ctx.beginPath();
-            ctx.arc(keyX + keyWidth / 2, rowCenter, Math.max(2, 2 * ptToPx), 0, Math.PI * 2);
-            ctx.fill();
-          }
-        } else {
-          ctx.fillStyle = series.color ? `#${series.color}` : color;
-          ctx.fillRect(keyX, rowCenter - 3 * ptToPx, keyWidth, 6 * ptToPx);
+        const entry = keyEntries[sourceIndex];
+        if (entry) {
+          const keyHeight = Math.min(layout.fontPx, layout.rowHeight - 2 * ptToPx);
+          drawLegendSwatch(
+            ctx,
+            entry.swatchStyle,
+            entry.color,
+            keyX,
+            rowCenter - keyHeight / 2,
+            keyWidth,
+            keyHeight,
+            entry.marker,
+            entry.fillPaint,
+            entry.outlineColor,
+            entry.outlineWidthEmu,
+            entry.outlineDash,
+            entry.outlineCap,
+            entry.outlineJoin,
+            ptToPx,
+          );
         }
         ctx.fillStyle = table.fontColor ? `#${table.fontColor}` : '#000000';
       }
@@ -567,10 +595,10 @@ function drawChartDataTable(
     ctx.lineWidth = table.lineWidthEmu != null
       ? axisLineWidthPx(table.lineWidthEmu, ptToPx)
       : Math.max(0.5, ptToPx * 0.75);
-    ctx.setLineDash([]);
+    ctx.setLineDash(dashPatternForPreset(table.lineDash ?? undefined, ctx.lineWidth));
     if (table.showHorizontalBorder) {
       let lineY = tableY + layout.headerHeight;
-      for (let row = 0; row < chart.series.length; row++) {
+      for (let row = 0; row < tableRows.length; row++) {
         ctx.beginPath(); ctx.moveTo(tableX, lineY); ctx.lineTo(tableX + tableWidth, lineY); ctx.stroke();
         lineY += layout.rowHeight;
       }
@@ -3006,6 +3034,7 @@ function renderBarChart(
   const catAxFontPx = axisLabelPx(chart.catAxisFontSizeHpt, h, ptToPx);
   const valAxLabelFontPx = axisLabelPx(chart.valAxisFontSizeHpt, h, ptToPx);
   const categoryLevels = !isH
+    && !chartHasDataTable(chart)
     && chart.catAxisNoMultiLevelLabels !== true
     && (chart.categoryLevels?.length ?? 0) > 1
     ? chart.categoryLevels!
@@ -3013,8 +3042,9 @@ function renderBarChart(
   const multiLevelCategoryBandH = categoryLevels
     ? (categoryLevels.length - 1) * (catAxFontPx + 4)
     : 0;
-  const dataTableBaseH = isH ? 0 : chartDataTableBaseHeight(chart, ptToPx);
-  const dataTableHeaderW = isH ? 0 : chartDataTableHeaderWidth(ctx, chart, ptToPx);
+  const hasDataTable = chartHasDataTable(chart);
+  const dataTableBaseH = chartDataTableBaseHeight(chart, ptToPx);
+  const dataTableHeaderW = chartDataTableHeaderWidth(ctx, chart, ptToPx);
   const leg = measuredLegendReserve(ctx, legendChart, w, h, 0.22, ptToPx);
   const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
     leg, chart.legendOverlay === true,
@@ -3061,9 +3091,10 @@ function renderBarChart(
   let padT = titleH + legTopH + valAxLabelFontPx / 2 + 2
     + secondaryCatLabelBandH + secondaryCatTitleBandH;
   const padB = isH
-    ? (chart.valAxisHidden ? h * 0.02 : catAxisLabelBandH(valAxLabelFontPx)) + catTitleH + legBottomH
-    : catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent) + multiLevelCategoryBandH
-      + dataTableBaseH + catTitleH + legBottomH;
+    ? (chart.valAxisHidden ? h * 0.02 : catAxisLabelBandH(valAxLabelFontPx))
+      + dataTableBaseH + catTitleH + legBottomH
+    : (hasDataTable ? 0 : catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent))
+      + multiLevelCategoryBandH + dataTableBaseH + catTitleH + legBottomH;
   const phEst = h - padT - padB;
   let horizontalCategoryLabelBandW = 0;
   if (isH && !chart.catAxisHidden && catLabelsVisible(chart)) {
@@ -3360,7 +3391,10 @@ function renderBarChart(
     // Horizontal bars: keep the wider left band for the category labels
     // (`c:catAx/c:delete val="1"` → no category labels, so tighten).
     l: isH
-      ? (chart.catAxisHidden ? w * 0.03 : automaticHorizontalCategoryLabelBandW) + valTitleW + legLeftW
+      ? legLeftW + Math.max(
+        (chart.catAxisHidden ? w * 0.03 : automaticHorizontalCategoryLabelBandW) + valTitleW,
+        dataTableHeaderW,
+      )
       : legLeftW + Math.max(valTitleW + valLabelBandW, dataTableHeaderW),
   };
 
@@ -3466,7 +3500,7 @@ function renderBarChart(
   const catLabelRotation = catLabelRotationRad(chart);
   const wrappedColumnCategories: string[][] = [];
   let wrappedCategoryExtraH = 0;
-  if (!isH && !dateAxisPlan && !chart.catAxisHidden && catLabelsVisible(chart) && catLabelRotation === 0) {
+  if (!hasDataTable && !isH && !dateAxisPlan && !chart.catAxisHidden && catLabelsVisible(chart) && catLabelRotation === 0) {
     const slotW = pw / n;
     const wrapFontPx = chart.catAxisFontSizeHpt != null
       ? catAxFontPx
@@ -3501,7 +3535,7 @@ function renderBarChart(
     }
   }
 
-  const dataTableLayout = !isH && chart.dataTable
+  const dataTableLayout = hasDataTable
     ? measureChartDataTable(ctx, chart, pw / n, ptToPx)
     : null;
   if (dataTableLayout && dataTableLayout.totalHeight > dataTableBaseH) {
@@ -4315,7 +4349,7 @@ function renderBarChart(
     );
   }
 
-  if (!chart.catAxisHidden && catLabelsVisible(chart)) {
+  if ((!hasDataTable || isH) && !chart.catAxisHidden && catLabelsVisible(chart)) {
     // `<c:catAx><c:txPr>…<a:solidFill>` colors the category tick labels.
     ctx.fillStyle = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#555';
     const drawnCatTickFontPx = chart.catAxisFontSizeHpt != null
@@ -4691,10 +4725,9 @@ function renderBarChart(
   }
 
   if (dataTableLayout) {
-    const tableY = py0 + ph
-      + catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent)
-      + multiLevelCategoryBandH
-      + wrappedCategoryExtraH;
+    const tableY = py0 + ph + (isH
+      ? (chart.valAxisHidden ? h * 0.02 : catAxisLabelBandH(valAxLabelFontPx))
+      : 0);
     drawChartDataTable(
       ctx, chart, dataTableLayout, px0, tableY, pw, x + legLeftW, ptToPx,
     );
@@ -4980,6 +5013,9 @@ function renderLineChart(
   const valTitlePx = axBands.valFontPx;
   const catTitleH = axBands.catBandH;
   const valTitleW = axBands.valBandW;
+  const hasDataTable = chartHasDataTable(chart);
+  const dataTableBaseH = chartDataTableBaseHeight(chart, ptToPx);
+  const dataTableHeaderW = chartDataTableHeaderWidth(ctx, chart, ptToPx);
 
   // Vertical pads (independent of the right gutter) so an estimated plot height
   // is known before the secondary-axis scale + right-gutter measurement — the
@@ -4987,7 +5023,9 @@ function renderLineChart(
   // label so the topmost gridline label rides above the plot; the bottom reserves
   // PowerPoint's full category-label band (gap + line-height + margin).
   let padT = titleH + legTopH + valAxFontPx / 2 + 2;
-  const padB = catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent)
+  const padB = (hasDataTable
+    ? dataTableBaseH
+    : catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent))
     + catTitleH + legBottomH;
   const phEst = h - padT - padB;
 
@@ -5020,7 +5058,10 @@ function renderLineChart(
     ? axisTitleFontPx(sec.titleFontSizeHpt, ptToPx) + 8
     : 0;
 
-  const titleLeftBandW = valAxFontPx * 2.2 + 10 + valTitleW + legLeftW;
+  const titleLeftBandW = legLeftW + Math.max(
+    valAxFontPx * 2.2 + 10 + valTitleW,
+    dataTableHeaderW,
+  );
   const titleRightBandW = legRightW + w * 0.05 + secLabelBandW + secTitleBandW;
 
   const provisionalPlan = planValueAxis(chart, dataMin, dataMax, phEst / ptToPx, pct);
@@ -5105,7 +5146,8 @@ function renderLineChart(
       manualOuterInsets,
     });
   }
-  const { plotRect: { px0, py0, pw, ph } } = lineFrame;
+  const { px0, py0, pw } = lineFrame.plotRect;
+  let { ph } = lineFrame.plotRect;
   drawChartTitleForLayout(
     ctx, chart,
     chart.titleManualLayout || !chart.titleRichRuns?.length ? x : px0, y,
@@ -5113,6 +5155,13 @@ function renderLineChart(
     y + titleTopPad, titleFontPx,
   );
   if (pw <= 0 || ph <= 0) return;
+
+  const dataTableLayout = hasDataTable
+    ? measureChartDataTable(ctx, chart, pw / n, ptToPx)
+    : null;
+  if (dataTableLayout && dataTableLayout.totalHeight > dataTableBaseH) {
+    ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
+  }
 
   if (chart.plotAreaBg) {
     ctx.fillStyle = `#${chart.plotAreaBg}`;
@@ -5448,7 +5497,7 @@ function renderLineChart(
         );
       }
     }
-    const showLabels = catLabelsVisible(chart);
+    const showLabels = !hasDataTable && catLabelsVisible(chart);
     const labelInterval = Math.max(1, Math.floor(chart.catAxisTickLabelSkip ?? 1));
     const rotRad = catLabelRotationRad(chart);
     const labelEntries = dateAxisPlan
@@ -5500,6 +5549,12 @@ function renderLineChart(
     drawSecondaryValueAxis(
       ctx, chart, sec, secScale, toYSecondary, r, px0, py0, pw, ph, ptToPx,
       secFontPx, secLabelBandW, primaryLabelColor, chart.date1904,
+    );
+  }
+
+  if (dataTableLayout) {
+    drawChartDataTable(
+      ctx, chart, dataTableLayout, px0, py0 + ph, pw, x + legLeftW, ptToPx,
     );
   }
 
@@ -5568,28 +5623,42 @@ function renderStockChart(
   const valTitlePx = axBands.valFontPx;
   const catTitleH = axBands.catBandH;
   const valTitleW = axBands.valBandW;
+  const hasDataTable = chartHasDataTable(chart);
+  const dataTableBaseH = chartDataTableBaseHeight(chart, ptToPx);
+  const dataTableHeaderW = chartDataTableHeaderWidth(ctx, chart, ptToPx);
 
   const padT = titleH + legTopH + valAxFontPx / 2 + 2;
-  const padB = catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent)
+  const padB = (hasDataTable
+    ? dataTableBaseH
+    : catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent))
     + catTitleH + legBottomH;
 
   const pad = {
     t: padT,
     r: legRightW + w * 0.05,
     b: padB,
-    l: valAxFontPx * 2.2 + 10 + valTitleW + legLeftW,
+    l: legLeftW + Math.max(valAxFontPx * 2.2 + 10 + valTitleW, dataTableHeaderW),
   };
 
   drawChartTitleForLayout(ctx, chart, x, y, w, h, y + titleTopPad, titleFontPx);
 
-  const { plotRect: { px0, py0, pw, ph } } = computeChartFrame(chart, x, y, w, h, ptToPx, {
+  const stockFrame = computeChartFrame(chart, x, y, w, h, ptToPx, {
     titleBand,
     legendSideReserveFrac: 0.22,
     legendReserve: leg,
     pad,
     honorPlotAreaManualLayout: true,
   });
+  const { px0, py0, pw } = stockFrame.plotRect;
+  let { ph } = stockFrame.plotRect;
   if (pw <= 0 || ph <= 0) return;
+
+  const dataTableLayout = hasDataTable
+    ? measureChartDataTable(ctx, chart, pw / n, ptToPx)
+    : null;
+  if (dataTableLayout && dataTableLayout.totalHeight > dataTableBaseH) {
+    ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
+  }
 
   if (chart.plotAreaBg) {
     ctx.fillStyle = `#${chart.plotAreaBg}`;
@@ -5797,7 +5866,7 @@ function renderStockChart(
     const catSlotMaxPx = dateAxisPlan
       ? (dateAxisPlan.categoryBandFractions[0] ?? 0) * pw - 4
       : (pw / n) * labelInterval - 4;
-    const showLabels = catLabelsVisible(chart);
+    const showLabels = !hasDataTable && catLabelsVisible(chart);
     const rotRad = catLabelRotationRad(chart);
     const labelEntries = dateAxisPlan
       ? dateAxisPlan.majorTicks.map(tick => ({
@@ -5847,6 +5916,12 @@ function renderStockChart(
         );
       }
     }
+  }
+
+  if (dataTableLayout) {
+    drawChartDataTable(
+      ctx, chart, dataTableLayout, px0, py0 + ph, pw, x + legLeftW, ptToPx,
+    );
   }
 
   drawLegendForLayout(ctx, chart, leg, x, y, w, h, px0, py0, pw, ph, titleH + 2, ptToPx);
@@ -6476,13 +6551,18 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
   const valTitlePx = axBands.valFontPx;
   const catTitleH = axBands.catBandH;
   const valTitleW = axBands.valBandW;
+  const hasDataTable = chartHasDataTable(chart);
+  const dataTableBaseH = chartDataTableBaseHeight(chart, ptToPx);
+  const dataTableHeaderW = chartDataTableHeaderWidth(ctx, chart, ptToPx);
 
   // Vertical pads first so the estimated plot height is known before the
   // secondary-axis scale + right-gutter measurement (same ordering as bar/line).
   // Top: title band + half a value-axis label above the top gridline. Bottom:
   // PowerPoint's category-label band (gap + line-height + margin).
   const padT = titleH + legTopH + valAxFontPx / 2 + 2;
-  const padB = catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent)
+  const padB = (hasDataTable
+    ? dataTableBaseH
+    : catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent))
     + catTitleH + legBottomH;
   const phEst = h - padT - padB;
 
@@ -6626,12 +6706,12 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
     t: padT,
     r: legRightW + w * 0.05 + secLabelBandW + secTitleBandW,
     b: padB,
-    l: w * 0.12 + valTitleW + legLeftW,
+    l: legLeftW + Math.max(w * 0.12 + valTitleW, dataTableHeaderW),
   };
 
   drawChartTitleForLayout(ctx, chart, x, y, w, h, y + titleTopPad, titleFontPx);
 
-  const { plotRect: { px0, py0, pw, ph } } = computeChartFrame(chart, x, y, w, h, ptToPx, {
+  const areaFrame = computeChartFrame(chart, x, y, w, h, ptToPx, {
     titleBand,
     legendSideReserveFrac: 0.22,
     legendReserve: leg,
@@ -6639,7 +6719,16 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
     honorPlotAreaManualLayout: true,
     manualOuterInsets,
   });
+  const { px0, py0, pw } = areaFrame.plotRect;
+  let { ph } = areaFrame.plotRect;
   if (pw <= 0 || ph <= 0) return;
+
+  const dataTableLayout = hasDataTable
+    ? measureChartDataTable(ctx, chart, pw / n, ptToPx)
+    : null;
+  if (dataTableLayout && dataTableLayout.totalHeight > dataTableBaseH) {
+    ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
+  }
 
   if (chart.plotAreaBg) {
     ctx.fillStyle = `#${chart.plotAreaBg}`;
@@ -7083,7 +7172,7 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
     }
   }
 
-  if (!chart.catAxisHidden) {
+  if (!hasDataTable && !chart.catAxisHidden) {
     const drawnCatTickFontPx = chart.catAxisFontSizeHpt != null
       ? catAxFontPx
       : Math.max(8, Math.min(11, pw / n * 0.8));
@@ -7144,6 +7233,12 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
     drawSecondaryValueAxis(
       ctx, chart, sec, secScale, toYSecondary, r, px0, py0, pw, ph, ptToPx,
       secFontPx, secLabelBandW, primaryLabelColor, chart.date1904,
+    );
+  }
+
+  if (dataTableLayout) {
+    drawChartDataTable(
+      ctx, chart, dataTableLayout, px0, py0 + ph, pw, x + legLeftW, ptToPx,
     );
   }
 
