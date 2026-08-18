@@ -1393,6 +1393,7 @@ function drawAxisTick(
   lineHidden = false,
   level: 'major' | 'minor' = 'major',
   ptToPx = 1,
+  dash?: string | null,
 ): void {
   // Axis shape properties style both the rule and its tick marks. An authored
   // `<a:ln><a:noFill/>` therefore suppresses the ticks too, while labels and
@@ -1410,7 +1411,7 @@ function drawAxisTick(
   const prevDash = ctx.getLineDash?.() ?? [];
   ctx.strokeStyle = color ?? '#888';
   ctx.lineWidth = lineWidth ?? 1;
-  ctx.setLineDash([]);
+  ctx.setLineDash(dashPatternForPreset(dash ?? undefined, ctx.lineWidth));
   ctx.beginPath();
   if (axis === 'val') {
     // val axis is vertical (x = anchor, y varies). Ticks extend horizontally;
@@ -1437,6 +1438,27 @@ function drawAxisTick(
   ctx.strokeStyle = prevS;
   ctx.lineWidth = prevW;
   ctx.setLineDash(prevDash);
+}
+
+function strokeAxisSegment(
+  ctx: CanvasRenderingContext2D,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  color: string,
+  lineWidth: number,
+  dash?: string | null,
+): void {
+  const previousDash = ctx.getLineDash?.() ?? [];
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.setLineDash(dashPatternForPreset(dash ?? undefined, lineWidth));
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.setLineDash(previousDash);
 }
 
 function axisTickLengthPx(
@@ -2425,11 +2447,7 @@ function drawSecondaryValueAxis(
   const axX = px0 + pw;
   const { color: secLineColor, width: secLineW } = resolveAxisLine(sec.lineColor, sec.lineWidthEmu, ptToPx);
   if (!sec.lineHidden) {
-    const previousDash = ctx.getLineDash?.() ?? [];
-    ctx.strokeStyle = secLineColor; ctx.lineWidth = secLineW;
-    ctx.setLineDash([]);
-    ctx.beginPath(); ctx.moveTo(axX, py0); ctx.lineTo(axX, py0 + ph); ctx.stroke();
-    ctx.setLineDash(previousDash);
+    strokeAxisSegment(ctx, axX, py0, axX, py0 + ph, secLineColor, secLineW, sec.lineDash);
   }
   if (!sec.hidden) {
     ctx.font = `${sec.fontItalic ? 'italic ' : ''}${sec.fontBold ? 'bold ' : ''}${secFontPx}px ${chartFontFamily(chart, sec.fontFace, 'minor')}`;
@@ -2439,7 +2457,7 @@ function drawSecondaryValueAxis(
     for (const sval of secScale.majorLines) {
       const gy = toYSecondary(sval);
       // Same tick geometry as the left axis, mirrored to the right edge.
-      drawAxisTick(ctx, sec.majorTickMark, 'val', axX, gy, secLineColor, secLineW, true, sec.lineHidden, 'major', ptToPx);
+      drawAxisTick(ctx, sec.majorTickMark, 'val', axX, gy, secLineColor, secLineW, true, sec.lineHidden, 'major', ptToPx, sec.lineDash);
       if (sec.tickLabelPos !== 'none') {
         ctx.fillText(
           formatAxisTickWithUnits(
@@ -2455,7 +2473,7 @@ function drawSecondaryValueAxis(
     }
     if (sec.minorTickMark && sec.minorTickMark !== 'none') {
       for (const value of secScale.minorTicks) {
-        drawAxisTick(ctx, sec.minorTickMark, 'val', axX, toYSecondary(value), secLineColor, secLineW, true, sec.lineHidden, 'minor', ptToPx);
+        drawAxisTick(ctx, sec.minorTickMark, 'val', axX, toYSecondary(value), secLineColor, secLineW, true, sec.lineHidden, 'minor', ptToPx, sec.lineDash);
       }
     }
   }
@@ -2520,15 +2538,7 @@ function drawSecondaryCategoryAxis(
   if (axis.hidden || categories.length === 0) return;
   const { color, width } = resolveAxisLine(axis.lineColor, axis.lineWidthEmu, ptToPx);
   if (!axis.lineHidden) {
-    const previousDash = ctx.getLineDash?.() ?? [];
-    ctx.strokeStyle = color;
-    ctx.lineWidth = width;
-    ctx.setLineDash([]);
-    ctx.beginPath();
-    ctx.moveTo(px0, py0);
-    ctx.lineTo(px0 + pw, py0);
-    ctx.stroke();
-    ctx.setLineDash(previousDash);
+    strokeAxisSegment(ctx, px0, py0, px0 + pw, py0, color, width, axis.lineDash);
   }
   const reversed = axis.orientation === 'maxMin';
   const labelSkip = Math.max(1, Math.floor(axis.tickLabelSkip ?? 1));
@@ -2551,7 +2561,7 @@ function drawSecondaryCategoryAxis(
         : count === 1 ? 0.5 : logical / (count - 1);
       drawAxisTick(
         ctx, axis.majorTickMark, 'cat', py0, px0 + fraction * pw,
-        color, width, true, axis.lineHidden, 'major', ptToPx,
+        color, width, true, axis.lineHidden, 'major', ptToPx, axis.lineDash,
       );
     }
   }
@@ -3688,13 +3698,6 @@ function renderBarChart(
   // is scaled to canvas px by `ptToPx`. See `resolveAxisLine`.
   const { color: catLineColor, width: catLineW } = resolveAxisLine(chart.catAxisLineColor, chart.catAxisLineWidthEmu, ptToPx);
   const { color: valLineColor, width: valLineW } = resolveAxisLine(chart.valAxisLineColor, chart.valAxisLineWidthEmu, ptToPx);
-  const strokeAxis = (x1: number, y1: number, x2: number, y2: number, color: string, lw: number): void => {
-    const previousDash = ctx.getLineDash?.() ?? [];
-    ctx.strokeStyle = color; ctx.lineWidth = lw;
-    ctx.setLineDash([]);
-    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-    ctx.setLineDash(previousDash);
-  };
   const drawCatLine = !chart.catAxisHidden && !chart.catAxisLineHidden;
   const drawValLine = !chart.valAxisHidden && !chart.valAxisLineHidden && chart.valAxisLineColor != null;
   const primaryCatCrossValue = categoryAxisCrossingValue(chart, plan.min, plan.max);
@@ -3715,11 +3718,11 @@ function renderBarChart(
   // keeps the axis line crisp on top of the columns.
   const drawAxesOnTop = (): void => {
     if (!isH) {
-      if (drawCatLine) strokeAxis(px0, primaryCatAxisY, px0 + pw, primaryCatAxisY, catLineColor, catLineW);
-      if (drawValLine) strokeAxis(px0, py0, px0, py0 + ph, valLineColor, valLineW);           // left
+      if (drawCatLine) strokeAxisSegment(ctx, px0, primaryCatAxisY, px0 + pw, primaryCatAxisY, catLineColor, catLineW, chart.catAxisLineDash);
+      if (drawValLine) strokeAxisSegment(ctx, px0, py0, px0, py0 + ph, valLineColor, valLineW, chart.valAxisLineDash);           // left
     } else {
-      if (drawCatLine) strokeAxis(primaryCatAxisX, py0, primaryCatAxisX, py0 + ph, catLineColor, catLineW);
-      if (drawValLine) strokeAxis(px0, py0 + ph, px0 + pw, py0 + ph, valLineColor, valLineW); // bottom
+      if (drawCatLine) strokeAxisSegment(ctx, primaryCatAxisX, py0, primaryCatAxisX, py0 + ph, catLineColor, catLineW, chart.catAxisLineDash);
+      if (drawValLine) strokeAxisSegment(ctx, px0, py0 + ph, px0 + pw, py0 + ph, valLineColor, valLineW, chart.valAxisLineDash); // bottom
     }
 
     // Axis major tick marks (`<c:*Ax><c:majorTickMark>` — ECMA-376 §21.2.2.101).
@@ -3732,18 +3735,18 @@ function renderBarChart(
     if (!chart.valAxisHidden && chart.valAxisMajorTickMark && chart.valAxisMajorTickMark !== 'none') {
       for (const val of plan.majorLines) {
         if (!isH) {
-          drawAxisTick(ctx, chart.valAxisMajorTickMark, 'val', px0, valY(val), valLineColor, valLineW, false, chart.valAxisLineHidden, 'major', ptToPx);
+          drawAxisTick(ctx, chart.valAxisMajorTickMark, 'val', px0, valY(val), valLineColor, valLineW, false, chart.valAxisLineHidden, 'major', ptToPx, chart.valAxisLineDash);
         } else {
-          drawAxisTick(ctx, chart.valAxisMajorTickMark, 'cat', py0 + ph, valX(val), valLineColor, valLineW, false, chart.valAxisLineHidden, 'major', ptToPx);
+          drawAxisTick(ctx, chart.valAxisMajorTickMark, 'cat', py0 + ph, valX(val), valLineColor, valLineW, false, chart.valAxisLineHidden, 'major', ptToPx, chart.valAxisLineDash);
         }
       }
     }
     if (!chart.valAxisHidden && chart.valAxisMinorTickMark && chart.valAxisMinorTickMark !== 'none') {
       for (const value of plan.minorTicks) {
         if (!isH) {
-          drawAxisTick(ctx, chart.valAxisMinorTickMark, 'val', px0, valY(value), valLineColor, valLineW, false, chart.valAxisLineHidden, 'minor', ptToPx);
+          drawAxisTick(ctx, chart.valAxisMinorTickMark, 'val', px0, valY(value), valLineColor, valLineW, false, chart.valAxisLineHidden, 'minor', ptToPx, chart.valAxisLineDash);
         } else {
-          drawAxisTick(ctx, chart.valAxisMinorTickMark, 'cat', py0 + ph, valX(value), valLineColor, valLineW, false, chart.valAxisLineHidden, 'minor', ptToPx);
+          drawAxisTick(ctx, chart.valAxisMinorTickMark, 'cat', py0 + ph, valX(value), valLineColor, valLineW, false, chart.valAxisLineHidden, 'minor', ptToPx, chart.valAxisLineDash);
         }
       }
     }
@@ -3765,9 +3768,9 @@ function renderBarChart(
         : ordinalFractions.filter((_, index) => index % catMajorTickSkip === 0);
       for (const frac of tickFractions) {
         if (!isH) {
-          drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', primaryCatAxisY, px0 + frac * pw, catLineColor, catLineW, false, chart.catAxisLineHidden, 'major', ptToPx);
+          drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', primaryCatAxisY, px0 + frac * pw, catLineColor, catLineW, false, chart.catAxisLineHidden, 'major', ptToPx, chart.catAxisLineDash);
         } else {
-          drawAxisTick(ctx, chart.catAxisMajorTickMark, 'val', primaryCatAxisX, py0 + frac * ph, catLineColor, catLineW, false, chart.catAxisLineHidden, 'major', ptToPx);
+          drawAxisTick(ctx, chart.catAxisMajorTickMark, 'val', primaryCatAxisX, py0 + frac * ph, catLineColor, catLineW, false, chart.catAxisLineHidden, 'major', ptToPx, chart.catAxisLineDash);
         }
       }
     }
@@ -3780,9 +3783,9 @@ function renderBarChart(
         : ordinalFractions;
       for (const frac of tickFractions) {
         if (!isH) {
-          drawAxisTick(ctx, chart.catAxisMinorTickMark, 'cat', primaryCatAxisY, px0 + frac * pw, catLineColor, catLineW, false, chart.catAxisLineHidden, 'minor', ptToPx);
+          drawAxisTick(ctx, chart.catAxisMinorTickMark, 'cat', primaryCatAxisY, px0 + frac * pw, catLineColor, catLineW, false, chart.catAxisLineHidden, 'minor', ptToPx, chart.catAxisLineDash);
         } else {
-          drawAxisTick(ctx, chart.catAxisMinorTickMark, 'val', primaryCatAxisX, py0 + frac * ph, catLineColor, catLineW, false, chart.catAxisLineHidden, 'minor', ptToPx);
+          drawAxisTick(ctx, chart.catAxisMinorTickMark, 'val', primaryCatAxisX, py0 + frac * ph, catLineColor, catLineW, false, chart.catAxisLineHidden, 'minor', ptToPx, chart.catAxisLineDash);
         }
       }
     }
@@ -4944,11 +4947,13 @@ function chartStyleRoleAxisLine(
   role: 'categoryAxis' | 'valueAxis',
   color: string | null | undefined,
   widthEmu: number | null | undefined,
+  dash: string | null | undefined,
   hidden: boolean,
 ): ChartDecorationLineStyle {
   return chartStyleRoleLine(chart, {
     color,
     widthEmu,
+    dash,
     // The shared axis model stores the effective boolean, so false means no
     // direct noFill rather than an authored visible override.
     hidden: hidden ? true : undefined,
@@ -4962,17 +4967,48 @@ function chartStyleRoleSecondaryAxisLine(
 ): SecondaryValueAxis | null | undefined {
   if (!axis || !chart.chartStyleRoles?.[role]) return axis;
   const line = chartStyleRoleAxisLine(
-    chart, role, axis.lineColor, axis.lineWidthEmu, axis.lineHidden,
+    chart, role, axis.lineColor, axis.lineWidthEmu, axis.lineDash, axis.lineHidden,
   );
   const lineHidden = line.hidden === true;
   if (line.color === axis.lineColor
     && line.widthEmu === axis.lineWidthEmu
+    && line.dash === axis.lineDash
     && lineHidden === axis.lineHidden) return axis;
   return {
     ...axis,
     lineColor: line.color,
     lineWidthEmu: line.widthEmu,
+    lineDash: line.dash,
     lineHidden,
+  };
+}
+
+function chartStyleRoleSeriesAxis(chart: ChartModel): ChartModel {
+  const axis = chart.threeD?.seriesAxis;
+  if (!axis || !chart.chartStyleRoles?.seriesAxis) return chart;
+  const line = chartStyleRoleLine(chart, {
+    color: axis.lineColor,
+    widthEmu: axis.lineWidthEmu,
+    dash: axis.lineDash,
+    hidden: axis.lineHidden ? true : undefined,
+  }, 'seriesAxis');
+  const lineHidden = line.hidden === true;
+  if (line.color === axis.lineColor
+    && line.widthEmu === axis.lineWidthEmu
+    && line.dash === axis.lineDash
+    && lineHidden === axis.lineHidden) return chart;
+  return {
+    ...chart,
+    threeD: {
+      ...chart.threeD,
+      seriesAxis: {
+        ...axis,
+        lineColor: line.color,
+        lineWidthEmu: line.widthEmu,
+        lineDash: line.dash,
+        lineHidden,
+      },
+    },
   };
 }
 
@@ -5220,6 +5256,7 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     && !chart.chartStyleRoles?.gridlineMinor
     && !chart.chartStyleRoles?.categoryAxis
     && !chart.chartStyleRoles?.valueAxis
+    && !chart.chartStyleRoles?.seriesAxis
     && !chart.chartStyleRoles?.dataPointMarker
     && !chart.chartStyleRoles?.legend
     && !chart.chartStyleRoles?.plotArea
@@ -5308,11 +5345,13 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
   );
   const catAxisLine = chartStyleRoleAxisLine(
     chart, 'categoryAxis',
-    chart.catAxisLineColor, chart.catAxisLineWidthEmu, chart.catAxisLineHidden,
+    chart.catAxisLineColor, chart.catAxisLineWidthEmu, chart.catAxisLineDash,
+    chart.catAxisLineHidden,
   );
   const valAxisLine = chartStyleRoleAxisLine(
     chart, 'valueAxis',
-    chart.valAxisLineColor, chart.valAxisLineWidthEmu, chart.valAxisLineHidden,
+    chart.valAxisLineColor, chart.valAxisLineWidthEmu, chart.valAxisLineDash,
+    chart.valAxisLineHidden,
   );
   changed ||= valMajor.visible !== chart.valAxisMajorGridlines
     || valMajor.color !== chart.valAxisGridlineColor
@@ -5334,9 +5373,11 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     || secondaryCatAxis !== chart.secondaryCatAxis
     || catAxisLine.color !== chart.catAxisLineColor
     || catAxisLine.widthEmu !== chart.catAxisLineWidthEmu
+    || catAxisLine.dash !== chart.catAxisLineDash
     || (catAxisLine.hidden === true) !== chart.catAxisLineHidden
     || valAxisLine.color !== chart.valAxisLineColor
     || valAxisLine.widthEmu !== chart.valAxisLineWidthEmu
+    || valAxisLine.dash !== chart.valAxisLineDash
     || (valAxisLine.hidden === true) !== chart.valAxisLineHidden;
   const effective = changed ? {
     ...chart,
@@ -5362,12 +5403,16 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     secondaryCatAxis,
     catAxisLineColor: catAxisLine.color,
     catAxisLineWidthEmu: catAxisLine.widthEmu,
+    catAxisLineDash: catAxisLine.dash,
     catAxisLineHidden: catAxisLine.hidden === true,
     valAxisLineColor: valAxisLine.color,
     valAxisLineWidthEmu: valAxisLine.widthEmu,
+    valAxisLineDash: valAxisLine.dash,
     valAxisLineHidden: valAxisLine.hidden === true,
   } : chart;
-  return chartStyleRoleLegend(chartStyleRolePlotArea(chartStyleRoleChartArea(effective)));
+  return chartStyleRoleLegend(chartStyleRolePlotArea(chartStyleRoleChartArea(
+    chartStyleRoleSeriesAxis(effective),
+  )));
 }
 
 function drawUpDownBars(
@@ -5858,7 +5903,7 @@ function renderLineChart(
     for (const v of plan.majorLines) {
       const gy = toY(v);
       if (drawMajorGrid) strokeValueGridlineH(ctx, px0, pw, gy, v === 0, grid);
-      drawAxisTick(ctx, chart.valAxisMajorTickMark, 'val', px0, gy, primaryValTickColor, primaryValTickWidth, false, chart.valAxisLineHidden, 'major', ptToPx);
+      drawAxisTick(ctx, chart.valAxisMajorTickMark, 'val', px0, gy, primaryValTickColor, primaryValTickWidth, false, chart.valAxisLineHidden, 'major', ptToPx, chart.valAxisLineDash);
       if (drawLabels) {
         ctx.fillStyle = chart.valAxisFontColor ? `#${chart.valAxisFontColor}` : '#555';
         ctx.textAlign = 'right';
@@ -5870,7 +5915,7 @@ function renderLineChart(
     }
     if (chart.valAxisMinorTickMark && chart.valAxisMinorTickMark !== 'none') {
       for (const value of plan.minorTicks) {
-        drawAxisTick(ctx, chart.valAxisMinorTickMark, 'val', px0, toY(value), primaryValTickColor, primaryValTickWidth, false, chart.valAxisLineHidden, 'minor', ptToPx);
+        drawAxisTick(ctx, chart.valAxisMinorTickMark, 'val', px0, toY(value), primaryValTickColor, primaryValTickWidth, false, chart.valAxisLineHidden, 'minor', ptToPx, chart.valAxisLineDash);
       }
     }
   }
@@ -5904,15 +5949,16 @@ function renderLineChart(
   // unless hidden explicitly. Office treats `<c:spPr><a:ln><a:noFill>` as
   // suppressing the rule and tick marks while retaining labels/gridlines.
   if (!chart.catAxisHidden && !chart.catAxisLineHidden) {
-    ctx.strokeStyle = primaryCatLine.color; ctx.lineWidth = primaryCatLine.width;
-    ctx.beginPath();
-    ctx.moveTo(px0, primaryCategoryAxisY);
-    ctx.lineTo(px0 + pw, primaryCategoryAxisY);
-    ctx.stroke();
+    strokeAxisSegment(
+      ctx, px0, primaryCategoryAxisY, px0 + pw, primaryCategoryAxisY,
+      primaryCatLine.color, primaryCatLine.width, chart.catAxisLineDash,
+    );
   }
   if (!chart.valAxisHidden && !chart.valAxisLineHidden) {
-    ctx.strokeStyle = primaryValLine.color; ctx.lineWidth = primaryValLine.width;
-    ctx.beginPath(); ctx.moveTo(px0, py0); ctx.lineTo(px0, py0 + ph); ctx.stroke();
+    strokeAxisSegment(
+      ctx, px0, py0, px0, py0 + ph,
+      primaryValLine.color, primaryValLine.width, chart.valAxisLineDash,
+    );
   }
 
   // CT_LineChart owns drop lines, high-low lines, and up/down bars at the
@@ -6136,14 +6182,14 @@ function renderLineChart(
       ? dateAxisPlan.majorTicks.map(tick => px0 + tick.fraction * pw)
       : Array.from({ length: Math.ceil(n / tickInterval) }, (_, index) => toX(index * tickInterval));
     for (const tx of majorTickXs) {
-      drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', primaryCategoryAxisY, tx, primaryCatTickColor, primaryCatTickWidth, false, chart.catAxisLineHidden, 'major', ptToPx);
+      drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', primaryCategoryAxisY, tx, primaryCatTickColor, primaryCatTickWidth, false, chart.catAxisLineHidden, 'major', ptToPx, chart.catAxisLineDash);
     }
     if (chart.catAxisMinorTickMark && chart.catAxisMinorTickMark !== 'none' && dateAxisPlan) {
       for (const tick of dateAxisPlan.minorTicks) {
         drawAxisTick(
           ctx, chart.catAxisMinorTickMark, 'cat', primaryCategoryAxisY,
           px0 + tick.fraction * pw, primaryCatTickColor, primaryCatTickWidth,
-          false, chart.catAxisLineHidden, 'minor', ptToPx,
+          false, chart.catAxisLineHidden, 'minor', ptToPx, chart.catAxisLineDash,
         );
       }
     }
@@ -6372,7 +6418,7 @@ function renderStockChart(
     for (const v of plan.majorLines) {
       const gy = toY(v);
       if (drawMajorGrid) strokeValueGridlineH(ctx, px0, pw, gy, v === 0, grid);
-      drawAxisTick(ctx, chart.valAxisMajorTickMark, 'val', px0, gy, undefined, undefined, false, chart.valAxisLineHidden, 'major', ptToPx);
+      drawAxisTick(ctx, chart.valAxisMajorTickMark, 'val', px0, gy, undefined, undefined, false, chart.valAxisLineHidden, 'major', ptToPx, chart.valAxisLineDash);
       if (drawLabels) {
         ctx.fillStyle = chart.valAxisFontColor ? `#${chart.valAxisFontColor}` : '#555';
         ctx.textAlign = 'right';
@@ -6383,17 +6429,25 @@ function renderStockChart(
       drawAxisTick(
         ctx, chart.valAxisMinorTickMark, 'val', px0, toY(v),
         undefined, undefined, false, chart.valAxisLineHidden, 'minor', ptToPx,
+        chart.valAxisLineDash,
       );
     }
   }
 
   // Axis rules (bottom = category, left = value).
-  ctx.strokeStyle = '#aaa'; ctx.lineWidth = 1;
+  const stockCatLine = resolveAxisLine(chart.catAxisLineColor, chart.catAxisLineWidthEmu, ptToPx);
+  const stockValLine = resolveAxisLine(chart.valAxisLineColor, chart.valAxisLineWidthEmu, ptToPx);
   if (!chart.catAxisHidden && !chart.catAxisLineHidden) {
-    ctx.beginPath(); ctx.moveTo(px0, py0 + ph); ctx.lineTo(px0 + pw, py0 + ph); ctx.stroke();
+    strokeAxisSegment(
+      ctx, px0, py0 + ph, px0 + pw, py0 + ph,
+      stockCatLine.color, stockCatLine.width, chart.catAxisLineDash,
+    );
   }
   if (!chart.valAxisHidden && !chart.valAxisLineHidden) {
-    ctx.beginPath(); ctx.moveTo(px0, py0); ctx.lineTo(px0, py0 + ph); ctx.stroke();
+    strokeAxisSegment(
+      ctx, px0, py0, px0, py0 + ph,
+      stockValLine.color, stockValLine.width, chart.valAxisLineDash,
+    );
   }
 
   // ── First/last-series up-down bars (§21.2.2.218/227). Shared with ordinary
@@ -6545,7 +6599,7 @@ function renderStockChart(
           chart.catAxisLabelAlignment,
         );
       const tx = anchor ? px0 + anchor.fraction * pw : entry.x;
-      drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', py0 + ph, tx, undefined, undefined, false, chart.catAxisLineHidden, 'major', ptToPx);
+      drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', py0 + ph, tx, stockCatLine.color, stockCatLine.width, false, chart.catAxisLineHidden, 'major', ptToPx, chart.catAxisLineDash);
       if (!showLabels) continue;
       ctx.textAlign = anchor?.textAlign ?? 'center';
       ctx.fillStyle = catLabelColor;
@@ -6564,7 +6618,7 @@ function renderStockChart(
         drawAxisTick(
           ctx, chart.catAxisMinorTickMark, 'cat', py0 + ph,
           px0 + tick.fraction * pw, undefined, undefined,
-          false, chart.catAxisLineHidden, 'minor', ptToPx,
+          false, chart.catAxisLineHidden, 'minor', ptToPx, chart.catAxisLineDash,
         );
       }
     }
@@ -7027,15 +7081,19 @@ function renderSurfaceChart(
 
   const categoryAxisStart = projection.project(front.x, floorY, nearDepth);
   const categoryAxisEnd = projection.project(front.x + front.w, floorY, nearDepth);
-  ctx.strokeStyle = chart.catAxisLineColor ? `#${chart.catAxisLineColor}` : '#000000';
-  ctx.lineWidth = chart.catAxisLineWidthEmu != null
+  const surfaceCatLineWidth = chart.catAxisLineWidthEmu != null
     ? axisLineWidthPx(chart.catAxisLineWidthEmu, ptToPx)
     : 1;
-  ctx.setLineDash([]);
-  ctx.beginPath();
-  ctx.moveTo(categoryAxisStart.x, categoryAxisStart.y);
-  ctx.lineTo(categoryAxisEnd.x, categoryAxisEnd.y);
-  ctx.stroke();
+  strokeAxisSegment(
+    ctx,
+    categoryAxisStart.x,
+    categoryAxisStart.y,
+    categoryAxisEnd.x,
+    categoryAxisEnd.y,
+    chart.catAxisLineColor ? `#${chart.catAxisLineColor}` : '#000000',
+    surfaceCatLineWidth,
+    chart.catAxisLineDash,
+  );
   ctx.font = chartFontCss(catFontPx, chartFontFamily(chart, chart.catAxisFontFace, 'minor'));
   ctx.fillStyle = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#000000';
   ctx.textBaseline = 'top';
@@ -7057,8 +7115,7 @@ function renderSurfaceChart(
   }
 
   if (!seriesAxis?.hidden) {
-    ctx.strokeStyle = seriesAxis?.lineColor ? `#${seriesAxis.lineColor}` : '#000000';
-    ctx.lineWidth = seriesAxis?.lineWidthEmu != null
+    const seriesAxisWidth = seriesAxis?.lineWidthEmu != null
       ? axisLineWidthPx(seriesAxis.lineWidthEmu, ptToPx)
       : 1;
     const seriesAxisMinPoint = projection.project(front.x, floorY, 0.5);
@@ -7067,10 +7124,11 @@ function renderSurfaceChart(
       ? front.x : front.x + front.w;
     const seriesStart = projection.project(seriesAxisX, floorY, nearDepth);
     const seriesEnd = projection.project(seriesAxisX, floorY, farDepth);
-    ctx.beginPath();
-    ctx.moveTo(seriesStart.x, seriesStart.y);
-    ctx.lineTo(seriesEnd.x, seriesEnd.y);
-    ctx.stroke();
+    strokeAxisSegment(
+      ctx, seriesStart.x, seriesStart.y, seriesEnd.x, seriesEnd.y,
+      seriesAxis?.lineColor ? `#${seriesAxis.lineColor}` : '#000000',
+      seriesAxisWidth, seriesAxis?.lineDash,
+    );
     ctx.font = chartFontCss(
       seriesFontPx,
       chartFontFamily(chart, seriesAxis?.fontFace, 'minor'),
@@ -7090,14 +7148,14 @@ function renderSurfaceChart(
     const valueAxisBottom = projection.project(valueAxisX, front.y + front.h, nearDepth);
     const valueAxisTop = projection.project(valueAxisX, front.y, nearDepth);
     if (Math.hypot(valueAxisTop.x - valueAxisBottom.x, valueAxisTop.y - valueAxisBottom.y) > 4) {
-      ctx.strokeStyle = chart.valAxisLineColor ? `#${chart.valAxisLineColor}` : '#000000';
-      ctx.lineWidth = chart.valAxisLineWidthEmu != null
+      const valueAxisWidth = chart.valAxisLineWidthEmu != null
         ? axisLineWidthPx(chart.valAxisLineWidthEmu, ptToPx)
         : 1;
-      ctx.beginPath();
-      ctx.moveTo(valueAxisBottom.x, valueAxisBottom.y);
-      ctx.lineTo(valueAxisTop.x, valueAxisTop.y);
-      ctx.stroke();
+      strokeAxisSegment(
+        ctx, valueAxisBottom.x, valueAxisBottom.y, valueAxisTop.x, valueAxisTop.y,
+        chart.valAxisLineColor ? `#${chart.valAxisLineColor}` : '#000000',
+        valueAxisWidth, chart.valAxisLineDash,
+      );
       const valFontPx = axisLabelPx(chart.valAxisFontSizeHpt, h, ptToPx);
       ctx.font = chartFontCss(valFontPx, chartFontFamily(chart, chart.valAxisFontFace, 'minor'));
       ctx.fillStyle = chart.valAxisFontColor ? `#${chart.valAxisFontColor}` : '#000000';
@@ -7785,7 +7843,7 @@ function renderAreaChart(
     ctx.textBaseline = 'middle';
     for (const v of areaPlan.majorLines) {
       const gy = toY(v);
-      drawAxisTick(ctx, chart.valAxisMajorTickMark, 'val', px0, gy, valLineColor, valLineW, false, chart.valAxisLineHidden, 'major', ptToPx);
+      drawAxisTick(ctx, chart.valAxisMajorTickMark, 'val', px0, gy, valLineColor, valLineW, false, chart.valAxisLineHidden, 'major', ptToPx, chart.valAxisLineDash);
       ctx.fillStyle = chart.valAxisFontColor ? `#${chart.valAxisFontColor}` : '#555';
       ctx.textAlign = 'right';
       const gap = chart.valAxisFontSizeHpt != null
@@ -7795,7 +7853,7 @@ function renderAreaChart(
     }
     if (chart.valAxisMinorTickMark && chart.valAxisMinorTickMark !== 'none') {
       for (const value of areaPlan.minorTicks) {
-        drawAxisTick(ctx, chart.valAxisMinorTickMark, 'val', px0, toY(value), valLineColor, valLineW, false, chart.valAxisLineHidden, 'minor', ptToPx);
+        drawAxisTick(ctx, chart.valAxisMinorTickMark, 'val', px0, toY(value), valLineColor, valLineW, false, chart.valAxisLineHidden, 'minor', ptToPx, chart.valAxisLineDash);
       }
     }
   }
@@ -7804,15 +7862,16 @@ function renderAreaChart(
   // while labels/gridlines remain. The value rule is drawn only when the file
   // gives it a colour, matching the bar/line renderers.
   if (!chart.catAxisHidden && !chart.catAxisLineHidden) {
-    ctx.strokeStyle = catLineColor; ctx.lineWidth = catLineW;
-    ctx.beginPath();
-    ctx.moveTo(px0, primaryCategoryAxisY);
-    ctx.lineTo(px0 + pw, primaryCategoryAxisY);
-    ctx.stroke();
+    strokeAxisSegment(
+      ctx, px0, primaryCategoryAxisY, px0 + pw, primaryCategoryAxisY,
+      catLineColor, catLineW, chart.catAxisLineDash,
+    );
   }
   if (!chart.valAxisHidden && !chart.valAxisLineHidden && chart.valAxisLineColor != null) {
-    ctx.strokeStyle = valLineColor; ctx.lineWidth = valLineW;
-    ctx.beginPath(); ctx.moveTo(px0, py0); ctx.lineTo(px0, py0 + ph); ctx.stroke();
+    strokeAxisSegment(
+      ctx, px0, py0, px0, py0 + ph,
+      valLineColor, valLineW, chart.valAxisLineDash,
+    );
   }
   // Category-axis major tick marks. With crossBetween="between" PowerPoint
   // draws them at the band BOUNDARIES (n+1 dividers); "midCat" ticks centers.
@@ -7823,16 +7882,16 @@ function renderAreaChart(
         drawAxisTick(
           ctx, chart.catAxisMajorTickMark, 'cat', primaryCategoryAxisY,
           px0 + tick.fraction * pw, catLineColor, catLineW,
-          false, chart.catAxisLineHidden, 'major', ptToPx,
+          false, chart.catAxisLineHidden, 'major', ptToPx, chart.catAxisLineDash,
         );
       }
     } else if (between) {
       for (let ci = 0; ci <= n; ci += tickSkip) {
-        drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', primaryCategoryAxisY, px0 + (ci / n) * pw, catLineColor, catLineW, false, chart.catAxisLineHidden, 'major', ptToPx);
+        drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', primaryCategoryAxisY, px0 + (ci / n) * pw, catLineColor, catLineW, false, chart.catAxisLineHidden, 'major', ptToPx, chart.catAxisLineDash);
       }
     } else {
       for (let ci = 0; ci < n; ci += tickSkip) {
-        drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', primaryCategoryAxisY, toX(ci), catLineColor, catLineW, false, chart.catAxisLineHidden, 'major', ptToPx);
+        drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', primaryCategoryAxisY, toX(ci), catLineColor, catLineW, false, chart.catAxisLineHidden, 'major', ptToPx, chart.catAxisLineDash);
       }
     }
   }
@@ -7846,7 +7905,7 @@ function renderAreaChart(
       drawAxisTick(
         ctx, chart.catAxisMinorTickMark, 'cat', primaryCategoryAxisY,
         px0 + tick.fraction * pw, catLineColor, catLineW,
-        false, chart.catAxisLineHidden, 'minor', ptToPx,
+        false, chart.catAxisLineHidden, 'minor', ptToPx, chart.catAxisLineDash,
       );
     }
   }
@@ -9382,6 +9441,7 @@ function renderRadarChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: C
       drawAxisTick(
         ctx, chart.valAxisMajorTickMark, 'val', cx2, y,
         valAxisLine.color, valAxisLine.width, false, chart.valAxisLineHidden, 'major', ptToPx,
+        chart.valAxisLineDash,
       );
       if (chart.valAxisTickLabelPos !== 'none') {
         ctx.fillText(formatPrimaryValueAxisTick(chart, v, false), cx2 - 3, y);
@@ -9402,6 +9462,7 @@ function renderRadarChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: C
           chart.valAxisLineHidden,
           'minor',
           ptToPx,
+          chart.valAxisLineDash,
         );
       }
     }
@@ -10111,11 +10172,11 @@ function renderScatterChart(
       // Scatter keeps its own undefined colour default (→ drawAxisTick's '#888'),
       // so only the width formula is shared. `axisLineWidthPx`'s 1 px fallback is
       // equivalent to undefined here (drawAxisTick treats both as a hairline).
-      drawAxisTick(ctx, chart.valAxisMajorTickMark, 'val', yAxisX, gy, yAxisLineColor, yAxisLineWidth, false, chart.valAxisLineHidden, 'major', ptToPx);
+      drawAxisTick(ctx, chart.valAxisMajorTickMark, 'val', yAxisX, gy, yAxisLineColor, yAxisLineWidth, false, chart.valAxisLineHidden, 'major', ptToPx, chart.valAxisLineDash);
     }
     if (chart.valAxisMinorTickMark && chart.valAxisMinorTickMark !== 'none') {
       for (const value of yMinorTicks) {
-        drawAxisTick(ctx, chart.valAxisMinorTickMark, 'val', yAxisX, toY(value), yAxisLineColor, yAxisLineWidth, false, chart.valAxisLineHidden, 'minor', ptToPx);
+        drawAxisTick(ctx, chart.valAxisMinorTickMark, 'val', yAxisX, toY(value), yAxisLineColor, yAxisLineWidth, false, chart.valAxisLineHidden, 'minor', ptToPx, chart.valAxisLineDash);
       }
     }
   }
@@ -10156,17 +10217,21 @@ function renderScatterChart(
   // `<c:catAx><c:spPr><a:ln>` when present; default otherwise.
   if (!chart.catAxisHidden && !chart.catAxisLineHidden) {
     ctx.save();
-    ctx.strokeStyle = chart.catAxisLineColor ? `#${chart.catAxisLineColor}` : '#888';
-    ctx.lineWidth = axisLineWidthPx(chart.catAxisLineWidthEmu, ptToPx);
     ctx.lineCap = 'butt';
-    ctx.beginPath(); ctx.moveTo(px0, xAxisY); ctx.lineTo(px0 + pw, xAxisY); ctx.stroke();
+    strokeAxisSegment(
+      ctx, px0, xAxisY, px0 + pw, xAxisY,
+      chart.catAxisLineColor ? `#${chart.catAxisLineColor}` : '#888',
+      axisLineWidthPx(chart.catAxisLineWidthEmu, ptToPx), chart.catAxisLineDash,
+    );
     ctx.restore();
   }
   if (!chart.valAxisHidden && !chart.valAxisLineHidden) {
     ctx.save();
-    ctx.strokeStyle = chart.valAxisLineColor ? `#${chart.valAxisLineColor}` : '#888';
-    ctx.lineWidth = axisLineWidthPx(chart.valAxisLineWidthEmu, ptToPx);
-    ctx.beginPath(); ctx.moveTo(yAxisX, py0); ctx.lineTo(yAxisX, py0 + ph); ctx.stroke();
+    strokeAxisSegment(
+      ctx, yAxisX, py0, yAxisX, py0 + ph,
+      chart.valAxisLineColor ? `#${chart.valAxisLineColor}` : '#888',
+      axisLineWidthPx(chart.valAxisLineWidthEmu, ptToPx), chart.valAxisLineDash,
+    );
     ctx.restore();
   }
 
@@ -10206,11 +10271,11 @@ function renderScatterChart(
       if (labelPos !== 'none') {
         ctx.fillText(formatAxisTickWithUnits(v, chart.catAxisFormatCode, chart.date1904, chart.catAxisDisplayUnits), gx, labelY);
       }
-      drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', xAxisY, gx, xAxisLineColor, lineWidth, false, chart.catAxisLineHidden, 'major', ptToPx);
+      drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', xAxisY, gx, xAxisLineColor, lineWidth, false, chart.catAxisLineHidden, 'major', ptToPx, chart.catAxisLineDash);
     }
     if (chart.catAxisMinorTickMark && chart.catAxisMinorTickMark !== 'none') {
       for (const value of xMinorTicks) {
-        drawAxisTick(ctx, chart.catAxisMinorTickMark, 'cat', xAxisY, toX(value), xAxisLineColor, lineWidth, false, chart.catAxisLineHidden, 'minor', ptToPx);
+        drawAxisTick(ctx, chart.catAxisMinorTickMark, 'cat', xAxisY, toX(value), xAxisLineColor, lineWidth, false, chart.catAxisLineHidden, 'minor', ptToPx, chart.catAxisLineDash);
       }
     }
   }
@@ -10241,12 +10306,10 @@ function renderScatterChart(
   if (secondaryX && secondaryXPlan && !secondaryX.hidden) {
     const line = resolveAxisLine(secondaryX.lineColor, secondaryX.lineWidthEmu, ptToPx);
     if (!secondaryX.lineHidden) {
-      ctx.strokeStyle = line.color;
-      ctx.lineWidth = line.width;
-      ctx.beginPath();
-      ctx.moveTo(px0, py0);
-      ctx.lineTo(px0 + pw, py0);
-      ctx.stroke();
+      strokeAxisSegment(
+        ctx, px0, py0, px0 + pw, py0,
+        line.color, line.width, secondaryX.lineDash,
+      );
     }
     const fontPx = chartTextFontSizePx(secondaryX.fontSizeHpt, ptToPx) ?? xAxLabelFontPx;
     ctx.font = chartFontCss(
@@ -10272,7 +10335,7 @@ function renderScatterChart(
       }
       drawAxisTick(
         ctx, secondaryX.majorTickMark, 'cat', py0, sx, line.color, line.width,
-        true, secondaryX.lineHidden, 'major', ptToPx,
+        true, secondaryX.lineHidden, 'major', ptToPx, secondaryX.lineDash,
       );
     }
     if (secondaryX.minorTickMark && secondaryX.minorTickMark !== 'none') {
@@ -10280,6 +10343,7 @@ function renderScatterChart(
         drawAxisTick(
           ctx, secondaryX.minorTickMark, 'cat', py0, toSecondaryX(value), line.color,
           line.width, true, secondaryX.lineHidden, 'minor', ptToPx,
+          secondaryX.lineDash,
         );
       }
     }
@@ -11871,12 +11935,14 @@ function renderWaterfallChart(
         chart.valAxisLineHidden,
         'major',
         ptToPx,
+        chart.valAxisLineDash,
       );
     }
     for (const value of plan.minorTicks) {
       drawAxisTick(
         ctx, chart.valAxisMinorTickMark, 'val', px0, yOf(value),
         valAxisLine.color, valAxisLine.width, false, chart.valAxisLineHidden, 'minor', ptToPx,
+        chart.valAxisLineDash,
       );
     }
   }
@@ -11887,14 +11953,16 @@ function renderWaterfallChart(
   const drawValLine = !chart.valAxisHidden && !chart.valAxisLineHidden;
   const drawCatLine = !chart.catAxisHidden && !chart.catAxisLineHidden;
   if (drawValLine) {
-    ctx.strokeStyle = valAxisLine.color;
-    ctx.lineWidth = valAxisLine.width;
-    ctx.beginPath(); ctx.moveTo(px0, py0); ctx.lineTo(px0, py0 + ph); ctx.stroke();
+    strokeAxisSegment(
+      ctx, px0, py0, px0, py0 + ph,
+      valAxisLine.color, valAxisLine.width, chart.valAxisLineDash,
+    );
   }
   if (drawCatLine) {
-    ctx.strokeStyle = catAxisLine.color;
-    ctx.lineWidth = catAxisLine.width;
-    ctx.beginPath(); ctx.moveTo(px0, py0 + ph); ctx.lineTo(px0 + pw, py0 + ph); ctx.stroke();
+    strokeAxisSegment(
+      ctx, px0, py0 + ph, px0 + pw, py0 + ph,
+      catAxisLine.color, catAxisLine.width, chart.catAxisLineDash,
+    );
   }
 
   // ECMA-376 / chartEx §17.18.34 ST_GapAmount: gapWidth is the gap between
@@ -12604,18 +12672,21 @@ function renderBoxWhiskerChart(
         chart.valAxisLineHidden,
         'major',
         ptToPx,
+        chart.valAxisLineDash,
       );
     }
     for (const value of boxAxisPlan.minorTicks) {
       drawAxisTick(
         ctx, chart.valAxisMinorTickMark, 'val', px0, yOf(value),
         valAxisLine.color, valAxisLine.width, false, chart.valAxisLineHidden, 'minor', ptToPx,
+        chart.valAxisLineDash,
       );
     }
     if (!chart.valAxisLineHidden) {
-      ctx.strokeStyle = valAxisLine.color;
-      ctx.lineWidth = valAxisLine.width;
-      ctx.beginPath(); ctx.moveTo(px0, py0); ctx.lineTo(px0, py0 + ph); ctx.stroke();
+      strokeAxisSegment(
+        ctx, px0, py0, px0, py0 + ph,
+        valAxisLine.color, valAxisLine.width, chart.valAxisLineDash,
+      );
     }
   }
   // Category-axis baseline. ChartEx carries the axis rule in the local
@@ -12627,9 +12698,10 @@ function renderBoxWhiskerChart(
     ptToPx,
   );
   if (!chart.catAxisHidden && !chart.catAxisLineHidden) {
-    ctx.strokeStyle = catAxisLine.color;
-    ctx.lineWidth = catAxisLine.width;
-    ctx.beginPath(); ctx.moveTo(px0, py0 + ph); ctx.lineTo(px0 + pw, py0 + ph); ctx.stroke();
+    strokeAxisSegment(
+      ctx, px0, py0 + ph, px0 + pw, py0 + ph,
+      catAxisLine.color, catAxisLine.width, chart.catAxisLineDash,
+    );
   }
 
   // ChartEx divides the plot into full category intervals, so the first and
@@ -12721,6 +12793,7 @@ function renderBoxWhiskerChart(
         chart.catAxisLineHidden,
         'major',
         ptToPx,
+        chart.catAxisLineDash,
       );
     }
     for (let si = 0; si < nSer; si++) {

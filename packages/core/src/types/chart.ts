@@ -834,8 +834,10 @@ export interface ChartModel {
    *  `<c:catAx|valAx><c:spPr><a:ln>`. */
   catAxisLineColor?: string | null;
   catAxisLineWidthEmu?: number | null;
+  catAxisLineDash?: string | null;
   valAxisLineColor?: string | null;
   valAxisLineWidthEmu?: number | null;
+  valAxisLineDash?: string | null;
   /**
    * `<c:catAx><c:numFmt@formatCode>` (or scatter X-axis valAx). When set,
    * the renderer formats X-axis tick labels with this code (e.g. dates).
@@ -1293,6 +1295,7 @@ export interface ChartThreeDSeriesAxis {
   fontFace?: string | null;
   lineColor?: string | null;
   lineWidthEmu?: number | null;
+  lineDash?: string | null;
   lineHidden: boolean;
   titleFontSizeHpt?: number | null;
   titleFontBold?: boolean | null;
@@ -1499,6 +1502,8 @@ export interface SecondaryValueAxis {
   lineColor?: string | null;
   /** `<c:spPr><a:ln w>` axis-line width in EMU. */
   lineWidthEmu?: number | null;
+  /** `<c:spPr><a:ln><a:prstDash val>` axis-line dash preset. */
+  lineDash?: string | null;
   /** `<c:spPr><a:ln><a:noFill>` — Office-compatible suppression of the
    *  secondary axis rule and tick marks; labels and gridlines remain. */
   lineHidden: boolean;

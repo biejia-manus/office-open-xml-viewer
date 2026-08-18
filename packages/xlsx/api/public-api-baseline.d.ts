@@ -482,8 +482,10 @@ export interface ChartModel {
     valAxisCrossesAt?: number | null;
     catAxisLineColor?: string | null;
     catAxisLineWidthEmu?: number | null;
+    catAxisLineDash?: string | null;
     valAxisLineColor?: string | null;
     valAxisLineWidthEmu?: number | null;
+    valAxisLineDash?: string | null;
     catAxisFormatCode?: string | null;
     catAxisMin?: number | null;
     catAxisMax?: number | null;
@@ -740,6 +742,7 @@ export interface ChartThreeDSeriesAxis {
     fontFace?: string | null;
     lineColor?: string | null;
     lineWidthEmu?: number | null;
+    lineDash?: string | null;
     lineHidden: boolean;
     titleFontSizeHpt?: number | null;
     titleFontBold?: boolean | null;
@@ -1363,6 +1366,7 @@ export interface SecondaryValueAxis {
     fontFace?: string | null;
     lineColor?: string | null;
     lineWidthEmu?: number | null;
+    lineDash?: string | null;
     lineHidden: boolean;
     majorTickMark: string;
     minorTickMark?: string | null;

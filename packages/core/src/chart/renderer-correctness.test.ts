@@ -907,6 +907,31 @@ describe('classic 3-D compatibility projection', () => {
     expect(rec.texts.find(text => text.text === 'North')?.fillStyle).toBe('#123456');
   });
 
+  it('applies the linked series-axis dash to a standard 3-D group', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A'],
+      chartStyleRoles: {
+        seriesAxis: { lineColors: ['654321'], lineWidthEmu: 25_400, lineDash: 'dashDot' },
+      },
+      threeD: {
+        rotationX: 15, rotationY: 20, depthPercent: 100, perspective: 30,
+        barGrouping: 'standard',
+        seriesAxis: {
+          hidden: false, orientation: 'minMax', majorTickMark: 'out', lineHidden: false,
+        },
+      },
+      series: [
+        series({ name: 'North', color: 'FF0000', values: [10] }),
+        series({ name: 'South', color: '00FF00', values: [10] }),
+      ],
+    }), RECT, 1);
+    expect(rec.segs.some(segment =>
+      segment.ss === '#654321' && segment.lw === 2 && segment.dash.length === 4
+    )).toBe(true);
+  });
+
   it('depth-sorts crossing 3-D line segments instead of painting whole series atomically', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
@@ -8590,7 +8615,7 @@ describe('CH10 — chart text font faces', () => {
 
 // ── CH6 — axis scale model (gridlines / units / logBase / orientation) ───────
 
-interface Seg { x0: number; y0: number; x1: number; y1: number; ss: string; lw: number }
+interface Seg { x0: number; y0: number; x1: number; y1: number; ss: string; lw: number; dash: number[] }
 interface SegRecorded { ctx: CanvasRenderingContext2D; segs: Seg[]; texts: TextCall[] }
 
 function strokedPolylineCtx(): {
@@ -8660,6 +8685,7 @@ function strokedPolylineCtx(): {
 function segRecordingCtx(): SegRecorded {
   const segs: Seg[] = [];
   const texts: TextCall[] = [];
+  let dash: number[] = [];
   let cx = 0, cy = 0, mx = 0, my = 0;
   const state: Record<string, unknown> = {
     font: '10px sans-serif', fillStyle: '#000', strokeStyle: '#000', lineWidth: 1,
@@ -8682,7 +8708,10 @@ function segRecordingCtx(): SegRecorded {
           };
         case 'moveTo': return (x: number, y: number) => { cx = x; cy = y; mx = x; my = y; };
         case 'lineTo': return (x: number, y: number) => {
-          segs.push({ x0: cx, y0: cy, x1: x, y1: y, ss: String(state.strokeStyle), lw: Number(state.lineWidth) });
+          segs.push({
+            x0: cx, y0: cy, x1: x, y1: y,
+            ss: String(state.strokeStyle), lw: Number(state.lineWidth), dash: [...dash],
+          });
           cx = x; cy = y;
         };
         case 'fillText': return (text: string, x: number, y: number) =>
@@ -8693,7 +8722,12 @@ function segRecordingCtx(): SegRecorded {
         case 'save': case 'restore': case 'beginPath': case 'fill': case 'stroke':
         case 'arc': case 'bezierCurveTo': case 'quadraticCurveTo': case 'rect':
         case 'fillRect': case 'strokeRect': case 'clearRect': case 'strokeText':
-        case 'setLineDash': case 'translate': case 'rotate': case 'scale': case 'clip':
+          return () => undefined;
+        case 'setLineDash': return (value?: number[]) => {
+          dash = Array.isArray(value) ? [...value] : [];
+        };
+        case 'getLineDash': return () => [...dash];
+        case 'translate': case 'rotate': case 'scale': case 'clip':
         case 'setTransform': case 'resetTransform': case 'getTransform':
           return () => undefined;
         default: return undefined;
@@ -8833,22 +8867,32 @@ describe('CH6 — axis scale model', () => {
     renderChart(linked.ctx, lineModel({
       valAxisMajorGridlines: false,
       chartStyleRoles: {
-        categoryAxis: { lineColors: ['AABBCC'], lineWidthEmu: 19_050 },
-        valueAxis: { lineColors: ['CCBBAA'], lineWidthEmu: 25_400 },
+        categoryAxis: { lineColors: ['AABBCC'], lineWidthEmu: 19_050, lineDash: 'dash' },
+        valueAxis: { lineColors: ['CCBBAA'], lineWidthEmu: 25_400, lineDash: 'dot' },
       },
     }), RECT, 1);
     expect(linked.segs.some(segment => segment.ss === '#AABBCC' && segment.lw === 1.5)).toBe(true);
     expect(linked.segs.some(segment => segment.ss === '#CCBBAA' && segment.lw === 2)).toBe(true);
+    expect(linked.segs.some(segment =>
+      segment.ss === '#AABBCC' && segment.dash.length > 0
+    )).toBe(true);
+    expect(linked.segs.some(segment =>
+      segment.ss === '#CCBBAA' && segment.dash.length > 0
+    )).toBe(true);
 
     const direct = segRecordingCtx();
     renderChart(direct.ctx, lineModel({
       valAxisMajorGridlines: false,
       catAxisLineColor: '112233',
+      catAxisLineDash: 'sysDot',
       chartStyleRoles: {
-        categoryAxis: { lineColors: ['AABBCC'], lineHidden: true },
+        categoryAxis: { lineColors: ['AABBCC'], lineDash: 'dash', lineHidden: true },
       },
     }), RECT, 1);
-    expect(direct.segs.some(segment => segment.ss === '#112233')).toBe(true);
+    expect(direct.segs.some(segment =>
+      segment.ss === '#112233' && segment.dash.length === 2
+        && segment.dash[0] === 1 && segment.dash[1] === 2
+    )).toBe(true);
     expect(direct.segs.some(segment => segment.ss === '#AABBCC')).toBe(false);
 
     const hidden = segRecordingCtx();
@@ -9089,6 +9133,31 @@ describe('CH6 — axis scale model', () => {
     );
     expect(lines.length).toBeGreaterThanOrEqual(6);
     expect(lines.every(segment => segment.lw === 2)).toBe(true);
+  });
+
+  it('applies the linked value-axis dash to an unauthored secondary axis', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, lineModel({
+      valAxisMajorGridlines: false,
+      valAxisLineColor: '111111',
+      valAxisLineDash: 'solid',
+      series: [
+        series({ values: [10, 20, 30] }),
+        series({ values: [20, 60, 100], useSecondaryAxis: true }),
+      ],
+      secondaryValAxis: {
+        min: 0, max: 100, title: null, hidden: false, lineHidden: false,
+        majorTickMark: 'none', majorUnit: 20,
+      },
+      chartStyleRoles: {
+        valueAxis: { lineColors: ['654321'], lineWidthEmu: 25_400, lineDash: 'dashDot' },
+      },
+    }), RECT, 1);
+    expect(rec.segs.some(segment =>
+      segment.ss === '#654321' && segment.lw === 2
+        && Math.abs(segment.x0 - segment.x1) < 0.5
+        && segment.x0 > RECT.w * 0.75 && segment.dash.length === 4
+    )).toBe(true);
   });
 
   it('secondary tick-label visibility and font properties do not affect ticks or grids', () => {

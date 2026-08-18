@@ -1288,7 +1288,7 @@ function drawThreeDSeriesAxis(
 
   if (!spec.lineHidden) {
     applyThreeDStroke(ctx, threeDStroke(
-      spec.lineColor, spec.lineWidthEmu, null, ptToPx, '898989', 1,
+      spec.lineColor, spec.lineWidthEmu, spec.lineDash, ptToPx, '898989', 1,
     ));
     ctx.beginPath();
     ctx.moveTo(start.x, start.y);
@@ -1826,7 +1826,8 @@ function frontAxes(
     applyThreeDStroke(ctx, threeDStroke(
       orientation === 'vertical' ? chart.catAxisLineColor : chart.valAxisLineColor,
       orientation === 'vertical' ? chart.catAxisLineWidthEmu : chart.valAxisLineWidthEmu,
-      null, ptToPx, '898989', 1,
+      orientation === 'vertical' ? chart.catAxisLineDash : chart.valAxisLineDash,
+      ptToPx, '898989', 1,
     ));
     ctx.beginPath();
     ctx.moveTo(geometry.horizontalStart.x, geometry.horizontalStart.y);
@@ -1837,7 +1838,8 @@ function frontAxes(
     applyThreeDStroke(ctx, threeDStroke(
       orientation === 'vertical' ? chart.valAxisLineColor : chart.catAxisLineColor,
       orientation === 'vertical' ? chart.valAxisLineWidthEmu : chart.catAxisLineWidthEmu,
-      null, ptToPx, '898989', 1,
+      orientation === 'vertical' ? chart.valAxisLineDash : chart.catAxisLineDash,
+      ptToPx, '898989', 1,
     ));
     ctx.beginPath();
     ctx.moveTo(geometry.verticalStart.x, geometry.verticalStart.y);
@@ -2025,7 +2027,8 @@ function cartesianAxisTicks(
   const valueMinorTickMark = chart.valAxisMinorTickMark ?? 'none';
   if (!chart.valAxisHidden && !chart.valAxisLineHidden) {
     applyThreeDStroke(ctx, threeDStroke(
-      chart.valAxisLineColor, chart.valAxisLineWidthEmu, null, ptToPx, '898989', 1,
+      chart.valAxisLineColor, chart.valAxisLineWidthEmu, chart.valAxisLineDash,
+      ptToPx, '898989', 1,
     ));
     const valueAnchor = (value: number) => orientation === 'horizontal'
       ? projection.project(front.x + axis.fraction(value) * front.w, axisY, depth)
@@ -2049,7 +2052,8 @@ function cartesianAxisTicks(
   }
   if (!chart.catAxisHidden && !chart.catAxisLineHidden) {
     applyThreeDStroke(ctx, threeDStroke(
-      chart.catAxisLineColor, chart.catAxisLineWidthEmu, null, ptToPx, '898989', 1,
+      chart.catAxisLineColor, chart.catAxisLineWidthEmu, chart.catAxisLineDash,
+      ptToPx, '898989', 1,
     ));
     const categoryStart = orientation === 'vertical'
       ? geometry.horizontalStart : geometry.verticalStart;

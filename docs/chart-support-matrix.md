@@ -101,7 +101,7 @@ status differences below are renderer-consumption gaps, not lost package data.
 | --- | --- | --- | --- |
 | S-STYLE-001 | Shared role parsing and package wiring | Supported | Paint recipes, fixed/relative Chart Colors indices, `NoStyle`, and bounded palette expansion are retained through DOCX, XLSX, and PPTX. |
 | S-STYLE-002 | `chartArea`, `plotArea`, `legend` | Partial | Chart-area and legend linked structured fills honor direct paint and `noFill` precedence in shared 2-D/3-D paths; linked outline color/width and direct line precedence are also consumed. Plot-area linked fill and outline color/width are consumed by Cartesian, stock, scatter/bubble, histogram, and Pareto paths. Dash/cap/join and the remaining plot-area chart families are incomplete. |
-| S-STYLE-003 | `categoryAxis`, `valueAxis`, tick labels, `seriesAxis` | Partial | Linked axis-line color, width, and `noFill` are consumed. Dash and text-style fallback remain incomplete. |
+| S-STYLE-003 | `categoryAxis`, `valueAxis`, tick labels, `seriesAxis` | Partial | Linked axis-line color, width, dash, and `noFill` are consumed for primary, secondary, and 3-D series axes. Text-style fallback remains incomplete. |
 | S-STYLE-004 | `seriesLine`, `dropLine`, `hiLoLine`, `upBar`, `downBar` | Supported | Direct formatting wins; the linked role supplies only omitted fill/line properties. |
 | S-STYLE-005 | `errorBar`, `leaderLine` | Supported | Direct line paint and `noFill` win; the linked role supplies omitted color, width, dash, and visibility in shared 2-D and optional 3-D paths. |
 | S-STYLE-006 | `trendline` | Supported | Direct trendline paint and `noFill` win; the linked role supplies omitted color, width, dash, and visibility to the plot and legend. |

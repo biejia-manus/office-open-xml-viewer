@@ -406,9 +406,13 @@ pub struct ChartModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cat_axis_line_width_emu: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cat_axis_line_dash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub val_axis_line_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub val_axis_line_width_emu: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub val_axis_line_dash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cat_axis_format_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -897,6 +901,8 @@ pub struct ChartThreeDSeriesAxis {
     pub line_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_width_emu: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_dash: Option<String>,
     pub line_hidden: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_font_size_hpt: Option<i32>,
@@ -1467,6 +1473,8 @@ pub struct SecondaryValueAxis {
     pub line_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_width_emu: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_dash: Option<String>,
     pub line_hidden: bool,
     pub major_tick_mark: String,
     /// `<c:valAx><c:minorTickMark val>` (§21.2.2.115). Omission is retained so
@@ -3782,6 +3790,17 @@ pub fn extract_axis_line_style(
     extract_sp_pr_ln_style(axis_node, resolver)
 }
 
+/// `<c:catAx|dateAx|valAx|serAx><c:spPr><a:ln><a:prstDash val>`.
+/// The dash token is kept separate from [`extract_axis_line_style`] so the
+/// existing color/width/noFill contract remains stable for host callers.
+pub fn extract_axis_line_dash(axis_node: Node) -> Option<String> {
+    child(axis_node, "spPr")
+        .and_then(|shape| child(shape, "ln"))
+        .and_then(|line| child(line, "prstDash"))
+        .and_then(|dash| dash.attribute("val"))
+        .map(ToOwned::to_owned)
+}
+
 /// `<…><c:spPr><a:ln>` line style for any node that carries a `<c:spPr>` shape
 /// property (an axis, a `<c:majorGridlines>` element, etc.). Returns
 /// `(color, width_emu, no_fill)` with the same contract as
@@ -5754,9 +5773,11 @@ pub fn parse_chartex_part_with_references_and_style_parts(
     let (cat_axis_line_color, cat_axis_line_width_emu, cat_axis_line_hidden) = cat_axis
         .map(|axis| extract_axis_line_style(axis, resolver))
         .unwrap_or((None, None, false));
+    let cat_axis_line_dash = cat_axis.and_then(extract_axis_line_dash);
     let (mut val_axis_line_color, mut val_axis_line_width_emu, mut val_axis_line_hidden) = val_axis
         .map(|axis| extract_axis_line_style(axis, resolver))
         .unwrap_or((None, None, false));
+    let mut val_axis_line_dash = val_axis.and_then(extract_axis_line_dash);
     if val_axis_line_color.is_none() && val_axis_line_width_emu.is_none() && !val_axis_line_hidden {
         if let Some(style_axis) = style_element("valueAxis") {
             (
@@ -5764,6 +5785,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
                 val_axis_line_width_emu,
                 val_axis_line_hidden,
             ) = extract_sp_pr_ln_style(style_axis, resolver);
+            val_axis_line_dash = extract_axis_line_dash(style_axis);
         }
     }
     let val_axis_major_gridlines = val_axis.map(axis_major_gridlines_visible);
@@ -5881,9 +5903,11 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         val_axis_font_color,
         cat_axis_line_color,
         cat_axis_line_width_emu,
+        cat_axis_line_dash,
         cat_axis_line_hidden,
         val_axis_line_color,
         val_axis_line_width_emu,
+        val_axis_line_dash,
         val_axis_line_hidden,
         data_label_font_size_hpt,
         legend_pos,
@@ -8074,6 +8098,7 @@ pub fn parse_chart_part_with_references_and_style_parts(
                 extract_axis_title_with_props_resolved(axis, color_resolver);
             let (line_color, line_width_emu, line_hidden) =
                 extract_axis_line_style(axis, color_resolver);
+            let line_dash = extract_axis_line_dash(axis);
             let positive_u32 = |name: &str| {
                 child(axis, name)
                     .and_then(|node| node.attribute("val"))
@@ -8095,6 +8120,7 @@ pub fn parse_chart_part_with_references_and_style_parts(
                 font_face: extract_axis_tick_label_face(axis),
                 line_color,
                 line_width_emu,
+                line_dash,
                 line_hidden,
                 title_font_size_hpt,
                 title_font_bold,
@@ -9336,9 +9362,11 @@ pub fn parse_chart_part_with_references_and_style_parts(
     let (mut cat_axis_line_color, mut cat_axis_line_width_emu, cat_axis_line_hidden) = cat_ax
         .map(|n| extract_axis_line_style(n, color_resolver))
         .unwrap_or((None, None, false));
+    let cat_axis_line_dash = cat_ax.and_then(extract_axis_line_dash);
     let (mut val_axis_line_color, mut val_axis_line_width_emu, val_axis_line_hidden) = val_ax
         .map(|n| extract_axis_line_style(n, color_resolver))
         .unwrap_or((None, None, false));
+    let val_axis_line_dash = val_ax.and_then(extract_axis_line_dash);
     if legacy_chart_style == Some(2) {
         let cat_needs_theme_width = cat_ax.is_some_and(|axis| {
             !cat_axis_line_hidden
@@ -9396,6 +9424,7 @@ pub fn parse_chart_part_with_references_and_style_parts(
             extract_axis_title_with_props_resolved(ax, color_resolver);
         let resolved_title_bold = t.as_ref().map(|_| title_bold.unwrap_or(false));
         let (line_color, line_width_emu, line_hidden) = extract_axis_line_style(ax, color_resolver);
+        let line_dash = extract_axis_line_dash(ax);
         let (minor_gridline_color, minor_gridline_width_emu, minor_gridline_dash) =
             extract_minor_gridline_style(ax, color_resolver);
         let (major_gridline_color, major_gridline_width_emu, major_gridline_dash) =
@@ -9416,6 +9445,7 @@ pub fn parse_chart_part_with_references_and_style_parts(
             font_face: extract_axis_tick_label_face(ax),
             line_color,
             line_width_emu,
+            line_dash,
             line_hidden,
             major_tick_mark: extract_axis_tick_mark_or_default(ax, "majorTickMark"),
             minor_tick_mark: extract_axis_tick_mark(ax, "minorTickMark"),
@@ -9860,9 +9890,11 @@ pub fn parse_chart_part_with_references_and_style_parts(
         val_axis_font_color,
         cat_axis_line_color,
         cat_axis_line_width_emu,
+        cat_axis_line_dash,
         cat_axis_line_hidden,
         val_axis_line_color,
         val_axis_line_width_emu,
+        val_axis_line_dash,
         val_axis_line_hidden,
         data_label_font_size_hpt,
         legend_pos,
@@ -10239,8 +10271,10 @@ mod tests {
             val_axis_crosses_at: None,
             cat_axis_line_color: None,
             cat_axis_line_width_emu: None,
+            cat_axis_line_dash: None,
             val_axis_line_color: None,
             val_axis_line_width_emu: None,
+            val_axis_line_dash: None,
             cat_axis_format_code: None,
             cat_axis_min: None,
             cat_axis_max: None,
@@ -10843,13 +10877,17 @@ mod tests {
     #[test]
     fn axis_line_style_solid_with_width() {
         let xml = r#"<c:catAx xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-            <c:spPr><a:noFill/><a:ln w="9525"><a:solidFill><a:srgbClr val="d9d9d9"/></a:solidFill></a:ln></c:spPr>
+            <c:spPr><a:noFill/><a:ln w="9525"><a:solidFill><a:srgbClr val="d9d9d9"/></a:solidFill><a:prstDash val="dash"/></a:ln></c:spPr>
         </c:catAx>"#;
         let d = root_of(xml);
         let (color, width, no_fill) = extract_axis_line_style(d.root_element(), &StubResolver);
         assert_eq!(color.as_deref(), Some("D9D9D9"));
         assert_eq!(width, Some(9525));
         assert!(!no_fill);
+        assert_eq!(
+            extract_axis_line_dash(d.root_element()).as_deref(),
+            Some("dash")
+        );
     }
 
     #[test]
@@ -12294,7 +12332,7 @@ Subtitle</a:t></a:r></a:p>
                     <c:axId val="1"/>
                     <c:axPos val="b"/>
                     <c:title><c:tx><c:rich><a:bodyPr vert="horz"/><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title>
-                    <c:spPr><a:ln><a:solidFill><a:srgbClr val="808080"/></a:solidFill></a:ln></c:spPr>
+                    <c:spPr><a:ln><a:solidFill><a:srgbClr val="808080"/></a:solidFill><a:prstDash val="dash"/></a:ln></c:spPr>
                   </c:catAx>
                   <c:valAx>
                     <c:axId val="2"/>
@@ -12303,6 +12341,7 @@ Subtitle</a:t></a:r></a:p>
                       <c:layout><c:manualLayout><c:xMode val="edge"/><c:yMode val="edge"/><c:x val="0.2"/><c:y val="0.1"/></c:manualLayout></c:layout>
                     </c:title>
                     <c:majorGridlines><c:spPr><a:ln w="3175"><a:solidFill><a:schemeClr val="accent3"/></a:solidFill></a:ln></c:spPr></c:majorGridlines>
+                    <c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="404040"/></a:solidFill><a:prstDash val="dot"/></a:ln></c:spPr>
                     <c:scaling><c:min val="0"/><c:max val="30"/></c:scaling>
                   </c:valAx>
                 </c:plotArea>
@@ -12349,6 +12388,10 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(m.cat_axis_gridline_color, None);
         assert_eq!(m.cat_axis_gridline_width_emu, None);
         assert_eq!(m.cat_axis_line_color.as_deref(), Some("808080"));
+        assert_eq!(m.cat_axis_line_dash.as_deref(), Some("dash"));
+        assert_eq!(m.val_axis_line_color.as_deref(), Some("404040"));
+        assert_eq!(m.val_axis_line_width_emu, Some(12700));
+        assert_eq!(m.val_axis_line_dash.as_deref(), Some("dot"));
         // The chartSpace border is theme-aware: scheme tx1 resolves through
         // the same color resolver as other DrawingML lines.
         assert_eq!(m.chart_border_color.as_deref(), Some("000000"));
@@ -12647,6 +12690,7 @@ Subtitle</a:t></a:r></a:p>
                   <c:crosses val="max"/>
                   <c:scaling><c:logBase val="10"/><c:orientation val="maxMin"/><c:min val="0.01"/><c:max val="1"/></c:scaling>
                   <c:tickLblPos val="none"/>
+                  <c:spPr><a:ln w="19050"><a:solidFill><a:srgbClr val="ABCDEF"/></a:solidFill><a:prstDash val="sysDot"/></a:ln></c:spPr>
                   <c:majorGridlines><c:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="654321"/></a:solidFill><a:prstDash val="dash"/></a:ln></c:spPr></c:majorGridlines>
                   <c:majorUnit val="0.25"/>
                   <c:minorUnit val="0.05"/>
@@ -12689,6 +12733,9 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(sec.log_base, Some(10.0));
         assert_eq!(sec.orientation.as_deref(), Some("maxMin"));
         assert_eq!(sec.tick_label_pos.as_deref(), Some("none"));
+        assert_eq!(sec.line_color.as_deref(), Some("ABCDEF"));
+        assert_eq!(sec.line_width_emu, Some(19050));
+        assert_eq!(sec.line_dash.as_deref(), Some("sysDot"));
         assert_eq!(sec.crosses.as_deref(), Some("max"));
         assert_eq!(sec.crosses_at, None);
         assert!(sec.major_gridlines);
@@ -15707,7 +15754,7 @@ Subtitle</a:t></a:r></a:p>
               <cs:dataPoint><cs:spPr><a:ln w="19050"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill></a:ln></cs:spPr></cs:dataPoint>
               <cs:valueAxis>
                 <cs:fontRef idx="minor"><a:srgbClr val="595959"/></cs:fontRef>
-                <cs:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="BFBFBF"/></a:solidFill></a:ln></cs:spPr>
+                <cs:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="BFBFBF"/></a:solidFill><a:prstDash val="dashDot"/></a:ln></cs:spPr>
                 <cs:defRPr sz="900" b="0"/>
               </cs:valueAxis>
             </cs:chartStyle>"#
@@ -15750,6 +15797,7 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(m.val_axis_font_face.as_deref(), Some("Calibri"));
         assert_eq!(m.val_axis_line_color.as_deref(), Some("BFBFBF"));
         assert_eq!(m.val_axis_line_width_emu, Some(9525));
+        assert_eq!(m.val_axis_line_dash.as_deref(), Some("dashDot"));
         assert!(!m.val_axis_line_hidden);
         assert_eq!(m.val_axis_gridline_color.as_deref(), Some("D9D9D9"));
         assert_eq!(m.val_axis_gridline_width_emu, Some(9525));
