@@ -37,7 +37,7 @@ observed input boundary is recorded in
 | C-LINE-003 | `lineChart/hiLowLines` | Yes | Yes | Yes | Supported | Valid on ordinary line charts as well as stock charts. |
 | C-LINE-004 | `lineChart/upDownBars` | Yes | Yes | Yes | Partial | Direct paint is supported. Empty-paint automatic white/black styling is limited to the retained legacy Style 2 observation. |
 | C-LINE-005 | Multiple `lineChart` groups in one plot area | Yes | Yes | Partial | Partial | Decoration ownership is retained and consumed; other group-level line properties still require individual provenance rows. |
-| C-LINE-006 | Group-level `marker` and `smooth` defaults | Partial | Partial | Partial | Partial | Group marker visibility is retained. Series-level smooth is retained; group-level smooth inheritance is not. |
+| C-LINE-006 | Group-level `marker` and `smooth` defaults | Yes | Yes | Yes | Supported | Group defaults are retained; an explicit series-level marker or smooth value remains authoritative. |
 | C-AREA-001 | `areaChart` standard, stacked, percent-stacked areas | Yes | Yes | Yes | Supported | Series fill, labels, axes, and stacking are shared across hosts. |
 | C-AREA-002 | `areaChart/dropLines` | No | No | No | Missing | Valid in `EG_AreaChartShared`. |
 | C-BAR-001 | `barChart` direction, grouping, overlap, and gap | Yes | Yes | Yes | Supported | Each bar group retains its own provenance and geometry. |

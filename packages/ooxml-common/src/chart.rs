@@ -8271,6 +8271,9 @@ pub fn parse_chart_part_with_references(
             // so a bare `<c:marker/>` enables markers (val default true); absent
             // ⇒ false (line series draw no markers unless opted in).
             let chart_marker_default = group.and_then(|g| bool_child(g, "marker")).unwrap_or(false);
+            let chart_smooth_default = group
+                .filter(|owner| owner.tag_name().name() == "lineChart")
+                .and_then(|owner| bool_child(owner, "smooth"));
             let marker_node = child(*ser, "marker");
             let (marker_symbol, marker_size, marker_fill, marker_line, marker_line_width_emu) =
                 parse_marker_block(marker_node, color_resolver);
@@ -8431,7 +8434,7 @@ pub fn parse_chart_part_with_references(
                 // `<c:ser><c:smooth>` (§21.2.2.194) — line/area spline flag.
                 // Shared with the xlsx parser via ooxml-common so both honor the
                 // CT_Boolean implied-true semantics.
-                smooth: extract_series_smooth(*ser),
+                smooth: extract_series_smooth(*ser).or(chart_smooth_default),
                 // `<c:ser><c:trendline>` (§21.2.2.211) — regression lines. Shared
                 // extractor; the line color resolves through the pptx theme.
                 trend_lines: extract_series_trendlines(*ser, color_resolver),
@@ -11182,6 +11185,27 @@ Subtitle</a:t></a:r></a:p>
             Some(false),
             "<c:marker val=\"0\"/> ⇒ markers off"
         );
+    }
+
+    #[test]
+    fn chart_level_smooth_is_the_line_series_default() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart>
+                <c:plotArea><c:lineChart>
+                  <c:grouping val="standard"/><c:smooth/>
+                  <c:ser><c:idx val="0"/><c:order val="0"/>
+                    <c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val>
+                  </c:ser>
+                  <c:ser><c:idx val="1"/><c:order val="1"/><c:smooth val="0"/>
+                    <c:val><c:numLit><c:pt idx="0"><c:v>2</c:v></c:pt></c:numLit></c:val>
+                  </c:ser>
+                </c:lineChart></c:plotArea>
+              </c:chart></c:chartSpace>"#
+        );
+        let model = parse_chart_part(chart_space_of(&xml).root_element(), &FixtureResolver)
+            .expect("line chart parses");
+        assert_eq!(model.series[0].smooth, Some(true));
+        assert_eq!(model.series[1].smooth, Some(false));
     }
 
     /// (a) Bar chart with the full decoration set: title (size/bold/color),
