@@ -4826,6 +4826,41 @@ function chartStyleRoleBarPaint(
   };
 }
 
+/** Draws the one-per-category drop-line envelope shared by classic line,
+ * area, and stock charts. ECMA-376 assigns the geometry to the owning chart
+ * group; each envelope joins its effective category-axis crossing to every
+ * finite plotted point at that category. */
+function drawDropLineEnvelopes(
+  ctx: CanvasRenderingContext2D,
+  members: ChartSeries[],
+  pointCount: number,
+  toX: (index: number) => number,
+  yMapFor: (series: ChartSeries) => (value: number) => number,
+  categoryAxisYFor: (series: ChartSeries) => number,
+  valueFor: (series: ChartSeries, index: number) => number | null,
+): void {
+  for (let index = 0; index < pointCount; index++) {
+    let minY = Infinity;
+    let maxY = -Infinity;
+    let hasPoint = false;
+    for (const series of members) {
+      const value = valueFor(series, index);
+      if (value == null || !Number.isFinite(value)) continue;
+      const pointY = yMapFor(series)(value);
+      const axisY = categoryAxisYFor(series);
+      if (!Number.isFinite(pointY) || !Number.isFinite(axisY)) continue;
+      minY = Math.min(minY, pointY, axisY);
+      maxY = Math.max(maxY, pointY, axisY);
+      hasPoint = true;
+    }
+    if (!hasPoint || Math.abs(maxY - minY) < 0.01) continue;
+    ctx.beginPath();
+    ctx.moveTo(toX(index), minY);
+    ctx.lineTo(toX(index), maxY);
+    ctx.stroke();
+  }
+}
+
 function chartStyleRoleErrorBar(
   chart: ChartModel,
   direct: NonNullable<ChartSeries['errBars']>[number],
@@ -5629,26 +5664,9 @@ function drawLineGroupDecorations(
       // plotted point in the owning line group. This is observable in vector
       // output for both ordinary and interior crossings; painting per-series
       // segments produces coincident seams and the wrong visible endpoints.
-      for (let index = 0; index < pointCount; index++) {
-        let minY = Infinity;
-        let maxY = -Infinity;
-        let hasPoint = false;
-        for (const series of members) {
-          const value = valueFor(series, index);
-          if (value == null || !Number.isFinite(value)) continue;
-          const pointY = yMapFor(series)(value);
-          const axisY = categoryAxisYFor(series);
-          if (!Number.isFinite(pointY) || !Number.isFinite(axisY)) continue;
-          minY = Math.min(minY, pointY, axisY);
-          maxY = Math.max(maxY, pointY, axisY);
-          hasPoint = true;
-        }
-        if (!hasPoint || Math.abs(maxY - minY) < 0.01) continue;
-        ctx.beginPath();
-        ctx.moveTo(toX(index), minY);
-        ctx.lineTo(toX(index), maxY);
-        ctx.stroke();
-      }
+      drawDropLineEnvelopes(
+        ctx, members, pointCount, toX, yMapFor, categoryAxisYFor, valueFor,
+      );
     }
 
     const hiLowLineStyle = decoration.hiLowLines
@@ -6588,6 +6606,24 @@ function renderStockChart(
       ctx, px0, py0, px0, py0 + ph,
       stockValLine.color, stockValLine.width, chart.valAxisLineDash,
     );
+  }
+
+  // CT_StockChart/dropLines uses the same chart-line paint contract as line
+  // and area charts. A stock drop line connects the category axis to the
+  // envelope of every finite stock value at that category.
+  if (chart.stockDropLines) {
+    const dropLineStyle = chartStyleRoleLine(chart, chart.stockDropLines, 'dropLine');
+    if (applyDecorationLineStyle(ctx, dropLineStyle, ptToPx)) {
+      drawDropLineEnvelopes(
+        ctx,
+        series,
+        n,
+        toX,
+        () => toY,
+        () => py0 + ph,
+        (stockSeries, index) => stockSeries.values[index] ?? null,
+      );
+    }
   }
 
   // ── First/last-series up-down bars (§21.2.2.218/227). Shared with ordinary

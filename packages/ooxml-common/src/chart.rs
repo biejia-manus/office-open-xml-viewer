@@ -702,6 +702,10 @@ pub struct ChartModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bar_group_decorations: Option<Vec<ChartBarGroupDecorations>>,
     // ── Stock chart (CH13, §21.2.2.198) ──────────────────────────────────────
+    /// `<c:stockChart><c:dropLines>` direct DrawingML line paint. Object
+    /// presence means the stock chart carries drop-line geometry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock_drop_lines: Option<ChartDecorationLineStyle>,
     /// `<c:stockChart><c:hiLowLines>` (§21.2.2.80) presence. When `Some(true)`
     /// the stock renderer draws a vertical line spanning each category's
     /// low↔high value. Only emitted for a stock chart (`chart_type == "stock"`);
@@ -6115,6 +6119,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         line_group_decorations: None,
         area_group_decorations: None,
         bar_group_decorations: None,
+        stock_drop_lines: None,
         stock_hi_low_lines: None,
         stock_hi_low_line_color: None,
         stock_up_down_bars: None,
@@ -8050,37 +8055,47 @@ pub fn parse_chart_part_with_references_and_style_parts(
         "unknown".to_string()
     };
 
-    // §21.2.2.198 stockChart decoration: `<c:hiLowLines>` (§21.2.2.80) and
-    // `<c:upDownBars>` (§21.2.2.218). Both are direct children of `<c:stockChart>`.
+    // §21.2.2.198 stockChart decorations: `<c:dropLines>`, `<c:hiLowLines>`
+    // (§21.2.2.80), and `<c:upDownBars>` (§21.2.2.218). All are direct
+    // children of `<c:stockChart>`.
     // The hi-lo line spans each category's low↔high; its `<c:spPr><a:ln>` fill is
     // resolved so the renderer strokes it in the file's color (else a gray
     // default). Up/down gap and direct bar paint are retained for the stock
     // renderer. Every field stays `None` for non-stock charts (byte-stable wire).
-    let (stock_hi_low_lines, stock_hi_low_line_color, stock_up_down_bars, stock_up_down_bar_style) =
-        if chart_type == "stock" {
-            let stock = find_chart("stockChart");
-            let hi_low = stock.and_then(|s| child(s, "hiLowLines"));
-            let hi_low_color = hi_low
-                .and_then(|hl| child(hl, "spPr"))
-                .and_then(|sp| child(sp, "ln"))
-                .and_then(|ln| {
-                    ln.children()
-                        .find(|n| n.is_element() && n.tag_name().name() == "solidFill")
-                })
-                .and_then(|fill| color_resolver.resolve_solid_fill(fill));
-            let up_down_node = stock.and_then(|s| child(s, "upDownBars"));
-            let up_down = up_down_node.is_some();
-            let up_down_style =
-                up_down_node.map(|node| parse_chart_up_down_bar_style(node, color_resolver));
-            (
-                Some(hi_low.is_some()),
-                hi_low_color,
-                if up_down { Some(true) } else { None },
-                up_down_style,
-            )
-        } else {
-            (None, None, None, None)
-        };
+    let (
+        stock_drop_lines,
+        stock_hi_low_lines,
+        stock_hi_low_line_color,
+        stock_up_down_bars,
+        stock_up_down_bar_style,
+    ) = if chart_type == "stock" {
+        let stock = find_chart("stockChart");
+        let drop_lines = stock
+            .and_then(|s| child(s, "dropLines"))
+            .map(|node| parse_chart_decoration_line_style(node, color_resolver));
+        let hi_low = stock.and_then(|s| child(s, "hiLowLines"));
+        let hi_low_color = hi_low
+            .and_then(|hl| child(hl, "spPr"))
+            .and_then(|sp| child(sp, "ln"))
+            .and_then(|ln| {
+                ln.children()
+                    .find(|n| n.is_element() && n.tag_name().name() == "solidFill")
+            })
+            .and_then(|fill| color_resolver.resolve_solid_fill(fill));
+        let up_down_node = stock.and_then(|s| child(s, "upDownBars"));
+        let up_down = up_down_node.is_some();
+        let up_down_style =
+            up_down_node.map(|node| parse_chart_up_down_bar_style(node, color_resolver));
+        (
+            drop_lines,
+            Some(hi_low.is_some()),
+            hi_low_color,
+            if up_down { Some(true) } else { None },
+            up_down_style,
+        )
+    } else {
+        (None, None, None, None, None)
+    };
     let surface_wireframe = find_chart("surfaceChart")
         .or_else(|| find_chart("surface3DChart"))
         .and_then(|surface| bool_child(surface, "wireframe"));
@@ -10106,6 +10121,7 @@ pub fn parse_chart_part_with_references_and_style_parts(
         line_group_decorations,
         area_group_decorations,
         bar_group_decorations,
+        stock_drop_lines,
         stock_hi_low_lines,
         stock_hi_low_line_color,
         stock_up_down_bars,
@@ -10441,6 +10457,7 @@ mod tests {
             line_group_decorations: None,
             area_group_decorations: None,
             bar_group_decorations: None,
+            stock_drop_lines: None,
             stock_hi_low_lines: None,
             stock_hi_low_line_color: None,
             stock_up_down_bars: None,
@@ -16402,7 +16419,10 @@ Subtitle</a:t></a:r></a:p>
             <c:cat><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:cat>
             <c:val><c:numCache><c:pt idx="0"><c:v>55</c:v></c:pt></c:numCache></c:val></c:ser>"#;
         let group = format!(
-            r#"<c:stockChart>{hi}<c:hiLowLines><c:spPr><a:ln><a:solidFill><a:srgbClr val="808080"/></a:solidFill></a:ln></c:spPr></c:hiLowLines></c:stockChart>"#
+            r#"<c:stockChart>{hi}
+              <c:dropLines><c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="123456"/></a:solidFill><a:prstDash val="dashDot"/></a:ln></c:spPr></c:dropLines>
+              <c:hiLowLines><c:spPr><a:ln><a:solidFill><a:srgbClr val="808080"/></a:solidFill></a:ln></c:spPr></c:hiLowLines>
+            </c:stockChart>"#
         );
         let xml = chart_space_with_group(&group);
         let d = chart_space_of(&xml);
@@ -16411,6 +16431,11 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(m.series.len(), 1);
         assert_eq!(m.series[0].name, "High");
         assert_eq!(m.series[0].values, vec![Some(55.0)]);
+        let drop_lines = m.stock_drop_lines.expect("stock drop lines");
+        assert_eq!(drop_lines.color.as_deref(), Some("123456"));
+        assert_eq!(drop_lines.width_emu, Some(12_700));
+        assert_eq!(drop_lines.dash.as_deref(), Some("dashDot"));
+        assert_eq!(drop_lines.hidden, Some(false));
         // hiLowLines present + its resolved line color; no upDownBars in fixture.
         assert_eq!(m.stock_hi_low_lines, Some(true));
         assert_eq!(m.stock_hi_low_line_color.as_deref(), Some("808080"));
@@ -16426,7 +16451,9 @@ Subtitle</a:t></a:r></a:p>
             <c:cat><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:cat>
             <c:val><c:numCache><c:pt idx="0"><c:v>5</c:v></c:pt></c:numCache></c:val></c:ser>"#;
         let group = format!(
-            r#"<c:stockChart>{ser}<c:upDownBars>
+            r#"<c:stockChart>{ser}
+            <c:dropLines><c:spPr><a:ln><a:noFill/></a:ln></c:spPr></c:dropLines>
+            <c:upDownBars>
             <c:gapWidth val="80"/>
             <c:upBars><c:spPr><a:solidFill><a:srgbClr val="00AA00"/></a:solidFill>
               <a:ln w="12700"><a:solidFill><a:srgbClr val="006600"/></a:solidFill></a:ln>
@@ -16437,6 +16464,8 @@ Subtitle</a:t></a:r></a:p>
         let xml = chart_space_with_group(&group);
         let d = chart_space_of(&xml);
         let m = parse_chart_part(d.root_element(), &FixtureResolver).expect("stock parses");
+        let drop_lines = m.stock_drop_lines.expect("stock drop lines");
+        assert_eq!(drop_lines.hidden, Some(true));
         assert_eq!(m.stock_hi_low_lines, Some(false));
         assert_eq!(m.stock_hi_low_line_color, None);
         assert_eq!(m.stock_up_down_bars, Some(true));

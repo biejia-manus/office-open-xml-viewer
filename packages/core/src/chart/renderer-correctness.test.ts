@@ -11279,6 +11279,39 @@ describe('CH13 — stock chart (high/low/close)', () => {
     expect(red.length).toBe(3);
   });
 
+  it('draws one styled stock drop-line envelope per category', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, stockModel({
+      stockDropLines: { color: '123456', widthEmu: 12700, dash: 'dashDot' },
+    }), RECT, 1);
+
+    const dropLines = rec.segs.filter(segment => segment.ss === '#123456');
+    expect(dropLines).toHaveLength(3);
+    expect(dropLines.every(segment => Math.abs(segment.x1 - segment.x0) < 0.01)).toBe(true);
+    expect(dropLines.every(segment => Math.abs(segment.y1 - segment.y0) > 20)).toBe(true);
+    expect(dropLines.every(segment => segment.lw === 1 && segment.dash.length > 0)).toBe(true);
+  });
+
+  it('keeps stock drop-line noFill hidden and resolves omitted paint from Chart Style', () => {
+    const hidden = segRecordingCtx();
+    renderChart(hidden.ctx, stockModel({
+      stockDropLines: { hidden: true },
+      chartStyleRoles: { dropLine: { lineColors: ['AABBCC'], lineWidthEmu: 25400 } },
+    }), RECT, 1);
+    expect(hidden.segs.some(segment => segment.ss === '#AABBCC')).toBe(false);
+
+    const linked = segRecordingCtx();
+    renderChart(linked.ctx, stockModel({
+      stockDropLines: {},
+      chartStyleRoles: {
+        dropLine: { lineColors: ['AABBCC'], lineWidthEmu: 25400, lineDash: 'dash' },
+      },
+    }), RECT, 1);
+    const dropLines = linked.segs.filter(segment => segment.ss === '#AABBCC');
+    expect(dropLines).toHaveLength(3);
+    expect(dropLines.every(segment => segment.lw === 2 && segment.dash.length > 0)).toBe(true);
+  });
+
   it('falls back to a default gray hi-lo line when no color is given', () => {
     const rec = segRecordingCtx();
     // stockHiLowLineColor omitted → renderer default '#595959'.

@@ -456,6 +456,7 @@ export interface ChartModel {
     lineGroupDecorations?: ChartLineGroupDecorations[] | null;
     areaGroupDecorations?: ChartAreaGroupDecorations[] | null;
     barGroupDecorations?: ChartBarGroupDecorations[] | null;
+    stockDropLines?: ChartDecorationLineStyle | null;
     stockHiLowLines?: boolean | null;
     stockHiLowLineColor?: string | null;
     stockUpDownBars?: boolean | null;

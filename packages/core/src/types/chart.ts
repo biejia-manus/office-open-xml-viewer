@@ -1102,6 +1102,8 @@ export interface ChartModel {
   /** Group-owned series lines for classic bar-chart groups. */
   barGroupDecorations?: ChartBarGroupDecorations[] | null;
   // ── Stock chart (CH13, §21.2.2.198) ──────────────────────────────────────
+  /** `<c:stockChart><c:dropLines>` direct DrawingML line paint. */
+  stockDropLines?: ChartDecorationLineStyle | null;
   /**
    * `<c:stockChart><c:hiLowLines>` presence (ECMA-376 §21.2.2.60). When true
    * the stock renderer draws a vertical line spanning each category's low↔high
