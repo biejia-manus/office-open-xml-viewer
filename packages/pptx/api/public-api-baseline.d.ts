@@ -736,7 +736,7 @@ export interface DimOptions {
     color: string;
     opacity: number;
 }
-interface DrawingMLCustomDashSegment {
+export interface DrawingMLCustomDashSegment {
     dash: number;
     space: number;
 }

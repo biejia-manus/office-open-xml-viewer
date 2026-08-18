@@ -1145,7 +1145,7 @@ export interface DocxViewerOptions extends Omit<RenderPageOptions, 'onTextRun'>,
     enableHyperlinks?: boolean;
     onError?: (err: Error) => void;
 }
-interface DrawingMLCustomDashSegment {
+export interface DrawingMLCustomDashSegment {
     dash: number;
     space: number;
 }

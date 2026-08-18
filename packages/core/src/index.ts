@@ -1,6 +1,7 @@
 export type {
   ArrowEnd,
   Bullet,
+  DrawingMLCustomDashSegment,
   EquationRun,
   Fill,
   FillRect,

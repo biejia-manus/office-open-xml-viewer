@@ -852,7 +852,7 @@ export interface DefinedName {
     name: string;
     formula: string;
 }
-interface DrawingMLCustomDashSegment {
+export interface DrawingMLCustomDashSegment {
     dash: number;
     space: number;
 }

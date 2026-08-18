@@ -70,6 +70,7 @@ export type {
   ChartexGeography,
   ChartexRegionMapColors,
   ChartexValueColorStop,
+  DrawingMLCustomDashSegment,
   FillRect,
   ImageFill,
   MathAccent,

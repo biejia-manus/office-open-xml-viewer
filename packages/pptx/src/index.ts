@@ -69,6 +69,7 @@ export type {
   ChartexGeography,
   ChartexRegionMapColors,
   ChartexValueColorStop,
+  DrawingMLCustomDashSegment,
   Duotone,
   EquationRun,
   LegendManualLayout,
