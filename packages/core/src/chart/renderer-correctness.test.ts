@@ -10185,6 +10185,70 @@ describe('classic line-chart group decorations', () => {
     expect(nextTo.labelY).toBeGreaterThan(nextTo.axisY);
     expect(low.labelY).toBeGreaterThan(nextTo.labelY);
   });
+
+  it('maps min and max crossings through the authored value-axis orientation', () => {
+    const axisY = (
+      crossing: 'min' | 'max',
+      orientation: 'minMax' | 'maxMin',
+    ): number => {
+      const rec = segRecordingCtx();
+      const model = decoratedLine();
+      model.valMin = -10;
+      model.valMax = 10;
+      model.valAxisOrientation = orientation;
+      model.catAxisCrosses = crossing;
+      model.catAxisLineColor = 'ABCDEF';
+      model.catAxisMajorTickMark = 'none';
+      renderChart(rec.ctx, model, RECT, 1);
+      const axis = rec.segs.find(segment =>
+        segment.ss === '#ABCDEF'
+        && Math.abs(segment.y1 - segment.y0) < 0.01
+        && Math.abs(segment.x1 - segment.x0) > 100
+      );
+      expect(axis).toBeDefined();
+      return axis!.y0;
+    };
+
+    const minimum = axisY('min', 'minMax');
+    const maximum = axisY('max', 'minMax');
+    expect(minimum).toBeGreaterThan(maximum);
+    expect(axisY('min', 'maxMin')).toBeCloseTo(maximum, 6);
+    expect(axisY('max', 'maxMin')).toBeCloseTo(minimum, 6);
+  });
+
+  it('uses the paired secondary crossing for a secondary line group', () => {
+    const dropLength = (crossesAt: number): number => {
+      const rec = segRecordingCtx();
+      const model = baseModel({
+        chartType: 'line', categories: ['A'], valMin: 0, valMax: 10,
+        valAxisMajorGridlines: false,
+        series: [series({
+          values: [150], useSecondaryAxis: true, lineGroupIndex: 1,
+          showMarker: false, lineColor: '4472C4',
+        })],
+        secondaryValAxis: {
+          min: 0, max: 200, title: null, hidden: true,
+          lineHidden: true, majorTickMark: 'none',
+        },
+        secondaryCatAxis: {
+          min: null, max: null, title: null, hidden: true,
+          lineHidden: true, majorTickMark: 'none', crossesAt,
+        },
+        lineGroupDecorations: [{
+          groupIndex: 1,
+          dropLines: { color: '123456', widthEmu: 9525 },
+        }],
+      });
+      renderChart(rec.ctx, model, RECT, 1);
+      const drop = rec.segs.find(segment =>
+        segment.ss === '#123456' && Math.abs(segment.x1 - segment.x0) < 0.01
+      );
+      expect(drop).toBeDefined();
+      return Math.abs(drop!.y1 - drop!.y0);
+    };
+
+    expect(dropLength(100)).toBeLessThan(dropLength(0));
+  });
 });
 
 describe('classic area-chart group drop lines', () => {
