@@ -377,6 +377,8 @@ export interface ChartModel {
     stockUpDownBarStyle?: ChartStockUpDownBarStyle | null;
     surfaceWireframe?: boolean | null;
     surfaceBandFormats?: ChartSurfaceBandFormat[] | null;
+    legacyChartStyle?: number | null;
+    themeAccentColors?: string[] | null;
     ofPie?: ChartOfPie | null;
     threeD?: ChartThreeD | null;
     chartexBox?: ChartexBoxWhisker | null;
@@ -456,6 +458,8 @@ export interface ChartSeries {
     labelColor?: string | null;
     seriesType?: string | null;
     barGroupIndex?: number | null;
+    barGroupDirection?: 'bar' | 'col' | string | null;
+    barGroupGrouping?: 'standard' | 'clustered' | 'stacked' | 'percentStacked' | string | null;
     barGroupGapWidth?: number | null;
     barGroupOverlap?: number | null;
     useSecondaryAxis?: boolean | null;
