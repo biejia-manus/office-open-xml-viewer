@@ -2623,6 +2623,44 @@ describe('bar chart authored layout and fills', () => {
     );
   });
 
+  it('uses linked plot-area structured fill only when direct paint is omitted', () => {
+    const chart = baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      series: [series({ values: [1, 2] })],
+      chartStyleRoles: {
+        plotArea: {
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 45,
+            rotWithShape: false,
+            stops: [
+              { position: 0, color: '112233' },
+              { position: 1, color: 'DDEEFF' },
+            ],
+          }],
+        },
+      },
+    });
+
+    const linked = recordingCtx();
+    renderChart(linked.ctx, chart, RECT, 1, 30);
+    expect(linked.gradients).toHaveLength(1);
+    expect(linked.gradients[0]?.stops).toEqual([
+      { position: 0, color: 'rgba(17,34,51,1)' },
+      { position: 1, color: 'rgba(221,238,255,1)' },
+    ]);
+    expect(linked.rects).toContainEqual(expect.objectContaining({ fs: '[object Object]' }));
+
+    const directNoFill = recordingCtx();
+    renderChart(directNoFill.ctx, {
+      ...chart,
+      plotAreaFillHidden: true,
+      plotAreaFillPaintAuthored: true,
+    }, RECT, 1, 30);
+    expect(directNoFill.gradients).toHaveLength(0);
+    expect(directNoFill.rects).not.toContainEqual(expect.objectContaining({ fs: '[object Object]' }));
+  });
+
   it('renders scatter-series markers and labels over a reversed horizontal category axis', () => {
     const rec = recordingCtx();
     const hiddenAxis = {

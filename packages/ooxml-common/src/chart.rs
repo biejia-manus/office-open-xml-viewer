@@ -250,6 +250,16 @@ pub struct ChartModel {
     pub cat_axis_line_hidden: bool,
     pub val_axis_line_hidden: bool,
     pub plot_area_bg: Option<String>,
+    /// Structured `<c:plotArea><c:spPr>` fill. Solid fills are also mirrored
+    /// in `plot_area_bg` for wire compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_fill: Option<ChartStyleFill>,
+    /// Explicit plot-area `noFill`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_fill_hidden: Option<bool>,
+    /// A direct plot-area fill paint was authored, even when unresolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_fill_paint_authored: Option<bool>,
     pub chart_bg: Option<String>,
     /// Structured non-solid chart-space fill. Solid fills remain represented
     /// by `chart_bg` for wire compatibility.
@@ -3212,6 +3222,59 @@ pub fn extract_chart_data_table(
 }
 
 #[derive(Default)]
+struct DirectShapeFill {
+    color: Option<String>,
+    fill: Option<ChartStyleFill>,
+    hidden: Option<bool>,
+    paint_authored: Option<bool>,
+}
+
+fn extract_direct_shape_fill(shape: Option<Node>, resolver: &dyn ColorResolver) -> DirectShapeFill {
+    let fill_paint = shape.and_then(|shape| parse_chart_style_paint(shape, resolver, None));
+    let paint_authored = shape
+        .and_then(|shape| {
+            shape.children().find(|node| {
+                node.is_element()
+                    && matches!(
+                        node.tag_name().name(),
+                        "noFill" | "solidFill" | "gradFill" | "pattFill" | "blipFill" | "grpFill"
+                    )
+            })
+        })
+        .map(|_| true);
+    // Keep the established shape-level resolver fallback: host resolvers may
+    // resolve a transformed theme fill as an effective solid even when the
+    // lower-level color node cannot be projected independently.
+    let resolved_shape_fill = shape.and_then(|shape| {
+        (child(shape, "noFill").is_none())
+            .then(|| resolver.resolve_shape_fill(shape))
+            .flatten()
+    });
+    let (color, fill, hidden) = match fill_paint {
+        Some(ChartStylePaint::NoFill) => (None, None, Some(true)),
+        Some(ChartStylePaint::Fill(Some(fill))) => {
+            let color = match &fill {
+                ChartStyleFill::Solid { color } => Some(color.clone()),
+                _ => resolved_shape_fill.clone(),
+            };
+            (color, Some(fill), None)
+        }
+        Some(ChartStylePaint::Fill(None)) => (
+            resolved_shape_fill.clone(),
+            resolved_shape_fill.map(|color| ChartStyleFill::Solid { color }),
+            None,
+        ),
+        None => (None, None, None),
+    };
+    DirectShapeFill {
+        color,
+        fill,
+        hidden,
+        paint_authored,
+    }
+}
+
+#[derive(Default)]
 struct LegendFrameStyle {
     fill_color: Option<String>,
     fill: Option<ChartStyleFill>,
@@ -3234,42 +3297,7 @@ fn extract_legend_frame_style(root: Node, resolver: &dyn ColorResolver) -> Legen
         return LegendFrameStyle::default();
     };
     let shape = child(legend, "spPr");
-    let fill_paint = shape.and_then(|shape| parse_chart_style_paint(shape, resolver, None));
-    let fill_paint_authored = shape
-        .and_then(|shape| {
-            shape.children().find(|node| {
-                node.is_element()
-                    && matches!(
-                        node.tag_name().name(),
-                        "noFill" | "solidFill" | "gradFill" | "pattFill" | "blipFill" | "grpFill"
-                    )
-            })
-        })
-        .map(|_| true);
-    // Keep the established shape-level resolver fallback: host resolvers may
-    // resolve a transformed theme fill as an effective solid even when the
-    // lower-level color node cannot be projected independently.
-    let resolved_shape_fill = shape.and_then(|shape| {
-        (child(shape, "noFill").is_none())
-            .then(|| resolver.resolve_shape_fill(shape))
-            .flatten()
-    });
-    let (fill_color, fill, fill_hidden) = match fill_paint {
-        Some(ChartStylePaint::NoFill) => (None, None, Some(true)),
-        Some(ChartStylePaint::Fill(Some(fill))) => {
-            let color = match &fill {
-                ChartStyleFill::Solid { color } => Some(color.clone()),
-                _ => resolved_shape_fill.clone(),
-            };
-            (color, Some(fill), None)
-        }
-        Some(ChartStylePaint::Fill(None)) => (
-            resolved_shape_fill.clone(),
-            resolved_shape_fill.map(|color| ChartStyleFill::Solid { color }),
-            None,
-        ),
-        None => (None, None, None),
-    };
+    let direct_fill = extract_direct_shape_fill(shape, resolver);
     let (line_color, line_width, line_hidden) = extract_sp_pr_ln_style(legend, resolver);
     let line_paint_authored = shape
         .and_then(|shape| child(shape, "ln"))
@@ -3284,10 +3312,10 @@ fn extract_legend_frame_style(root: Node, resolver: &dyn ColorResolver) -> Legen
         })
         .map(|_| true);
     LegendFrameStyle {
-        fill_color,
-        fill,
-        fill_hidden,
-        fill_paint_authored,
+        fill_color: direct_fill.color,
+        fill: direct_fill.fill,
+        fill_hidden: direct_fill.hidden,
+        fill_paint_authored: direct_fill.paint_authored,
         line_color: if line_hidden { None } else { line_color },
         line_width_emu: line_width,
         line_hidden: line_hidden.then_some(true),
@@ -5810,6 +5838,9 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         cat_axis_hidden,
         val_axis_hidden,
         plot_area_bg: None,
+        plot_area_fill: None,
+        plot_area_fill_hidden: None,
+        plot_area_fill_paint_authored: None,
         chart_bg: {
             let sp_pr = root
                 .children()
@@ -8350,15 +8381,8 @@ pub fn parse_chart_part_with_references_and_style_parts(
         .descendants()
         .find(|n| n.is_element() && n.tag_name().name() == "plotArea")?;
 
-    // Plot area background: <c:plotArea><c:spPr><a:solidFill>
-    let plot_area_bg = plot_area
-        .children()
-        .find(|n| n.is_element() && n.tag_name().name() == "spPr")
-        .and_then(|sp| {
-            sp.children()
-                .find(|n| n.is_element() && n.tag_name().name() == "solidFill")
-        })
-        .and_then(|fill| color_resolver.resolve_solid_fill(fill));
+    let plot_area_fill_style = extract_direct_shape_fill(child(plot_area, "spPr"), color_resolver);
+    let plot_area_bg = plot_area_fill_style.color;
     let data_table = extract_chart_data_table(plot_area, color_resolver);
 
     let ser_nodes: Vec<_> = plot_area
@@ -9803,6 +9827,9 @@ pub fn parse_chart_part_with_references_and_style_parts(
         cat_axis_hidden,
         val_axis_hidden,
         plot_area_bg,
+        plot_area_fill: plot_area_fill_style.fill,
+        plot_area_fill_hidden: plot_area_fill_style.hidden,
+        plot_area_fill_paint_authored: plot_area_fill_style.paint_authored,
         chart_bg,
         chart_fill,
         rounded_corners,
@@ -10127,6 +10154,9 @@ mod tests {
             cat_axis_line_hidden: false,
             val_axis_line_hidden: false,
             plot_area_bg: None,
+            plot_area_fill: None,
+            plot_area_fill_hidden: None,
+            plot_area_fill_paint_authored: None,
             chart_bg: Some("FFFFFF".to_string()),
             chart_fill: None,
             rounded_corners: None,
@@ -11324,6 +11354,35 @@ Subtitle</a:t></a:r></a:p>
             model.chart_fill,
             Some(ChartStyleFill::Gradient { .. })
         ));
+    }
+
+    #[test]
+    fn parse_chart_part_preserves_direct_plot_area_fill_provenance() {
+        let gradient = root_of(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart><c:spPr><a:gradFill rotWithShape="0"><a:gsLst><a:gs pos="0"><a:srgbClr val="112233"/></a:gs><a:gs pos="100000"><a:srgbClr val="AABBCC"/></a:gs></a:gsLst><a:lin ang="2700000"/></a:gradFill></c:spPr></c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let model = parse_chart_part(gradient.root_element(), &FixtureResolver)
+            .expect("classic chart parses");
+        assert!(matches!(
+            model.plot_area_fill,
+            Some(ChartStyleFill::Gradient {
+                angle,
+                rot_with_shape: Some(false),
+                ..
+            }) if (angle - 45.0).abs() < 1e-9
+        ));
+        assert_eq!(model.plot_area_fill_hidden, None);
+        assert_eq!(model.plot_area_fill_paint_authored, Some(true));
+
+        let no_fill = root_of(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart><c:spPr><a:noFill/></c:spPr></c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let model = parse_chart_part(no_fill.root_element(), &FixtureResolver)
+            .expect("classic chart parses");
+        assert_eq!(model.plot_area_bg, None);
+        assert_eq!(model.plot_area_fill, None);
+        assert_eq!(model.plot_area_fill_hidden, Some(true));
+        assert_eq!(model.plot_area_fill_paint_authored, Some(true));
     }
 
     #[test]

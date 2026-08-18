@@ -2888,6 +2888,7 @@ function renderBarChart(
     gapPolicy?: CategoryGapPolicy;
     semanticLineNoStyleFallback?: boolean;
   } = {},
+  shapeRotationDeg = 0,
 ): void {
   const { x, y, w, h } = r;
   const isH = chart.chartType === 'clusteredBarH' || chart.chartType === 'stackedBarH' || chart.chartType === 'stackedBarHPct';
@@ -3542,10 +3543,7 @@ function renderBarChart(
     ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
   }
 
-  if (chart.plotAreaBg) {
-    ctx.fillStyle = `#${chart.plotAreaBg}`;
-    ctx.fillRect(px0, py0, pw, ph);
-  }
+  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, shapeRotationDeg);
 
   // `axMax`/`step` (primary) and `sMin`/`sMax`/`sStep` (secondary) were computed
   // above the `pad` block so the gutters could be sized to the labels. The
@@ -5074,6 +5072,48 @@ function chartStyleRoleLegend(chart: ChartModel): ChartModel {
   };
 }
 
+function chartStyleRolePlotArea(chart: ChartModel): ChartModel {
+  const linked = chart.chartStyleRoles?.plotArea;
+  if (!linked) return chart;
+  let plotAreaFill = chart.plotAreaFill;
+  let plotAreaBg = chart.plotAreaBg;
+  let plotAreaFillHidden = chart.plotAreaFillHidden;
+  const directPaint = chart.plotAreaFillPaintAuthored === true
+    || plotAreaFill != null || plotAreaBg != null || plotAreaFillHidden === true;
+  if (!directPaint && linked.fillNoStyle !== true) {
+    if (linked.fillHidden === true) {
+      plotAreaFillHidden = true;
+    } else {
+      plotAreaFill = chartExStyleFillPaint(linked, 0);
+      plotAreaBg = plotAreaFill == null
+        ? chartExStyleColor(chart, linked, 'fill', 0, 1)
+        : null;
+    }
+  }
+  if (plotAreaFill === chart.plotAreaFill
+    && plotAreaBg === chart.plotAreaBg
+    && plotAreaFillHidden === chart.plotAreaFillHidden) return chart;
+  return { ...chart, plotAreaFill, plotAreaBg, plotAreaFillHidden };
+}
+
+function paintPlotAreaFill(
+  ctx: CanvasRenderingContext2D,
+  chart: ChartModel,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  shapeRotationDeg = 0,
+): void {
+  if (chart.plotAreaFillHidden === true) return;
+  const fill = chart.plotAreaFill
+    ? resolveFill(chart.plotAreaFill, ctx, x, y, w, h, shapeRotationDeg)
+    : chart.plotAreaBg ? `#${chart.plotAreaBg}` : null;
+  if (!fill) return;
+  ctx.fillStyle = fill;
+  ctx.fillRect(x, y, w, h);
+}
+
 /** Materialize the linked decoration roles that an optional family renderer
  * consumes directly from `ChartSeries`. Keeping this projection in core means
  * the 2-D, 3-D, DOCX, XLSX, and PPTX paths receive one effective precedence
@@ -5089,6 +5129,7 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     && !chart.chartStyleRoles?.valueAxis
     && !chart.chartStyleRoles?.dataPointMarker
     && !chart.chartStyleRoles?.legend
+    && !chart.chartStyleRoles?.plotArea
     && chart.chartStyleMarkerSizePt == null
     && chart.chartStyleMarkerSymbol == null) {
     return chart;
@@ -5232,7 +5273,7 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     valAxisLineWidthEmu: valAxisLine.widthEmu,
     valAxisLineHidden: valAxisLine.hidden === true,
   } : chart;
-  return chartStyleRoleLegend(effective);
+  return chartStyleRoleLegend(chartStyleRolePlotArea(effective));
 }
 
 function drawUpDownBars(
@@ -5399,6 +5440,7 @@ function renderLineChart(
   chart: ChartModel,
   r: ChartRect,
   ptToPx: number,
+  shapeRotationDeg = 0,
 ): void {
   const { x, y, w, h } = r;
   const cats = chartCategories(chart);
@@ -5662,10 +5704,7 @@ function renderLineChart(
     ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
   }
 
-  if (chart.plotAreaBg) {
-    ctx.fillStyle = `#${chart.plotAreaBg}`;
-    ctx.fillRect(px0, py0, pw, ph);
-  }
+  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, shapeRotationDeg);
 
   // Value axis is vertical → its length is the plot height (axis-length-aware
   // auto major unit, same model as the bar/column renderer). `planValueAxis`
@@ -6106,6 +6145,7 @@ function renderStockChart(
   chart: ChartModel,
   r: ChartRect,
   ptToPx: number,
+  shapeRotationDeg = 0,
 ): void {
   const { x, y, w, h } = r;
   const cats = chartCategories(chart);
@@ -6181,10 +6221,7 @@ function renderStockChart(
     ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
   }
 
-  if (chart.plotAreaBg) {
-    ctx.fillStyle = `#${chart.plotAreaBg}`;
-    ctx.fillRect(px0, py0, pw, ph);
-  }
+  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, shapeRotationDeg);
 
   // ── Value-axis extent: across every series' plotted values (the hi-lo line
   // needs both the low and high extremes). Authored bounds are retained and
@@ -7004,7 +7041,13 @@ function renderSurfaceChart(
 // Area chart
 // ═══════════════════════════════════════════════════════════════════════════
 
-function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: ChartRect, ptToPx: number): void {
+function renderAreaChart(
+  ctx: CanvasRenderingContext2D,
+  chart: ChartModel,
+  r: ChartRect,
+  ptToPx: number,
+  shapeRotationDeg = 0,
+): void {
   const { x, y, w, h } = r;
   const cats = chartCategories(chart);
   const n = cats.length; if (n === 0) return;
@@ -7251,10 +7294,7 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
     ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
   }
 
-  if (chart.plotAreaBg) {
-    ctx.fillStyle = `#${chart.plotAreaBg}`;
-    ctx.fillRect(px0, py0, pw, ph);
-  }
+  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, shapeRotationDeg);
 
   // Primary extent from the PRIMARY series only (secondary series live on their
   // own axis). When `sec` is null every series is primary, byte-identical to
@@ -9663,7 +9703,13 @@ function drawScatterSeriesLayer(
   }
 }
 
-function renderScatterChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: ChartRect, ptToPx: number): void {
+function renderScatterChart(
+  ctx: CanvasRenderingContext2D,
+  chart: ChartModel,
+  r: ChartRect,
+  ptToPx: number,
+  shapeRotationDeg = 0,
+): void {
   const { x, y, w, h } = r;
   const primaryEntries = chart.series
     .map((series, index) => ({ series, index }))
@@ -9809,10 +9855,7 @@ function renderScatterChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r:
   });
   if (pw <= 0 || ph <= 0) return;
 
-  if (chart.plotAreaBg) {
-    ctx.fillStyle = `#${chart.plotAreaBg}`;
-    ctx.fillRect(px0, py0, pw, ph);
-  }
+  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, shapeRotationDeg);
 
   // X / Y data extents. Secondary-group points have their own independent
   // top/right value axes and therefore must not stretch the primary scales.
@@ -11456,6 +11499,7 @@ function renderHistogramChart(
   chart: ChartModel,
   rect: ChartRect,
   ptToPx: number,
+  shapeRotationDeg = 0,
 ): void {
   const source = chart.series[0];
   if (!source) return;
@@ -11469,7 +11513,7 @@ function renderHistogramChart(
     chartType: 'clusteredBar',
     categories: plan.categories,
     series: [{ ...source, categories: undefined, values: plan.counts }],
-  }, rect, ptToPx, { gapPolicy: 'chartex' });
+  }, rect, ptToPx, { gapPolicy: 'chartex' }, shapeRotationDeg);
 }
 
 function renderWaterfallChart(
@@ -12053,6 +12097,7 @@ function renderParetoLineChart(
   chart: ChartModel,
   r: ChartRect,
   ptToPx: number,
+  shapeRotationDeg = 0,
 ): void {
   const source = chart.series[0];
   if (!source) return;
@@ -12104,7 +12149,7 @@ function renderParetoLineChart(
     valMin: chart.valMin ?? 0,
     valMax: chart.valMax ?? 1.2,
     valAxisMajorUnit: chart.valAxisMajorUnit ?? 0.2,
-  }, r, ptToPx);
+  }, r, ptToPx, shapeRotationDeg);
 }
 
 /** Owner-backed ChartEx Pareto: sorted frequency columns plus cumulative line. */
@@ -12113,6 +12158,7 @@ function renderParetoChart(
   chart: ChartModel,
   r: ChartRect,
   ptToPx: number,
+  shapeRotationDeg = 0,
 ): void {
   const owner = chart.series[0];
   if (!owner) return;
@@ -12178,7 +12224,7 @@ function renderParetoChart(
   }, r, ptToPx, {
     gapPolicy: 'chartex',
     semanticLineNoStyleFallback: true,
-  });
+  }, shapeRotationDeg);
 }
 
 // ─── chartEx: box-and-whisker (CH15, MS 2014 chartex ext) ────────────────────
@@ -13857,15 +13903,15 @@ export function renderChart(
       case 'stackedBarH':
       case 'stackedBarPct':
       case 'stackedBarHPct':
-        renderBarChart(ctx, chart, rect, ptToPx); break;
+        renderBarChart(ctx, chart, rect, ptToPx, {}, shapeRotationDeg); break;
       case 'line':
       case 'stackedLine':
       case 'stackedLinePct':
-        renderLineChart(ctx, chart, rect, ptToPx); break;
+        renderLineChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'area':
       case 'stackedArea':
       case 'stackedAreaPct':
-        renderAreaChart(ctx, chart, rect, ptToPx); break;
+        renderAreaChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'pie':
         renderPieChart(ctx, chart, rect, false, ptToPx); break;
       case 'ofPie':
@@ -13876,7 +13922,7 @@ export function renderChart(
         renderRadarChart(ctx, chart, rect, ptToPx); break;
       case 'scatter':
       case 'bubble':
-        renderScatterChart(ctx, chart, rect, ptToPx); break;
+        renderScatterChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'waterfall':
         renderWaterfallChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'clusteredColumn':
@@ -13886,17 +13932,18 @@ export function renderChart(
           rect,
           ptToPx,
           { gapPolicy: 'chartex' },
+          shapeRotationDeg,
         ); break;
       case 'histogram':
-        renderHistogramChart(ctx, chart, rect, ptToPx); break;
+        renderHistogramChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'funnel':
         renderFunnelChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'paretoLine':
-        renderParetoLineChart(ctx, chart, rect, ptToPx); break;
+        renderParetoLineChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'pareto':
-        renderParetoChart(ctx, chart, rect, ptToPx); break;
+        renderParetoChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'stock':
-        renderStockChart(ctx, chart, rect, ptToPx); break;
+        renderStockChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'surface':
         renderSurfaceChart(ctx, chart, rect, ptToPx); break;
       case 'boxWhisker':

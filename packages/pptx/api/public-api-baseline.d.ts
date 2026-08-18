@@ -292,6 +292,9 @@ export interface ChartModel {
     catAxisLineHidden: boolean;
     valAxisLineHidden: boolean;
     plotAreaBg: string | null;
+    plotAreaFill?: Fill | null;
+    plotAreaFillHidden?: boolean | null;
+    plotAreaFillPaintAuthored?: boolean | null;
     chartBg: string | null;
     chartFill?: Fill | null;
     roundedCorners?: boolean | null;

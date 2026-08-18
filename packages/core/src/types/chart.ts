@@ -580,6 +580,13 @@ export interface ChartModel {
   valAxisLineHidden: boolean;
   /** Hex without '#'. From `<c:plotArea><c:spPr><a:solidFill>`. */
   plotAreaBg: string | null;
+  /** Structured `<c:plotArea><c:spPr>` fill. Solid fills are also mirrored in
+   * `plotAreaBg` for wire compatibility. */
+  plotAreaFill?: Fill | null;
+  /** Explicit plot-area `noFill`; prevents linked style fallback. */
+  plotAreaFillHidden?: boolean | null;
+  /** A direct plot-area fill paint was authored, even when unresolved. */
+  plotAreaFillPaintAuthored?: boolean | null;
   /** Outer chartSpace background (hex without '#'). null when noFill/absent. */
   chartBg: string | null;
   /** Structured non-solid `<c:chartSpace><c:spPr>` fill. Solid fills retain
