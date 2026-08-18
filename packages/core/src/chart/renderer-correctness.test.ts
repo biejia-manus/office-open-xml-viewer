@@ -2323,6 +2323,107 @@ describe('bar chart authored layout and fills', () => {
     )).toBe(true);
   });
 
+  it('does not reserve plot space for an overlay legend and retains manual placement', () => {
+    const render = (overlay: boolean) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'clusteredBar',
+        categories: ['A'],
+        series: [series({ name: 'Overlay', color: 'FF0000', values: [10] })],
+        showLegend: true,
+        legendPos: 'r',
+        legendOverlay: overlay,
+        legendManualLayout: {
+          xMode: 'edge', yMode: 'edge', wMode: 'factor', hMode: 'factor',
+          x: 0.55, y: 0.1, w: 0.35, h: 0.2,
+        },
+      }), RECT, 1);
+      return rec;
+    };
+    const reserved = render(false);
+    const overlay = render(true);
+    const widestRed = (rec: Recorded) => Math.max(
+      ...rec.rects.filter(rect => rect.fs === '#FF0000').map(rect => rect.w),
+    );
+    expect(widestRed(overlay)).toBeGreaterThan(widestRed(reserved));
+    const legend = overlay.texts.find(text => text.text === 'Overlay');
+    expect(legend?.x).toBeGreaterThanOrEqual(RECT.w * 0.55);
+    expect(legend?.x).toBeLessThanOrEqual(RECT.w * 0.9);
+  });
+
+  it('applies indexed legend deletion and entry-local text properties without reordering', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A'],
+      series: ['First', 'Deleted', 'Styled'].map((name, index) =>
+        series({ name, values: [index + 1] })
+      ),
+      showLegend: true,
+      legendPos: 'r',
+      legendEntries: [
+        { idx: 1, deleted: true },
+        {
+          idx: 2,
+          fontFace: 'Entry Face',
+          fontColor: 'AABBCC',
+          fontSizeHpt: 1400,
+          fontBold: true,
+        },
+      ],
+    }), RECT, 1);
+
+    const labels = rec.texts.filter(text => ['First', 'Deleted', 'Styled'].includes(text.text));
+    expect(labels.map(label => label.text)).toEqual(['First', 'Styled']);
+    expect(labels[1]).toMatchObject({ fillStyle: '#AABBCC' });
+    expect(labels[1].font).toContain('bold 14px');
+    expect(labels[1].font).toContain('Entry Face');
+  });
+
+  it('indexes legend-entry overrides against point-driven pie entries', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'pie',
+      categories: ['Alpha', 'Beta', 'Gamma'],
+      series: [series({ values: [2, 3, 5] })],
+      showLegend: true,
+      legendPos: 'r',
+      legendEntries: [
+        { idx: 0, deleted: false },
+        { idx: 1, deleted: true },
+        { idx: 2, fontColor: '008800', fontBold: true },
+      ],
+    }), RECT, 1);
+
+    const labels = rec.texts.filter(text => ['Alpha', 'Beta', 'Gamma'].includes(text.text));
+    expect(labels.map(label => label.text)).toEqual(['Alpha', 'Gamma']);
+    expect(labels[1]).toMatchObject({ fillStyle: '#008800' });
+    expect(labels[1].font).toContain('bold');
+  });
+
+  it('applies the same indexed legend overrides to a 3-D chart', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A'],
+      series: ['First 3D', 'Deleted 3D', 'Styled 3D'].map((name, index) =>
+        series({ name, values: [index + 1] })
+      ),
+      showLegend: true,
+      legendPos: 'r',
+      legendEntries: [
+        { idx: 1, deleted: true },
+        { idx: 2, fontColor: 'CC00CC', fontSizeHpt: 1300, fontBold: true },
+      ],
+      threeD: { rotationX: 15, rotationY: 20 },
+    }), RECT, 1);
+
+    const labels = rec.texts.filter(text => text.text.endsWith('3D'));
+    expect(labels.map(label => label.text)).toEqual(['First 3D', 'Styled 3D']);
+    expect(labels[1]).toMatchObject({ fillStyle: '#CC00CC' });
+    expect(labels[1].font).toContain('bold 13px');
+  });
+
   it('paints an authored legend-frame fill and outline behind its manual content box', () => {
     const rec = recordingCtx();
     const chart = baseModel({

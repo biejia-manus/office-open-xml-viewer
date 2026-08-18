@@ -37,6 +37,9 @@ use crate::text::{parse_body_pr, BodyPrDefaults};
 /// parts contain 6 base colors × at most 9 variations; this bound prevents an
 /// adversarial colors×variations product from amplifying a bounded XML tree.
 const MAX_CHART_COLOR_STYLE_ENTRIES: usize = 4096;
+/// A legend is a bounded UI list even when its backing series cache is much
+/// larger. Bound authored entry overrides before allocating the wire model.
+const MAX_CHART_LEGEND_ENTRIES: usize = 4096;
 /// Aggregate structured-fill components retained after expanding one Chart
 /// Style role across the linked Chart Colors palette. A gradient contributes
 /// one component per stop; solid and pattern fills contribute one. This bounds
@@ -261,6 +264,13 @@ pub struct ChartModel {
     pub val_axis_font_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend_manual_layout: Option<LegendManualLayout>,
+    /// `<c:legend><c:overlay>` (§21.2.2.132). Absent is preserved as `None`;
+    /// a present element without `val` is true per CT_Boolean.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_overlay: Option<bool>,
+    /// Source-ordered indexed `<c:legendEntry>` overrides (§21.2.2.94).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_entries: Option<Vec<ChartLegendEntryOverride>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub val_axis_format_code: Option<String>,
     /// `<c:valAx><c:dispUnits>` (§21.2.2.45) scales displayed axis-associated
@@ -1707,6 +1717,23 @@ pub struct LegendManualLayout {
     pub h: f64,
 }
 
+/// Indexed classic-chart legend entry override (`CT_LegendEntry`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartLegendEntryOverride {
+    pub idx: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_face: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size_hpt: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_bold: Option<bool>,
+}
+
 /// Combine a chart-type family (`bar` / `line` / `area`) with its bar direction
 /// and grouping into the canonical `ChartModel.chart_type` vocabulary the core
 /// renderer dispatches on.
@@ -2266,6 +2293,62 @@ pub fn extract_legend(root: Node) -> (bool, Option<String>) {
             .map(|s| s.to_string())
     });
     (show, pos)
+}
+
+/// Preserve `<c:legend><c:overlay>` and source-ordered indexed
+/// `<c:legendEntry>` overrides (ECMA-376 §21.2.2.94, §21.2.2.132).
+///
+/// Entry-local text properties are partial: omitted properties inherit the
+/// legend-level `<c:txPr>` in the renderer. The entry count is bounded before
+/// constructing the wire vector so an authored legend cannot amplify a small
+/// chart part into an unbounded UI model.
+pub fn extract_legend_overrides(
+    root: Node,
+    resolver: &dyn ColorResolver,
+) -> (Option<bool>, Option<Vec<ChartLegendEntryOverride>>) {
+    let Some(legend) = root
+        .descendants()
+        .find(|node| node.is_element() && node.tag_name().name() == "legend")
+    else {
+        return (None, None);
+    };
+    let overlay = bool_child(legend, "overlay");
+    let entries = legend
+        .children()
+        .filter(|node| node.is_element() && node.tag_name().name() == "legendEntry")
+        .take(MAX_CHART_LEGEND_ENTRIES)
+        .filter_map(|entry| {
+            let idx = child(entry, "idx")?.attribute("val")?.parse::<u32>().ok()?;
+            let txpr = child(entry, "txPr");
+            let run_props = txpr.and_then(|body| {
+                body.descendants().find(|node| {
+                    node.is_element() && matches!(node.tag_name().name(), "defRPr" | "rPr")
+                })
+            });
+            let font_color = txpr.and_then(|body| {
+                body.descendants().find_map(|node| {
+                    (node.is_element() && node.tag_name().name() == "solidFill")
+                        .then(|| resolver.resolve_solid_fill(node))
+                        .flatten()
+                })
+            });
+            Some(ChartLegendEntryOverride {
+                idx,
+                deleted: bool_child(entry, "delete"),
+                font_face: txpr.and_then(first_latin_typeface),
+                font_color,
+                font_size_hpt: run_props
+                    .and_then(|props| props.attribute("sz"))
+                    .and_then(parse_text_font_size_hpt),
+                font_bold: run_props.and_then(|props| {
+                    props
+                        .attribute("b")
+                        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+                }),
+            })
+        })
+        .collect::<Vec<_>>();
+    (overlay, (!entries.is_empty()).then_some(entries))
 }
 
 /// `<c:barChart><c:gapWidth val>` / `<c:overlap val>` (ECMA-376 §21.2.2.13,
@@ -5547,6 +5630,8 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         val_axis_minor_tick_mark: Some(val_axis_minor_tick_mark),
         cat_axis_minor_tick_mark: None,
         legend_manual_layout: None,
+        legend_overlay: None,
+        legend_entries: None,
         title_manual_layout: None,
         cat_axis_crosses: None,
         cat_axis_crosses_at: None,
@@ -9187,6 +9272,7 @@ pub fn parse_chart_part_with_references(
         .descendants()
         .find(|n| n.is_element() && n.tag_name().name() == "legend")
         .and_then(extract_legend_manual_layout);
+    let (legend_overlay, legend_entries) = extract_legend_overrides(root, color_resolver);
 
     // Chart-title `<c:title><c:layout><c:manualLayout>` (ECMA-376 §21.2.2.88).
     let title_manual_layout = title_node_opt
@@ -9326,6 +9412,8 @@ pub fn parse_chart_part_with_references(
         val_axis_minor_tick_mark,
         cat_axis_minor_tick_mark,
         legend_manual_layout,
+        legend_overlay,
+        legend_entries,
         title_manual_layout,
         cat_axis_crosses,
         cat_axis_crosses_at,
@@ -9566,6 +9654,8 @@ mod tests {
             cat_axis_font_color: None,
             val_axis_font_color: None,
             legend_manual_layout: None,
+            legend_overlay: None,
+            legend_entries: None,
             val_axis_format_code: None,
             val_axis_display_units: None,
             cat_axis_display_units: None,
@@ -9747,6 +9837,52 @@ mod tests {
         let (show, pos) = extract_legend(d.root_element());
         assert!(!show);
         assert!(pos.is_none());
+    }
+
+    #[test]
+    fn legend_overlay_and_entry_overrides_preserve_index_delete_and_text_properties() {
+        let xml = r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+                xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+            <c:legend>
+              <c:legendEntry><c:idx val="2"/><c:delete/></c:legendEntry>
+              <c:legendEntry><c:idx val="0"/><c:txPr><a:p><a:pPr>
+                <a:defRPr sz="1400" b="1"><a:solidFill><a:srgbClr val="AABBCC"/></a:solidFill><a:latin typeface="Aptos"/></a:defRPr>
+              </a:pPr></a:p></c:txPr></c:legendEntry>
+              <c:overlay/>
+            </c:legend>
+        </c:chart>"#;
+        let document = root_of(xml);
+        let (overlay, entries) = extract_legend_overrides(document.root_element(), &StubResolver);
+        assert_eq!(overlay, Some(true));
+        assert_eq!(
+            entries,
+            Some(vec![
+                ChartLegendEntryOverride {
+                    idx: 2,
+                    deleted: Some(true),
+                    font_face: None,
+                    font_color: None,
+                    font_size_hpt: None,
+                    font_bold: None,
+                },
+                ChartLegendEntryOverride {
+                    idx: 0,
+                    deleted: None,
+                    font_face: Some("Aptos".to_string()),
+                    font_color: Some("AABBCC".to_string()),
+                    font_size_hpt: Some(1400),
+                    font_bold: Some(true),
+                },
+            ])
+        );
+
+        let explicit_false = root_of(
+            r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:legend><c:overlay val="0"/></c:legend></c:chart>"#,
+        );
+        assert_eq!(
+            extract_legend_overrides(explicit_false.root_element(), &StubResolver).0,
+            Some(false)
+        );
     }
 
     #[test]

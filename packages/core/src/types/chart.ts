@@ -558,6 +558,12 @@ export interface ChartModel {
   dataTable?: ChartDataTable | null;
   /** `<c:legend><c:legendPos val>` — "r"|"l"|"t"|"b"|"tr". null = default (r). */
   legendPos: 'r' | 'l' | 't' | 'b' | 'tr' | null;
+  /** `<c:legend><c:overlay>` — when true, the legend is painted over the chart
+   *  instead of reserving space in the automatic plot layout. */
+  legendOverlay?: boolean | null;
+  /** Indexed `<c:legendEntry>` overrides. Entries retain source order; `idx`
+   *  addresses the effective series- or point-driven legend entry. */
+  legendEntries?: ChartLegendEntryOverride[] | null;
   /** `<c:catAx><c:crossBetween val="..."/>`. "between" inserts 0.5-step padding
    *  on each end of the category axis; "midCat" anchors endpoints to the axes. */
   catAxisCrossBetween: 'between' | 'midCat' | string;
@@ -1531,6 +1537,19 @@ export interface LegendManualLayout {
   y: number;
   w: number;
   h: number;
+}
+
+/** Classic-chart `<c:legendEntry>` (§21.2.2.94 / CT_LegendEntry). */
+export interface ChartLegendEntryOverride {
+  idx: number;
+  /** `<c:delete>`; a bare element is true. */
+  deleted?: boolean | null;
+  /** Entry-local `<c:txPr>` properties. Omitted properties inherit the
+   *  chart-level legend text style. */
+  fontFace?: string | null;
+  fontColor?: string | null;
+  fontSizeHpt?: number | null;
+  fontBold?: boolean | null;
 }
 
 export interface ChartRect {

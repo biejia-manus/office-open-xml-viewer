@@ -265,7 +265,13 @@ export function chartLegendReserve(
 
 /** Split a legend reserve into the four per-side bands (three of which are 0).
  *  Matches the `leg?.side === 'r' ? leg.reserveW : 0` idiom repeated inline. */
-export function chartLegendBands(leg: ChartLegendReserve | null): ChartLegendBands {
+export function chartLegendBands(
+  leg: ChartLegendReserve | null,
+  overlay = false,
+): ChartLegendBands {
+  // §21.2.2.132: an overlay legend keeps its automatic paint rectangle but
+  // contributes no reserved band to the plot layout.
+  if (overlay) return { legRightW: 0, legLeftW: 0, legTopH: 0, legBottomH: 0 };
   return {
     legRightW: leg?.side === 'r' ? leg.reserveW : 0,
     legLeftW: leg?.side === 'l' ? leg.reserveW : 0,
@@ -631,7 +637,7 @@ export function computeChartFrame(
   const legend = params.legendReserve !== undefined
     ? params.legendReserve
     : chartLegendReserve(chart, w, h, params.legendSideReserveFrac);
-  const legendBands = chartLegendBands(legend);
+  const legendBands = chartLegendBands(legend, chart.legendOverlay === true);
   const axisTitles = chartAxisTitleBands(chart, w, h, ptToPx);
 
   let px0: number, py0: number, pw: number, ph: number;

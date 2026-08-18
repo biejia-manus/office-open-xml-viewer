@@ -177,6 +177,18 @@ describe('chartLegendReserve + bands', () => {
       legBottomH: 0,
     });
   });
+  it('keeps the legend paint rectangle but removes every reserved band for overlay', () => {
+    for (const legendPos of ['r', 'l', 't', 'b', 'tr'] as const) {
+      const leg = chartLegendReserve(model({ showLegend: true, legendPos }), W, H, 0.22);
+      expect(leg, legendPos).not.toBeNull();
+      expect(chartLegendBands(leg, true), legendPos).toEqual({
+        legRightW: 0,
+        legLeftW: 0,
+        legTopH: 0,
+        legBottomH: 0,
+      });
+    }
+  });
   it('honors the wider pie side fraction (0.28)', () => {
     const leg = chartLegendReserve(model({ showLegend: true, legendPos: 'l' }), W, H, 0.28);
     expect(leg).toEqual({ side: 'l', reserveW: Math.max(80, W * 0.28), reserveH: 0 });

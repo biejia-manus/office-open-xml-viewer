@@ -3,7 +3,7 @@
 // scatter, waterfall). Ported from the xlsx implementation with pptx
 // extensions (valMin-aware axis, plotAreaBg, dataPointColors, waterfall).
 
-import type { ChartDataLabelOverride, ChartDecorationLineStyle, ChartDisplayUnits, ChartManualLayout, ChartModel, ChartRect, ChartSeries, ChartSeriesDataLabels, ChartStockUpDownBarStyle, ChartTextBox, ChartTextRun, ChartTrendline, SecondaryValueAxis } from '../types/chart';
+import type { ChartDataLabelOverride, ChartDecorationLineStyle, ChartDisplayUnits, ChartLegendEntryOverride, ChartManualLayout, ChartModel, ChartRect, ChartSeries, ChartSeriesDataLabels, ChartStockUpDownBarStyle, ChartTextBox, ChartTextRun, ChartTrendline, SecondaryValueAxis } from '../types/chart';
 import type { Fill } from '../types/common';
 import {
   AXIS_OUTER_TEXT_MARGIN_PT,
@@ -806,6 +806,23 @@ interface LegendEntry {
   outlineDash: string | null;
   outlineCap: string | null;
   outlineJoin: string | null;
+  textOverride: ChartLegendEntryOverride | null;
+}
+
+function applyLegendEntryOverrides(
+  entries: readonly LegendEntry[],
+  overrides: readonly ChartLegendEntryOverride[],
+): LegendEntry[] {
+  if (overrides.length === 0) return [...entries];
+  const byIndex = new Map<number, ChartLegendEntryOverride>();
+  for (const override of overrides) byIndex.set(override.idx, override);
+  const effective: LegendEntry[] = [];
+  for (let index = 0; index < entries.length; index++) {
+    const override = byIndex.get(index);
+    if (override?.deleted === true) continue;
+    effective.push({ ...entries[index], textOverride: override ?? null });
+  }
+  return effective;
 }
 
 /** The legend key embedded in a classic data label (`<c:showLegendKey>`).
@@ -828,6 +845,7 @@ function buildLegendEntries(
   chartCategories: string[] = [],
   fillPaints: ReadonlyArray<Fill | null | undefined> = [],
   pieVaryColors = true,
+  entryOverrides: readonly ChartLegendEntryOverride[] = [],
 ): LegendEntry[] {
   if (varyByPoint || legendIsCategoryDriven(chartType)) {
     // Category-driven: one entry per data point of the first series, labeled by
@@ -837,7 +855,7 @@ function buildLegendEntries(
     const n = first ? first.values.length : 0;
     const cats = first?.categories ?? chartCategories;
     const overrides = new Map(first?.dataPointOverrides?.map(point => [point.idx, point]) ?? []);
-    return Array.from({ length: n }, (_, i) => {
+    const entries = Array.from({ length: n }, (_, i) => {
       const point = overrides.get(i);
       const lineVisible = (point?.lineHidden ?? first?.lineHidden) !== true;
       return {
@@ -861,10 +879,12 @@ function buildLegendEntries(
           ? (point?.lineDash ?? first?.chartexStyle?.lineDash ?? null) : null,
         outlineCap: lineVisible ? (first?.chartexStyle?.lineCap ?? null) : null,
         outlineJoin: lineVisible ? (first?.chartexStyle?.lineJoin ?? null) : null,
+        textOverride: null,
       };
     });
+    return applyLegendEntryOverrides(entries, entryOverrides);
   }
-  return series.map((s, i) => {
+  const entries = series.map((s, i) => {
     // A combo chart has multiple chart groups under one plotArea. The legend
     // key describes the individual series' group, not the first/primary group.
     const family = s.seriesType ?? chartType;
@@ -890,8 +910,10 @@ function buildLegendEntries(
       outlineDash: lineVisible ? (s.chartexStyle?.lineDash ?? null) : null,
       outlineCap: lineVisible ? (s.chartexStyle?.lineCap ?? null) : null,
       outlineJoin: lineVisible ? (s.chartexStyle?.lineJoin ?? null) : null,
+      textOverride: null,
     };
   });
+  return applyLegendEntryOverrides(entries, entryOverrides);
 }
 
 /** Resolve data-label keys through the chart's existing legend-style pipeline.
@@ -928,6 +950,28 @@ interface LegendTextStyle {
   color: string;
   bold: boolean;
   sizePx: number | null;
+}
+
+function legendEntryTextStyle(
+  chart: ChartModel,
+  base: LegendTextStyle,
+  override: ChartLegendEntryOverride | null,
+  ptToPx: number,
+): LegendTextStyle {
+  if (!override) return base;
+  const face = resolveThemeFontRef(chart, override.fontFace) ?? override.fontFace;
+  return {
+    fontFamily: face ? `"${face}", Calibri, Arial, sans-serif` : base.fontFamily,
+    color: override.fontColor ? `#${override.fontColor}` : base.color,
+    bold: override.fontBold ?? base.bold,
+    sizePx: chartTextFontSizePx(override.fontSizeHpt, ptToPx) ?? base.sizePx,
+  };
+}
+
+function setLegendFont(ctx: CanvasRenderingContext2D, style: LegendTextStyle, ptToPx: number): number {
+  const size = legendFontSizePx(style, ptToPx);
+  ctx.font = `${style.bold ? 'bold ' : ''}${size}px ${style.fontFamily}`;
+  return size;
 }
 
 const DEFAULT_LEGEND_STYLE: LegendTextStyle = {
@@ -1007,6 +1051,14 @@ function sideLegendLabelLines(
   ];
 }
 
+interface MeasuredLegendLayout extends ChartLegendReserve {
+  measuredLabels: string[];
+  entryStyles: LegendTextStyle[];
+  fontSizes: number[];
+  swatches: number[];
+  itemWidths: number[];
+}
+
 /** Resolve the shared automatic legend reserve from real Canvas text metrics. */
 function measuredLegendReserve(
   ctx: CanvasRenderingContext2D,
@@ -1015,7 +1067,7 @@ function measuredLegendReserve(
   h: number,
   sideReserveFrac: number,
   ptToPx: number,
-): ChartLegendReserve | null {
+): MeasuredLegendLayout | null {
   if (!chart.showLegend) return null;
   const style = legendTextStyle(chart, ptToPx);
   const entries = buildLegendEntries(
@@ -1026,24 +1078,38 @@ function measuredLegendReserve(
     chart.categories,
     [],
     chart.varyColors !== false,
+    chart.legendEntries ?? [],
   );
-  const fontSize = legendFontSizePx(style, ptToPx);
-  const swatches = legendSwatchWidths(entries, fontSize, ptToPx);
+  const entryStyles = entries.map(entry =>
+    legendEntryTextStyle(chart, style, entry.textOverride, ptToPx)
+  );
+  const fontSizes = entryStyles.map(entryStyle => legendFontSizePx(entryStyle, ptToPx));
+  const swatches = entries.map((entry, index) =>
+    legendSwatchWidths([entry], fontSizes[index], ptToPx)[0]
+  );
   ctx.save();
-  ctx.font = `${style.bold ? 'bold ' : ''}${fontSize}px ${style.fontFamily}`;
-  const itemWidths = entries.map((entry, index) =>
-    swatches[index] + LEGEND_SWATCH_TEXT_GAP + ctx.measureText(entry.label).width
-  );
+  const itemWidths = entries.map((entry, index) => {
+    setLegendFont(ctx, entryStyles[index], ptToPx);
+    return swatches[index] + LEGEND_SWATCH_TEXT_GAP + ctx.measureText(entry.label).width;
+  });
   ctx.restore();
   const pos = chart.legendPos ?? 'r';
   const horizontal = pos === 't' || pos === 'b';
-  return chartLegendReserve(chart, w, h, sideReserveFrac, {
+  const reserve = chartLegendReserve(chart, w, h, sideReserveFrac, {
     itemWidths,
-    rowHeight: fontSize + LEGEND_ROW_EXTRA_PX,
+    rowHeight: Math.max(0, ...fontSizes) + LEGEND_ROW_EXTRA_PX,
     itemGap: LEGEND_ITEM_GAP,
     horizontalPadding: horizontal ? LEGEND_HORIZONTAL_PADDING : LEGEND_SIDE_PADDING,
     verticalPadding: LEGEND_VERTICAL_PADDING,
   });
+  return reserve ? {
+    ...reserve,
+    measuredLabels: entries.map(entry => entry.label),
+    entryStyles,
+    fontSizes,
+    swatches,
+    itemWidths,
+  } : null;
 }
 
 function drawLegend(
@@ -1060,6 +1126,8 @@ function drawLegend(
   fillPaints: ReadonlyArray<Fill | null | undefined> = [],
   shapeRotationDeg = 0,
   pieVaryColors = true,
+  chartForEntryStyles?: ChartModel,
+  measured?: MeasuredLegendLayout | null,
 ): void {
   const gap = LEGEND_SWATCH_TEXT_GAP;
   const entries = buildLegendEntries(
@@ -1070,16 +1138,34 @@ function drawLegend(
     chartCategories,
     fillPaints,
     pieVaryColors,
+    chartForEntryStyles?.legendEntries ?? [],
   );
-  const boldPrefix = style.bold ? 'bold ' : '';
-  const fontSize = legendFontSizePx(style, ptToPx);
-  ctx.font = `${boldPrefix}${fontSize}px ${style.fontFamily}`;
+  const canReuseMeasure = measured != null
+    && measured.measuredLabels.length === entries.length
+    && measured.measuredLabels.every((label, index) => label === entries[index].label);
+  const entryStyles = canReuseMeasure
+    ? measured.entryStyles
+    : entries.map(entry => chartForEntryStyles
+        ? legendEntryTextStyle(chartForEntryStyles, style, entry.textOverride, ptToPx)
+        : style
+      );
+  const fontSizes = canReuseMeasure
+    ? measured.fontSizes
+    : entryStyles.map(entryStyle => legendFontSizePx(entryStyle, ptToPx));
+  if (entryStyles[0]) setLegendFont(ctx, entryStyles[0], ptToPx);
   ctx.textBaseline = 'middle';
-  const rowH = fontSize + LEGEND_ROW_EXTRA_PX;
-  const swatches = legendSwatchWidths(entries, fontSize, ptToPx);
-  const itemWidths = entries.map((entry, index) =>
-    swatches[index] + gap + ctx.measureText(entry.label).width
-  );
+  const rowH = Math.max(0, ...fontSizes) + LEGEND_ROW_EXTRA_PX;
+  const swatches = canReuseMeasure
+    ? measured.swatches
+    : entries.map((entry, index) =>
+        legendSwatchWidths([entry], fontSizes[index], ptToPx)[0]
+      );
+  const itemWidths = canReuseMeasure
+    ? measured.itemWidths
+    : entries.map((entry, index) => {
+        setLegendFont(ctx, entryStyles[index], ptToPx);
+        return swatches[index] + gap + ctx.measureText(entry.label).width;
+      });
   if (orient === 'horizontal') {
     const rows = packLegendRows(itemWidths, lw, LEGEND_ITEM_GAP);
     const visibleRows = rows.slice(
@@ -1106,8 +1192,9 @@ function drawLegend(
           0,
           effectiveWidth - sw - gap + LEGEND_MEASUREMENT_EPSILON_PX,
         );
+        setLegendFont(ctx, entryStyles[index], ptToPx);
         const label = elideToWidth(ctx, entries[index].label, maxTextPx);
-        const swatchH = legendSwatchHeight(entries[index], fontSize, ptToPx);
+        const swatchH = legendSwatchHeight(entries[index], fontSizes[index], ptToPx);
         drawLegendSwatch(
           ctx, entries[index].swatchStyle, entries[index].color,
           rx, ry - swatchH / 2, sw, swatchH,
@@ -1116,7 +1203,7 @@ function drawLegend(
           entries[index].outlineDash, entries[index].outlineCap, entries[index].outlineJoin,
           ptToPx, shapeRotationDeg,
         );
-        ctx.fillStyle = style.color;
+        ctx.fillStyle = entryStyles[index].color;
         ctx.textAlign = 'left';
         ctx.fillText(label, rx + sw + gap, ry);
         rx += effectiveWidth + LEGEND_ITEM_GAP;
@@ -1133,11 +1220,15 @@ function drawLegend(
   // historical one-line/elided rows so wrapping one category cannot starve
   // later entries. Series-driven legends are the bounded multi-line case.
   const wrapSeriesNames = !varyByPoint && !legendIsCategoryDriven(chartType);
-  const labelLines = entries.map(entry => wrapSeriesNames
-    ? sideLegendLabelLines(ctx, entry.label, maxTextPx)
-    : [elideToWidth(ctx, entry.label, maxTextPx)]
+  const labelLines = entries.map((entry, index) => {
+    setLegendFont(ctx, entryStyles[index], ptToPx);
+    return wrapSeriesNames
+      ? sideLegendLabelLines(ctx, entry.label, maxTextPx)
+      : [elideToWidth(ctx, entry.label, maxTextPx)];
+  });
+  const entryHeights = labelLines.map((lines, index) =>
+    lines.length * fontSizes[index] + LEGEND_ROW_EXTRA_PX
   );
-  const entryHeights = labelLines.map(lines => lines.length * fontSize + LEGEND_ROW_EXTRA_PX);
   let visibleCount = 0;
   let visibleHeight = 0;
   while (visibleCount < entries.length
@@ -1155,7 +1246,7 @@ function drawLegend(
       ry += entryH;
       continue;
     }
-    const swatchH = legendSwatchHeight(entries[i], fontSize, ptToPx);
+    const swatchH = legendSwatchHeight(entries[i], fontSizes[i], ptToPx);
     drawLegendSwatch(
       ctx, entries[i].swatchStyle, entries[i].color,
       lx, ry + (entryH - swatchH) / 2, sw, swatchH,
@@ -1164,11 +1255,12 @@ function drawLegend(
       entries[i].outlineDash, entries[i].outlineCap, entries[i].outlineJoin,
       ptToPx, shapeRotationDeg,
     );
-    ctx.fillStyle = style.color; ctx.textAlign = 'left';
+    setLegendFont(ctx, entryStyles[i], ptToPx);
+    ctx.fillStyle = entryStyles[i].color; ctx.textAlign = 'left';
     labelLines[i].forEach((line, lineIndex) =>
       // Preserve the established single-line baseline byte-for-byte. Extra
       // wrapped lines continue at one authored font-size interval.
-      ctx.fillText(line, lx + sw + gap, ry + fontSize * (lineIndex + 0.5))
+      ctx.fillText(line, lx + sw + gap, ry + fontSizes[i] * (lineIndex + 0.5))
     );
     ry += entryH;
   }
@@ -1190,7 +1282,7 @@ function legendTextStyle(chart: ChartModel, ptToPx: number): LegendTextStyle {
 // Legend placement is resolved by `chartLegendReserve` (layout.ts). This alias
 // keeps the drawing helper's signature readable while sharing the single source
 // of truth for the reserve shape.
-type LegendLayout = ChartLegendReserve;
+type LegendLayout = MeasuredLegendLayout;
 
 /** Draw a legend in the band reserved by {@link chartLegendReserve}. */
 function drawLegendForLayout(
@@ -1248,13 +1340,13 @@ function drawLegendForLayout(
   if (manualBox) {
     const orient = manualBox.w >= manualBox.h ? 'horizontal' : 'vertical';
     paintLegendFrame(ctx, chart, manualBox, ptToPx);
-    drawLegend(ctx, legendSeries, manualBox.x, manualBox.y, manualBox.w, manualBox.h, orient, chart.chartType, legStyle, chart.scatterStyle, varyByPoint, chart.categories, ptToPx, fillPaints, shapeRotationDeg, chart.varyColors !== false);
+    drawLegend(ctx, legendSeries, manualBox.x, manualBox.y, manualBox.w, manualBox.h, orient, chart.chartType, legStyle, chart.scatterStyle, varyByPoint, chart.categories, ptToPx, fillPaints, shapeRotationDeg, chart.varyColors !== false, chart, leg);
     return;
   }
   paintLegendFrame(ctx, chart, defaultBox, ptToPx);
   drawLegend(ctx, legendSeries, defaultBox.x, defaultBox.y, defaultBox.w, defaultBox.h,
     defaultOrientation, chart.chartType, legStyle, chart.scatterStyle, varyByPoint,
-    chart.categories, ptToPx, fillPaints, shapeRotationDeg, chart.varyColors !== false);
+    chart.categories, ptToPx, fillPaints, shapeRotationDeg, chart.varyColors !== false, chart, leg);
 }
 
 function drawAxisTick(
@@ -2923,7 +3015,9 @@ function renderBarChart(
   const dataTableBaseH = isH ? 0 : chartDataTableBaseHeight(chart, ptToPx);
   const dataTableHeaderW = isH ? 0 : chartDataTableHeaderWidth(ctx, chart, ptToPx);
   const leg = measuredLegendReserve(ctx, legendChart, w, h, 0.22, ptToPx);
-  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(leg);
+  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
+    leg, chart.legendOverlay === true,
+  );
   // Axis-title bands sized from the *actual* title font (honoring XML @sz)
   // plus a small gap, so big titles get a wide enough gutter
   // and never collide with the tick labels.
@@ -4873,7 +4967,9 @@ function renderLineChart(
   let titleTopPad = titleBand.topPad;
   let titleH = titleBand.bandH;
   const leg = measuredLegendReserve(ctx, chart, w, h, 0.22, ptToPx);
-  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(leg);
+  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
+    leg, chart.legendOverlay === true,
+  );
   const catAxFontPx = axisLabelPx(chart.catAxisFontSizeHpt, h, ptToPx);
   const valAxFontPx = axisLabelPx(chart.valAxisFontSizeHpt, h, ptToPx);
   // Axis-title bands use the real title font (XML @sz when set), independent of
@@ -5461,7 +5557,9 @@ function renderStockChart(
   const titleTopPad = titleBand.topPad;
   const titleH = titleBand.bandH;
   const leg = measuredLegendReserve(ctx, chart, w, h, 0.22, ptToPx);
-  const { legRightW, legLeftW, legBottomH, legTopH } = chartLegendBands(leg);
+  const { legRightW, legLeftW, legBottomH, legTopH } = chartLegendBands(
+    leg, chart.legendOverlay === true,
+  );
   const catAxFontPx = axisLabelPx(chart.catAxisFontSizeHpt, h, ptToPx);
   const valAxFontPx = axisLabelPx(chart.valAxisFontSizeHpt, h, ptToPx);
   const axBands = chartAxisTitleBands(chart, w, h, ptToPx);
@@ -5939,7 +6037,9 @@ function renderSurfaceChart(
   // isolate this to the authored/effective camera elevation, not legend side.
   if (Math.abs(surfaceView.rotationX) === 90) legendChart.series.reverse();
   const legend = measuredLegendReserve(ctx, legendChart, w, h, 0.22, ptToPx);
-  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(legend);
+  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
+    legend, chart.legendOverlay === true,
+  );
   const titleBand = measuredCartesianTitleBand(ctx, chart, w, h, ptToPx);
   const catFontPx = axisLabelPx(chart.catAxisFontSizeHpt, h, ptToPx);
   const seriesAxis = chart.threeD?.seriesAxis;
@@ -6367,7 +6467,9 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
   const catAxFontPx = axisLabelPx(chart.catAxisFontSizeHpt, h, ptToPx);
   const valAxFontPx = axisLabelPx(chart.valAxisFontSizeHpt, h, ptToPx);
   const leg = measuredLegendReserve(ctx, chart, w, h, 0.22, ptToPx);
-  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(leg);
+  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
+    leg, chart.legendOverlay === true,
+  );
   const axBands = chartAxisTitleBands(chart, w, h, ptToPx);
   const catTitlePx = axBands.catFontPx;
   const valTitlePx = axBands.valFontPx;
@@ -8984,7 +9086,9 @@ function renderScatterChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r:
   const xAxLabelFontPx = axisLabelPx(chart.catAxisFontSizeHpt, h, ptToPx);
   const yAxLabelFontPx = axisLabelPx(chart.valAxisFontSizeHpt, h, ptToPx);
   const leg = measuredLegendReserve(ctx, chart, w, h, 0.22, ptToPx);
-  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(leg);
+  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
+    leg, chart.legendOverlay === true,
+  );
   const axBands = chartAxisTitleBands(chart, w, h, ptToPx);
   const catTitlePx = axBands.catFontPx;
   const valTitlePx = axBands.valFontPx;
@@ -10886,7 +10990,9 @@ function renderWaterfallChart(
     ],
   };
   const leg = measuredLegendReserve(ctx, legendChart, w, h, 0.22, ptToPx);
-  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(leg);
+  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
+    leg, chart.legendOverlay === true,
+  );
   const pad = {
     t: titleBand.bandH + legTopH + valFontPx / 2 + 2,
     r: legRightW + w * 0.02,
@@ -11190,7 +11296,9 @@ function renderFunnelChart(
     )],
   };
   const leg = measuredLegendReserve(ctx, legendChart, w, h, 0.22, ptToPx);
-  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(leg);
+  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
+    leg, chart.legendOverlay === true,
+  );
   const catFontPx = axisLabelPx(chart.catAxisFontSizeHpt, h, ptToPx);
   ctx.save();
   ctx.font = chartFontCss(
@@ -11622,7 +11730,9 @@ function renderBoxWhiskerChart(
     series: boxLegendSeries,
   };
   const leg = measuredLegendReserve(ctx, legendChart, w, h, 0.22, ptToPx);
-  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(leg);
+  const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
+    leg, chart.legendOverlay === true,
+  );
   const pad = {
     t: titleBand.bandH + legTopH + valAxFontPx0 / 2 + 2,
     r: legRightW + w * 0.02,
@@ -12432,7 +12542,7 @@ function renderSunburstChart(
   drawLegendForLayout(
     ctx,
     legendChart,
-    frame.legend,
+    leg,
     x,
     y,
     w,
@@ -12774,7 +12884,7 @@ function renderTreemapChart(
   drawLegendForLayout(
     ctx,
     legendChart,
-    frame.legend,
+    leg,
     r.x,
     r.y,
     r.w,
