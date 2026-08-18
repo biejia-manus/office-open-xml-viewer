@@ -93,7 +93,9 @@ export function surfaceMaterialFactor(normal: { x: number; y: number; z: number 
   const facing = normal.z < 0
     ? { x: -normal.x, y: -normal.y, z: -normal.z }
     : normal;
-  const light = { x: -0.24, y: 0.42, z: 0.88 };
+  // The observed Office surface material is lit from screen upper-right.
+  // Shared camera projection maps +x rightward and +y upward on screen.
+  const light = { x: 0.24, y: 0.42, z: 0.88 };
   const length = Math.hypot(light.x, light.y, light.z);
   const lambert = Math.max(0,
     (facing.x * light.x + facing.y * light.y + facing.z * light.z) / length,

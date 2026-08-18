@@ -6604,7 +6604,7 @@ describe('CH9 — line/area smooth splines (§21.2.2.194)', () => {
     )).toBe(true);
   });
 
-  it('uses category centers for major ticks, boundaries for minor ticks, and italic labels', () => {
+  it('uses longer major ticks at category boundaries and shorter minor ticks at centers', () => {
     const ticks = segRecordingCtx();
     const model = baseModel({
       chartType: 'clusteredBar',
@@ -6622,6 +6622,20 @@ describe('CH9 — line/area smooth splines (§21.2.2.194)', () => {
       && Math.abs(segment.x1 - segment.x0) < 0.001
       && Math.abs(segment.y1 - segment.y0) <= 8);
     expect(categoryTicks).toHaveLength(11);
+    const byLength = (length: number) => categoryTicks.filter(segment =>
+      Math.abs(Math.abs(segment.y1 - segment.y0) - length) < 0.001);
+    const boundaryTicks = byLength(6).sort((left, right) => left.x0 - right.x0);
+    const centreTicks = byLength(4).sort((left, right) => left.x0 - right.x0);
+    expect(boundaryTicks).toHaveLength(6);
+    expect(centreTicks).toHaveLength(5);
+    expect(boundaryTicks[0].x0).toBeLessThan(centreTicks[0].x0);
+    expect(boundaryTicks.at(-1)!.x0).toBeGreaterThan(centreTicks.at(-1)!.x0);
+    for (let index = 0; index < centreTicks.length; index++) {
+      expect(centreTicks[index].x0).toBeCloseTo(
+        (boundaryTicks[index].x0 + boundaryTicks[index + 1].x0) / 2,
+        6,
+      );
+    }
 
     const labels = recordingCtx();
     renderChart(labels.ctx, model, RECT, 1);
@@ -9331,7 +9345,7 @@ describe('CH13 — stock chart (high/low/close)', () => {
 });
 
 describe('surface contour charts', () => {
-  it('separates Surface point centres from category-grid boundaries', () => {
+  it('centres category points but places Surface series on axis endpoints', () => {
     const rec = strokedPolylineCtx();
     renderChart(rec.ctx, baseModel({
       chartType: 'surface',
@@ -9378,7 +9392,7 @@ describe('surface contour charts', () => {
       });
     };
     expect(fractionsAlong('#FF00FF', ['Y1', 'Y2'], { x: 8, y: 0 }))
-      .toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.75, 6)]);
+      .toEqual([expect.closeTo(0, 6), expect.closeTo(1, 6)]);
     expect(fractionsAlong('#00FFFF', ['X1', 'X2'], { x: 0, y: 8 }))
       .toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.75, 6)]);
 
@@ -9436,8 +9450,8 @@ describe('surface contour charts', () => {
     // bounded Surface-family perspective gain without coupling other 3-D
     // families to the compatibility observation.
     const points = omitted.flat();
-    expect(Math.min(...points.map(point => point.x))).toBeCloseTo(198.2, 0);
-    expect(Math.max(...points.map(point => point.y))).toBeCloseTo(229.0, 0);
+    expect(Math.min(...points.map(point => point.x))).toBeCloseTo(149.2, 0);
+    expect(Math.max(...points.map(point => point.y))).toBeCloseTo(264.4, 0);
   });
 
   it('rejects an unbounded authored band count before allocating tick arrays', () => {

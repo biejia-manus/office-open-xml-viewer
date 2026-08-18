@@ -679,20 +679,26 @@ stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 149.2167,319.25
-lineTo 149.2167,312.95
+moveTo 68.5,319.25
+lineTo 68.5,312.95
 stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 310.65,319.25
-lineTo 310.65,312.95
+moveTo 229.9333,319.25
+lineTo 229.9333,312.95
 stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 472.0833,319.25
-lineTo 472.0833,312.95
+moveTo 391.3667,319.25
+lineTo 391.3667,312.95
+stroke ss=#aaa lw=1 dash=
+setLineDash
+setLineDash
+beginPath
+moveTo 552.8,319.25
+lineTo 552.8,312.95
 stroke ss=#aaa lw=1 dash=
 setLineDash
 set font=10.5px sans-serif
@@ -889,20 +895,26 @@ stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 24.475,108.5542
-lineTo 30.775,108.5542
+moveTo 24.475,63.175
+lineTo 30.775,63.175
 stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 24.475,199.3125
-lineTo 30.775,199.3125
+moveTo 24.475,153.9333
+lineTo 30.775,153.9333
 stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 24.475,290.0708
-lineTo 30.775,290.0708
+moveTo 24.475,244.6917
+lineTo 30.775,244.6917
+stroke ss=#aaa lw=1 dash=
+setLineDash
+setLineDash
+beginPath
+moveTo 24.475,335.45
+lineTo 30.775,335.45
 stroke ss=#aaa lw=1 dash=
 setLineDash
 set font=10.5px sans-serif
@@ -1098,20 +1110,26 @@ stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 123.6833,341.75
-lineTo 123.6833,335.45
+moveTo 47.8,341.75
+lineTo 47.8,335.45
 stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 275.45,341.75
-lineTo 275.45,335.45
+moveTo 199.5667,341.75
+lineTo 199.5667,335.45
 stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 427.2167,341.75
-lineTo 427.2167,335.45
+moveTo 351.3333,341.75
+lineTo 351.3333,335.45
+stroke ss=#aaa lw=1 dash=
+setLineDash
+setLineDash
+beginPath
+moveTo 503.1,341.75
+lineTo 503.1,335.45
 stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
@@ -2974,20 +2992,26 @@ stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 139.8,323.25
-lineTo 139.8,316.95
+moveTo 41.2,323.25
+lineTo 41.2,316.95
 stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 337,323.25
-lineTo 337,316.95
+moveTo 238.4,323.25
+lineTo 238.4,316.95
 stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 534.2,323.25
-lineTo 534.2,316.95
+moveTo 435.6,323.25
+lineTo 435.6,316.95
+stroke ss=#aaa lw=1 dash=
+setLineDash
+setLineDash
+beginPath
+moveTo 632.8,323.25
+lineTo 632.8,316.95
 stroke ss=#aaa lw=1 dash=
 setLineDash
 set font=10.5px sans-serif
@@ -3169,20 +3193,26 @@ stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 217.4667,341.75
-lineTo 217.4667,335.45
+moveTo 134.4,341.75
+lineTo 134.4,335.45
 stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 383.6,341.75
-lineTo 383.6,335.45
+moveTo 300.5333,341.75
+lineTo 300.5333,335.45
 stroke ss=#aaa lw=1 dash=
 setLineDash
 setLineDash
 beginPath
-moveTo 549.7333,341.75
-lineTo 549.7333,335.45
+moveTo 466.6667,341.75
+lineTo 466.6667,335.45
+stroke ss=#aaa lw=1 dash=
+setLineDash
+setLineDash
+beginPath
+moveTo 632.8,341.75
+lineTo 632.8,335.45
 stroke ss=#aaa lw=1 dash=
 setLineDash
 set font=10.5px sans-serif

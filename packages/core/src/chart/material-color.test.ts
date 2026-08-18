@@ -33,10 +33,17 @@ describe('legacy Pattern 2 generated colours', () => {
 
 describe('surface automatic material', () => {
   it('is winding-invariant and bounded to the surface compatibility range', () => {
-    const lit = surfaceMaterialFactor({ x: -0.2, y: 0.4, z: 0.9 });
-    expect(surfaceMaterialFactor({ x: 0.2, y: -0.4, z: -0.9 })).toBeCloseTo(lit, 12);
+    const lit = surfaceMaterialFactor({ x: 0.2, y: 0.4, z: 0.9 });
+    expect(surfaceMaterialFactor({ x: -0.2, y: -0.4, z: -0.9 })).toBeCloseTo(lit, 12);
     expect(lit).toBeGreaterThan(1);
     expect(surfaceMaterialFactor({ x: 0.2, y: -0.4, z: 0.1 })).toBeGreaterThanOrEqual(0.48);
+  });
+
+  it('lights camera-space upper-right facets more strongly than their mirrors', () => {
+    expect(surfaceMaterialFactor({ x: 0.4, y: 0, z: 0.92 }))
+      .toBeGreaterThan(surfaceMaterialFactor({ x: -0.4, y: 0, z: 0.92 }));
+    expect(surfaceMaterialFactor({ x: 0, y: 0.4, z: 0.92 }))
+      .toBeGreaterThan(surfaceMaterialFactor({ x: 0, y: -0.4, z: 0.92 }));
   });
 });
 

@@ -3537,15 +3537,13 @@ function renderBarChart(
         }
       }
     }
-    // Major category ticks identify labelled category centers. Minor ticks
-    // identify the intervening boundaries when crossBetween="between". Excel
-    // therefore emits N centered major ticks plus N+1 boundary minor ticks for
-    // an ordinary column axis that authors both tick levels.
+    // Category-axis major ticks share the major-grid positions: with
+    // crossBetween="between" they mark the N+1 interval boundaries, while
+    // labels and minor ticks sit at the N category centres. This distinction
+    // matters when both levels use `cross`: Office's 6pt major boundary marks
+    // remain visibly longer than its 4pt centred minor marks.
     if (!chart.catAxisHidden && chart.catAxisMajorTickMark && chart.catAxisMajorTickMark !== 'none') {
-      const ordinalFractions = Array.from(
-        { length: n },
-        (_, ci) => isCrossBetween(chart) ? (ci + 0.5) / n : (n === 1 ? 0.5 : ci / (n - 1)),
-      );
+      const ordinalFractions = catGridlineFractions(chart, n);
       const tickSkip = Math.max(1, Math.floor(chart.catAxisTickMarkSkip ?? 1));
       const tickFractions = dateAxisPlan
         ? dateAxisPlan.majorTicks.map(tick => tick.fraction)
@@ -3560,7 +3558,7 @@ function renderBarChart(
     }
     if (!chart.catAxisHidden && chart.catAxisMinorTickMark && chart.catAxisMinorTickMark !== 'none') {
       const ordinalFractions = isCrossBetween(chart)
-        ? Array.from({ length: n + 1 }, (_, ci) => ci / n)
+        ? Array.from({ length: n }, (_, ci) => (ci + 0.5) / n)
         : Array.from({ length: Math.max(0, n - 1) }, (_, ci) => (ci + 0.5) / (n - 1));
       const tickFractions = dateAxisPlan
         ? dateAxisPlan.minorTicks.map(tick => tick.fraction)
@@ -5565,10 +5563,14 @@ function renderSurfaceChart(
     column, columnCount, categoryBetween, categoryReversed,
   ) * front.w;
   const seriesReversed = seriesAxis?.orientation === 'maxMin';
-  const toDepth = (row: number): number => {
-    const authoredDepth = projection.seriesDepth(row, rowCount, false);
-    return seriesReversed ? 1 - authoredDepth : authoredDepth;
-  };
+  // Surface rows are values on `<c:serAx>`, whose schema has no
+  // `<c:crossBetween>`. Office places the first and last rows on the series
+  // axis endpoints, unlike category points centred by value-axis
+  // crossBetween="between". Reuse the shared endpoint placement so reversal
+  // and the single-row midpoint remain consistent with other ordinal axes.
+  const toDepth = (row: number): number => categoryPositionFraction(
+    row, rowCount, false, seriesReversed,
+  );
   const toValueY = (value: number): number =>
     front.y + front.h - surfaceFrac(value) * front.h;
   interface SurfacePaint {
