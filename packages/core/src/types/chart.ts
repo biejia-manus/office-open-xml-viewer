@@ -90,6 +90,9 @@ export interface ChartSeries {
   /** Zero-based document-order index of the owning classic line-chart group.
    * Group decorations resolve through `ChartModel.lineGroupDecorations`. */
   lineGroupIndex?: number | null;
+  /** Zero-based document-order index of the owning classic area-chart group.
+   * Group drop lines resolve through `ChartModel.areaGroupDecorations`. */
+  areaGroupIndex?: number | null;
   /** Zero-based document-order index of the owning classic `<c:barChart>` or
    * `<c:bar3DChart>` group. Separate groups sharing an axis overlay rather than
    * becoming additional members of one cluster. */
@@ -984,6 +987,8 @@ export interface ChartModel {
   catAxisLabelRotation?: number | null;
   /** Group-owned decorations for classic line-chart groups. */
   lineGroupDecorations?: ChartLineGroupDecorations[] | null;
+  /** Group-owned drop lines for classic area-chart groups. */
+  areaGroupDecorations?: ChartAreaGroupDecorations[] | null;
   // ── Stock chart (CH13, §21.2.2.198) ──────────────────────────────────────
   /**
    * `<c:stockChart><c:hiLowLines>` presence (ECMA-376 §21.2.2.60). When true
@@ -1101,6 +1106,13 @@ export interface ChartLineGroupDecorations {
   hiLowLines?: ChartDecorationLineStyle | null;
   /** `<c:upDownBars>` geometry and direct bar paint. */
   upDownBars?: ChartStockUpDownBarStyle | null;
+}
+
+export interface ChartAreaGroupDecorations {
+  /** Zero-based document-order index among classic area-chart groups. */
+  groupIndex: number;
+  /** `<c:dropLines>` direct line paint; object presence means geometry exists. */
+  dropLines?: ChartDecorationLineStyle | null;
 }
 
 export interface ChartOfPie {

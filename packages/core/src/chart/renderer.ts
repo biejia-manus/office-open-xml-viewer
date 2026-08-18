@@ -3487,14 +3487,7 @@ function renderBarChart(
   };
   const drawCatLine = !chart.catAxisHidden && !chart.catAxisLineHidden;
   const drawValLine = !chart.valAxisHidden && !chart.valAxisLineHidden && chart.valAxisLineColor != null;
-  const primaryCatCrossValue = chart.catAxisCrossesAt != null
-    && Number.isFinite(chart.catAxisCrossesAt)
-    ? clamp(chart.catAxisCrossesAt, plan.min, plan.max)
-    : chart.catAxisCrosses === 'max'
-      ? plan.max
-      : chart.catAxisCrosses === 'min'
-        ? plan.min
-        : clamp(0, plan.min, plan.max);
+  const primaryCatCrossValue = categoryAxisCrossingValue(chart, plan.min, plan.max);
   const primaryCatAxisY = !isH ? valY(primaryCatCrossValue) : py0 + ph;
   const primaryCatAxisX = isH ? valX(primaryCatCrossValue) : px0;
   const categoryLabelAxisY = !isH && (chart.catAxisTickLabelPos ?? 'nextTo') === 'nextTo'
@@ -4547,6 +4540,15 @@ function drawLineGroupDecorations(
       }
     }
   }
+}
+
+function categoryAxisCrossingValue(chart: ChartModel, min: number, max: number): number {
+  if (chart.catAxisCrossesAt != null && Number.isFinite(chart.catAxisCrossesAt)) {
+    return clamp(chart.catAxisCrossesAt, min, max);
+  }
+  if (chart.catAxisCrosses === 'max') return max;
+  if (chart.catAxisCrosses === 'min') return min;
+  return clamp(0, min, max);
 }
 
 function renderLineChart(
@@ -6359,6 +6361,22 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
   const seriesOrder = stacked
     ? areaSeries.map((_, index) => index)
     : areaSeries.map((_, index) => areaSeries.length - 1 - index);
+  const stackedTopValues = stacked
+    ? areaSeries.map(() => new Array<number>(n).fill(0))
+    : null;
+  if (stackedTopValues) {
+    for (let categoryIndex = 0; categoryIndex < n; categoryIndex++) {
+      let running = 0;
+      for (let areaIndex = 0; areaIndex < areaSeries.length; areaIndex++) {
+        running += stackedValue(areaIndex, categoryIndex);
+        stackedTopValues[areaIndex][categoryIndex] = running;
+      }
+    }
+  }
+  const plottedAreaValue = (areaIndex: number, categoryIndex: number): number => {
+    if (!stacked) return areaSeries[areaIndex].series.values[categoryIndex] ?? 0;
+    return stackedTopValues?.[areaIndex]?.[categoryIndex] ?? 0;
+  };
   for (const areaIndex of seriesOrder) {
     const { series: s, chartIndex } = areaSeries[areaIndex];
     const color = chartColor(chartIndex, s);
@@ -6413,6 +6431,37 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
     }
   }
 
+  // `CT_AreaChart` includes `dropLines` through `EG_AreaChartShared`
+  // (ECMA-376 Part 1, dml-chart.xsd). Each authored line joins the plotted
+  // area point to its category axis. Paint after the opaque area fills so the
+  // authored geometry remains visible, but before point markers and labels.
+  const categoryAxisY = toY(categoryAxisCrossingValue(chart, areaPlan.min, areaPlan.max));
+  const areaGroupMembers = new Map<number, Array<{ series: ChartSeries; areaIndex: number }>>();
+  for (let areaIndex = 0; areaIndex < areaSeries.length; areaIndex++) {
+    const series = areaSeries[areaIndex].series;
+    const groupIndex = series.areaGroupIndex ?? 0;
+    const members = areaGroupMembers.get(groupIndex) ?? [];
+    members.push({ series, areaIndex });
+    areaGroupMembers.set(groupIndex, members);
+  }
+  for (const decoration of chart.areaGroupDecorations ?? []) {
+    if (!decoration.dropLines || !applyDecorationLineStyle(ctx, decoration.dropLines, ptToPx)) {
+      continue;
+    }
+    const members = areaGroupMembers.get(decoration.groupIndex) ?? [];
+    for (const member of members) {
+      const yOf = yMapFor(member.series);
+      for (let categoryIndex = 0; categoryIndex < n; categoryIndex++) {
+        if (member.series.values[categoryIndex] == null) continue;
+        const pointY = yOf(plottedAreaValue(member.areaIndex, categoryIndex));
+        ctx.beginPath();
+        ctx.moveTo(toX(categoryIndex), categoryAxisY);
+        ctx.lineTo(toX(categoryIndex), pointY);
+        ctx.stroke();
+      }
+    }
+  }
+
   // Markers, error bars, and per-point data labels for area series. Drawn in a
   // SEPARATE forward pass (after all fills) so the fill loop above stays
   // byte-identical, and each block fires ONLY for series carrying the relevant
@@ -6430,20 +6479,12 @@ function renderAreaChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Ch
     // Top of each series' band per category (stacked); the raw value otherwise.
     // Rebuilt independently of the fill loop's mutated stackBase. The ordered
     // series sequence stacks forward, so band si reaches Σ_{k=0..si}.
-    const topValue = (areaIndex: number, ci: number): number => {
-      if (stacked) {
-        let sum = 0;
-        for (let k = 0; k <= areaIndex; k++) sum += stackedValue(k, ci);
-        return sum;
-      }
-      return areaSeries[areaIndex].series.values[ci] ?? 0;
-    };
     for (let areaIndex = 0; areaIndex < areaSeries.length; areaIndex++) {
       const { series: s, chartIndex } = areaSeries[areaIndex];
       const pointOverrides = indexPointOverrides(s.dataPointOverrides);
       const color = chartColor(chartIndex, s);
       const yOf = yMapFor(s);
-      const plottedOf = (ci: number): number => topValue(areaIndex, ci);
+      const plottedOf = (ci: number): number => plottedAreaValue(areaIndex, ci);
       // Error bars first (markers overlay their tips).
       for (const eb of s.errBars ?? []) {
         drawCategoryErrorBars(ctx, s, eb, n, toX, yOf, plottedOf, color);

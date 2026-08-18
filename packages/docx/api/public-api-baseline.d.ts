@@ -232,6 +232,10 @@ interface ChartLineGroupDecorations {
     hiLowLines?: ChartDecorationLineStyle | null;
     upDownBars?: ChartStockUpDownBarStyle | null;
 }
+interface ChartAreaGroupDecorations {
+    groupIndex: number;
+    dropLines?: ChartDecorationLineStyle | null;
+}
 export interface ChartManualLayout {
     xMode?: string;
     yMode?: string;
@@ -385,6 +389,7 @@ export interface ChartModel {
     valAxisTickLabelPos?: string | null;
     catAxisLabelRotation?: number | null;
     lineGroupDecorations?: ChartLineGroupDecorations[] | null;
+    areaGroupDecorations?: ChartAreaGroupDecorations[] | null;
     stockHiLowLines?: boolean | null;
     stockHiLowLineColor?: string | null;
     stockUpDownBars?: boolean | null;
@@ -473,6 +478,7 @@ export interface ChartSeries {
     labelColor?: string | null;
     seriesType?: string | null;
     lineGroupIndex?: number | null;
+    areaGroupIndex?: number | null;
     barGroupIndex?: number | null;
     barGroupDirection?: 'bar' | 'col' | string | null;
     barGroupGrouping?: 'standard' | 'clustered' | 'stacked' | 'percentStacked' | string | null;

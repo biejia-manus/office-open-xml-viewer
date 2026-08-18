@@ -9500,6 +9500,106 @@ describe('classic line-chart group decorations', () => {
   });
 });
 
+describe('classic area-chart group drop lines', () => {
+  it('draws authored drop lines from each plotted area point to the category axis', () => {
+    const rec = segRecordingCtx();
+    const model = baseModel({
+      chartType: 'area',
+      categories: ['A', 'B', 'C'],
+      valMin: 0,
+      valMax: 30,
+      valAxisMajorGridlines: false,
+      series: [series({ name: 'Area', values: [10, 20, 15], lineColor: '4472C4' })],
+    });
+    const extended = model as ChartModel & {
+      areaGroupDecorations?: Array<{
+        groupIndex: number;
+        dropLines?: { color?: string | null; widthEmu?: number | null } | null;
+      }>;
+    };
+    extended.areaGroupDecorations = [{
+      groupIndex: 0,
+      dropLines: { color: '123456', widthEmu: 12700 },
+    }];
+    (extended.series[0] as ChartSeries & { areaGroupIndex?: number | null }).areaGroupIndex = 0;
+
+    renderChart(rec.ctx, extended, RECT, 1);
+
+    const dropLines = rec.segs.filter(segment =>
+      segment.ss === '#123456'
+      && Math.abs(segment.x1 - segment.x0) < 0.01
+      && Math.abs(segment.y1 - segment.y0) > 1
+    );
+    expect(dropLines).toHaveLength(3);
+    expect(new Set(dropLines.map(line => line.y0.toFixed(6))).size).toBe(1);
+  });
+
+  it('uses the cumulative plotted value for percent and stacked area groups', () => {
+    const rec = segRecordingCtx();
+    const model = baseModel({
+      chartType: 'stackedArea',
+      categories: ['A'],
+      valMin: 0,
+      valMax: 30,
+      valAxisMajorGridlines: true,
+      valAxisMajorUnit: 30,
+      series: [
+        series({ name: 'First', values: [10], lineColor: '4472C4' }),
+        series({ name: 'Second', values: [20], lineColor: 'ED7D31' }),
+      ],
+    });
+    const extended = model as ChartModel & {
+      areaGroupDecorations?: Array<{
+        groupIndex: number;
+        dropLines?: { color?: string | null; widthEmu?: number | null } | null;
+      }>;
+    };
+    extended.areaGroupDecorations = [{ groupIndex: 0, dropLines: { color: '123456' } }];
+    for (const item of extended.series) {
+      (item as ChartSeries & { areaGroupIndex?: number | null }).areaGroupIndex = 0;
+    }
+
+    renderChart(rec.ctx, extended, RECT, 1);
+
+    const dropLines = rec.segs.filter(segment => segment.ss === '#123456');
+    expect(dropLines).toHaveLength(2);
+    const topGridlineY = Math.min(
+      ...rec.segs
+        .filter(segment => Math.abs(segment.y1 - segment.y0) < 0.01
+          && Math.abs(segment.x1 - segment.x0) > 100)
+        .map(segment => segment.y0),
+    );
+    expect(Math.min(dropLines[0].y1, dropLines[1].y1)).toBeCloseTo(topGridlineY, 6);
+  });
+
+  it('starts drop lines at an explicitly crossed category axis', () => {
+    const render = (crossesAt: number): Seg[] => {
+      const rec = segRecordingCtx();
+      const model = baseModel({
+        chartType: 'area', categories: ['A', 'B'], valMin: 0, valMax: 30,
+        catAxisCrossesAt: crossesAt, valAxisMajorGridlines: false,
+        series: [series({ name: 'Area', values: [10, 20] })],
+      });
+      const extended = model as ChartModel & {
+        areaGroupDecorations?: Array<{
+          groupIndex: number;
+          dropLines?: { color?: string | null } | null;
+        }>;
+      };
+      extended.areaGroupDecorations = [{ groupIndex: 0, dropLines: { color: '123456' } }];
+      (extended.series[0] as ChartSeries & { areaGroupIndex?: number | null }).areaGroupIndex = 0;
+      renderChart(rec.ctx, extended, RECT, 1);
+      return rec.segs.filter(segment => segment.ss === '#123456');
+    };
+
+    const atZero = render(0);
+    const atTen = render(10);
+    expect(atZero).toHaveLength(2);
+    expect(atTen).toHaveLength(2);
+    expect(atTen[0].y0).toBeLessThan(atZero[0].y0);
+  });
+});
+
 describe('CH13 — stock chart (high/low/close)', () => {
   // High/Low/Close over three dates. Value axis 0..70 so the plot geometry is
   // easy to reason about.

@@ -1,8 +1,25 @@
 # Chart support matrix
 
-This document is the authoritative implementation backlog for DrawingML charts.
-It complements the public feature summary: a chart family can be generally
-available while individual authored properties remain partial.
+This document is a summarized implementation view for DrawingML charts. The
+specification-derived source of truth is
+[#1276](https://github.com/yukiyokotani/office-open-xml-viewer/issues/1276).
+A chart family can be generally available while individual authored properties
+remain partial; the issue therefore tracks the finer-grained audit and work
+items that are intentionally collapsed here.
+
+## Inventory method
+
+The audit starts from the Strict and Transitional `dml-chart.xsd` contracts in
+ECMA-376, then follows every referenced chart type and group into the shared
+parser, wire model, and renderer. DrawingML paint/text contracts, MS-ODRAWXML
+ChartEx and linked style parts, extension-list contracts, and host package
+relationships are audited as separate workstreams. Office-produced output is
+used only to establish a bounded compatibility rule where the specification
+leaves behavior application-defined.
+
+The matrix is not considered exhaustive until every specification workstream
+in #1276 is classified. New implementation findings must be recorded in that
+issue before this summary is promoted to `Supported`.
 
 ## Status and completion criteria
 
@@ -39,7 +56,7 @@ observed input boundary is recorded in
 | C-LINE-005 | Multiple `lineChart` groups in one plot area | Yes | Yes | Partial | Partial | Decoration ownership is retained and consumed; other group-level line properties still require individual provenance rows. |
 | C-LINE-006 | Group-level `marker` and `smooth` defaults | Yes | Yes | Yes | Supported | Group defaults are retained; an explicit series-level marker or smooth value remains authoritative. |
 | C-AREA-001 | `areaChart` standard, stacked, percent-stacked areas | Yes | Yes | Yes | Supported | Series fill, labels, axes, and stacking are shared across hosts. |
-| C-AREA-002 | `areaChart/dropLines` | No | No | No | Missing | Valid in `EG_AreaChartShared`. |
+| C-AREA-002 | `areaChart/dropLines` | Yes | Yes | Yes | Partial | `EG_AreaChartShared` ownership, direct line paint, stacked cumulative points, and explicit category-axis crossings are implemented. Office-reference paint ordering still needs a focused fidelity fixture. |
 | C-BAR-001 | `barChart` direction, grouping, overlap, and gap | Yes | Yes | Yes | Supported | Each bar group retains its own provenance and geometry. |
 | C-BAR-002 | `barChart/serLines` | No | No | No | Missing | Series connector lines are separate from error bars and trendlines. |
 | C-STOCK-001 | Stock high-low lines and up/down bars | Yes | Yes | Yes | Partial | High-low lines and up/down bars render; stock `dropLines` is missing. |
@@ -101,7 +118,8 @@ The shared Chart Style parser currently resolves the following roles directly:
 
 ## Maintenance rules
 
-- Update this matrix in the same pull request that changes support status.
+- Update #1276 and this summary in the same pull request that changes support
+  status.
 - Do not mark a row Supported from a single screenshot or sample-specific
   adjustment.
 - Keep self-VRT and Office-fidelity validation separate: self-VRT detects

@@ -567,6 +567,10 @@ pub struct ChartModel {
     /// prevents combo charts or multiple line groups from sharing decorations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_group_decorations: Option<Vec<ChartLineGroupDecorations>>,
+    /// Group-owned drop lines for each classic `<c:areaChart>` /
+    /// `<c:area3DChart>` in plot-area document order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area_group_decorations: Option<Vec<ChartAreaGroupDecorations>>,
     // ── Stock chart (CH13, §21.2.2.198) ──────────────────────────────────────
     /// `<c:stockChart><c:hiLowLines>` (§21.2.2.80) presence. When `Some(true)`
     /// the stock renderer draws a vertical line spanning each category's
@@ -724,6 +728,14 @@ pub struct ChartLineGroupDecorations {
     pub hi_low_lines: Option<ChartDecorationLineStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub up_down_bars: Option<ChartStockUpDownBarStyle>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartAreaGroupDecorations {
+    pub group_index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_lines: Option<ChartDecorationLineStyle>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -960,6 +972,10 @@ pub struct ChartSeries {
     /// decorations are resolved through `ChartModel::line_group_decorations`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_group_index: Option<u32>,
+    /// Document-order index of the owning classic area-chart group. Group
+    /// drop lines resolve through `ChartModel::area_group_decorations`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area_group_index: Option<u32>,
     /// Document-order index of the owning classic bar-chart group. This keeps
     /// separately authored overlay groups distinct after the shared model
     /// flattens plot-area series.
@@ -4974,6 +4990,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         label_color: None,
         series_type: None,
         line_group_index: None,
+        area_group_index: None,
         bar_group_index: None,
         bar_group_direction: None,
         bar_group_grouping: None,
@@ -5533,6 +5550,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         val_axis_tick_label_pos: None,
         cat_axis_label_rotation: None,
         line_group_decorations: None,
+        area_group_decorations: None,
         stock_hi_low_lines: None,
         stock_hi_low_line_color: None,
         stock_up_down_bars: None,
@@ -7785,6 +7803,27 @@ pub fn parse_chart_part_with_references(
             node.is_element() && matches!(node.tag_name().name(), "lineChart" | "line3DChart")
         })
         .collect();
+    let area_group_nodes: Vec<_> = plot_area
+        .children()
+        .filter(|node| {
+            node.is_element() && matches!(node.tag_name().name(), "areaChart" | "area3DChart")
+        })
+        .collect();
+    let line_group_indices: std::collections::HashMap<_, _> = line_group_nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.id(), index as u32))
+        .collect();
+    let area_group_indices: std::collections::HashMap<_, _> = area_group_nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.id(), index as u32))
+        .collect();
+    let bar_group_indices: std::collections::HashMap<_, _> = bar_group_nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.id(), index as u32))
+        .collect();
     let parsed_line_group_decorations: Vec<_> = line_group_nodes
         .iter()
         .enumerate()
@@ -7807,6 +7846,18 @@ pub fn parse_chart_part_with_references(
         .collect();
     let line_group_decorations =
         (!parsed_line_group_decorations.is_empty()).then_some(parsed_line_group_decorations);
+    let parsed_area_group_decorations: Vec<_> = area_group_nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(group_index, group)| {
+            child(*group, "dropLines").map(|node| ChartAreaGroupDecorations {
+                group_index: group_index as u32,
+                drop_lines: Some(parse_chart_decoration_line_style(node, color_resolver)),
+            })
+        })
+        .collect();
+    let area_group_decorations =
+        (!parsed_area_group_decorations.is_empty()).then_some(parsed_area_group_decorations);
 
     if ser_nodes.is_empty() {
         return None;
@@ -7880,18 +7931,15 @@ pub fn parse_chart_part_with_references(
             let series_type = group
                 .map(|p| p.tag_name().name())
                 .and_then(group_series_type);
-            let line_group_index = group.and_then(|owner| {
-                line_group_nodes
-                    .iter()
-                    .position(|candidate| *candidate == owner)
-                    .map(|index| index as u32)
-            });
-            let bar_group_index = group.and_then(|owner| {
-                bar_group_nodes
-                    .iter()
-                    .position(|candidate| *candidate == owner)
-                    .map(|index| index as u32)
-            });
+            let line_group_index = group
+                .and_then(|owner| line_group_indices.get(&owner.id()))
+                .copied();
+            let area_group_index = group
+                .and_then(|owner| area_group_indices.get(&owner.id()))
+                .copied();
+            let bar_group_index = group
+                .and_then(|owner| bar_group_indices.get(&owner.id()))
+                .copied();
             let (bar_group_gap_width, bar_group_overlap) = group
                 .filter(|owner| matches!(owner.tag_name().name(), "barChart" | "bar3DChart"))
                 .map(extract_bar_gap_overlap)
@@ -8409,6 +8457,7 @@ pub fn parse_chart_part_with_references(
                 label_color,
                 series_type,
                 line_group_index,
+                area_group_index,
                 bar_group_index,
                 bar_group_direction,
                 bar_group_grouping,
@@ -9219,6 +9268,7 @@ pub fn parse_chart_part_with_references(
         val_axis_tick_label_pos,
         cat_axis_label_rotation,
         line_group_decorations,
+        area_group_decorations,
         stock_hi_low_lines,
         stock_hi_low_line_color,
         stock_up_down_bars,
@@ -9349,6 +9399,7 @@ mod tests {
                 label_color: None,
                 series_type: None,
                 line_group_index: None,
+                area_group_index: None,
                 bar_group_index: None,
                 bar_group_direction: None,
                 bar_group_grouping: None,
@@ -9509,6 +9560,7 @@ mod tests {
             val_axis_tick_label_pos: None,
             cat_axis_label_rotation: None,
             line_group_decorations: None,
+            area_group_decorations: None,
             stock_hi_low_lines: None,
             stock_hi_low_line_color: None,
             stock_up_down_bars: None,
@@ -15082,6 +15134,38 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(up_down.gap_width_percent, 80.0);
         assert_eq!(up_down.up.fill_color.as_deref(), Some("EEEEEE"));
         assert_eq!(up_down.down.fill_color.as_deref(), Some("333333"));
+    }
+
+    #[test]
+    fn parse_chart_part_preserves_area_group_drop_lines_and_ownership() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}">
+              <c:chart><c:plotArea><c:areaChart>
+                <c:grouping val="standard"/>
+                <c:ser><c:idx val="0"/><c:order val="0"/>
+                  <c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt></c:strLit></c:cat>
+                  <c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>20</c:v></c:pt></c:numLit></c:val>
+                </c:ser>
+                <c:dropLines><c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="123456"/></a:solidFill></a:ln></c:spPr></c:dropLines>
+                <c:axId val="1"/><c:axId val="2"/>
+              </c:areaChart></c:plotArea></c:chart>
+            </c:chartSpace>"#,
+        );
+        let document = chart_space_of(&xml);
+        let model =
+            parse_chart_part(document.root_element(), &FixtureResolver).expect("area chart parses");
+        let wire = serde_json::to_value(model).expect("serializes");
+
+        assert_eq!(wire["series"][0]["areaGroupIndex"], 0);
+        assert_eq!(wire["areaGroupDecorations"][0]["groupIndex"], 0);
+        assert_eq!(
+            wire["areaGroupDecorations"][0]["dropLines"]["color"],
+            "123456"
+        );
+        assert_eq!(
+            wire["areaGroupDecorations"][0]["dropLines"]["widthEmu"],
+            12700
+        );
     }
 
     #[test]
