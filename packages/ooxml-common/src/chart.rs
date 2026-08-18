@@ -265,6 +265,12 @@ pub struct ChartModel {
     /// by `chart_bg` for wire compatibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart_fill: Option<ChartStyleFill>,
+    /// Explicit chart-area `noFill`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_fill_hidden: Option<bool>,
+    /// A direct chart-area fill paint was authored, even when unresolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_fill_paint_authored: Option<bool>,
     /// `<c:chartSpace><c:roundedCorners>` (§21.2.2.159). A bare CT_Boolean is
     /// true; omission is preserved as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3625,21 +3631,6 @@ pub fn extract_chart_space_rounded_corners(root: Node) -> Option<bool> {
     })
 }
 
-/// Preserve structured non-solid chart-space fills through the same shared
-/// DrawingML gradient/pattern grammar used by Chart Style and ChartEx paint.
-/// Solid/noFill retain the established `chart_bg` wire representation.
-fn extract_chart_space_structured_fill(
-    root: Node,
-    resolver: &dyn ColorResolver,
-) -> Option<ChartStyleFill> {
-    let shape = child(root, "spPr")?;
-    match parse_chart_style_paint(shape, resolver, None) {
-        Some(ChartStylePaint::Fill(Some(fill @ ChartStyleFill::Gradient { .. })))
-        | Some(ChartStylePaint::Fill(Some(fill @ ChartStyleFill::Pattern { .. }))) => Some(fill),
-        _ => None,
-    }
-}
-
 pub fn extract_chart_space_border(chart_space_root: Node) -> (Option<String>, Option<u32>) {
     let Some(ln) = child(chart_space_root, "spPr").and_then(|sp| child(sp, "ln")) else {
         return (None, None);
@@ -5816,6 +5807,15 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         .and_then(|n| attr(&n, "gapWidth"))
         .and_then(|v| v.parse::<f64>().ok())
         .map(|frac| (frac * 100.0).round() as i32);
+    let chart_space_sp_pr = root
+        .children()
+        .find(|node| node.is_element() && node.tag_name().name() == "spPr");
+    let chart_fill_style = extract_direct_shape_fill(chart_space_sp_pr, resolver);
+    let chart_bg = if chart_fill_style.paint_authored == Some(true) {
+        chart_fill_style.color.clone()
+    } else {
+        resolver.default_chart_bg()
+    };
 
     Some(ChartModel {
         chart_type,
@@ -5841,20 +5841,10 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         plot_area_fill: None,
         plot_area_fill_hidden: None,
         plot_area_fill_paint_authored: None,
-        chart_bg: {
-            let sp_pr = root
-                .children()
-                .find(|node| node.is_element() && node.tag_name().name() == "spPr");
-            match sp_pr {
-                Some(shape) if child(shape, "noFill").is_some() => None,
-                Some(shape) => match child(shape, "solidFill") {
-                    Some(fill) => resolver.resolve_solid_fill(fill),
-                    None => resolver.default_chart_bg(),
-                },
-                None => resolver.default_chart_bg(),
-            }
-        },
-        chart_fill: None,
+        chart_bg,
+        chart_fill: chart_fill_style.fill,
+        chart_fill_hidden: chart_fill_style.hidden,
+        chart_fill_paint_authored: chart_fill_style.paint_authored,
         rounded_corners: None,
         plot_visible_only: None,
         show_legend,
@@ -9228,19 +9218,18 @@ pub fn parse_chart_part_with_references_and_style_parts(
     let chart_sp_pr = root
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "spPr");
-    let chart_bg = match chart_sp_pr {
-        Some(sp) if child(sp, "noFill").is_some() => None,
-        Some(sp) => match child(sp, "solidFill") {
-            Some(fill) => color_resolver.resolve_solid_fill(fill),
-            // `CT_ShapeProperties` carries a fill *choice*. Merely authoring
-            // another property (commonly `<a:ln><a:noFill/></a:ln>`) does not
-            // mean that the chart-area fill itself is `noFill`; retain the
-            // host application's default until a fill choice overrides it.
-            None => color_resolver.default_chart_bg(),
-        },
-        None => color_resolver.default_chart_bg(),
+    let chart_fill_style = extract_direct_shape_fill(chart_sp_pr, color_resolver);
+    // `CT_ShapeProperties` carries a fill choice. Merely authoring another
+    // property (commonly `<a:ln><a:noFill/></a:ln>`) does not override the
+    // host application's default chart-area fill. A direct but unsupported
+    // paint is still authored and therefore must not fall back to that default
+    // or to a linked Chart Style paint.
+    let chart_bg = if chart_fill_style.paint_authored == Some(true) {
+        chart_fill_style.color
+    } else {
+        color_resolver.default_chart_bg()
     };
-    let chart_fill = extract_chart_space_structured_fill(root, color_resolver);
+    let chart_fill = chart_fill_style.fill;
     let rounded_corners = extract_chart_space_rounded_corners(root);
 
     // <c:legend> + <c:legendPos val> — shared helper.
@@ -9832,6 +9821,8 @@ pub fn parse_chart_part_with_references_and_style_parts(
         plot_area_fill_paint_authored: plot_area_fill_style.paint_authored,
         chart_bg,
         chart_fill,
+        chart_fill_hidden: chart_fill_style.hidden,
+        chart_fill_paint_authored: chart_fill_style.paint_authored,
         rounded_corners,
         plot_visible_only,
         show_legend,
@@ -10159,6 +10150,8 @@ mod tests {
             plot_area_fill_paint_authored: None,
             chart_bg: Some("FFFFFF".to_string()),
             chart_fill: None,
+            chart_fill_hidden: None,
+            chart_fill_paint_authored: None,
             rounded_corners: None,
             plot_visible_only: None,
             show_legend: false,
@@ -11321,7 +11314,7 @@ Subtitle</a:t></a:r></a:p>
             r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:spPr><a:gradFill rotWithShape="0"><a:gsLst><a:gs pos="0"><a:srgbClr val="112233"/></a:gs><a:gs pos="100000"><a:srgbClr val="AABBCC"/></a:gs></a:gsLst><a:lin ang="2700000" scaled="1"/></a:gradFill></c:spPr></c:chartSpace>"#,
         );
         assert!(matches!(
-            extract_chart_space_structured_fill(gradient.root_element(), &StubResolver),
+            extract_direct_shape_fill(child(gradient.root_element(), "spPr"), &StubResolver).fill,
             Some(ChartStyleFill::Gradient {
                 angle,
                 rot_with_shape: Some(false),
@@ -11333,7 +11326,7 @@ Subtitle</a:t></a:r></a:p>
             r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:spPr><a:pattFill prst="diagCross"><a:fgClr><a:srgbClr val="112233"/></a:fgClr><a:bgClr><a:srgbClr val="AABBCC"/></a:bgClr></a:pattFill></c:spPr></c:chartSpace>"#,
         );
         assert_eq!(
-            extract_chart_space_structured_fill(pattern.root_element(), &StubResolver),
+            extract_direct_shape_fill(child(pattern.root_element(), "spPr"), &StubResolver).fill,
             Some(ChartStyleFill::Pattern {
                 fg: "112233".to_string(),
                 bg: "AABBCC".to_string(),
@@ -11351,9 +11344,11 @@ Subtitle</a:t></a:r></a:p>
             .expect("classic chart parses");
         assert_eq!(model.rounded_corners, Some(true));
         assert!(matches!(
-            model.chart_fill,
+            model.chart_fill.as_ref(),
             Some(ChartStyleFill::Gradient { .. })
         ));
+        assert_eq!(model.chart_fill_hidden, None);
+        assert_eq!(model.chart_fill_paint_authored, Some(true));
     }
 
     #[test]
@@ -12116,6 +12111,7 @@ Subtitle</a:t></a:r></a:p>
         let parsed = parse_chart_part(doc.root_element(), &WhiteChartFixtureResolver)
             .expect("line-only chart parses");
         assert_eq!(parsed.chart_bg.as_deref(), Some("FFFFFF"));
+        assert_eq!(parsed.chart_fill_paint_authored, None);
 
         // An explicit fill choice remains authoritative.
         let no_fill = chart_xml("<c:spPr><a:noFill/></c:spPr>");
@@ -12123,6 +12119,8 @@ Subtitle</a:t></a:r></a:p>
         let parsed = parse_chart_part(doc.root_element(), &WhiteChartFixtureResolver)
             .expect("noFill chart parses");
         assert_eq!(parsed.chart_bg, None);
+        assert_eq!(parsed.chart_fill_hidden, Some(true));
+        assert_eq!(parsed.chart_fill_paint_authored, Some(true));
     }
 
     #[test]

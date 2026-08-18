@@ -593,6 +593,10 @@ export interface ChartModel {
    *  the legacy `chartBg` representation; gradient/pattern use the shared
    *  DrawingML fill model. */
   chartFill?: Fill | null;
+  /** Explicit chart-area `noFill`; prevents host-default or linked fallback. */
+  chartFillHidden?: boolean | null;
+  /** A direct chart-area fill paint was authored, even when unresolved. */
+  chartFillPaintAuthored?: boolean | null;
   /** `<c:chartSpace><c:roundedCorners>`; a bare element is true. Omission is
    *  preserved and renders the ordinary rectangular chart area. */
   roundedCorners?: boolean | null;

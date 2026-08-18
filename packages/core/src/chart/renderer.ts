@@ -5096,6 +5096,33 @@ function chartStyleRolePlotArea(chart: ChartModel): ChartModel {
   return { ...chart, plotAreaFill, plotAreaBg, plotAreaFillHidden };
 }
 
+function chartStyleRoleChartArea(chart: ChartModel): ChartModel {
+  const linked = chart.chartStyleRoles?.chartArea;
+  if (!linked) return chart;
+  let chartFill = chart.chartFill;
+  let chartBg = chart.chartBg;
+  let chartFillHidden = chart.chartFillHidden;
+  const directPaint = chart.chartFillPaintAuthored === true
+    || chartFill != null || chartFillHidden === true;
+  if (!directPaint && linked.fillNoStyle !== true) {
+    if (linked.fillHidden === true) {
+      chartFill = null;
+      chartBg = null;
+      chartFillHidden = true;
+    } else {
+      chartFill = chartExStyleFillPaint(linked, 0);
+      chartBg = chartFill == null
+        ? chartExStyleColor(chart, linked, 'fill', 0, 1)
+        : null;
+      chartFillHidden = null;
+    }
+  }
+  if (chartFill === chart.chartFill
+    && chartBg === chart.chartBg
+    && chartFillHidden === chart.chartFillHidden) return chart;
+  return { ...chart, chartFill, chartBg, chartFillHidden };
+}
+
 function paintPlotAreaFill(
   ctx: CanvasRenderingContext2D,
   chart: ChartModel,
@@ -5130,6 +5157,7 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     && !chart.chartStyleRoles?.dataPointMarker
     && !chart.chartStyleRoles?.legend
     && !chart.chartStyleRoles?.plotArea
+    && !chart.chartStyleRoles?.chartArea
     && chart.chartStyleMarkerSizePt == null
     && chart.chartStyleMarkerSymbol == null) {
     return chart;
@@ -5273,7 +5301,7 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     valAxisLineWidthEmu: valAxisLine.widthEmu,
     valAxisLineHidden: valAxisLine.hidden === true,
   } : chart;
-  return chartStyleRoleLegend(chartStyleRolePlotArea(effective));
+  return chartStyleRoleLegend(chartStyleRolePlotArea(chartStyleRoleChartArea(effective)));
 }
 
 function drawUpDownBars(
@@ -13813,7 +13841,9 @@ export function renderChart(
     }
     // Only fill the outer chartSpace when chartBg is set; a null means noFill
     // (transparent) per OOXML, so the underlying slide/sheet shows through.
-    if (chart.chartFill) {
+    if (chart.chartFillHidden === true) {
+      // Direct or linked `noFill`: retain the host surface beneath the chart.
+    } else if (chart.chartFill) {
       const fill = resolveFill(chart.chartFill, ctx, x, y, w, h, shapeRotationDeg);
       if (fill) ctx.fillStyle = fill;
       if (fill) ctx.fillRect(x, y, w, h);

@@ -397,6 +397,8 @@ export interface ChartModel {
     plotAreaFillPaintAuthored?: boolean | null;
     chartBg: string | null;
     chartFill?: Fill | null;
+    chartFillHidden?: boolean | null;
+    chartFillPaintAuthored?: boolean | null;
     roundedCorners?: boolean | null;
     plotVisibleOnly?: boolean | null;
     showLegend: boolean;

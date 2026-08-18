@@ -378,6 +378,39 @@ describe('chart-space background', () => {
       x: 0, y: 0, w: 640, h: 360, fs: 'rgba(17,34,51,1)',
     });
   });
+
+  it('lets linked chart-area paint replace only an unauthored host default', () => {
+    const chart = baseModel({
+      chartBg: 'FFFFFF',
+      chartStyleRoles: {
+        chartArea: {
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: [
+              { position: 0, color: '112233' },
+              { position: 1, color: 'DDEEFF' },
+            ],
+          }],
+        },
+      },
+    });
+    const linked = recordingCtx();
+    renderChart(linked.ctx, chart, RECT, 1);
+    expect(linked.gradients).toHaveLength(1);
+    expect(linked.rects[0]).toMatchObject({
+      x: 0, y: 0, w: 640, h: 360, fs: '[object Object]',
+    });
+
+    const directNoFill = recordingCtx();
+    renderChart(directNoFill.ctx, {
+      ...chart,
+      chartBg: null,
+      chartFillHidden: true,
+      chartFillPaintAuthored: true,
+    }, RECT, 1);
+    expect(directNoFill.gradients).toHaveLength(0);
+    expect(directNoFill.rects).toHaveLength(0);
+  });
 });
 
 describe('rich chart titles', () => {
