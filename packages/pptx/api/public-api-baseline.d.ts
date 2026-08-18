@@ -191,12 +191,16 @@ export interface ChartExElementStyle {
     fillPaintAuthored?: boolean | null;
     fillNoStyle?: boolean | null;
     lineColors?: Array<string | null> | null;
+    linePaints?: Array<SolidFill | GradientFill | PatternFill | null> | null;
     lineWidthEmu?: number | null;
     lineHidden?: boolean | null;
     lineNoStyle?: boolean | null;
     lineDash?: string | null;
+    lineDashAuthored?: boolean | null;
+    lineCustomDash?: ChartLineDashSegment[] | null;
     lineCap?: string | null;
     lineJoin?: string | null;
+    lineCompound?: string | null;
     fillColorIndex?: number | null;
     lineColorIndex?: number | null;
 }
@@ -264,6 +268,7 @@ export interface ChartLegendEntryOverride {
     fontSizeHpt?: number | null;
     fontBold?: boolean | null;
 }
+export type ChartLineDashSegment = DrawingMLCustomDashSegment;
 export interface ChartLineGroupDecorations {
     groupIndex: number;
     dropLines?: ChartDecorationLineStyle | null;
@@ -306,10 +311,14 @@ export interface ChartModel {
     plotAreaFillHidden?: boolean | null;
     plotAreaFillPaintAuthored?: boolean | null;
     plotAreaLineColor?: string | null;
+    plotAreaLineFill?: SolidFill | GradientFill | PatternFill | null;
     plotAreaLineWidthEmu?: number | null;
     plotAreaLineDash?: string | null;
+    plotAreaLineDashAuthored?: boolean | null;
+    plotAreaLineCustomDash?: ChartLineDashSegment[] | null;
     plotAreaLineCap?: string | null;
     plotAreaLineJoin?: string | null;
+    plotAreaLineCompound?: string | null;
     plotAreaLineHidden?: boolean | null;
     plotAreaLinePaintAuthored?: boolean | null;
     chartBg: string | null;
@@ -380,19 +389,27 @@ export interface ChartModel {
     legendFillHidden?: boolean | null;
     legendFillPaintAuthored?: boolean | null;
     legendLineColor?: string | null;
+    legendLineFill?: SolidFill | GradientFill | PatternFill | null;
     legendLineWidthEmu?: number | null;
     legendLineDash?: string | null;
+    legendLineDashAuthored?: boolean | null;
+    legendLineCustomDash?: ChartLineDashSegment[] | null;
     legendLineCap?: string | null;
     legendLineJoin?: string | null;
+    legendLineCompound?: string | null;
     legendLineHidden?: boolean | null;
     legendLinePaintAuthored?: boolean | null;
     themeMajorFontLatin?: string | null;
     themeMinorFontLatin?: string | null;
     chartBorderColor?: string | null;
+    chartBorderLineFill?: SolidFill | GradientFill | PatternFill | null;
     chartBorderWidthEmu?: number | null;
     chartBorderDash?: string | null;
+    chartBorderDashAuthored?: boolean | null;
+    chartBorderCustomDash?: ChartLineDashSegment[] | null;
     chartBorderCap?: string | null;
     chartBorderJoin?: string | null;
+    chartBorderCompound?: string | null;
     chartBorderHidden?: boolean | null;
     chartBorderPaintAuthored?: boolean | null;
     catAxisCrosses?: string | null;
@@ -510,7 +527,7 @@ export interface ChartRect {
     h: number;
 }
 export interface ChartRegionMapRenderer {
-    render(ctx: CanvasRenderingContext2D, chart: ChartModel, rect: ChartRect, ptToPx: number): boolean;
+    render(ctx: CanvasRenderingContext2D, chart: ChartModel, rect: ChartRect, ptToPx: number, shapeRotationDeg?: number): boolean;
 }
 export interface ChartSeries {
     name: string;
@@ -719,6 +736,10 @@ export interface DimOptions {
     color: string;
     opacity: number;
 }
+interface DrawingMLCustomDashSegment {
+    dash: number;
+    space: number;
+}
 export interface Duotone {
     clr1: string;
     clr2: string;
@@ -797,8 +818,8 @@ export interface LegendManualLayout {
     hMode?: string;
     x: number;
     y: number;
-    w: number;
-    h: number;
+    w?: number;
+    h?: number;
 }
 export interface LightRig {
     rig: string;
@@ -1566,10 +1587,7 @@ export interface Stroke {
         fillType: 'none';
     }>;
     dashStyle?: string;
-    customDash?: ReadonlyArray<{
-        dash: number;
-        space: number;
-    }>;
+    customDash?: ReadonlyArray<DrawingMLCustomDashSegment>;
     lineCap?: 'butt' | 'round' | 'square';
     lineJoin?: 'round' | 'bevel' | 'miter';
     miterLimit?: number;

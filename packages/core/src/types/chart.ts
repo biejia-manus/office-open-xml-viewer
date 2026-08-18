@@ -6,7 +6,13 @@
 // truth for chart rendering across PPTX / XLSX (and future DrawingML charts
 // in DOCX).
 
-import type { Fill, GradientFill, PatternFill, SolidFill } from './common';
+import type {
+  DrawingMLCustomDashSegment,
+  Fill,
+  GradientFill,
+  PatternFill,
+  SolidFill,
+} from './common';
 
 export interface ChartSeries {
   name: string;
@@ -471,6 +477,9 @@ export type ChartType =
   | 'boxWhisker' | 'sunburst' | 'treemap'
   | string;
 
+/** Backward-compatible chart name for the shared DrawingML dash atom. */
+export type ChartLineDashSegment = DrawingMLCustomDashSegment;
+
 /** Effective paint for one role in an Office 2013+ Chart Style part. */
 export interface ChartExElementStyle {
   /** Linked Chart Style text defaults (`fontRef` + `defRPr`). */
@@ -494,13 +503,22 @@ export interface ChartExElementStyle {
   fillNoStyle?: boolean | null;
   /** Per-color-style-index outlines after `phClr` substitution/transforms. */
   lineColors?: Array<string | null> | null;
+  /** Structured outline paints after `phClr` substitution/transforms. */
+  linePaints?: Array<SolidFill | GradientFill | PatternFill | null> | null;
   lineWidthEmu?: number | null;
   lineHidden?: boolean | null;
   /** Linked Chart Style uses `NoStyle`, not an authored no-fill outline. */
   lineNoStyle?: boolean | null;
   lineDash?: string | null;
+  /** A preset/custom dash choice was authored, even if its value is absent. */
+  lineDashAuthored?: boolean | null;
+  /** DrawingML `<a:custDash>` atoms; presence overrides `lineDash`. */
+  lineCustomDash?: ChartLineDashSegment[] | null;
   lineCap?: string | null;
   lineJoin?: string | null;
+  /** Parsed compound-line token. Retained until bounded Office evidence can
+   * establish chart-frame rail geometry; current frame painters do not guess. */
+  lineCompound?: string | null;
   /** Fixed zero-based Chart Colors index; absent means relative (`auto`). */
   fillColorIndex?: number | null;
   /** Fixed zero-based Chart Colors index; absent means relative (`auto`). */
@@ -609,10 +627,14 @@ export interface ChartModel {
   plotAreaFillPaintAuthored?: boolean | null;
   /** Direct plot-area outline paint and width. */
   plotAreaLineColor?: string | null;
+  plotAreaLineFill?: SolidFill | GradientFill | PatternFill | null;
   plotAreaLineWidthEmu?: number | null;
   plotAreaLineDash?: string | null;
+  plotAreaLineDashAuthored?: boolean | null;
+  plotAreaLineCustomDash?: ChartLineDashSegment[] | null;
   plotAreaLineCap?: string | null;
   plotAreaLineJoin?: string | null;
+  plotAreaLineCompound?: string | null;
   /** Explicit plot-area outline `noFill`. */
   plotAreaLineHidden?: boolean | null;
   /** A direct plot-area line paint was authored, even when unresolved. */
@@ -812,11 +834,15 @@ export interface ChartModel {
   legendFillPaintAuthored?: boolean | null;
   /** `<c:legend><c:spPr><a:ln>` explicit frame stroke (hex without '#'). */
   legendLineColor?: string | null;
+  legendLineFill?: SolidFill | GradientFill | PatternFill | null;
   /** `<c:legend><c:spPr><a:ln@w>` frame stroke width in EMU. */
   legendLineWidthEmu?: number | null;
   legendLineDash?: string | null;
+  legendLineDashAuthored?: boolean | null;
+  legendLineCustomDash?: ChartLineDashSegment[] | null;
   legendLineCap?: string | null;
   legendLineJoin?: string | null;
+  legendLineCompound?: string | null;
   /** Explicit `<c:legend><c:spPr><a:ln><a:noFill/>`; prevents linked fallback. */
   legendLineHidden?: boolean | null;
   /** A direct legend line paint was authored, even when its color could not be resolved. */
@@ -837,12 +863,16 @@ export interface ChartModel {
    *  XML explicitly declares a paintable line; null otherwise (no default
    *  border is drawn). */
   chartBorderColor?: string | null;
+  chartBorderLineFill?: SolidFill | GradientFill | PatternFill | null;
   /** `<c:chartSpace><c:spPr><a:ln@w>` border width in EMU. null = 1px hairline
    *  when a color is present. */
   chartBorderWidthEmu?: number | null;
   chartBorderDash?: string | null;
+  chartBorderDashAuthored?: boolean | null;
+  chartBorderCustomDash?: ChartLineDashSegment[] | null;
   chartBorderCap?: string | null;
   chartBorderJoin?: string | null;
+  chartBorderCompound?: string | null;
   /** Explicit chart-area border `noFill`. */
   chartBorderHidden?: boolean | null;
   /** A direct chart-area line paint was authored, even when unresolved. */
@@ -1666,8 +1696,8 @@ export interface LegendManualLayout {
   /** Fractions of chart space width/height. */
   x: number;
   y: number;
-  w: number;
-  h: number;
+  w?: number;
+  h?: number;
 }
 
 /** Classic-chart `<c:legendEntry>` (§21.2.2.94 / CT_LegendEntry). */

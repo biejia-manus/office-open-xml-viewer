@@ -396,7 +396,8 @@ describe('chart-space background', () => {
           }],
           lineColors: ['445566'],
           lineWidthEmu: 9525,
-          lineDash: 'dashDot',
+          lineCustomDash: [{ dash: 1.25, space: 0.75 }],
+          lineCompound: 'dbl',
           lineCap: 'sq',
           lineJoin: 'bevel',
         },
@@ -411,8 +412,13 @@ describe('chart-space background', () => {
     expect(linked.strokeRects).toContainEqual(expect.objectContaining({
       ss: '#445566', lw: 0.75, cap: 'square', join: 'bevel',
     }));
-    expect(linked.strokeRects.find(rect => rect.ss === '#445566')?.dash.length)
-      .toBeGreaterThan(0);
+    expect(linked.strokeRects.find(rect => rect.ss === '#445566')?.dash)
+      .toEqual([0.9375, 0.5625]);
+
+    const directEmptyDash = recordingCtx();
+    renderChart(directEmptyDash.ctx, { ...chart, chartBorderCustomDash: [] }, RECT, 1);
+    expect(directEmptyDash.strokeRects.find(rect => rect.ss === '#445566')?.dash)
+      .toEqual([]);
 
     const directNoFill = recordingCtx();
     renderChart(directNoFill.ctx, {
@@ -2818,7 +2824,8 @@ describe('bar chart authored layout and fills', () => {
           }],
           lineColors: ['808080'],
           lineWidthEmu: 3175,
-          lineDash: 'dashDot',
+          lineCustomDash: [{ dash: 1.25, space: 0.75 }],
+          lineCompound: 'dbl',
           lineCap: 'sq',
           lineJoin: 'bevel',
         },
@@ -2829,7 +2836,7 @@ describe('bar chart authored layout and fills', () => {
     expect(linked.rects).toContainEqual({ x: 64, y: 72, w: 320, h: 108, fs: '[object Object]' });
     expect(linked.strokeRects).toContainEqual({
       x: 64.25, y: 72.25, w: 319.5, h: 107.5,
-      ss: '#808080', lw: 0.5, dash: [3, 1.5, 0.75, 1.5], cap: 'square', join: 'bevel',
+      ss: '#808080', lw: 0.5, dash: [0.625, 0.375], cap: 'square', join: 'bevel',
     });
 
     const directLineGeometry = recordingCtx();
@@ -2842,6 +2849,11 @@ describe('bar chart authored layout and fills', () => {
     expect(directLineGeometry.strokeRects).toContainEqual(expect.objectContaining({
       ss: '#808080', dash: [], cap: 'round', join: 'round',
     }));
+
+    const directEmptyDash = recordingCtx();
+    renderChart(directEmptyDash.ctx, { ...chart, legendLineCustomDash: [] }, RECT, 1);
+    expect(directEmptyDash.strokeRects.find(rect => rect.ss === '#808080')?.dash)
+      .toEqual([]);
 
     const directNoFill = recordingCtx();
     renderChart(directNoFill.ctx, {
@@ -2876,7 +2888,8 @@ describe('bar chart authored layout and fills', () => {
           }],
           lineColors: ['445566'],
           lineWidthEmu: 9525,
-          lineDash: 'dashDot',
+          lineCustomDash: [{ dash: 1.25, space: 0.75 }],
+          lineCompound: 'dbl',
           lineCap: 'sq',
           lineJoin: 'bevel',
         },
@@ -2894,8 +2907,13 @@ describe('bar chart authored layout and fills', () => {
     expect(linked.strokeRects).toContainEqual(expect.objectContaining({
       ss: '#445566', lw: 0.75, cap: 'square', join: 'bevel',
     }));
-    expect(linked.strokeRects.find(rect => rect.ss === '#445566')?.dash.length)
-      .toBeGreaterThan(0);
+    expect(linked.strokeRects.find(rect => rect.ss === '#445566')?.dash)
+      .toEqual([0.9375, 0.5625]);
+
+    const directEmptyDash = recordingCtx();
+    renderChart(directEmptyDash.ctx, { ...chart, plotAreaLineCustomDash: [] }, RECT, 1, 30);
+    expect(directEmptyDash.strokeRects.find(rect => rect.ss === '#445566')?.dash)
+      .toEqual([]);
 
     const directNoFill = recordingCtx();
     renderChart(directNoFill.ctx, {
@@ -2908,6 +2926,102 @@ describe('bar chart authored layout and fills', () => {
     expect(directNoFill.gradients).toHaveLength(0);
     expect(directNoFill.rects).not.toContainEqual(expect.objectContaining({ fs: '[object Object]' }));
     expect(directNoFill.strokeRects).not.toContainEqual(expect.objectContaining({ ss: '#445566' }));
+  });
+
+  it('strokes chart, plot, and legend frames with structured DrawingML line paint', () => {
+    const linePaint = {
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 30,
+      stops: [
+        { position: 0, color: '112233' },
+        { position: 1, color: 'DDEEFF' },
+      ],
+    };
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      series: [series({ values: [1, 2] })],
+      showLegend: true,
+      legendPos: 'r',
+      chartStyleRoles: {
+        chartArea: { linePaints: [linePaint], lineWidthEmu: 9525 },
+        plotArea: { linePaints: [linePaint], lineWidthEmu: 9525 },
+        legend: { linePaints: [linePaint], lineWidthEmu: 9525 },
+      },
+    }), RECT, 1);
+    expect(rec.gradients).toHaveLength(3);
+    expect(rec.strokeRects.filter(rect => rect.ss === '[object Object]')).toHaveLength(3);
+  });
+
+  it('keeps a bare direct preset-dash choice authoritative over linked dash', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A', 'B'], series: [series({ values: [1, 2] })],
+      plotAreaLineColor: '445566',
+      plotAreaLineDashAuthored: true,
+      chartStyleRoles: { plotArea: { lineDash: 'dash' } },
+    }), RECT, 1);
+    expect(rec.strokeRects.find(rect => rect.ss === '#445566')?.dash).toEqual([]);
+  });
+
+  it('honors legend manual-layout x/y when width and height are omitted', () => {
+    const common = baseModel({
+      chartType: 'line', categories: ['A'], series: [series({ values: [1] })],
+      showLegend: true, legendPos: 'r', legendFillColor: '123456',
+    });
+    const automatic = recordingCtx();
+    renderChart(automatic.ctx, common, RECT, 1);
+    const manual = recordingCtx();
+    renderChart(manual.ctx, {
+      ...common,
+      legendManualLayout: {
+        xMode: 'factor', yMode: 'factor',
+        x: 0.1, y: 0.2,
+      },
+    }, RECT, 1);
+    const autoFrame = automatic.rects.find(rect => rect.fs === '#123456');
+    const manualFrame = manual.rects.find(rect => rect.fs === '#123456');
+    expect(autoFrame).toBeDefined();
+    expect(manualFrame).toEqual({
+      ...autoFrame as NonNullable<typeof autoFrame>,
+      x: (autoFrame as NonNullable<typeof autoFrame>).x + RECT.w * 0.1,
+      y: (autoFrame as NonNullable<typeof autoFrame>).y + RECT.h * 0.2,
+    });
+  });
+
+  it.each([
+    ['pie', baseModel({
+      chartType: 'pie', categories: ['A', 'B'], series: [series({ values: [1, 2] })],
+    })],
+    ['radar', baseModel({
+      chartType: 'radar', categories: ['A', 'B', 'C'],
+      series: [series({ values: [1, 2, 3] })],
+    })],
+    ['surface', baseModel({
+      chartType: 'surface', categories: ['X1', 'X2'], valAxisMajorUnit: 1,
+      series: [series({ values: [1, 2] }), series({ values: [2, 3] })],
+    })],
+    ['waterfall', baseModel({
+      chartType: 'waterfall', categories: ['A', 'B'], series: [series({ values: [2, -1] })],
+    })],
+    ['funnel', baseModel({
+      chartType: 'funnel', categories: ['A', 'B'], series: [series({ values: [2, 1] })],
+    })],
+    ['3-D column', baseModel({
+      chartType: 'clusteredBar', categories: ['A', 'B'],
+      series: [series({ values: [1, 2] })],
+      threeD: { rotationX: 15, rotationY: 20, perspective: 30 },
+    })],
+  ] as const)('paints the shared plot-area frame for %s', (_name, source) => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, {
+      ...source,
+      plotAreaBg: '123456',
+      plotAreaFillPaintAuthored: true,
+    }, RECT, 1, 0);
+    expect(rec.rects).toContainEqual(expect.objectContaining({ fs: '#123456' }));
   });
 
   it('renders scatter-series markers and labels over a reversed horizontal category axis', () => {
@@ -5521,6 +5635,29 @@ describe('ChartEx flat layouts dispatch to semantic renderers', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, chartExLegendModel(chartType, { lineHidden: true }), RECT, 1);
     expect(rec.strokeRects.filter(rect => rect.w <= 7 && rect.h <= 7)).toHaveLength(0);
+  });
+
+  it.each([
+    'clusteredColumn', 'histogram', 'waterfall', 'funnel',
+    'boxWhisker', 'sunburst', 'treemap',
+  ])('%s paints the shared plot-area frame behind ChartEx geometry', chartType => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, {
+      ...chartExLegendModel(chartType, null),
+      plotAreaBg: '123456',
+      plotAreaFillPaintAuthored: true,
+      plotAreaManualLayout: {
+        layoutTarget: 'inner',
+        xMode: 'edge', yMode: 'edge', wMode: 'factor', hMode: 'factor',
+        x: 0.2, y: 0.25, w: 0.4, h: 0.35,
+      },
+    }, RECT, 1);
+    const plotFrame = rec.rects.find(rect => rect.fs === '#123456');
+    expect(plotFrame).toBeDefined();
+    expect(plotFrame?.x).toBeCloseTo(128);
+    expect(plotFrame?.y).toBeCloseTo(90);
+    expect(plotFrame?.w).toBeCloseTo(256);
+    expect(plotFrame?.h).toBeCloseTo(126);
   });
 
   it.each([

@@ -58,6 +58,7 @@ export type {
   ChartDisplayUnits,
   ChartDisplayUnitsLabel,
   ChartExElementStyle,
+  ChartLineDashSegment,
   ChartexHistogramBinning,
   ChartexBoxSeries,
   ChartexBoxWhisker,
