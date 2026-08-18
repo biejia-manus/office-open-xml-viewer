@@ -3419,25 +3419,19 @@ impl XlsxArchive {
             .begin_operation("parse")
             .map_err(|error| JsValue::from_str(&error))?;
         let result = (|| -> Result<Vec<u8>, String> {
-            let styles = if self.shared.is_none() {
-                let zip = self.archive.as_mut().expect("container open checked above");
-                let (shared, styles) = WorkbookShared::load_with_styles(zip)?;
-                self.shared = Some(shared);
-                styles
-            } else {
+            let styles = if let Some(shared) = &self.shared {
                 // A sheet cursor may have initialized only the lightweight style
                 // projection. Parse the full style model only when the caller
                 // later asks for the workbook index, and move it directly into
                 // the serialized result.
-                let theme_colors = Rc::clone(
-                    &self
-                        .shared
-                        .as_ref()
-                        .expect("shared loaded above")
-                        .theme_colors,
-                );
+                let theme_colors = Rc::clone(&shared.theme_colors);
                 let zip = self.archive.as_mut().expect("container open checked above");
                 parse_styles(zip, theme_colors.as_ref()).map(|parsed| parsed.styles)
+            } else {
+                let zip = self.archive.as_mut().expect("container open checked above");
+                let (shared, styles) = WorkbookShared::load_with_styles(zip)?;
+                self.shared = Some(shared);
+                styles
             };
             let shared = self.shared.as_ref().expect("shared loaded above");
             let zip = self.archive.as_mut().expect("container open checked above");
