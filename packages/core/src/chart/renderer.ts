@@ -75,6 +75,7 @@ import {
 import { effectiveDataLabelText } from './data-label-content.js';
 import { placeTrendlineLabel } from './trendline-label.js';
 import { paintLegendFrame } from './legend-frame.js';
+import { applyPlotVisibleOnly } from './source-visibility.js';
 import {
   boundDataLabelText,
   fitDataLabelLines,
@@ -13101,6 +13102,7 @@ export function renderChart(
   // caller instead of requiring each call site to remember to do so.
   ctx.save();
   try {
+    chart = applyPlotVisibleOnly(chart);
     const { x, y, w, h } = rect;
     const rounded = chart.roundedCorners === true;
     const cornerRadius = rounded ? CHART_SPACE_CORNER_RADIUS_PT * ptToPx : 0;

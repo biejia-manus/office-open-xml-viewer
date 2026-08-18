@@ -55,6 +55,11 @@ export interface ChartSeries {
   threeDShape?: 'box' | 'cylinder' | 'cone' | 'coneToMax' | 'pyramid' | 'pyramidToMax' | string | null;
   /** Numeric values; null = missing data point. */
   values: (number | null)[];
+  /** Host-resolved visibility provenance for the cells supplying each plotted
+   * value (and X/bubble-size cells for scatter/bubble). `true` means at least
+   * one required source cell is in a hidden row or column. The shared renderer
+   * consumes this only when `ChartModel.plotVisibleOnly` is explicitly true. */
+  sourceHidden?: boolean[] | null;
   /**
    * Per-data-point colors (pie / doughnut). Hex without '#'. null inside the
    * array = use palette for that slice. Omit entirely for non-pie series.
@@ -511,6 +516,10 @@ export interface ChartModel {
   /** Direct chart title element exists; an empty title still reserves its band. */
   titlePresent?: boolean;
   categories: string[];
+  /** Host-resolved visibility of the shared category source, aligned by point
+   * index. Kept separate from the category strings so authored chart caches
+   * remain authoritative while XLSX can still supply row/column visibility. */
+  categorySourceHidden?: boolean[] | null;
   /**
    * `<c:multiLvlStrCache>` category levels, deepest/leaf level first. Sparse
    * outer levels retain empty entries so each non-empty label marks the start
@@ -559,6 +568,9 @@ export interface ChartModel {
   /** `<c:chartSpace><c:roundedCorners>`; a bare element is true. Omission is
    *  preserved and renders the ordinary rectangular chart area. */
   roundedCorners?: boolean | null;
+  /** `<c:chart><c:plotVisOnly>` (§21.2.2.146). A bare element is true; omission
+   * is retained rather than inventing an application default. */
+  plotVisibleOnly?: boolean | null;
   /** True when `<c:legend>` is declared in the chart XML. False = no legend. */
   showLegend: boolean;
   /** Optional category/series table authored below the cartesian plot. */

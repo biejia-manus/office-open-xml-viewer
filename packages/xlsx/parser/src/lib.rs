@@ -639,6 +639,7 @@ fn finalize_projected_sheet(
         sheet_path,
         Some(ChartReferenceContext {
             materialized_rows,
+            materialized_col_hidden: Some(&ws.col_hidden),
             sheet_name: name,
             sheets: &shared.sheets,
             workbook_rels: &rels_doc,
@@ -3701,10 +3702,10 @@ impl XlsxArchive {
                         shared.theme_colors.as_ref(),
                         &active.name,
                     )?;
-                    let current_index = active
-                        .reference_index
-                        .take()
-                        .map(WorksheetCellLookupBuilder::finish);
+                    let current_index = active.reference_index.take().and_then(|mut builder| {
+                        builder.mark_hidden_columns(&parsed.0.col_hidden)?;
+                        Some(builder.finish())
+                    });
                     let zip = self.archive.as_mut().expect("container open checked above");
                     let worksheet = finalize_projected_sheet(
                         zip,

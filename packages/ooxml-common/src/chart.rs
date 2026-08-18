@@ -225,6 +225,10 @@ pub struct ChartModel {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub title_present: bool,
     pub categories: Vec<String>,
+    /// Host-resolved visibility of the shared category reference. Authored
+    /// chart caches remain authoritative for text/value content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_source_hidden: Option<Vec<bool>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category_levels: Option<Vec<Vec<String>>>,
     pub series: Vec<ChartSeries>,
@@ -247,6 +251,10 @@ pub struct ChartModel {
     /// true; omission is preserved as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rounded_corners: Option<bool>,
+    /// `<c:chart><c:plotVisOnly>` (§21.2.2.146). A bare CT_Boolean is true;
+    /// omission remains `None` because the element itself has no schema default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_visible_only: Option<bool>,
     pub show_legend: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_table: Option<ChartDataTable>,
@@ -1000,6 +1008,10 @@ pub struct ChartSeries {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub three_d_shape: Option<String>,
     pub values: Vec<Option<f64>>,
+    /// Host-resolved visibility provenance aligned with `values`. A true slot
+    /// means at least one required source cell is in a hidden row or column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_hidden: Option<Vec<bool>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_point_colors: Option<Vec<Option<String>>>,
     /// `<c:pieChart|doughnutChart><c:ser><c:explosion val>` default pull-out
@@ -5143,6 +5155,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         line_color,
         line_width_emu,
         three_d_shape: None,
+        source_hidden: None,
         data_point_colors: None,
         explosion: None,
         data_label_colors,
@@ -5552,6 +5565,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         title_rich_runs: None,
         title_present: chartex_title_present,
         categories,
+        category_source_hidden: None,
         category_levels: None,
         series,
         // chartEx layouts color by branch/series index, not §21.2.2.227
@@ -5581,6 +5595,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         },
         chart_fill: None,
         rounded_corners: None,
+        plot_visible_only: None,
         show_legend,
         data_table: None,
         cat_axis_cross_between: "between".to_string(),
@@ -7287,6 +7302,14 @@ pub trait ChartReferenceResolver {
     fn resolve_strings(&mut self, formula: &str) -> Option<Vec<String>>;
     fn resolve_numbers(&mut self, formula: &str) -> Option<Vec<Option<f64>>>;
 
+    /// Resolve whether each source cell is in a hidden host row or column.
+    /// The formula's cached chart values remain authoritative; this method
+    /// supplies provenance only, so package-specific lookup stays outside the
+    /// shared DrawingML parser.
+    fn resolve_hidden(&mut self, _formula: &str) -> Option<Vec<bool>> {
+        None
+    }
+
     /// Resolve the source-linked number format of a numeric reference. ChartEx
     /// dimensions frequently omit caches and `<cx:numFmt>` while data labels
     /// remain linked to the first source cell's worksheet number format.
@@ -7368,6 +7391,32 @@ fn collect_number_source(
     reference_formula(container).and_then(|formula| references.resolve_numbers(&formula))
 }
 
+fn collect_source_hidden(
+    ser_node: Node<'_, '_>,
+    child_tag: &str,
+    references: &mut dyn ChartReferenceResolver,
+) -> Option<Vec<bool>> {
+    let container = ser_node
+        .children()
+        .find(|node| node.is_element() && node.tag_name().name() == child_tag)?;
+    reference_formula(container).and_then(|formula| references.resolve_hidden(&formula))
+}
+
+fn merge_source_hidden(target: &mut Option<Vec<bool>>, incoming: Option<Vec<bool>>) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    match target {
+        Some(existing) => {
+            existing.resize(existing.len().max(incoming.len()), false);
+            for (index, hidden) in incoming.into_iter().enumerate() {
+                existing[index] |= hidden;
+            }
+        }
+        None => *target = Some(incoming),
+    }
+}
+
 /// Formula identity for a source that genuinely needs the host resolver.
 /// Authored caches/literals deliberately return `None`: even when their `<f>`
 /// text matches another series, their authored point data remains authoritative.
@@ -7418,6 +7467,7 @@ pub fn parse_chart_part_with_references(
     references: &mut dyn ChartReferenceResolver,
 ) -> Option<ChartModel> {
     let root = chart_root;
+    let plot_visible_only = child(root, "chart").and_then(|chart| bool_child(chart, "plotVisOnly"));
     let legacy_chart_style = child(root, "style")
         .and_then(|style| style.attribute("val"))
         .and_then(|value| value.parse::<u8>().ok())
@@ -8080,6 +8130,7 @@ pub fn parse_chart_part_with_references(
         .or_else(|| collect_string_source(ser_nodes[0], category_tag, references))
         .unwrap_or_default();
     let category_levels = resolved_category_levels.filter(|levels| levels.len() > 1);
+    let category_source_hidden = collect_source_hidden(ser_nodes[0], category_tag, references);
 
     // Map a chart-group element name to the per-series `seriesType` string the
     // renderer dispatches on (mixed bar+line charts key line vs. non-line off
@@ -8254,6 +8305,22 @@ pub fn parse_chart_part_with_references(
             } else {
                 None
             };
+            let mut source_hidden = collect_source_hidden(*ser, val_tag, references);
+            if series_is_scatter_like {
+                merge_source_hidden(
+                    &mut source_hidden,
+                    collect_source_hidden(*ser, own_category_tag, references),
+                );
+            }
+            if group
+                .map(|node| node.tag_name().name() == "bubbleChart")
+                .unwrap_or(false)
+            {
+                merge_source_hidden(
+                    &mut source_hidden,
+                    collect_source_hidden(*ser, "bubbleSize", references),
+                );
+            }
 
             // Series color from spPr > solidFill (bar/area/pie) or spPr > ln >
             // solidFill (line/scatter/radar carry their color on the stroke).
@@ -8543,7 +8610,31 @@ pub fn parse_chart_part_with_references(
             let dlbl_range_cache = collect_dlbl_range_cache(*ser);
             let (series_data_labels, data_label_overrides) =
                 parse_series_data_labels(*ser, color_resolver, &dlbl_range_cache);
-            let err_bars = parse_error_bars(*ser, &values, color_resolver);
+            let visible_error_bar_values = (plot_visible_only == Some(true)).then(|| {
+                values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        let hidden_category = !series_is_scatter_like
+                            && category_source_hidden
+                                .as_ref()
+                                .is_some_and(|hidden| hidden.get(index) == Some(&true));
+                        let hidden_value = source_hidden
+                            .as_ref()
+                            .is_some_and(|hidden| hidden.get(index) == Some(&true));
+                        if hidden_category || hidden_value {
+                            None
+                        } else {
+                            *value
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let err_bars = parse_error_bars(
+                *ser,
+                visible_error_bar_values.as_deref().unwrap_or(&values),
+                color_resolver,
+            );
             let invert_if_negative = bool_child(*ser, "invertIfNegative");
             let mut automatic_negative_style = None;
             let inverted_format = ser
@@ -8604,6 +8695,7 @@ pub fn parse_chart_part_with_references(
                 name,
                 chartex_format_idx: None,
                 values,
+                source_hidden,
                 color,
                 fill_pattern: parse_series_pattern_fill(*ser, color_resolver),
                 invert_if_negative,
@@ -9352,6 +9444,7 @@ pub fn parse_chart_part_with_references(
         title_rich_runs,
         title_present,
         categories,
+        category_source_hidden,
         category_levels,
         series,
         vary_colors,
@@ -9366,6 +9459,7 @@ pub fn parse_chart_part_with_references(
         chart_bg,
         chart_fill,
         rounded_corners,
+        plot_visible_only,
         show_legend,
         data_table,
         cat_axis_cross_between,
@@ -9611,6 +9705,7 @@ mod tests {
             title_rich_runs: None,
             title_present: false,
             categories: vec!["A".to_string(), "B".to_string()],
+            category_source_hidden: None,
             category_levels: None,
             series: vec![ChartSeries {
                 name: "S1".to_string(),
@@ -9629,6 +9724,7 @@ mod tests {
                 line_width_emu: None,
                 three_d_shape: None,
                 values: vec![Some(1.0), None, Some(3.0)],
+                source_hidden: None,
                 data_point_colors: None,
                 explosion: None,
                 data_label_colors: None,
@@ -9677,6 +9773,7 @@ mod tests {
             chart_bg: Some("FFFFFF".to_string()),
             chart_fill: None,
             rounded_corners: None,
+            plot_visible_only: None,
             show_legend: false,
             data_table: None,
             legend_pos: None,
@@ -16348,6 +16445,57 @@ Subtitle</a:t></a:r></a:p>
         );
         assert_eq!(chart.cat_axis_no_multi_level_labels, Some(false));
         assert_eq!(chart.series[0].categories, None);
+    }
+
+    struct HiddenSourceResolver;
+
+    impl ChartReferenceResolver for HiddenSourceResolver {
+        fn resolve_strings(&mut self, _formula: &str) -> Option<Vec<String>> {
+            None
+        }
+
+        fn resolve_numbers(&mut self, _formula: &str) -> Option<Vec<Option<f64>>> {
+            None
+        }
+
+        fn resolve_hidden(&mut self, formula: &str) -> Option<Vec<bool>> {
+            match formula {
+                "Cats" => Some(vec![false, true, false, false]),
+                "Values" => Some(vec![false, false, true, false]),
+                _ => None,
+            }
+        }
+    }
+
+    #[test]
+    fn plot_visible_only_preserves_source_masks_and_precedes_statistical_error_bars() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea><c:lineChart>
+              <c:ser><c:idx val="0"/><c:order val="0"/>
+                <c:cat><c:strRef><c:f>Cats</c:f><c:strCache><c:ptCount val="4"/><c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt><c:pt idx="2"><c:v>C</c:v></c:pt><c:pt idx="3"><c:v>D</c:v></c:pt></c:strCache></c:strRef></c:cat>
+                <c:val><c:numRef><c:f>Values</c:f><c:numCache><c:ptCount val="4"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>20</c:v></c:pt><c:pt idx="2"><c:v>100</c:v></c:pt><c:pt idx="3"><c:v>40</c:v></c:pt></c:numCache></c:numRef></c:val>
+                <c:errBars><c:errDir val="y"/><c:errBarType val="both"/><c:errValType val="stdDev"/><c:val val="1"/></c:errBars>
+              </c:ser>
+            </c:lineChart></c:plotArea><c:plotVisOnly/></c:chart></c:chartSpace>"#
+        );
+        let doc = root_of(&xml);
+        let mut references = HiddenSourceResolver;
+        let chart =
+            parse_chart_part_with_references(doc.root_element(), &FixtureResolver, &mut references)
+                .expect("line chart parses");
+
+        assert_eq!(chart.plot_visible_only, Some(true));
+        assert_eq!(
+            chart.category_source_hidden,
+            Some(vec![false, true, false, false])
+        );
+        assert_eq!(
+            chart.series[0].source_hidden,
+            Some(vec![false, false, true, false])
+        );
+        let errors = chart.series[0].err_bars.as_ref().expect("error bars");
+        assert_eq!(errors[0].plus, vec![Some(15.0); 4]);
+        assert_eq!(errors[0].minus, vec![Some(15.0); 4]);
     }
 
     #[test]
