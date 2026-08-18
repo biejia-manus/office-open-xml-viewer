@@ -41,6 +41,8 @@ import {
   type ChartThreeDProjection,
   type ThreeDScenePoint,
 } from './three-d.js';
+import { scaleHexColor } from './material-color.js';
+import { categoryPositionFraction } from './category-spacing.js';
 import {
   buildThreeDAreaStripMeshes,
   buildThreeDPieSectorMesh,
@@ -170,15 +172,6 @@ function hasAuthoredDatumOutline(
     || style?.lineCap != null
     || style?.lineJoin != null;
   return authored && series.lineHidden !== true && style?.lineHidden !== true;
-}
-
-function scaleHexColor(color: string, factor: number): string {
-  const value = color.replace(/^#/, '');
-  if (!/^[0-9a-f]{6}$/i.test(value)) return color;
-  const channel = (offset: number) => Math.max(0, Math.min(255,
-    Math.round(parseInt(value.slice(offset, offset + 2), 16) * factor)
-  )).toString(16).padStart(2, '0');
-  return `#${channel(0)}${channel(2)}${channel(4)}`;
 }
 
 /** Automatic 3-D chart material evaluated from a real camera-space face
@@ -724,20 +717,6 @@ function paintThreeDTooManyDataPoints(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('(too many data points)', rect.x + rect.w / 2, rect.y + rect.h / 2);
-}
-
-function categoryPositionFraction(
-  index: number,
-  count: number,
-  bars: boolean,
-  reversed = false,
-): number {
-  const last = Math.max(0, count - 1);
-  const safeIndex = Number.isFinite(index) ? Math.max(0, Math.min(last, index)) : 0;
-  const fraction = bars
-    ? (safeIndex + 0.5) / Math.max(1, count)
-    : count === 1 ? 0.5 : safeIndex / last;
-  return reversed ? 1 - fraction : fraction;
 }
 
 function authoredCategoryRotation(chart: ChartModel): number | null {
@@ -1484,7 +1463,7 @@ function axisPlan(
   orientation: 'vertical' | 'horizontal',
 ): NumericValueAxisPlan {
   const factor = percent ? 100 : 1;
-  const minorTickMark = chart.valAxisMinorTickMark ?? 'cross';
+  const minorTickMark = chart.valAxisMinorTickMark ?? 'none';
   return planNumericValueAxis({
     dataMin,
     dataMax,
@@ -1496,10 +1475,6 @@ function axisPlan(
     axisOrientation: orientation,
     logBase: chart.valAxisLogBase,
     reversed: chart.valAxisOrientation === 'maxMin',
-    // Classic 3-D charts keep <c:minorTickMark> omitted in the package, while
-    // Excel's effective value-axis setting is `cross` with an automatic
-    // major/5 minor unit. This is an application default for 3-D charts, not
-    // CT_TickMark@val's schema default (which only applies to a present node).
     needMinor: chart.valAxisMinorGridlines === true || minorTickMark !== 'none',
   });
 }
@@ -1963,7 +1938,7 @@ function cartesianAxisTicks(
     front.y + front.h / 2,
     depth,
   );
-  const valueMinorTickMark = chart.valAxisMinorTickMark ?? 'cross';
+  const valueMinorTickMark = chart.valAxisMinorTickMark ?? 'none';
   if (!chart.valAxisHidden && !chart.valAxisLineHidden) {
     applyThreeDStroke(ctx, threeDStroke(
       chart.valAxisLineColor, chart.valAxisLineWidthEmu, null, ptToPx, '898989', 1,

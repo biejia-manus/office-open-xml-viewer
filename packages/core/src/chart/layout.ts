@@ -297,7 +297,8 @@ export type ChartAxisTitleSide = 'left' | 'right' | 'horizontal';
 
 /** Resolve the title's paint rotation. DrawingML `ST_Angle` is expressed in
  *  60000ths of a degree; any explicit `bodyPr@rot`/`bodyPr@vert` value has
- *  priority. With no authoring, left reads bottom-to-top, right top-to-bottom,
+ *  priority. With no authoring, both vertical value-axis titles read
+ *  bottom-to-top, matching Excel's primary and secondary axes,
  *  and a top/bottom value axis stays horizontal. */
 export function axisTitleRotationRad(
   side: ChartAxisTitleSide,
@@ -335,7 +336,7 @@ export function axisTitleRotationRad(
     return authoredDegrees * Math.PI / 180;
   }
   if (side === 'left') return -Math.PI / 2;
-  if (side === 'right') return Math.PI / 2;
+  if (side === 'right') return -Math.PI / 2;
   return 0;
 }
 

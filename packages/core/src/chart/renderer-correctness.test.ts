@@ -81,6 +81,25 @@ function materialFills(rec: Recorded, baseHex: string): FillPaintEvent[] {
     event.kind === 'fill' && isMaterialColor(event.fillStyle, baseHex));
 }
 
+function isSurfaceMaterialColor(fillStyle: string, baseHex: string): boolean {
+  const actual = /^#([0-9a-f]{6})$/i.exec(fillStyle)?.[1];
+  const base = /^#?([0-9a-f]{6})$/i.exec(baseHex)?.[1];
+  if (!actual || !base) return false;
+  const factors: number[] = [];
+  for (const offset of [0, 2, 4]) {
+    const source = parseInt(base.slice(offset, offset + 2), 16);
+    const painted = parseInt(actual.slice(offset, offset + 2), 16);
+    if (source === 0) {
+      if (painted !== 0) return false;
+    } else if (painted < 255) {
+      factors.push(painted / source);
+    }
+  }
+  return factors.length > 0
+    && factors.every(factor => factor >= 0.45 && factor <= 1.25)
+    && Math.max(...factors) - Math.min(...factors) < 0.05;
+}
+
 /** Minimal recording 2D context: captures fillRect + fillText, tracks the
  *  handful of state props the renderer reads, and models text width. */
 function recordingCtx(measureOverride?: (text: string, fontPx: number) => number | null): Recorded {
@@ -268,6 +287,32 @@ describe('chart-space background', () => {
     }), RECT, 1);
 
     expect(rec.rects[0]).toEqual({ x: 0, y: 0, w: 640, h: 360, fs: '#F2F2F2' });
+  });
+});
+
+describe('rich chart titles', () => {
+  it('wraps a long heading and preserves an explicit italic subtitle line', () => {
+    const rec = recordingCtx((text, fontPx) => text.length * fontPx * 0.6);
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      title: 'A long heading that must wrap\nSubtitle',
+      titleFontSizeHpt: 1800,
+      titleRichRuns: [
+        { text: 'A long heading that must wrap', fontSizeHpt: 1800, bold: true },
+        { text: '\nSubtitle', fontSizeHpt: 1400, italic: true, color: '112233' },
+      ],
+      categories: ['A', 'B'],
+      series: [series({ values: [1, 2] })],
+    }), { x: 0, y: 0, w: 180, h: 220 }, 1);
+
+    const titlePieces = rec.texts.filter(text =>
+      ['A', 'long', 'heading', 'that', 'must', 'wrap', 'Subtitle'].includes(text.text.trim()),
+    );
+    expect(new Set(titlePieces.map(text => text.y)).size).toBeGreaterThanOrEqual(3);
+    const subtitle = rec.texts.find(text => text.text === 'Subtitle');
+    expect(subtitle?.font).toContain('italic');
+    expect(subtitle?.font).toContain('14px');
+    expect(subtitle?.fillStyle).toBe('#112233');
   });
 });
 
@@ -461,53 +506,32 @@ describe('classic 3-D compatibility projection', () => {
     }
   });
 
-  it('applies the Office 3-D value-axis default of cross minor ticks at major/5', () => {
-    const rec = strokedPolylineCtx();
-    renderChart(rec.ctx, baseModel({
-      chartType: 'line',
-      categories: ['A', 'B'],
-      valMin: 0,
-      valMax: 20,
-      valAxisMajorUnit: 10,
-      // Excel retains an omitted <c:minorTickMark> in the package but renders
-      // 3-D value-axis minor ticks as cross marks at the automatic minor unit.
-      valAxisMinorTickMark: undefined,
-      valAxisMajorGridlines: false,
-      catAxisMajorTickMark: 'none',
-      valAxisLineColor: 'FF00FF',
-      threeD: { rotationX: 15, rotationY: 20, depthPercent: 100, perspective: 30 },
-      series: [series({ values: [5, 15] })],
-    }), RECT, 1);
+  it('does not invent 3-D minor ticks when minorTickMark is omitted', () => {
+    const minorTickCount = (minorTickMark: ChartModel['valAxisMinorTickMark']): number => {
+      const rec = strokedPolylineCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'line', categories: ['A', 'B'],
+        valMin: 0, valMax: 20, valAxisMajorUnit: 10,
+        valAxisMinorTickMark: minorTickMark,
+        valAxisMajorGridlines: false,
+        catAxisMajorTickMark: 'none',
+        valAxisLineColor: 'FF00FF',
+        threeD: { rotationX: 15, rotationY: 20, depthPercent: 100, perspective: 30 },
+        series: [series({ values: [5, 15] })],
+      }), RECT, 1);
+      return rec.strokes
+        .filter(stroke => stroke.ss === '#FF00FF' && stroke.points.length === 2)
+        .map(stroke => Math.hypot(
+          stroke.points[1].x - stroke.points[0].x,
+          stroke.points[1].y - stroke.points[0].y,
+        ))
+        .filter(length => Math.abs(length - 4) < 1e-8)
+        .length;
+    };
 
-    const tickLengths = rec.strokes
-      .filter(stroke => stroke.ss === '#FF00FF' && stroke.points.length === 2)
-      .map(stroke => Math.hypot(
-        stroke.points[1].x - stroke.points[0].x,
-        stroke.points[1].y - stroke.points[0].y,
-      ));
-    expect(tickLengths.filter(length => Math.abs(length - 4) < 1e-8)).toHaveLength(8);
-
-    const authoredNone = strokedPolylineCtx();
-    renderChart(authoredNone.ctx, baseModel({
-      chartType: 'line',
-      categories: ['A', 'B'],
-      valMin: 0,
-      valMax: 20,
-      valAxisMajorUnit: 10,
-      valAxisMinorTickMark: 'none',
-      valAxisMajorGridlines: false,
-      catAxisMajorTickMark: 'none',
-      valAxisLineColor: 'FF00FF',
-      threeD: { rotationX: 15, rotationY: 20, depthPercent: 100, perspective: 30 },
-      series: [series({ values: [5, 15] })],
-    }), RECT, 1);
-    const authoredNoneLengths = authoredNone.strokes
-      .filter(stroke => stroke.ss === '#FF00FF' && stroke.points.length === 2)
-      .map(stroke => Math.hypot(
-        stroke.points[1].x - stroke.points[0].x,
-        stroke.points[1].y - stroke.points[0].y,
-      ));
-    expect(authoredNoneLengths.some(length => Math.abs(length - 4) < 1e-8)).toBe(false);
+    expect(minorTickCount(undefined)).toBe(0);
+    expect(minorTickCount('none')).toBe(0);
+    expect(minorTickCount('cross')).toBe(8);
   });
 
   it('keeps the horizontal 3-D value grid non-degenerate between floor and back wall', () => {
@@ -3643,6 +3667,163 @@ describe('CH5 — category axis numFmt applies to category tick labels (§21.2.2
     expect(labels.some(l => l === '44927')).toBe(false);
   });
 
+  it('clips column marks before an authored date-axis minimum', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['45600', '45630', '45660'],
+      catAxisIsDate: true,
+      catAxisBaseTimeUnit: 'days',
+      catAxisMajorTimeUnit: 'days',
+      catAxisMajorUnit: 30,
+      catAxisMin: 45630,
+      catAxisMax: 45660,
+      series: [series({ color: '4472C4', values: [10, 20, 30] })],
+    }), RECT, 1);
+
+    const bars = rec.rects.filter(rect => rect.fs === '#4472C4');
+    expect(bars).toHaveLength(2);
+    expect(bars.every(bar => bar.x >= 0)).toBe(true);
+  });
+
+  it('keeps a zero-gap overlay bar group as one continuous date range', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['45658', '45689', '45717'],
+      catAxisIsDate: true,
+      catAxisBaseTimeUnit: 'months',
+      catAxisMajorTimeUnit: 'months',
+      catAxisMajorUnit: 1,
+      catAxisMin: 45658,
+      series: [
+        series({
+          color: '4472C4', values: [10, 20, 30], seriesType: 'bar',
+          barGroupIndex: 0, barGroupGapWidth: 150,
+        }),
+        series({
+          color: 'D3D3D333', values: [1, 1, 0], seriesType: 'bar', useSecondaryAxis: true,
+          barGroupIndex: 1, barGroupGapWidth: 0, barGroupOverlap: 100,
+        }),
+      ],
+      secondaryValAxis: {
+        min: 0.06, max: 0.08, title: null, hidden: false, lineHidden: false,
+        majorTickMark: 'cross',
+      },
+    }), RECT, 1);
+
+    const range = rec.rects.filter(rect => rect.fs === '#D3D3D333' && rect.h > 0);
+    expect(range).toHaveLength(2);
+    expect(range[0].x + range[0].w).toBeCloseTo(range[1].x);
+  });
+
+  it('positions horizontal bar clusters within their owning group', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBarH',
+      categories: ['A'],
+      series: [
+        series({ color: 'FF0000', values: [10], barGroupIndex: 0, barGroupGapWidth: 100 }),
+        series({ color: '0000FF', values: [20], barGroupIndex: 0, barGroupGapWidth: 100 }),
+        series({ color: '00FF00', values: [15], barGroupIndex: 1, barGroupGapWidth: 0 }),
+      ],
+    }), RECT, 1);
+
+    const red = rec.rects.find(rect => rect.fs === '#FF0000')!;
+    const blue = rec.rects.find(rect => rect.fs === '#0000FF')!;
+    const overlay = rec.rects.find(rect => rect.fs === '#00FF00')!;
+    expect(overlay.y).toBeLessThanOrEqual(Math.min(red.y, blue.y));
+    expect(overlay.y + overlay.h).toBeGreaterThanOrEqual(Math.max(red.y + red.h, blue.y + blue.h));
+  });
+
+  it('keeps stacked and clustered semantics local to each bar group', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A'],
+      series: [
+        series({
+          color: 'FF0000', values: [10], barGroupIndex: 0,
+          barGroupDirection: 'col', barGroupGrouping: 'stacked',
+        }),
+        series({
+          color: '0000FF', values: [20], barGroupIndex: 0,
+          barGroupDirection: 'col', barGroupGrouping: 'stacked',
+        }),
+        series({
+          color: '00FF00', values: [15], barGroupIndex: 1,
+          barGroupDirection: 'col', barGroupGrouping: 'clustered',
+        }),
+      ],
+    }), RECT, 1);
+
+    const red = rec.rects.find(rect => rect.fs === '#FF0000')!;
+    const blue = rec.rects.find(rect => rect.fs === '#0000FF')!;
+    const green = rec.rects.find(rect => rect.fs === '#00FF00')!;
+    expect(red.x).toBeCloseTo(blue.x);
+    expect(red.w).toBeCloseTo(blue.w);
+    expect(Math.min(red.y + red.h, blue.y + blue.h)).toBeCloseTo(
+      Math.max(red.y, blue.y),
+    );
+    expect(green.x).toBeLessThanOrEqual(red.x);
+    expect(green.x + green.w).toBeGreaterThanOrEqual(red.x + red.w);
+  });
+
+  it('normalizes a secondary-axis percent-stacked bar group before scaling', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A'],
+      secondaryValAxis: {
+        min: null, max: null, title: null, hidden: false, lineHidden: false,
+        majorTickMark: 'none', formatCode: '0%',
+      },
+      series: [
+        series({
+          color: '808080', values: [10], barGroupIndex: 0,
+          barGroupDirection: 'col', barGroupGrouping: 'clustered',
+        }),
+        series({
+          color: 'FF0000', values: [1], barGroupIndex: 1,
+          barGroupDirection: 'col', barGroupGrouping: 'percentStacked',
+          useSecondaryAxis: true,
+        }),
+        series({
+          color: '0000FF', values: [1], barGroupIndex: 1,
+          barGroupDirection: 'col', barGroupGrouping: 'percentStacked',
+          useSecondaryAxis: true,
+        }),
+      ],
+    }), RECT, 1);
+
+    const red = rec.rects.find(rect => rect.fs === '#FF0000')!;
+    const blue = rec.rects.find(rect => rect.fs === '#0000FF')!;
+    expect(red.h).toBeGreaterThan(0);
+    expect(blue.h).toBeGreaterThan(0);
+    expect(Math.min(red.y + red.h, blue.y + blue.h)).toBeCloseTo(
+      Math.max(red.y, blue.y),
+    );
+    expect(rec.texts.map(text => text.text)).toContain('100%');
+  });
+
+  it('keeps horizontal date-axis category spacing when majorUnit is automatic', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBarH',
+      categories: ['1', '100', '101'],
+      catAxisIsDate: true,
+      catAxisBaseTimeUnit: 'days',
+      series: [series({ color: '4472C4', values: [10, 20, 30] })],
+    }), RECT, 1);
+
+    const centers = rec.rects
+      .filter(rect => rect.fs === '#4472C4')
+      .map(rect => rect.y + rect.h / 2);
+    expect(centers).toHaveLength(3);
+    expect(Math.abs(centers[1]! - centers[0]!))
+      .toBeGreaterThan(Math.abs(centers[2]! - centers[1]!) * 50);
+  });
+
   it('a horizontal bar chart formats numeric-serial categories through the date code', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
@@ -5090,7 +5271,7 @@ describe('CH7 — line/area series honor a secondary value axis (§21.2.2.*)', (
     });
   }
 
-  it('paints the right-axis title top-to-bottom with its authored font', () => {
+  it('paints the right-axis title bottom-to-top with its authored font', () => {
     const rec = ringRecordingCtx();
     const model = comboModel('line', true);
     model.secondaryValAxis = {
@@ -5102,7 +5283,7 @@ describe('CH7 — line/area series honor a secondary value axis (§21.2.2.*)', (
     };
     renderChart(rec.ctx, model, RECT, 1);
 
-    expect(rec.rotates).toContain(Math.PI / 2);
+    expect(rec.rotates).toContain(-Math.PI / 2);
     const title = rec.fontTexts.find(text => text.text === 'Rate');
     expect(title?.font).toContain('9px');
     expect(title?.font).toContain('Aptos Narrow');
@@ -6340,6 +6521,349 @@ describe('CH9 — line/area smooth splines (§21.2.2.194)', () => {
       expect(straight.beziers).toBe(0);
     });
   }
+
+  it('bar + line combo applies the line-series smooth flag in the overlay path', () => {
+    const smooth = markerRecordingCtx();
+    renderChart(smooth.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B', 'C', 'D'],
+      series: [
+        series({ name: 'Bars', values: [30, 45, 40, 60], seriesType: 'bar' }),
+        series({ name: 'Rate', values: [3, 5, 4, 6], seriesType: 'line', smooth: true }),
+      ],
+    }), RECT, 1);
+
+    const straight = markerRecordingCtx();
+    renderChart(straight.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B', 'C', 'D'],
+      series: [
+        series({ name: 'Bars', values: [30, 45, 40, 60], seriesType: 'bar' }),
+        series({ name: 'Rate', values: [3, 5, 4, 6], seriesType: 'line', smooth: false }),
+      ],
+    }), RECT, 1);
+
+    expect(smooth.beziers).toBeGreaterThan(0);
+    expect(straight.beziers).toBe(0);
+  });
+
+  it('scales a combo line dash preset by its authored stroke width', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B', 'C'],
+      series: [
+        series({ name: 'Bars', values: [10, 20, 30], seriesType: 'bar' }),
+        series({
+          name: 'Sales', values: [100, 120, 160], seriesType: 'line',
+          lineColor: 'ED7D31', lineWidthEmu: 31_750,
+          chartexStyle: { lineDash: 'dash' }, showMarker: false,
+        }),
+      ],
+    }), RECT, 1);
+
+    expect(rec.strokes).toContainEqual(expect.objectContaining({
+      ss: '#ED7D31', lw: 2.5, dash: [15, 7.5],
+    }));
+  });
+
+  it('keeps axes solid after a dashed combo series and ends its legend key on a full dash', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['Jan', 'Feb', 'Mar'],
+      showLegend: true,
+      legendPos: 'b',
+      catAxisLineColor: '000000',
+      catAxisLineWidthEmu: 12_700,
+      valAxisLineColor: '000000',
+      valAxisLineWidthEmu: 12_700,
+      series: [
+        series({ name: 'Volume', values: [1_200, 1_500, 1_800], seriesType: 'bar' }),
+        series({
+          name: 'Sales', values: [11_500, 18_000, 24_000], seriesType: 'line',
+          lineColor: 'ED7D31', lineWidthEmu: 31_750,
+          chartexStyle: { lineDash: 'dash' }, showMarker: false,
+          useSecondaryAxis: true,
+        }),
+      ],
+      secondaryValAxis: {
+        min: null, max: null, title: null, hidden: false, lineHidden: false,
+        majorTickMark: 'out',
+      },
+    }), RECT, 1);
+
+    expect(rec.strokes.filter(stroke => stroke.ss === '#000000')
+      .every(stroke => stroke.dash.length === 0)).toBe(true);
+    expect(rec.strokes.filter(stroke => stroke.ss === '#aaa')
+      .every(stroke => stroke.dash.length === 0)).toBe(true);
+    const orangeKeys = rec.strokes.filter(stroke =>
+      stroke.ss === '#ED7D31' && stroke.points.length === 2);
+    expect(orangeKeys.some(stroke =>
+      Math.abs(stroke.points[1].x - stroke.points[0].x) === 37.5
+    )).toBe(true);
+  });
+
+  it('uses category centers for major ticks, boundaries for minor ticks, and italic labels', () => {
+    const ticks = segRecordingCtx();
+    const model = baseModel({
+      chartType: 'clusteredBar',
+      categories: ['Jan', 'Feb', 'Mar', 'Apr', 'May'],
+      series: [series({ values: [1, 2, 3, 4, 5] })],
+      catAxisLineColor: '123456',
+      catAxisLineWidthEmu: 12_700,
+      catAxisMajorTickMark: 'cross',
+      catAxisMinorTickMark: 'cross',
+      catAxisFontItalic: true,
+    });
+    renderChart(ticks.ctx, model, RECT, 1);
+    const categoryTicks = ticks.segs.filter(segment =>
+      segment.ss === '#123456'
+      && Math.abs(segment.x1 - segment.x0) < 0.001
+      && Math.abs(segment.y1 - segment.y0) <= 8);
+    expect(categoryTicks).toHaveLength(11);
+
+    const labels = recordingCtx();
+    renderChart(labels.ctx, model, RECT, 1);
+    expect(labels.texts.find(text => text.text === 'Jan')?.font).toContain('italic');
+  });
+
+  it('crosses a column category-axis rule at value zero while low labels remain below', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B'],
+      series: [series({ values: [-10, 10] })],
+      valMin: -10,
+      valMax: 10,
+      catAxisCrosses: 'autoZero',
+      catAxisTickLabelPos: 'low',
+      catAxisLineColor: '123456',
+      catAxisLineWidthEmu: 12_700,
+    }), RECT, 1);
+    const rule = rec.segs.find(segment =>
+      segment.ss === '#123456'
+      && Math.abs(segment.y1 - segment.y0) < 0.001
+      && Math.abs(segment.x1 - segment.x0) > 100);
+    expect(rule).toBeDefined();
+    expect(rule!.y0).toBeGreaterThan(RECT.h * 0.2);
+    expect(rule!.y0).toBeLessThan(RECT.h * 0.8);
+    expect(rec.texts.filter(text => text.text === 'A' || text.text === 'B')
+      .every(text => text.y > rule!.y0)).toBe(true);
+  });
+
+  it('pads a zero-anchored automatic secondary axis from its effective span', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B', 'C'],
+      series: [
+        series({ values: [1_200, 1_500, 1_800], seriesType: 'bar' }),
+        series({
+          values: [11_500, 18_000, 24_000], seriesType: 'line',
+          useSecondaryAxis: true, showMarker: false,
+        }),
+      ],
+      secondaryValAxis: {
+        min: null, max: null, title: null, hidden: false, lineHidden: false,
+        majorTickMark: 'out',
+      },
+    }), RECT, 1);
+    expect(rec.texts.some(text => text.text === '25000')).toBe(true);
+    expect(rec.texts.some(text => text.text === '30000')).toBe(true);
+  });
+
+  it('bar + area combo paints the area as a filled path behind the columns', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['Jan', 'Feb', 'Mar'],
+      showLegend: true,
+      series: [
+        series({ name: 'A', values: [45, 52, 30], color: '4472C4', seriesType: 'bar' }),
+        series({ name: 'B', values: [25, 30, 45], color: 'A5A5A5', seriesType: 'bar' }),
+        series({
+          name: 'Trend', values: [80, 85, 90], color: '70AD47',
+          seriesType: 'area', useSecondaryAxis: true,
+        }),
+      ],
+      secondaryValAxis: {
+        min: 0,
+        max: 120,
+        title: 'Also Values',
+        hidden: false,
+        lineHidden: false,
+        majorTickMark: 'out',
+      },
+    }), RECT, 1);
+
+    expect(rec.filledPaths.some(path => path.fillStyle === '#70AD47')).toBe(true);
+    expect(rec.rects.filter(rect => rect.fs === '#4472C4' && rect.h > 10)).toHaveLength(3);
+    expect(rec.rects.filter(rect => rect.fs === '#A5A5A5' && rect.h > 10)).toHaveLength(3);
+    expect(rec.texts.some(text => text.text === 'Trend')).toBe(true);
+    expect(rec.texts.some(text => text.text === '120')).toBe(true);
+    expect(rec.texts.some(text => text.text === '160')).toBe(false);
+  });
+
+  it('uses the authored alternate fill for negative bars', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['Positive', 'Negative'],
+      series: [series({
+        name: 'Profit',
+        color: '4472C4',
+        values: [150, -300],
+        invertIfNegative: true,
+        invertedFill: { fillType: 'solid', color: 'FFFFFF' },
+        invertedLineColor: '000000',
+        invertedLineWidthEmu: 9_525,
+      })],
+    }), RECT, 1);
+
+    expect(rec.rects.filter(rect => rect.fs === '#4472C4')).toHaveLength(1);
+    expect(rec.rects.filter(rect => rect.fs === '#FFFFFF')).toHaveLength(1);
+    expect(rec.strokeRects.filter(rect => rect.ss === '#000000' && rect.lw === 0.75))
+      .toHaveLength(1);
+  });
+
+  it('keeps the application-generated outline-only negative style separate from authored inversion', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B', 'C'],
+      series: [series({
+        name: 'Value',
+        color: '4472C4',
+        values: [-24_000, -18_000, -11_500],
+        automaticNegativeStyle: true,
+        invertedFillHidden: true,
+        invertedLineColor: '000000',
+        invertedLineWidthEmu: 9_525,
+      })],
+    }), RECT, 1);
+
+    expect(rec.rects.filter(rect => rect.fs === '#4472C4')).toHaveLength(0);
+    expect(rec.strokeRects.filter(rect => rect.ss === '#000000' && rect.lw === 0.75))
+      .toHaveLength(3);
+  });
+});
+
+describe('classic chart data table (CT_DTable)', () => {
+  it('reserves a table band and paints keys, names, values, and authored borders', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['45658', '45689'],
+      catAxisFormatCode: 'mmm\\-yy',
+      series: [
+        series({ name: 'Sales', values: [120, 150], color: '4F81BD', seriesType: 'bar' }),
+        series({
+          name: 'Growth', values: [0.02, 0.05], color: 'C0504D', lineColor: 'C0504D',
+          seriesType: 'line', showMarker: true,
+        }),
+      ],
+      dataTable: {
+        showHorizontalBorder: true,
+        showVerticalBorder: true,
+        showOutline: true,
+        showKeys: true,
+        fontSizeHpt: 1000,
+        lineColor: '445566',
+        lineWidthEmu: 12700,
+      },
+    }), RECT, 1);
+
+    const text = rec.texts.map(call => call.text);
+    expect(text).toContain('Sales');
+    expect(text).toContain('Growth');
+    expect(text).toContain('120');
+    expect(text).toContain('0.05');
+    expect(text).toContain('Jan-25');
+    expect(text).toContain('Feb-25');
+    expect(rec.strokeRects.some(rect => rect.ss === '#445566')).toBe(true);
+    expect(rec.arcs.length).toBeGreaterThan(0); // line-series key marker
+  });
+
+  it('localizes a built-in short-date category source independently of the date-axis code', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['45658', '45688'],
+      catAxisFormatCode: 'mmm\\-yy',
+      series: [series({
+        name: 'Sales', values: [120, 150], seriesType: 'bar',
+        catFormatCode: 'm/d/yy', catFormatBuiltinId: 14,
+      })],
+      dataTable: {
+        showHorizontalBorder: true, showVerticalBorder: true,
+        showOutline: true, showKeys: false,
+      },
+    }), RECT, 1);
+    expect(rec.texts.some(text => text.text.includes('2025'))).toBe(true);
+    expect(rec.texts.some(text => text.text === 'Jan-25')).toBe(true);
+  });
+});
+
+describe('classic multi-level category labels', () => {
+  it('paints sparse outer labels centered across their category spans', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['Male', 'Female', 'Male', 'Female'],
+      categoryLevels: [
+        ['Male', 'Female', 'Male', 'Female'],
+        ['Smoker', '', 'Non-Smoker', ''],
+      ],
+      series: [series({ name: 'Prevalence', values: [25, 22, 15, 18] })],
+    }), RECT, 1);
+
+    const male = rec.texts.find(text => text.text === 'Male');
+    const smoker = rec.texts.find(text => text.text === 'Smoker');
+    const nonSmoker = rec.texts.find(text => text.text === 'Non-Smoker');
+    expect(smoker?.y).toBeGreaterThan(male?.y as number);
+    expect(smoker?.x).toBeLessThan(nonSmoker?.x as number);
+    expect(rec.paintEvents.filter(event => event.kind === 'stroke').length).toBeGreaterThan(4);
+  });
+
+  it('extends first-level separators through the first label band', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['Male', 'Female', 'Male', 'Female'],
+      categoryLevels: [
+        ['Male', 'Female', 'Male', 'Female'],
+        ['Smoker', '', 'Non-Smoker', ''],
+      ],
+      catAxisFontSizeHpt: 1000,
+      catAxisLineColor: '000000',
+      catAxisMajorTickMark: 'cross',
+      catAxisMinorTickMark: 'cross',
+      series: [series({ name: 'Prevalence', values: [25, 22, 15, 18] })],
+    }), RECT, 1);
+
+    const separatorSegments = rec.segs.filter(segment =>
+      segment.ss === '#000000'
+      && Math.abs(segment.x1 - segment.x0) < 0.01
+      && Math.abs(segment.y1 - segment.y0) > 10);
+    const separatorXs = new Set(
+      separatorSegments.map(segment => Math.round(segment.x0 * 100) / 100),
+    );
+    expect(separatorXs.size).toBe(5);
+    expect(separatorSegments).toHaveLength(5);
+  });
+
+  it('honors noMultiLvlLbl by suppressing outer labels', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['Male', 'Female'],
+      categoryLevels: [['Male', 'Female'], ['Group', '']],
+      catAxisNoMultiLevelLabels: true,
+      series: [series({ values: [1, 2] })],
+    }), RECT, 1);
+    expect(rec.texts.some(text => text.text === 'Group')).toBe(false);
+  });
 });
 
 describe('CH9 — dispBlanksAs controls null-cell handling (§21.2.2.42)', () => {
@@ -8064,7 +8588,7 @@ describe('radar value-axis planning', () => {
       valAxisMajorGridlines: false,
     }), RECT, 1);
     expect(styled.strokes).toContainEqual(expect.objectContaining({
-      ss: '#2468AC', lw: 2, dash: [4, 2], cap: 'round', join: 'bevel',
+      ss: '#2468AC', lw: 2, dash: [12, 6], cap: 'round', join: 'bevel',
     }));
 
     const markers = recordingCtx();
@@ -8264,6 +8788,84 @@ describe('CH6-follow — series trendlines (commit 3)', () => {
     expect(withTrend.segs.some(s => s.dashed)).toBe(false);
   });
 
+  it('renders column-series percentage error bars, trendline equation, and legend key', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredColumn',
+      categories: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+      showLegend: true,
+      legendPos: 'b',
+      valMin: 0,
+      valMax: 200,
+      series: [series({
+        name: 'Monthly Revenue',
+        color: '4472C4',
+        values: [100, 120, 110, 150, 140, 170],
+        errBars: [{
+          dir: 'y', barType: 'both', noEndCap: true,
+          plus: [10, 12, 11, 15, 14, 17],
+          minus: [10, 12, 11, 15, 14, 17],
+          color: '404040',
+        }],
+        trendLines: [{
+          trendlineType: 'linear', dispEq: true, lineColor: 'FF0000',
+        }],
+      })],
+    }), RECT, 1);
+
+    expect(rec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#404040' });
+    expect(rec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#FF0000' });
+    expect(rec.texts.map(text => text.text)).toContain('y = 12.8571x + 86.6667');
+    expect(rec.texts.map(text => text.text)).toContain('Monthly Revenue');
+    expect(rec.texts.map(text => text.text)).toContain('Linear (Monthly Revenue)');
+  });
+
+  it('includes column error-bar endpoints in the automatic value-axis extent', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredColumn',
+      categories: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+      series: [series({
+        values: [100, 120, 110, 150, 140, 170],
+        errBars: [{
+          dir: 'y', barType: 'both', noEndCap: true,
+          plus: [10, 12, 11, 15, 14, 17],
+          minus: [10, 12, 11, 15, 14, 17],
+        }],
+      })],
+    }), RECT, 1);
+
+    const labels = rec.texts.map(text => text.text);
+    expect(labels).toContain('0');
+    expect(labels).toContain('200');
+    expect(labels).not.toContain('-20');
+  });
+
+  it('uses an authored trendline name in the bar legend', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredColumn',
+      categories: ['A', 'B'],
+      showLegend: true,
+      legendPos: 'b',
+      series: [series({
+        name: 'Series', values: [1, 2],
+        trendLines: [{ trendlineType: 'linear', name: 'Forecast' }],
+      })],
+    }), RECT, 1);
+    expect(rec.texts.map(text => text.text)).toContain('Forecast');
+  });
+
+  it('adds a line-series trendline to the shared legend path', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, {
+      ...lineWithTrend({ trendLines: [{ trendlineType: 'linear' }] }),
+      showLegend: true,
+      legendPos: 'b',
+    }, RECT, 1);
+    expect(rec.texts.map(text => text.text)).toContain('Linear (S)');
+  });
+
   it('honors the trendline DrawingML dash preset', () => {
     const rec = dashSegRecordingCtx();
     renderChart(rec.ctx, lineWithTrend({
@@ -8363,6 +8965,32 @@ describe('CH6-follow — series trendlines (commit 3)', () => {
     }), RECT, 1);
     expect(rec.texts.map(text => text.text).filter(text => text.startsWith('y =') || text.startsWith('R²')))
       .toEqual(expected);
+  });
+
+  it('formats generated trendline values with the authored label numFmt', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, lineWithTrend({
+      trendLines: [{ trendlineType: 'linear', dispEq: true, dispRSqr: true, labelFormatCode: '0.00' }],
+    }), RECT, 1);
+    expect(rec.texts.map(text => text.text)).toEqual(expect.arrayContaining([
+      'y = 2.00x + 1.00',
+      'R² = 1.00',
+    ]));
+  });
+
+  it('uses the source-series numFmt for a source-linked trendline label', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, lineWithTrend({
+      valFormatCode: '0.0%',
+      trendLines: [{
+        trendlineType: 'linear', dispEq: true, dispRSqr: true,
+        labelFormatCode: '0.00', labelFormatSourceLinked: true,
+      }],
+    }), RECT, 1);
+    expect(rec.texts.map(text => text.text)).toEqual(expect.arrayContaining([
+      'y = 200.0%x + 100.0%',
+      'R² = 100.0%',
+    ]));
   });
 
   it('uses the rightmost fitted value only for automatic label height', () => {
@@ -8627,6 +9255,29 @@ describe('CH13 — stock chart (high/low/close)', () => {
     expect(count('cross') - count('none')).toBe(4);
   });
 
+  it('draws stock-series error bars and includes their endpoints in auto scaling', () => {
+    const rec = recordingCtx();
+    const model = stockModel({
+      valMin: null,
+      valMax: null,
+      series: [
+        series({
+          name: 'High', values: [55, 57, 57],
+          errBars: [{
+            dir: 'y', barType: 'plus', plus: [25, 25, 25], minus: [],
+            noEndCap: true, color: 'FF00FF',
+          }],
+        }),
+        series({ name: 'Low', values: [11, 12, 13] }),
+        series({ name: 'Close', values: [32, 35, 34] }),
+      ],
+    });
+    renderChart(rec.ctx, model, RECT, 1);
+
+    expect(rec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#FF00FF' });
+    expect(rec.texts.map(text => text.text)).toContain('90');
+  });
+
   it('draws styled open-close up/down bars with the authored gap width', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, stockModel({
@@ -8655,6 +9306,393 @@ describe('CH13 — stock chart (high/low/close)', () => {
     expect(bars[0].w).toBeGreaterThan(30);
     expect(rec.strokeRects.some(rect => rect.ss === '#006600' && rect.lw === 1)).toBe(true);
     expect(rec.strokeRects.some(rect => rect.ss === '#660000' && rect.lw === 2)).toBe(true);
+  });
+
+  it('draws three-series up/down bars and only the explicitly authored marker', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, stockModel({
+      stockUpDownBars: true,
+      showLegend: true,
+      legendPos: 'r',
+      series: [
+        series({
+          name: 'High', values: [55, 57, 57], markerSymbol: 'circle',
+          markerSize: 5, markerFill: '4472C4', markerLine: '4472C4', lineHidden: true,
+        }),
+        series({ name: 'Low', values: [11, 12, 13], markerSymbol: 'none', lineHidden: true }),
+        series({ name: 'Close', values: [32, 35, 34], markerSymbol: 'none', lineHidden: true }),
+      ],
+    }), RECT, 1);
+
+    expect(rec.rects.filter(rect => rect.fs === '#000000')).toHaveLength(3);
+    expect(rec.arcs).toHaveLength(4); // three plotted High points + one legend marker
+    expect(rec.texts.map(text => text.text)).toEqual(expect.arrayContaining(['High', 'Low', 'Close']));
+  });
+});
+
+describe('surface contour charts', () => {
+  it('separates Surface point centres from category-grid boundaries', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'surface',
+      categories: ['X1', 'X2'],
+      catAxisCrossBetween: 'between',
+      catAxisLineColor: '00FFFF',
+      catAxisMajorGridlines: true,
+      catAxisGridlineColor: '00AA00',
+      valMin: 0,
+      valMax: 30,
+      valAxisMajorUnit: 5,
+      valAxisHidden: true,
+      surfaceWireframe: false,
+      threeD: {
+        rotationX: 15,
+        rotationY: 20,
+        rightAngleAxes: true,
+        perspective: 0,
+        seriesAxis: {
+          hidden: false,
+          lineHidden: false,
+          lineColor: 'FF00FF',
+          majorTickMark: 'none',
+        },
+      },
+      series: [
+        series({ name: 'Y1', values: [0, 30] }),
+        series({ name: 'Y2', values: [30, 0] }),
+      ],
+    }), RECT, 1);
+
+    const fractionsAlong = (axisColor: string, labels: string[], labelOffset: { x: number; y: number }) => {
+      const axis = rec.strokes.find(stroke => stroke.ss === axisColor && stroke.points.length === 2);
+      expect(axis).toBeDefined();
+      const [start, end] = axis!.points;
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const lengthSquared = dx * dx + dy * dy;
+      return labels.map(label => {
+      const text = rec.texts.find(entry => entry.text === label);
+      expect(text).toBeDefined();
+        const point = { x: text!.x - labelOffset.x, y: text!.y - labelOffset.y };
+      return ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared;
+      });
+    };
+    expect(fractionsAlong('#FF00FF', ['Y1', 'Y2'], { x: 8, y: 0 }))
+      .toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.75, 6)]);
+    expect(fractionsAlong('#00FFFF', ['X1', 'X2'], { x: 0, y: 8 }))
+      .toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.75, 6)]);
+
+    const categoryAxis = rec.strokes.find(stroke =>
+      stroke.ss === '#00FFFF' && stroke.points.length === 2
+    );
+    expect(categoryAxis).toBeDefined();
+    const [categoryStart, categoryEnd] = categoryAxis!.points;
+    const categoryDx = categoryEnd.x - categoryStart.x;
+    const categoryDy = categoryEnd.y - categoryStart.y;
+    const categoryLengthSquared = categoryDx * categoryDx + categoryDy * categoryDy;
+    const gridFractions = rec.strokes
+      .filter(stroke => stroke.ss === '#00AA00' && stroke.points.length === 2)
+      .map(stroke => {
+        const point = stroke.points[0];
+        return ((point.x - categoryStart.x) * categoryDx
+          + (point.y - categoryStart.y) * categoryDy) / categoryLengthSquared;
+      });
+    expect(gridFractions).toEqual([
+      expect.closeTo(0, 6), expect.closeTo(0.5, 6), expect.closeTo(1, 6),
+    ]);
+  });
+
+  it('uses the observed oblique perspective camera when view3D is omitted', () => {
+    const model = (threeD: ChartModel['threeD']): ChartModel => baseModel({
+      chartType: 'surface',
+      categories: ['X1', 'X2', 'X3'],
+      valMin: 0,
+      valMax: 30,
+      valAxisMajorUnit: 5,
+      surfaceWireframe: false,
+      threeD,
+      series: [
+        series({ name: 'Y1', values: [0, 10, 20] }),
+        series({ name: 'Y2', values: [10, 20, 30] }),
+      ],
+    });
+    const paintPoints = (threeD: ChartModel['threeD']) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, model(threeD), RECT, 1);
+      return rec.filledPaths.map(path => path.points);
+    };
+
+    const omitted = paintPoints(undefined);
+    const observedDefault = paintPoints({
+      rotationX: 15, rotationY: 20, rightAngleAxes: false, perspective: 30,
+    });
+    const orthographic = paintPoints({
+      rotationX: 15, rotationY: 20, rightAngleAxes: true, perspective: 0,
+    });
+    expect(omitted).toEqual(observedDefault);
+    expect(omitted).not.toEqual(orthographic);
+    // The S1-S5 Office vectors show stronger vertical convergence than the
+    // normative pinhole response alone. These normalized mesh extrema pin the
+    // bounded Surface-family perspective gain without coupling other 3-D
+    // families to the compatibility observation.
+    const points = omitted.flat();
+    expect(Math.min(...points.map(point => point.x))).toBeCloseTo(198.2, 0);
+    expect(Math.max(...points.map(point => point.y))).toBeCloseTo(229.0, 0);
+  });
+
+  it('rejects an unbounded authored band count before allocating tick arrays', () => {
+    const rec = recordingCtx();
+    expect(() => renderChart(rec.ctx, baseModel({
+      chartType: 'surface',
+      categories: ['X1', 'X2'],
+      valMin: 0,
+      valMax: 1,
+      valAxisMajorUnit: Number.MIN_VALUE,
+      surfaceWireframe: false,
+      series: [
+        series({ name: 'Y1', values: [0, 1] }),
+        series({ name: 'Y2', values: [1, 0] }),
+      ],
+    }), RECT, 1)).not.toThrow();
+    expect(rec.filledPaths).toEqual([]);
+
+    const finiteButExcessive = recordingCtx();
+    expect(() => renderChart(finiteButExcessive.ctx, baseModel({
+      chartType: 'surface',
+      categories: ['X1', 'X2'],
+      valMin: 0,
+      valMax: 1,
+      valAxisMajorUnit: 1e-5,
+      surfaceWireframe: false,
+      series: [
+        series({ name: 'Y1', values: [0, 1] }),
+        series({ name: 'Y2', values: [1, 0] }),
+      ],
+    }), RECT, 1)).not.toThrow();
+    expect(finiteButExcessive.filledPaths).toEqual([]);
+  });
+
+  it('does not extend the observed automatic material to an unverified camera', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'surface',
+      categories: ['X1', 'X2'],
+      valMin: 0,
+      valMax: 10,
+      valAxisMajorUnit: 10,
+      surfaceWireframe: false,
+      legacyChartStyle: 2,
+      themeAccentColors: ['156082', 'E97132', '196B24', '0F9ED5', 'A02B93', '4EA72E'],
+      threeD: { rotationX: 30, rotationY: 45, perspective: 20, rightAngleAxes: false },
+      series: [
+        series({ name: 'Y1', values: [5, 5] }),
+        series({ name: 'Y2', values: [5, 5] }),
+      ],
+    }), RECT, 1);
+    expect(rec.filledPaths.filter(path => path.points.length >= 3).map(path => path.fillStyle))
+      .toEqual(expect.arrayContaining(['#156082']));
+    expect(rec.filledPaths.filter(path => path.points.length >= 3)
+      .every(path => path.fillStyle === '#156082')).toBe(true);
+  });
+
+  it('selects the upper Surface diagonal across plane and reversed saddle boundaries', () => {
+    const diagonalDirection = (values: number[][]): number => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'surface',
+        categories: ['X1', 'X2'],
+        valMin: 0,
+        valMax: 30,
+        valAxisMajorUnit: 30,
+        surfaceWireframe: false,
+        threeD: {
+          rotationX: 90,
+          rotationY: 0,
+          perspective: 0,
+          rightAngleAxes: false,
+          seriesAxis: { hidden: true, majorTickMark: 'none', lineHidden: true },
+        },
+        series: values.map((row, index) => series({ name: `Y${index + 1}`, values: row })),
+      }), RECT, 1);
+
+      const triangles = rec.filledPaths.filter(path => path.points.length === 3);
+      expect(triangles).toHaveLength(2);
+      const shared = triangles[0].points.filter(point => triangles[1].points.some(other =>
+        Math.abs(point.x - other.x) < 1e-9 && Math.abs(point.y - other.y) < 1e-9
+      ));
+      expect(shared).toHaveLength(2);
+      return (shared[1].x - shared[0].x) * (shared[1].y - shared[0].y);
+    };
+
+    // Equal opposing sums use the stable B-D tie direction. Reversing a
+    // saddle swaps which opposing pair is higher and therefore swaps the
+    // selected diagonal instead of turning Excel's ridge into a valley.
+    expect(diagonalDirection([[0, 10], [20, 30]])).toBeGreaterThan(0);
+    expect(diagonalDirection([[0, 30], [30, 0]])).toBeGreaterThan(0);
+    expect(diagonalDirection([[30, 0], [0, 30]])).toBeLessThan(0);
+  });
+
+  it('uses the automatic Pattern 2 band palette and view-dependent legend order', () => {
+    const model = (rotationX: number): ChartModel => baseModel({
+      chartType: 'surface',
+      categories: ['X1', 'X2'],
+      valMin: 0,
+      valMax: 30,
+      valAxisMajorUnit: 5,
+      showLegend: true,
+      legendPos: 'b',
+      surfaceWireframe: false,
+      legacyChartStyle: 2,
+      themeAccentColors: ['156082', 'E97132', '196B24', '0F9ED5', 'A02B93', '4EA72E'],
+      threeD: {
+        rotationX,
+        seriesAxis: { hidden: true, majorTickMark: 'none', lineHidden: true },
+      },
+      series: [
+        series({ name: 'Y1', values: [0, 10] }),
+        series({ name: 'Y2', values: [20, 30] }),
+      ],
+    });
+    const oblique = recordingCtx();
+    renderChart(oblique.ctx, model(15), RECT, 1);
+    const contour = recordingCtx();
+    renderChart(contour.ctx, model(90), RECT, 1);
+
+    const palette = ['#115473', '#CF642B', '#155E1F', '#0C8CBD', '#8E2582', '#449428'];
+    const legendColors = new Set(oblique.rects.map(rect => rect.fs));
+    expect(palette.every(color => legendColors.has(color))).toBe(true);
+    const obliqueBands = oblique.texts.map(text => text.text).filter(text => text.includes('-'));
+    const contourBands = contour.texts.map(text => text.text).filter(text => text.includes('-'));
+    expect(obliqueBands).toEqual(['0-5', '5-10', '10-15', '15-20', '20-25', '25-30']);
+    expect(contourBands).toEqual(['25-30', '20-25', '15-20', '10-15', '5-10', '0-5']);
+  });
+
+  it('derives automatic Surface bands from the projected value-axis length', () => {
+    const surface = (
+      values: number[][],
+      threeD: ChartModel['threeD'],
+      rect: ChartRect,
+    ): string[] => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'surface',
+        categories: values[0].map((_, index) => `X${index + 1}`),
+        showLegend: true,
+        legendPos: 'b',
+        surfaceWireframe: false,
+        threeD: {
+          ...threeD,
+          seriesAxis: { hidden: true, majorTickMark: 'none', lineHidden: true },
+        },
+        series: values.map((row, index) => series({ name: `Y${index + 1}`, values: row })),
+      }), rect, 1);
+      return rec.texts.map(text => text.text).filter(text => text.includes('-'));
+    };
+
+    expect(surface([
+      [10, 20, 30, 20, 10],
+      [20, 40, 60, 40, 20],
+      [30, 60, 90, 60, 30],
+      [20, 40, 60, 40, 20],
+      [10, 20, 30, 20, 10],
+    ], { rotationX: 90, rotationY: 0, perspective: 0, rightAngleAxes: false }, RECT))
+      .toEqual(['80-100', '60-80', '40-60', '20-40', '0-20']);
+
+    expect(surface([
+      [0, 5, 10, 15],
+      [10, 15, 20, 25],
+      [20, 25, 30, 35],
+    ], {}, { x: 0, y: 0, w: 900, h: 220 }))
+      .toEqual(['0-10', '10-20', '20-30', '30-40']);
+  });
+
+  it('anchors automatic Surface band boundaries at an authored non-zero minimum', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'surface',
+      categories: ['X1', 'X2'],
+      valMin: 3,
+      valAxisMajorUnit: 5,
+      showLegend: true,
+      legendPos: 'b',
+      surfaceWireframe: false,
+      series: [
+        series({ name: 'Y1', values: [4, 8] }),
+        series({ name: 'Y2', values: [9, 12] }),
+      ],
+    }), RECT, 1);
+
+    expect(rec.texts.map(text => text.text).filter(text => text.includes('-')))
+      .toEqual(['3-8', '8-13']);
+  });
+
+  it('interpolates value bands across the matrix and labels both category axes', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'surface',
+      categories: ['X1', 'X2', 'X3'],
+      valMin: 0,
+      valMax: 100,
+      valAxisMajorUnit: 20,
+      showLegend: true,
+      legendPos: 'r',
+      surfaceWireframe: false,
+      threeD: { seriesAxis: { hidden: false, orientation: 'minMax', majorTickMark: 'cross', lineHidden: false } },
+      series: [
+        series({ name: 'Y1', color: '156082', values: [10, 20, 10] }),
+        series({ name: 'Y2', color: 'E97132', values: [20, 40, 20] }),
+        series({ name: 'Y3', color: '196B24', values: [30, 60, 30] }),
+      ],
+    }), RECT, 1);
+
+    expect(rec.filledPaths.length).toBeGreaterThan(8);
+    const surfaceFills = [...new Set(rec.filledPaths.map(path => path.fillStyle))];
+    for (const base of ['156082', 'E97132', '196B24']) {
+      expect(surfaceFills.some(fill => isSurfaceMaterialColor(fill, base))).toBe(true);
+    }
+    expect(surfaceFills.length).toBeGreaterThan(3);
+    const labels = rec.texts.map(text => text.text);
+    expect(labels).toEqual(expect.arrayContaining(['X1', 'X2', 'X3', 'Y1', 'Y2', 'Y3', '0-20', '80-100']));
+  });
+
+  it('uses the shared automatic value-axis unit with one bounded surface material', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'surface',
+      categories: ['X1', 'X2', 'X3', 'X4', 'X5'],
+      showLegend: true,
+      legendPos: 'r',
+      surfaceWireframe: false,
+      valAxisHidden: true,
+      threeD: {
+        rotationX: 90,
+        rotationY: 0,
+        perspective: 0,
+        rightAngleAxes: false,
+        seriesAxis: {
+          hidden: false, orientation: 'minMax', majorTickMark: 'cross', lineHidden: false,
+        },
+      },
+      series: [
+        series({ name: 'Y1', color: '156082', values: [10, 20, 30, 20, 10] }),
+        series({ name: 'Y2', color: 'E97132', values: [20, 40, 60, 40, 20] }),
+        series({ name: 'Y3', color: '196B24', values: [30, 60, 90, 60, 30] }),
+        series({ name: 'Y4', color: '0F9ED5', values: [20, 40, 60, 40, 20] }),
+        series({ name: 'Y5', color: 'A02B93', values: [10, 20, 30, 20, 10] }),
+      ],
+    }), RECT, 1);
+
+    const labels = rec.texts.map(text => text.text);
+    expect(labels.some(label => /^0-/.test(label))).toBe(true);
+    expect(labels.some(label => /-100$/.test(label))).toBe(true);
+    const automaticColors = new Set([
+      '#156082', '#E97132', '#196B24', '#0F9ED5', '#A02B93',
+      '#4472C4', '#ED7D31', '#A9D18E', '#FF0000', '#70AD47', '#4BACC6',
+      '#FFC000', '#9E480E', '#843C0C', '#636363', '#255E91', '#967300',
+    ]);
+    expect(rec.filledPaths.every(path => [...automaticColors].some(base =>
+      isSurfaceMaterialColor(path.fillStyle, base)
+    ))).toBe(true);
   });
 });
 

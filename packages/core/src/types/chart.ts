@@ -22,6 +22,25 @@ export interface ChartSeries {
    * solid/fallback series colour.
    */
   fillPattern?: PatternFill | null;
+  /** `<c:invertIfNegative>` — negative bars use the alternate series paint. */
+  invertIfNegative?: boolean | null;
+  /** Application-generated negative marker style for an otherwise unformatted
+   * classic bar/column series. Kept separate from authored
+   * `<c:invertIfNegative>` so the wire model preserves element provenance. */
+  automaticNegativeStyle?: boolean | null;
+  /**
+   * Alternate DrawingML fill from `c14:invertSolidFillFmt/c14:spPr`.
+   * Kept as a shared fill recipe so solid, gradient, and pattern alternates
+   * render identically in XLSX, DOCX, and PPTX chart hosts.
+   */
+  invertedFill?: SolidFill | GradientFill | PatternFill | null;
+  /** Alternate negative fill explicitly authored as `<a:noFill>`. */
+  invertedFillHidden?: boolean | null;
+  /** Effective outline for a negative inverted bar. Office supplies a black
+   *  0.75pt outline when `invertSolidFillFmt` authors a fill but no line. */
+  invertedLineColor?: string | null;
+  invertedLineWidthEmu?: number | null;
+  invertedLineHidden?: boolean | null;
   /** ChartEx `<cx:series><cx:spPr>` local shape paint. Positive fill/line
    * properties override linked style roles; series noFill remains distinct
    * from a data-point noFill. */
@@ -62,6 +81,19 @@ export interface ChartSeries {
    * chart's primary type.
    */
   seriesType?: string | null;
+  /** Zero-based document-order index of the owning classic `<c:barChart>` or
+   * `<c:bar3DChart>` group. Separate groups sharing an axis overlay rather than
+   * becoming additional members of one cluster. */
+  barGroupIndex?: number | null;
+  /** Direct `<c:barDir>` on the owning bar-chart group. */
+  barGroupDirection?: 'bar' | 'col' | string | null;
+  /** Direct `<c:grouping>` on the owning bar-chart group. */
+  barGroupGrouping?: 'standard' | 'clustered' | 'stacked' | 'percentStacked' | string | null;
+  /** Group-local `<c:gapWidth>`; distinct bar groups may author different
+   * widths in the same combo chart. */
+  barGroupGapWidth?: number | null;
+  /** Group-local `<c:overlap>` for the owning bar group. */
+  barGroupOverlap?: number | null;
   /**
    * Combo chart: this series is plotted against the SECONDARY value axis
    * (`ChartModel.secondaryValAxis`) — the `<c:valAx>` with `axPos="r"` /
@@ -91,6 +123,9 @@ export interface ChartSeries {
   valFormatCode?: string | null;
   /** Number format from the series category/X cache. */
   catFormatCode?: string | null;
+  /** Built-in worksheet number-format ID of the category source. Kept
+   * separately because ID 14 is locale-sensitive, unlike a literal m/d/yy. */
+  catFormatBuiltinId?: number | null;
   /** Per-point category/X formats from `<c:pt@formatCode>`. */
   catFormatCodes?: (string | null)[] | null;
   /**
@@ -176,6 +211,8 @@ export interface ChartSeries {
  * fitted to the series' data points.
  */
 export interface ChartTrendline {
+  /** Optional authored `<c:name>` shown in the legend. */
+  name?: string | null;
   /**
    * `<c:trendlineType val>` (§21.2.2.213, `ST_TrendlineType` §21.2.3.50):
    * "linear" | "exp" | "log" | "power" | "poly" | "movingAvg". The renderer
@@ -200,6 +237,10 @@ export interface ChartTrendline {
   labelManualLayout?: ChartManualLayout | null;
   /** Explicit `<c:trendlineLbl><c:tx>` text, when present. */
   labelText?: string | null;
+  /** `<c:trendlineLbl><c:numFmt formatCode>` for generated equation/R² values. */
+  labelFormatCode?: string | null;
+  /** `<c:trendlineLbl><c:numFmt sourceLinked>` authored linkage state. */
+  labelFormatSourceLinked?: boolean | null;
   /** Trendline-label `<c:txPr>` run properties. */
   labelFontSizeHpt?: number | null;
   labelFontBold?: boolean | null;
@@ -382,6 +423,7 @@ export type ChartType =
   | 'pie' | 'doughnut'
   | 'scatter' | 'bubble' | 'radar' | 'waterfall'
   | 'stock'
+  | 'surface' | 'surface3D'
   // chartEx (MS 2014 chartex ext) layouts CH15 renders.
   | 'boxWhisker' | 'sunburst' | 'treemap'
   | string;
@@ -414,12 +456,47 @@ export interface ChartExElementStyle {
   lineColorIndex?: number | null;
 }
 
+/** Authored low-to-high formatting for one classic surface-chart band. */
+export interface ChartSurfaceBandFormat {
+  idx: number;
+  fill?: SolidFill | GradientFill | PatternFill | null;
+  fillHidden?: boolean | null;
+  lineColor?: string | null;
+  lineWidthEmu?: number | null;
+  lineHidden?: boolean | null;
+}
+
+/** `<c:plotArea><c:dTable>` (`CT_DTable`) for classic DrawingML charts. */
+export interface ChartDataTable {
+  showHorizontalBorder: boolean;
+  showVerticalBorder: boolean;
+  showOutline: boolean;
+  showKeys: boolean;
+  fontSizeHpt?: number | null;
+  fontFace?: string | null;
+  fontColor?: string | null;
+  fontBold?: boolean | null;
+  fontItalic?: boolean | null;
+  lineColor?: string | null;
+  lineWidthEmu?: number | null;
+  lineHidden?: boolean | null;
+}
+
 export interface ChartModel {
   chartType: ChartType;
   title: string | null;
+  /** Formatted DrawingML runs for a legacy chart title. `title` remains the
+   * plain-text compatibility value used by callers that do not need styling. */
+  titleRichRuns?: ChartTextRun[] | null;
   /** Direct chart title element exists; an empty title still reserves its band. */
   titlePresent?: boolean;
   categories: string[];
+  /**
+   * `<c:multiLvlStrCache>` category levels, deepest/leaf level first. Sparse
+   * outer levels retain empty entries so each non-empty label marks the start
+   * of its category span.
+   */
+  categoryLevels?: string[][] | null;
   series: ChartSeries[];
   /** Text boxes in the Chart Drawing part referenced by `<c:userShapes>`.
    *  Coordinates are chart-space fractions from `<cdr:relSizeAnchor>`. */
@@ -457,6 +534,8 @@ export interface ChartModel {
   chartBg: string | null;
   /** True when `<c:legend>` is declared in the chart XML. False = no legend. */
   showLegend: boolean;
+  /** Optional category/series table authored below the cartesian plot. */
+  dataTable?: ChartDataTable | null;
   /** `<c:legend><c:legendPos val>` — "r"|"l"|"t"|"b"|"tr". null = default (r). */
   legendPos: 'r' | 'l' | 't' | 'b' | 'tr' | null;
   /** `<c:catAx><c:crossBetween val="..."/>`. "between" inserts 0.5-step padding
@@ -841,6 +920,20 @@ export interface ChartModel {
   /** Numeric horizontal-axis minor step (scatter/bubble `<c:valAx>`). */
   catAxisMinorUnit?: number | null;
   /**
+   * Whether the authored category axis is a classic date axis (`<c:dateAx>`).
+   * Date axes position numeric serial categories in authored base-time-unit
+   * calendar slots rather than assigning every source point an ordinal slot.
+   */
+  catAxisIsDate?: boolean | null;
+  /** `<c:dateAx><c:baseTimeUnit val>` (`days` by schema default). */
+  catAxisBaseTimeUnit?: 'days' | 'months' | 'years' | string | null;
+  /** `<c:dateAx><c:majorTimeUnit val>` (`days` by schema default). */
+  catAxisMajorTimeUnit?: 'days' | 'months' | 'years' | string | null;
+  /** `<c:dateAx><c:minorTimeUnit val>` (`days` by schema default). */
+  catAxisMinorTimeUnit?: 'days' | 'months' | 'years' | string | null;
+  /** `<c:catAx><c:noMultiLvlLbl>` suppresses outer category levels. */
+  catAxisNoMultiLevelLabels?: boolean | null;
+  /**
    * `<c:valAx><c:scaling><c:logBase val>` (§21.2.2.98, `ST_LogBase` §21.2.3.25)
    * — logarithmic value-axis base (>= 2). When set, values map to pixels in log
    * space and gridlines fall on powers of the base. null/undefined ⇒ linear
@@ -891,12 +984,23 @@ export interface ChartModel {
   stockHiLowLineColor?: string | null;
   /**
    * `<c:stockChart><c:upDownBars>` presence (ECMA-376 §21.2.2.227). Parsed so a
-   * stock file carrying open-close up/down bars draws them between the Open and
-   * Close values. null/undefined when absent.
+   * stock file carrying up/down bars draws them between the first and last
+   * series (Open↔Close for four-series, High↔Close for three-series charts).
+   * null/undefined when absent.
    */
   stockUpDownBars?: boolean | null;
   /** Parsed `<c:upDownBars>` geometry and direct up/down bar paint. */
   stockUpDownBarStyle?: ChartStockUpDownBarStyle | null;
+  /** `<c:surfaceChart|surface3DChart><c:wireframe>` effective boolean. */
+  surfaceWireframe?: boolean | null;
+  /** `<c:bandFmts>` indexed low-to-high (§21.2.2.13/14). */
+  surfaceBandFormats?: ChartSurfaceBandFormat[] | null;
+  /** Legacy `<c:style@val>` (1..48). Automatic classic-chart palettes use
+   * this authored style independently of any ChartEx sidecar. */
+  legacyChartStyle?: number | null;
+  /** Theme `accent1..accent6`, retained for renderer-generated classic chart
+   * objects such as automatic surface value bands. */
+  themeAccentColors?: string[] | null;
   /** Pie-of-pie / bar-of-pie secondary-plot contract (§21.2.2.126). */
   ofPie?: ChartOfPie | null;
   /** Authored 3D chart-space view and group depth controls. */
@@ -1044,6 +1148,7 @@ export interface ChartTextRun {
   text: string;
   fontSizeHpt?: number | null;
   bold?: boolean | null;
+  italic?: boolean | null;
   color?: string | null;
   fontFace?: string | null;
 }

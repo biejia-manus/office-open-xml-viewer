@@ -9,9 +9,111 @@ use crate::{
     resolve_zip_path,
 };
 use ooxml_common::depth::parse_guarded;
-use ooxml_common::ns::{is_c_ns, is_r_ns, is_xdr_ns};
+use ooxml_common::ns::{is_c_ns, is_r_ns, is_x_ns, is_xdr_ns};
+use std::collections::HashMap;
 
 const CHARTEX_NS: &str = "http://schemas.microsoft.com/office/drawing/2014/chartex";
+const MAX_CHART_STYLE_FORMATS: usize = 1_048_576;
+const MAX_CHART_CUSTOM_NUMBER_FORMATS: usize = 65_536;
+const MAX_CHART_NUMBER_FORMAT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Workbook-wide projection of the two style tables chart source-linked
+/// number formats need. The complete cell style parser owns all other style
+/// semantics; this bounded index avoids reinflating/reparsing `styles.xml` for
+/// every chart or worksheet projection.
+#[derive(Default)]
+pub(crate) struct ChartNumberFormatCache {
+    style_num_fmt_ids: Vec<Option<u32>>,
+    custom_num_formats: HashMap<u32, String>,
+}
+
+impl ChartNumberFormatCache {
+    pub(crate) fn from_document(document: &roxmltree::Document<'_>) -> Self {
+        let style_num_fmt_ids = document
+            .descendants()
+            .find(|node| {
+                node.is_element()
+                    && node.tag_name().name() == "cellXfs"
+                    && is_x_ns(node.tag_name().namespace())
+            })
+            .into_iter()
+            .flat_map(|cell_xfs| {
+                cell_xfs.children().filter(|node| {
+                    node.is_element()
+                        && node.tag_name().name() == "xf"
+                        && is_x_ns(node.tag_name().namespace())
+                })
+            })
+            .take(MAX_CHART_STYLE_FORMATS)
+            .map(|xf| {
+                xf.attribute("numFmtId")
+                    .and_then(|value| value.parse::<u32>().ok())
+            })
+            .collect();
+
+        let mut custom_num_formats = HashMap::new();
+        let mut remaining_bytes = MAX_CHART_NUMBER_FORMAT_BYTES;
+        if let Some(num_fmts) = document.descendants().find(|node| {
+            node.is_element()
+                && node.tag_name().name() == "numFmts"
+                && is_x_ns(node.tag_name().namespace())
+        }) {
+            for num_fmt in num_fmts
+                .children()
+                .filter(|node| {
+                    node.is_element()
+                        && node.tag_name().name() == "numFmt"
+                        && is_x_ns(node.tag_name().namespace())
+                })
+                .take(MAX_CHART_CUSTOM_NUMBER_FORMATS)
+            {
+                let Some(id) = num_fmt
+                    .attribute("numFmtId")
+                    .and_then(|value| value.parse::<u32>().ok())
+                else {
+                    continue;
+                };
+                let Some(code) = num_fmt.attribute("formatCode") else {
+                    continue;
+                };
+                if code.len() > remaining_bytes {
+                    break;
+                }
+                remaining_bytes -= code.len();
+                custom_num_formats.insert(id, code.to_string());
+            }
+        }
+
+        Self {
+            style_num_fmt_ids,
+            custom_num_formats,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_styles(styles: &Styles) -> Self {
+        let style_num_fmt_ids = styles
+            .cell_xfs
+            .iter()
+            .take(MAX_CHART_STYLE_FORMATS)
+            .map(|xf| Some(xf.num_fmt_id))
+            .collect();
+        let mut custom_num_formats = HashMap::new();
+        let mut remaining_bytes = MAX_CHART_NUMBER_FORMAT_BYTES;
+        for format in styles.num_fmts.iter().take(MAX_CHART_CUSTOM_NUMBER_FORMATS) {
+            let code = &format.format_code;
+            if code.len() > remaining_bytes {
+                break;
+            }
+            remaining_bytes -= code.len();
+            custom_num_formats.insert(format.num_fmt_id, code.clone());
+        }
+        Self {
+            style_num_fmt_ids,
+            custom_num_formats,
+        }
+    }
+}
 
 /// Collect live graphic frames while applying MCE branch selection at any
 /// nesting depth. Excel may place a chartEx `AlternateContent` directly under
@@ -48,6 +150,7 @@ pub(crate) struct ChartReferenceContext<'a, 'input, 'session> {
     pub(crate) workbook_rels: &'a roxmltree::Document<'input>,
     pub(crate) shared_strings: &'a [SharedString],
     pub(crate) defined_names: &'a [DefinedName],
+    pub(crate) number_formats: &'a ChartNumberFormatCache,
     pub(crate) session: &'session mut WorksheetReferenceSession,
 }
 
@@ -59,6 +162,7 @@ struct XlsxChartReferenceResolver<'archive, 'data, 'input, 'session> {
     workbook_rels: &'data roxmltree::Document<'input>,
     shared_strings: &'data [SharedString],
     defined_names: &'data [DefinedName],
+    number_formats: &'data ChartNumberFormatCache,
     session: &'session mut WorksheetReferenceSession,
 }
 
@@ -115,31 +219,18 @@ impl XlsxChartReferenceResolver<'_, '_, '_, '_> {
             })
     }
 
+    fn number_format_id_for_style(&mut self, style_index: u32) -> Option<u32> {
+        self.number_formats
+            .style_num_fmt_ids
+            .get(style_index as usize)
+            .copied()
+            .flatten()
+    }
+
     fn number_format_for_style(&mut self, style_index: u32) -> Option<String> {
-        let xml = read_zip_string(self.archive, "xl/styles.xml").ok()?;
-        let document = parse_guarded(&xml).ok()?;
-        let cell_xfs = document
-            .descendants()
-            .find(|node| node.is_element() && node.tag_name().name() == "cellXfs")?;
-        let num_fmt_id = cell_xfs
-            .children()
-            .filter(|node| node.is_element() && node.tag_name().name() == "xf")
-            .nth(style_index as usize)
-            .and_then(|xf| xf.attribute("numFmtId"))
-            .and_then(|value| value.parse::<u32>().ok())?;
-        if let Some(format_code) = document
-            .descendants()
-            .find(|node| {
-                node.is_element()
-                    && node.tag_name().name() == "numFmt"
-                    && node
-                        .attribute("numFmtId")
-                        .and_then(|value| value.parse::<u32>().ok())
-                        == Some(num_fmt_id)
-            })
-            .and_then(|node| node.attribute("formatCode"))
-        {
-            return Some(format_code.to_string());
+        let num_fmt_id = self.number_format_id_for_style(style_index)?;
+        if let Some(format_code) = self.number_formats.custom_num_formats.get(&num_fmt_id) {
+            return Some(format_code.clone());
         }
         // ECMA-376 §18.8.30 built-in number formats. Chart labels only need
         // the format code; returning it keeps the shared renderer independent
@@ -226,6 +317,12 @@ impl ooxml_common::chart::ChartReferenceResolver for XlsxChartReferenceResolver<
         let formula = self.expand_defined_name(formula);
         let style_index = self.source_style_index(&formula)?;
         self.number_format_for_style(style_index)
+    }
+
+    fn resolve_number_format_id(&mut self, formula: &str) -> Option<u32> {
+        let formula = self.expand_defined_name(formula);
+        let style_index = self.source_style_index(&formula)?;
+        self.number_format_id_for_style(style_index)
     }
 
     fn resolve_string_levels(&mut self, formula: &str) -> Option<Vec<Vec<String>>> {
@@ -571,6 +668,7 @@ pub(crate) fn load_sheet_charts(
                         workbook_rels: context.workbook_rels,
                         shared_strings: context.shared_strings,
                         defined_names: context.defined_names,
+                        number_formats: context.number_formats,
                         session: context.session,
                     };
                     if is_chartex {
@@ -694,6 +792,10 @@ impl ooxml_common::chart::ColorResolver for XlsxColorResolver<'_> {
     /// white default).
     fn default_chart_bg(&self) -> Option<String> {
         Some("FFFFFF".to_string())
+    }
+
+    fn implicit_outline_only_negative_column_style(&self) -> bool {
+        true
     }
 }
 /// Locate the first resolvable `<a:solidFill>` among `parent`'s direct children
@@ -880,6 +982,36 @@ mod solid_fill_color_tests {
             .expect("chart should parse");
 
         assert_eq!(chart.series[0].color.as_deref(), Some("00AA00"));
+    }
+
+    #[test]
+    fn xlsx_host_enables_the_bounded_outline_only_negative_column_default() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="{A_NS}">
+              <c:chart><c:plotArea><c:barChart>
+                <c:barDir val="col"/><c:varyColors val="0"/>
+                <c:ser><c:idx val="0"/><c:order val="0"/>
+                  <c:val><c:numLit><c:pt idx="0"><c:v>-24000</c:v></c:pt></c:numLit></c:val>
+                </c:ser>
+              </c:barChart></c:plotArea></c:chart>
+            </c:chartSpace>"#
+        );
+        let palette = theme();
+        let resolver = XlsxColorResolver {
+            theme_colors: &palette,
+            theme_major_font_latin: None,
+            theme_minor_font_latin: None,
+            theme_format_scheme: None,
+        };
+        let doc = Document::parse(&xml).expect("chartSpace fixture");
+        let chart = ooxml_common::chart::parse_chart_part(doc.root_element(), &resolver)
+            .expect("chart should parse");
+        let series = &chart.series[0];
+        assert_eq!(series.invert_if_negative, None);
+        assert_eq!(series.automatic_negative_style, Some(true));
+        assert_eq!(series.inverted_fill_hidden, Some(true));
+        assert_eq!(series.inverted_line_color.as_deref(), Some("000000"));
+        assert_eq!(series.inverted_line_width_emu, Some(9_525));
     }
 }
 
@@ -1208,6 +1340,9 @@ mod worksheet_reference_tests {
         let sheet_metas = sheets();
         let theme = vec!["#4472C4".into(); 12];
         let mut session = WorksheetReferenceSession::default();
+        let styles = crate::styles::parse_styles(&mut archive, &theme)
+            .expect("styles parse for chart references");
+        let number_formats = ChartNumberFormatCache::from_styles(&styles.styles);
         session.seed_current_sheet("Dashboard", None);
         let charts = load_sheet_charts(
             &mut archive,
@@ -1219,6 +1354,7 @@ mod worksheet_reference_tests {
                 workbook_rels: &rels,
                 shared_strings: &[],
                 defined_names: &[],
+                number_formats: &number_formats,
                 session: &mut session,
             }),
             &theme,
@@ -1249,6 +1385,10 @@ mod worksheet_reference_tests {
         let rels = parse_guarded(workbook_rels_xml()).unwrap();
         let sheet_metas = sheets();
         let mut session = WorksheetReferenceSession::default();
+        let theme = vec!["#4472C4".into(); 12];
+        let styles = crate::styles::parse_styles(&mut archive, &theme)
+            .expect("styles parse for chart references");
+        let number_formats = ChartNumberFormatCache::from_styles(&styles.styles);
         session.seed_current_sheet("Dashboard", None);
         let mut resolver = XlsxChartReferenceResolver {
             archive: &mut archive,
@@ -1258,6 +1398,7 @@ mod worksheet_reference_tests {
             workbook_rels: &rels,
             shared_strings: &[],
             defined_names: &[],
+            number_formats: &number_formats,
             session: &mut session,
         };
         assert_eq!(
@@ -1267,6 +1408,13 @@ mod worksheet_reference_tests {
             )
             .as_deref(),
             Some("#,##0"),
+        );
+        assert_eq!(
+            ooxml_common::chart::ChartReferenceResolver::resolve_number_format_id(
+                &mut resolver,
+                "'التقرير'!$C$2:$C$4",
+            ),
+            Some(3),
         );
     }
 

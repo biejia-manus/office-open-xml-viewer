@@ -34,6 +34,7 @@ describe('axis-title authored properties', () => {
     expect(axisTitleRotationRad('left', 1_800_000, 'vert270')).toBeCloseTo(-Math.PI / 3);
     expect(axisTitleRotationRad('left', null, 'eaVert')).toBeCloseTo(Math.PI / 2);
     expect(axisTitleRotationRad('right', null, 'horz')).toBe(0);
+    expect(axisTitleRotationRad('right', null, null)).toBeCloseTo(-Math.PI / 2);
   });
 });
 

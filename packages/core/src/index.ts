@@ -29,6 +29,7 @@ export type {
 } from './types/common';
 export type {
   ChartDataLabelOverride,
+  ChartDataTable,
   ChartDataPointOverride,
   ChartErrBars,
   ChartLabelBox,
@@ -39,6 +40,7 @@ export type {
   ChartSeriesDataLabels,
   ChartStockBarPaint,
   ChartStockUpDownBarStyle,
+  ChartSurfaceBandFormat,
   ChartTextBox,
   ChartTextParagraph,
   ChartTextRun,
@@ -151,6 +153,7 @@ export {
   type SymbolTextSegment,
 } from './fonts/symbol-font';
 export { renderChart } from './chart/renderer';
+export { formatLocalizedExcelShortDate } from './chart/chart-number-format';
 export { autoResize, type AutoResizeOptions } from './autoResize';
 export {
   buildCustomPath,
