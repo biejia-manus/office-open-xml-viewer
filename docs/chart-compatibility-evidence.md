@@ -30,6 +30,7 @@ of the repository.
 | --- | ---: | --- |
 | Fully automatic linear value axes | 6,354 | Finite classic linear axes; strict 1.2 zero-pin boundary; 1/2/5 ceiling ladder; automatic minor unit is major/5. Twenty-four unstable tiny-offset outputs were not emulated. |
 | Explicit min/max with omitted major unit | 297 | Classic linear, non-percent axes. Vertical and horizontal axes use separately observed density classes. Authored units always win. |
+| Fractional classic date-axis units | month and year units 1.01, 1.5, 1.9, 1.99, 2.0, 2.01, 2.1, 2.5, and 3.1 with explicit bounds | ECMA-376 retains positive doubles, while MS-OE376 requires Office date-axis units to be at least one. Within the observed `1 <= value < 4` boundary, Excel advances integral `n.0` by `n` calendar units and any observed non-zero fractional part by `floor(n)^2` units. Larger fractional values, values below one, and omitted automatic intervals are not inferred; fractional day units remain elapsed-day intervals. |
 | Percent-stacked automatic units | 48 | Horizontal/vertical and positive/signed percentage axes, with the observed 120 pt vertical density boundary. |
 | Radar automatic units | 36 | Small, ordinary, and large spoke lengths. |
 | Pie Style 2 repeated colors | point counts 1–48 | ECMA-376 Style 2 accent order plus Office-observed repeated-set luminance transforms. Point formatting and `noFill` remain authoritative. Counts above 48 use the same documented repeat-set rule but are not claimed as byte-exact Office observations. |

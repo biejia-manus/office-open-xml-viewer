@@ -4669,6 +4669,46 @@ describe('CH5 — category axis numFmt applies to category tick labels (§21.2.2
     expect(range[0].x + range[0].w).toBeCloseTo(range[1].x);
   });
 
+  it('shares fractional calendar ticks across primary and secondary series', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['45292', '45302', '45383'],
+      catAxisIsDate: true,
+      catAxisBaseTimeUnit: 'days',
+      catAxisMajorTimeUnit: 'months',
+      catAxisMajorUnit: 1.5,
+      catAxisMin: 45292,
+      catAxisMax: 45383,
+      catAxisFormatCode: 'm/d/yyyy',
+      series: [
+        series({ color: '4472C4', lineColor: '4472C4', values: [10, 20, 30], showMarker: false }),
+        series({
+          color: 'ED7D31', lineColor: 'ED7D31', values: [30, 20, 10], showMarker: false,
+          useSecondaryAxis: true,
+        }),
+      ],
+      secondaryValAxis: {
+        min: 0, max: 40, title: null, hidden: false, lineHidden: false,
+        majorTickMark: 'none',
+      },
+    }), RECT, 1);
+
+    const labels = rec.texts.map(text => text.text);
+    expect(labels).toContain('1/1/2024');
+    expect(labels).toContain('2/1/2024');
+    expect(labels).toContain('3/1/2024');
+    expect(labels).toContain('4/1/2024');
+    const primary = rec.strokes.find(stroke => stroke.ss === '#4472C4' && stroke.points.length === 3);
+    const secondary = rec.strokes.find(stroke => stroke.ss === '#ED7D31' && stroke.points.length === 3);
+    expect(primary).toBeDefined();
+    expect(secondary).toBeDefined();
+    expect(secondary!.points.map(point => point.x))
+      .toEqual(primary!.points.map(point => point.x));
+    expect(primary!.points[1]!.x - primary!.points[0]!.x)
+      .toBeLessThan(primary!.points[2]!.x - primary!.points[1]!.x);
+  });
+
   it('positions horizontal bar clusters within their owning group', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({

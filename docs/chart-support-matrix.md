@@ -77,7 +77,7 @@ observed input boundary is recorded in
 
 | ID | Property | Parser | Model | Renderer | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| C-AXIS-001 | Linear/date/log axes, authored bounds and units | Yes | Yes | Yes | Partial | Fractional month/year date-axis units require an Office compatibility boundary. |
+| C-AXIS-001 | Linear/date/log axes, authored bounds and units | Yes | Yes | Yes | Partial | Explicit fractional month/year units in the retained `1 <= value < 4` compatibility boundary are rendered. Other fractional and application-defined automatic date intervals remain unsupported. |
 | C-AXIS-002 | Category `lblAlgn` and `lblOffset` | Yes | Yes | Yes | Supported | Category/date and auxiliary category axes retain both properties; the shared renderer applies interval alignment and the specified percentage of its family-specific default label gap. |
 | C-AXIS-003 | Axis crossing (`crosses`, `crossesAt`, and `crossBetween`) | Yes | Yes | Partial | Partial | Bar/column, line, area, and Surface use one effective crossing for axis geometry, ticks, labels, and group decorations. Remaining numeric-X and arbitrary combination boundaries are still under audit. |
 | C-LABEL-001 | Value/category/series/percent labels, separators, leader lines, and manual layout | Yes | Yes | Yes | Supported | Per-point and series-level overrides are retained. |
