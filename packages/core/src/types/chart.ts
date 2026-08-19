@@ -267,6 +267,8 @@ export interface ChartTrendline {
   labelManualLayout?: ChartManualLayout | null;
   /** Explicit `<c:trendlineLbl><c:tx>` text, when present. */
   labelText?: string | null;
+  /** Bounded formatted runs from `<c:trendlineLbl><c:tx><c:rich>`. */
+  labelRichRuns?: ChartTextRun[] | null;
   /** `<c:trendlineLbl><c:numFmt formatCode>` for generated equation/R² values. */
   labelFormatCode?: string | null;
   /** `<c:trendlineLbl><c:numFmt sourceLinked>` authored linkage state. */
@@ -276,7 +278,24 @@ export interface ChartTrendline {
   labelFontBold?: boolean | null;
   labelFontItalic?: boolean | null;
   labelFontColor?: string | null;
+  /** A label-text fill choice was authored, even when it cannot be resolved. */
+  labelFontPaintAuthored?: boolean | null;
+  /** Direct `<a:noFill/>` on the trendline-label text. */
+  labelFontHidden?: boolean | null;
   labelFontFace?: string | null;
+  labelFontLanguage?: string | null;
+  /** Normalized baseline shift (`0.3` = 30% of the effective font size). */
+  labelFontBaseline?: number | null;
+  labelTextRotation?: number | null;
+  labelTextWrap?: string | null;
+  labelTextVerticalAnchor?: string | null;
+  labelTextVerticalMode?: string | null;
+  labelTextLInsEmu?: number | null;
+  labelTextTInsEmu?: number | null;
+  labelTextRInsEmu?: number | null;
+  labelTextBInsEmu?: number | null;
+  /** A trendline-label `bodyPr` layer was authored. */
+  labelTextBodyAuthored?: boolean | null;
   /** `<c:trendlineLbl><c:spPr>` fill/border. */
   labelBox?: ChartLabelBox | null;
   /** First authored paragraph alignment from `<c:trendlineLbl><c:txPr>`. */
@@ -347,11 +366,31 @@ export interface ChartDataLabelOverride {
   /** "l"|"r"|"t"|"b"|"ctr"|"outEnd"|"bestFit". undefined = inherit. */
   position?: string;
   fontColor?: string;
+  /** A point-label text fill was authored, including unsupported paint. */
+  fontPaintAuthored?: boolean;
+  /** Direct `<a:noFill/>` on point-label text. */
+  fontHidden?: boolean;
   fontSizeHpt?: number;
   /** Effective per-point `<a:latin typeface>`; undefined inherits the series. */
   fontFace?: string;
   /** `<a:defRPr b="1">` inside the per-idx rich text. */
   fontBold?: boolean;
+  fontItalic?: boolean;
+  fontLanguage?: string;
+  /** Normalized baseline shift (`0.3` = 30% of the effective font size). */
+  fontBaseline?: number;
+  textRotation?: number;
+  textWrap?: string;
+  textVerticalAnchor?: string;
+  textVerticalMode?: string;
+  textLInsEmu?: number;
+  textTInsEmu?: number;
+  textRInsEmu?: number;
+  textBInsEmu?: number;
+  /** A point-label `bodyPr` layer was authored. */
+  textBodyAuthored?: boolean;
+  /** First effective DrawingML paragraph alignment. */
+  textAlign?: 'l' | 'ctr' | 'r' | 'just' | 'dist' | string;
   /** Per-point number format; undefined inherits the series default. */
   formatCode?: string;
   /** Per-point component separator; undefined inherits the series default. */
@@ -397,13 +436,27 @@ export interface ChartDataLabelOverride {
 export interface ChartLabelBox {
   /** `<a:solidFill>` resolved hex (no `#`). Box background. */
   fill?: string;
+  fillPaint?: SolidFill | GradientFill | PatternFill | null;
+  fillHidden?: boolean | null;
+  fillPaintAuthored?: boolean | null;
   /** `<a:ln><a:solidFill>` resolved hex (no `#`). Border stroke. */
   borderColor?: string;
+  borderFill?: SolidFill | GradientFill | PatternFill | null;
   /** `<a:ln w>` border width in EMU (12700 EMU = 1 pt). */
   borderWidthEmu?: number;
+  borderHidden?: boolean | null;
+  borderPaintAuthored?: boolean | null;
+  borderDash?: string | null;
+  borderDashAuthored?: boolean | null;
+  borderCustomDash?: ChartLineDashSegment[] | null;
+  borderCap?: string | null;
+  borderJoin?: string | null;
+  borderCompound?: string | null;
 }
 
 export interface ChartSeriesDataLabels {
+  /** Series-level `<c:dLbls><c:delete>` collection visibility. */
+  deleted?: boolean | null;
   showVal: boolean;
   showCatName: boolean;
   showSerName: boolean;
@@ -414,15 +467,33 @@ export interface ChartSeriesDataLabels {
   showLegendKey?: boolean;
   position?: string;
   fontColor?: string;
+  fontPaintAuthored?: boolean;
+  fontHidden?: boolean;
   formatCode?: string;
   /** `<c:dLbls><c:separator>` (§21.2.2.170), including authored line breaks. */
   separator?: string;
   /** Series-level bold default for data labels. */
   fontBold?: boolean;
+  fontItalic?: boolean;
+  fontLanguage?: string;
+  /** Normalized baseline shift (`0.3` = 30% of the effective font size). */
+  fontBaseline?: number;
   /** Series-level font size for data labels (OOXML hundredths of a point). */
   fontSizeHpt?: number;
   /** Series-level `<c:dLbls><c:txPr>…<a:latin typeface>` font face. */
   fontFace?: string;
+  textRotation?: number;
+  textWrap?: string;
+  textVerticalAnchor?: string;
+  textVerticalMode?: string;
+  textLInsEmu?: number;
+  textTInsEmu?: number;
+  textRInsEmu?: number;
+  textBInsEmu?: number;
+  /** A series-default `bodyPr` layer was authored. */
+  textBodyAuthored?: boolean;
+  /** Series-default DrawingML paragraph alignment. */
+  textAlign?: 'l' | 'ctr' | 'r' | 'just' | 'dist' | string;
   /** Series-default callout box (`<c:dLbls><c:spPr>`, ECMA-376 §21.2.2.49/
    *  §21.2.2.197). When present the pie/doughnut renderer draws Word's boxed
    *  callout layout (box + optional leader line) instead of plain text. */
@@ -487,7 +558,23 @@ export interface ChartExElementStyle {
   fontBold?: boolean | null;
   fontItalic?: boolean | null;
   fontColor?: string | null;
+  fontPaintAuthored?: boolean | null;
+  fontHidden?: boolean | null;
   fontFace?: string | null;
+  /** Authored BCP-47 language from linked `defRPr`; never inferred from text. */
+  fontLanguage?: string | null;
+  /** Linked `defRPr@baseline`, normalized to a fraction (`0.3` = 30%). */
+  fontBaseline?: number | null;
+  /** Linked `bodyPr` text-body defaults. Direct chart text properties win. */
+  textRotation?: number | null;
+  textWrap?: string | null;
+  textVerticalAnchor?: string | null;
+  textVerticalMode?: string | null;
+  textLInsEmu?: number | null;
+  textTInsEmu?: number | null;
+  textRInsEmu?: number | null;
+  textBInsEmu?: number | null;
+  textBodyAuthored?: boolean | null;
   /**
    * Per-color-style-index DrawingML fill recipes after `phClr` substitution.
    * Uses the same shared fill model as DrawingML shapes and cell-adjacent
@@ -1383,7 +1470,16 @@ export interface ChartTextRun {
   bold?: boolean | null;
   italic?: boolean | null;
   color?: string | null;
+  /** This run/default authored a text-fill choice, resolved or otherwise. */
+  colorPaintAuthored?: boolean | null;
+  /** Effective direct `<a:noFill/>` for this run. */
+  colorHidden?: boolean | null;
   fontFace?: string | null;
+  language?: string | null;
+  /** DrawingML baseline shift normalized to a fraction of the font size. */
+  baseline?: number | null;
+  /** Effective `<a:pPr algn>` for the paragraph that owns this run. */
+  paragraphAlign?: 'l' | 'ctr' | 'r' | 'just' | 'dist' | string | null;
 }
 
 /** One DrawingML paragraph inside a chart-relative text box. */

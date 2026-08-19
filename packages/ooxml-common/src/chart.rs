@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::text::{parse_body_pr, BodyPrDefaults};
+use crate::units::coordinate32_to_emu;
 
 /// Resource ceiling for the expanded Chart Colors total set. Typical Office
 /// parts contain 6 base colors × at most 9 variations; this bound prevents an
@@ -53,6 +54,11 @@ const MAX_CHART_MARKER_GRADIENT_STOPS: usize = 4096;
 /// Aggregate direct marker-paint components retained by one chart. This is an
 /// availability boundary, not a visual compatibility rule.
 const MAX_CHART_MARKER_PAINT_COMPONENTS: usize = MAX_CHART_STYLE_PAINT_COMPONENTS;
+/// Direct data/trendline label shapes can replay one gradient for every label.
+/// Bound both a single recipe and the aggregate retained wire components before
+/// parsing stop lists. These are availability ceilings, not visual rules.
+const MAX_CHART_LABEL_GRADIENT_STOPS: usize = 4096;
+const MAX_CHART_LABEL_PAINT_COMPONENTS: usize = MAX_CHART_STYLE_PAINT_COMPONENTS;
 /// Aggregate role×palette slots retained from one linked Chart Style. Typical
 /// Office parts use 30 paint roles × 6–54 colors. Reject the entire fallback
 /// table before expansion rather than retaining an arbitrary role or palette
@@ -112,7 +118,38 @@ pub struct ChartExElementStyle {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_paint_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_hidden: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_face: Option<String>,
+    /// `<cs:*><cs:defRPr lang>` (MS-ODRAWXML CT_StyleEntry). Preserved as an
+    /// authored language tag; Canvas does not infer language from label text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_language: Option<String>,
+    /// `<cs:*><cs:defRPr baseline>` as a normalized fraction (`0.3` = 30%).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_baseline: Option<f64>,
+    /// Linked `<cs:*><cs:bodyPr>` text-body defaults. Omission remains distinct
+    /// from an authored zero/empty value so direct chart text stays dominant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_rotation: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_wrap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_vertical_anchor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_vertical_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_l_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_t_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_r_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_b_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_body_authored: Option<bool>,
     /// Per-color-style-index DrawingML fill recipes after `phClr`
     /// substitution. Solid fills remain duplicated in `fill_colors` for wire
     /// compatibility; gradient and pattern fills are retained only here.
@@ -1098,7 +1135,21 @@ pub struct ChartTextRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_paint_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_hidden: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_face: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// DrawingML baseline shift normalized to a fraction of the font size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<f64>,
+    /// Effective `<a:pPr algn>` for the paragraph that owns this run. Keeping
+    /// it on each bounded run preserves paragraph-specific alignment without
+    /// introducing another nested wire representation for data labels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paragraph_align: Option<String>,
 }
 
 /// One DrawingML paragraph in a chart-drawing text box.
@@ -1317,6 +1368,9 @@ pub struct ChartTrendline {
     pub label_manual_layout: Option<ChartManualLayout>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_text: Option<String>,
+    /** Bounded formatted runs from `<c:trendlineLbl><c:tx><c:rich>`. */
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_rich_runs: Option<Vec<ChartTextRun>>,
     /// `<c:trendlineLbl><c:numFmt formatCode>` — authored formatting for
     /// generated equation / R² values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1334,7 +1388,33 @@ pub struct ChartTrendline {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_font_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_font_paint_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_font_hidden: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_font_face: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_font_language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_font_baseline: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_text_rotation: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_text_wrap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_text_vertical_anchor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_text_vertical_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_text_l_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_text_t_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_text_r_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_text_b_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_text_body_authored: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_box: Option<ChartLabelBox>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1408,11 +1488,41 @@ pub struct ChartDataLabelOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_paint_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_hidden: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_hpt: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_face: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_baseline: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_rotation: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_wrap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_vertical_anchor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_vertical_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_l_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_t_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_r_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_b_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_body_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_align: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1478,18 +1588,46 @@ pub struct ChartLabelBox {
     /// `<a:noFill>`/absent leaves this `None` (transparent box).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_paint: Option<ChartStyleFill>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_hidden: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_paint_authored: Option<bool>,
     /// `<c:spPr><a:ln><a:solidFill>` resolved hex (no `#`) — border stroke.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_fill: Option<ChartStyleFill>,
     /// `<c:spPr><a:ln w>` border width in EMU (12700 EMU = 1 pt).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_width_emu: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_hidden: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_paint_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_dash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_dash_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_custom_dash: Option<Vec<ChartLineDashSegment>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_cap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_join: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_compound: Option<String>,
 }
 
 /// Mirror of TS `ChartSeriesDataLabels`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartSeriesDataLabels {
+    /// Series-level `<c:dLbls><c:delete>` suppresses the collection. A
+    /// per-point `<c:dLbl><c:delete val="0">` may override it for that point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<bool>,
     pub show_val: bool,
     pub show_cat_name: bool,
     pub show_ser_name: bool,
@@ -1505,6 +1643,10 @@ pub struct ChartSeriesDataLabels {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_paint_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_hidden: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format_code: Option<String>,
     /// `<c:dLbls><c:separator>` (§21.2.2.170) inserted between enabled label
     /// components. Office commonly stores a line break here for pie labels.
@@ -1513,10 +1655,36 @@ pub struct ChartSeriesDataLabels {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_bold: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_baseline: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_hpt: Option<i32>,
     /// `<c:dLbls><c:txPr>…<a:latin typeface>` series-default label face.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_face: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_rotation: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_wrap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_vertical_anchor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_vertical_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_l_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_t_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_r_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_b_ins_emu: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_body_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_align: Option<String>,
     /// Series-default callout-box style (`<c:dLbls>` §21.2.2.49 `<c:spPr>`
     /// §21.2.2.197) — the box drawn around each pie/doughnut label. When present
     /// the pie renderer switches from plain outer-ring text to Word's boxed
@@ -2263,6 +2431,83 @@ fn chart_text_bool_attr(node: Node, name: &str) -> Option<bool> {
         .map(|value| matches!(value, "1" | "true" | "on"))
 }
 
+#[derive(Debug, Clone, Default)]
+struct ChartTextPaint {
+    color: Option<String>,
+    authored: bool,
+    hidden: bool,
+}
+
+/// Resolve the first authored DrawingML text fill in the character-property
+/// cascade. An unsupported or unresolved direct paint is still authoritative:
+/// it blocks lower defaults without inventing a replacement colour.
+fn chart_text_paint<'a, 'input: 'a>(
+    nodes: impl IntoIterator<Item = Option<Node<'a, 'input>>>,
+    resolver: &dyn ColorResolver,
+) -> ChartTextPaint {
+    for props in nodes.into_iter().flatten() {
+        if !shape_has_fill_choice(props) {
+            continue;
+        }
+        return ChartTextPaint {
+            color: resolver.resolve_shape_fill(props),
+            authored: true,
+            hidden: child(props, "noFill").is_some(),
+        };
+    }
+    ChartTextPaint::default()
+}
+
+#[derive(Debug, Clone, Default)]
+struct ChartLabelBodyStyle {
+    authored: bool,
+    rotation: Option<i32>,
+    wrap: Option<String>,
+    anchor: Option<String>,
+    vertical_mode: Option<String>,
+    left_inset: Option<i64>,
+    top_inset: Option<i64>,
+    right_inset: Option<i64>,
+    bottom_inset: Option<i64>,
+}
+
+fn chart_label_body_style(node: Option<Node<'_, '_>>) -> ChartLabelBodyStyle {
+    let Some(body) = node else {
+        return ChartLabelBodyStyle::default();
+    };
+    let signed_coordinate = |name: &str| body.attribute(name).and_then(coordinate32_to_emu);
+    ChartLabelBodyStyle {
+        authored: true,
+        rotation: body
+            .attribute("rot")
+            .and_then(|value| value.parse::<i32>().ok()),
+        wrap: body.attribute("wrap").map(ToOwned::to_owned),
+        anchor: body.attribute("anchor").map(ToOwned::to_owned),
+        vertical_mode: body.attribute("vert").map(ToOwned::to_owned),
+        left_inset: signed_coordinate("lIns"),
+        top_inset: signed_coordinate("tIns"),
+        right_inset: signed_coordinate("rIns"),
+        bottom_inset: signed_coordinate("bIns"),
+    }
+}
+
+fn merge_chart_label_body_styles(
+    direct: ChartLabelBodyStyle,
+    fallback: ChartLabelBodyStyle,
+) -> ChartLabelBodyStyle {
+    ChartLabelBodyStyle {
+        authored: direct.authored || fallback.authored,
+        rotation: direct.rotation.or(fallback.rotation),
+        wrap: direct.wrap.or(fallback.wrap),
+        anchor: direct.anchor.or(fallback.anchor),
+        vertical_mode: direct.vertical_mode.or(fallback.vertical_mode),
+        left_inset: direct.left_inset.or(fallback.left_inset),
+        top_inset: direct.top_inset.or(fallback.top_inset),
+        right_inset: direct.right_inset.or(fallback.right_inset),
+        bottom_inset: direct.bottom_inset.or(fallback.bottom_inset),
+    }
+}
+
 fn chart_text_run_from_node(
     run: Node,
     paragraph_default: Option<Node>,
@@ -2279,19 +2524,7 @@ fn chart_text_run_from_node(
         .into_iter()
         .flatten()
         .find_map(|node| node.attribute("sz").and_then(parse_text_font_size_hpt));
-    let color = run_props
-        .and_then(|node| child(node, "solidFill"))
-        .and_then(|fill| resolver.resolve_solid_fill(fill))
-        .or_else(|| {
-            paragraph_default
-                .and_then(|node| child(node, "solidFill"))
-                .and_then(|fill| resolver.resolve_solid_fill(fill))
-        })
-        .or_else(|| {
-            text_body_default
-                .and_then(|node| child(node, "solidFill"))
-                .and_then(|fill| resolver.resolve_solid_fill(fill))
-        });
+    let text_paint = chart_text_paint([run_props, paragraph_default, text_body_default], resolver);
     let font_face = run_props
         .and_then(|node| child(node, "latin"))
         .and_then(|latin| latin.attribute("typeface"))
@@ -2319,8 +2552,22 @@ fn chart_text_run_from_node(
             .and_then(|node| chart_text_bool_attr(node, "i"))
             .or_else(|| paragraph_default.and_then(|node| chart_text_bool_attr(node, "i")))
             .or_else(|| text_body_default.and_then(|node| chart_text_bool_attr(node, "i"))),
-        color,
+        color: text_paint.color,
+        color_paint_authored: text_paint.authored.then_some(true),
+        color_hidden: text_paint.hidden.then_some(true),
         font_face,
+        language: [run_props, paragraph_default, text_body_default]
+            .into_iter()
+            .flatten()
+            .find_map(|node| node.attribute("lang").map(ToOwned::to_owned)),
+        baseline: [run_props, paragraph_default, text_body_default]
+            .into_iter()
+            .flatten()
+            .find_map(|node| {
+                node.attribute("baseline")
+                    .and_then(parse_chart_text_percentage)
+            }),
+        paragraph_align: None,
     })
 }
 
@@ -2356,7 +2603,12 @@ fn parse_chart_title_rich_runs(
                 bold: None,
                 italic: None,
                 color: None,
+                color_paint_authored: None,
+                color_hidden: None,
                 font_face: None,
+                language: None,
+                baseline: None,
+                paragraph_align: None,
             });
             scalar_count += 1;
         }
@@ -3433,10 +3685,12 @@ fn extract_direct_shape_fill(shape: Option<Node>, resolver: &dyn ColorResolver) 
     }
 }
 
-fn extract_direct_shape_line(node: Node, resolver: &dyn ColorResolver) -> DirectShapeLine {
+fn extract_direct_shape_line_from_sp_pr(
+    shape: Option<Node>,
+    resolver: &dyn ColorResolver,
+) -> DirectShapeLine {
     use crate::line::LineDash;
 
-    let shape = child(node, "spPr");
     let line = shape.and_then(|shape| child(shape, "ln"));
     let parsed_line = line.map(|line| parse_chart_style_line(line, resolver, None));
     let paint_authored = line
@@ -3450,7 +3704,11 @@ fn extract_direct_shape_line(node: Node, resolver: &dyn ColorResolver) -> Direct
             })
         })
         .map(|_| true);
-    let (color, width_emu, no_fill) = extract_sp_pr_ln_style(node, resolver);
+    let color = line.and_then(|line| resolver.resolve_shape_fill(line));
+    let width_emu = line
+        .and_then(|line| line.attribute("w"))
+        .and_then(|value| value.parse::<u32>().ok());
+    let no_fill = line.is_some_and(|line| child(line, "noFill").is_some());
     let fill = parsed_line
         .as_ref()
         .and_then(|line| line.paint.as_ref())
@@ -3498,6 +3756,10 @@ fn extract_direct_shape_line(node: Node, resolver: &dyn ColorResolver) -> Direct
         hidden: no_fill.then_some(true),
         paint_authored,
     }
+}
+
+fn extract_direct_shape_line(node: Node, resolver: &dyn ColorResolver) -> DirectShapeLine {
+    extract_direct_shape_line_from_sp_pr(child(node, "spPr"), resolver)
 }
 
 #[derive(Default)]
@@ -3663,14 +3925,20 @@ pub fn extract_series_trendlines(
     ser_node: Node,
     resolver: &dyn ColorResolver,
 ) -> Option<Vec<ChartTrendline>> {
-    fn first_named_descendant<'a, 'input>(
-        container: Node<'a, 'input>,
-        name: &str,
-    ) -> Option<Node<'a, 'input>> {
-        container
-            .descendants()
-            .find(|node| node.is_element() && node.tag_name().name() == name)
-    }
+    let label_shapes = ser_node
+        .children()
+        .filter(|node| node.is_element() && node.tag_name().name() == "trendline")
+        .filter_map(|trendline| child(trendline, "trendlineLbl"))
+        .filter_map(|label| child(label, "spPr"));
+    let allow_label_paints = label_paint_recipes_within_budget(label_shapes);
+    extract_series_trendlines_with_paint_policy(ser_node, resolver, allow_label_paints)
+}
+
+fn extract_series_trendlines_with_paint_policy(
+    ser_node: Node,
+    resolver: &dyn ColorResolver,
+    allow_label_paints: bool,
+) -> Option<Vec<ChartTrendline>> {
     let mut out = Vec::new();
     for tl in ser_node
         .children()
@@ -3709,16 +3977,11 @@ pub fn extract_series_trendlines(
         let label_txpr = label.and_then(|node| child(node, "txPr"));
         let label_tx = label.and_then(|node| child(node, "tx"));
         let label_rich = label_tx.and_then(|tx| child(tx, "rich"));
-        let rich_run_prop = label_rich.and_then(|rich| first_named_descendant(rich, "rPr"));
-        let rich_default_prop = label_rich.and_then(|rich| first_named_descendant(rich, "defRPr"));
-        let txpr_run_prop = label_txpr.and_then(|txpr| first_named_descendant(txpr, "rPr"));
-        let txpr_default_prop = label_txpr.and_then(|txpr| first_named_descendant(txpr, "defRPr"));
-        let run_props = [
-            rich_run_prop,
-            rich_default_prop,
-            txpr_run_prop,
-            txpr_default_prop,
-        ];
+        // Label-wide fallback comes only from paragraph defaults. Individual
+        // rich-run rPr stays on `label_rich_runs`; promoting it here would make
+        // one run's noFill/colour/typography leak into unformatted siblings.
+        let txpr_default_prop = label_txpr.and_then(first_paragraph_default_run_props);
+        let run_props = [txpr_default_prop];
         let label_text = label_tx
             .and_then(|tx| {
                 child(tx, "rich")
@@ -3740,6 +4003,8 @@ pub fn extract_series_trendlines(
                     })
             })
             .filter(|text| !text.is_empty());
+        let label_rich_runs =
+            label.and_then(|node| parse_data_label_rich_runs(node, resolver, None));
         let label_manual_layout = label
             .and_then(|node| child(node, "layout"))
             .and_then(extract_manual_layout);
@@ -3762,21 +4027,27 @@ pub fn extract_series_trendlines(
             .iter()
             .flatten()
             .find_map(|node| chart_text_bool_attr(*node, "i"));
-        let label_font_color = run_props.iter().flatten().find_map(|node| {
-            child(*node, "solidFill").and_then(|fill| resolver.resolve_solid_fill(fill))
-        });
+        let label_text_paint = chart_text_paint(run_props, resolver);
+        let label_font_color = label_text_paint.color.clone();
         let label_font_face = run_props
             .iter()
             .flatten()
             .find_map(|node| first_latin_typeface(*node));
-        let label_text_align = label_rich
-            .and_then(|rich| first_named_descendant(rich, "pPr"))
-            .and_then(|node| attr(&node, "algn"))
-            .or_else(|| {
-                label_txpr
-                    .and_then(|txpr| first_named_descendant(txpr, "pPr"))
-                    .and_then(|node| attr(&node, "algn"))
-            });
+        let label_font_language = run_props
+            .iter()
+            .flatten()
+            .find_map(|node| node.attribute("lang").map(ToOwned::to_owned));
+        let label_font_baseline = run_props.iter().flatten().find_map(|node| {
+            node.attribute("baseline")
+                .and_then(parse_chart_text_percentage)
+        });
+        let label_body = merge_chart_label_body_styles(
+            chart_label_body_style(label_rich.and_then(|rich| child(rich, "bodyPr"))),
+            chart_label_body_style(label_txpr.and_then(|txpr| child(txpr, "bodyPr"))),
+        );
+        let label_text_align = label_txpr
+            .and_then(first_paragraph_properties)
+            .and_then(|node| attr(&node, "algn"));
         out.push(ChartTrendline {
             name: child(tl, "name")
                 .and_then(|node| node.text())
@@ -3792,18 +4063,33 @@ pub fn extract_series_trendlines(
             disp_eq: bool_child(tl, "dispEq"),
             label_manual_layout,
             label_text,
+            label_rich_runs,
             label_format_code,
             label_format_source_linked,
             label_font_size_hpt,
             label_font_bold,
             label_font_italic,
             label_font_color,
+            label_font_paint_authored: label_text_paint.authored.then_some(true),
+            label_font_hidden: label_text_paint.hidden.then_some(true),
             label_font_face,
+            label_font_language,
+            label_font_baseline,
+            label_text_rotation: label_body.rotation,
+            label_text_wrap: label_body.wrap,
+            label_text_vertical_anchor: label_body.anchor,
+            label_text_vertical_mode: label_body.vertical_mode,
+            label_text_l_ins_emu: label_body.left_inset,
+            label_text_t_ins_emu: label_body.top_inset,
+            label_text_r_ins_emu: label_body.right_inset,
+            label_text_b_ins_emu: label_body.bottom_inset,
+            label_text_body_authored: label_body.authored.then_some(true),
             label_box: label.and_then(|node| {
-                parse_label_box(
+                parse_label_box_with_policy(
                     node.children()
                         .find(|child| child.is_element() && child.tag_name().name() == "spPr"),
                     resolver,
+                    allow_label_paints,
                 )
             }),
             label_text_align,
@@ -4659,14 +4945,43 @@ fn parse_chartex_element_style(
         });
     let (font_size_hpt, font_bold, font_color, font_face) =
         extract_chartex_style_text_props(Some(style_node), resolver);
+    let direct_font_paint = chart_text_paint([child(style_node, "defRPr")], resolver);
+    let font_paint_authored = (direct_font_paint.authored || font_color.is_some()).then_some(true);
+    let font_hidden = direct_font_paint.hidden.then_some(true);
     let font_italic = extract_chartex_style_text_italic(Some(style_node));
+    let (
+        font_language,
+        font_baseline,
+        text_rotation,
+        text_wrap,
+        text_vertical_anchor,
+        text_vertical_mode,
+        text_l_ins_emu,
+        text_t_ins_emu,
+        text_r_ins_emu,
+        text_b_ins_emu,
+    ) = extract_chartex_style_text_body(style_node);
+    let text_body_authored = child(style_node, "bodyPr").map(|_| true);
 
     ChartExElementStyle {
         font_size_hpt,
         font_bold,
         font_italic,
         font_color,
+        font_paint_authored,
+        font_hidden,
         font_face,
+        font_language,
+        font_baseline,
+        text_rotation,
+        text_wrap,
+        text_vertical_anchor,
+        text_vertical_mode,
+        text_l_ins_emu,
+        text_t_ins_emu,
+        text_r_ins_emu,
+        text_b_ins_emu,
+        text_body_authored,
         fill_paints,
         fill_colors,
         fill_hidden,
@@ -5165,35 +5480,37 @@ fn extract_chartex_style_text_props(
         .and_then(|props| props.attribute("sz"))
         .and_then(parse_text_font_size_hpt);
     let bold = def_r_pr.and_then(|props| chart_text_bool_attr(props, "b"));
-    let color = def_r_pr
+    // A directly-authored DrawingML fill choice owns the text paint even when
+    // that choice is noFill or a paint kind the current wire model cannot
+    // resolve. Falling through to fontRef in that case would let inherited
+    // formatting revive text that the direct formatting intentionally hides.
+    let direct_paint_authored = def_r_pr.is_some_and(shape_has_fill_choice);
+    let direct_color = def_r_pr
         .and_then(|props| child(props, "solidFill"))
-        .and_then(|fill| resolver.resolve_solid_fill(fill))
-        .or_else(|| {
-            font_ref.and_then(|font| {
-                font.children()
-                    .find(|node| {
-                        node.is_element()
-                            && matches!(
-                                node.tag_name().name(),
-                                "srgbClr"
-                                    | "schemeClr"
-                                    | "sysClr"
-                                    | "prstClr"
-                                    | "scrgbClr"
-                                    | "hslClr"
-                            )
+        .and_then(|fill| resolver.resolve_solid_fill(fill));
+    let inherited_color = (!direct_paint_authored)
+        .then_some(font_ref)
+        .flatten()
+        .and_then(|font| {
+            font.children()
+                .find(|node| {
+                    node.is_element()
+                        && matches!(
+                            node.tag_name().name(),
+                            "srgbClr" | "schemeClr" | "sysClr" | "prstClr" | "scrgbClr" | "hslClr"
+                        )
+                })
+                .and_then(|color_node| {
+                    crate::color::color_source_from_element(color_node).and_then(|source| {
+                        crate::color::resolve_color_source(
+                            source,
+                            &ColorResolverThemeAdapter(resolver),
+                            resolver.tint_mode(),
+                        )
                     })
-                    .and_then(|color_node| {
-                        crate::color::color_source_from_element(color_node).and_then(|source| {
-                            crate::color::resolve_color_source(
-                                source,
-                                &ColorResolverThemeAdapter(resolver),
-                                resolver.tint_mode(),
-                            )
-                        })
-                    })
-            })
+                })
         });
+    let color = direct_color.or(inherited_color);
     let face = def_r_pr.and_then(first_latin_typeface).or_else(|| {
         match font_ref.and_then(|font| font.attribute("idx")) {
             Some("major") => resolver.theme_major_font_latin(),
@@ -5206,6 +5523,66 @@ fn extract_chartex_style_text_props(
 
 fn extract_chartex_style_text_italic(style_node: Option<Node>) -> Option<bool> {
     child(style_node?, "defRPr").and_then(|props| chart_text_bool_attr(props, "i"))
+}
+
+/// Normalize DrawingML `ST_Percentage` to a fraction. Strict packages use a
+/// percent lexical form (`30%`); Transitional packages may use an integer
+/// (`30000`, thousandths of a percent).
+fn parse_chart_text_percentage(value: &str) -> Option<f64> {
+    if let Some(percent) = value.strip_suffix('%') {
+        if percent.is_empty() || percent.starts_with('+') || percent.matches('.').count() > 1 {
+            return None;
+        }
+        let digits = percent.strip_prefix('-').unwrap_or(percent);
+        if digits.is_empty()
+            || !digits.chars().all(|ch| ch.is_ascii_digit() || ch == '.')
+            || digits.starts_with('.')
+            || digits.ends_with('.')
+        {
+            return None;
+        }
+        let parsed = percent.parse::<f64>().ok()?;
+        return parsed.is_finite().then_some(parsed / 100.0);
+    }
+    value
+        .parse::<i32>()
+        .ok()
+        .map(|raw| f64::from(raw) / 100_000.0)
+}
+
+#[allow(clippy::type_complexity)]
+fn extract_chartex_style_text_body(
+    style_node: Node,
+) -> (
+    Option<String>,
+    Option<f64>,
+    Option<i32>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+) {
+    let def_r_pr = child(style_node, "defRPr");
+    let body = chart_label_body_style(child(style_node, "bodyPr"));
+    (
+        def_r_pr
+            .and_then(|props| props.attribute("lang"))
+            .map(ToOwned::to_owned),
+        def_r_pr
+            .and_then(|props| props.attribute("baseline"))
+            .and_then(parse_chart_text_percentage),
+        body.rotation,
+        body.wrap,
+        body.anchor,
+        body.vertical_mode,
+        body.left_inset,
+        body.top_inset,
+        body.right_inset,
+        body.bottom_inset,
+    )
 }
 
 /// Parse chartEx with a package-supplied resolver for formula-only dimensions.
@@ -5328,10 +5705,26 @@ type ChartexSeriesLabels = (
     Option<ChartSeriesDataLabels>,
 );
 
+fn first_paragraph_properties<'a, 'input: 'a>(
+    text_body: Node<'a, 'input>,
+) -> Option<Node<'a, 'input>> {
+    text_body
+        .children()
+        .find(|node| node.is_element() && node.tag_name().name() == "p")
+        .and_then(|paragraph| child(paragraph, "pPr"))
+}
+
+fn first_paragraph_default_run_props<'a, 'input: 'a>(
+    text_body: Node<'a, 'input>,
+) -> Option<Node<'a, 'input>> {
+    first_paragraph_properties(text_body).and_then(|properties| child(properties, "defRPr"))
+}
+
 fn parse_chartex_series_labels(
     series: Node,
     value_count: usize,
     resolver: &dyn ColorResolver,
+    allow_label_paints: bool,
 ) -> ChartexSeriesLabels {
     let Some(labels) = child(series, "dataLabels") else {
         return (None, None, None);
@@ -5342,7 +5735,15 @@ fn parse_chartex_series_labels(
             .and_then(|node| chart_text_bool_attr(node, name))
             .unwrap_or(false)
     };
+    let series_tx_pr = child(labels, "txPr");
+    // MS-ODRAWXML CT_DataLabels permits one paragraph without runs here.
+    // Only that paragraph's default run properties participate in the
+    // collection-level label style; invalid runs/later paragraphs are ignored.
+    let series_run_props = series_tx_pr.and_then(first_paragraph_default_run_props);
+    let series_text_paint = chart_text_paint([series_run_props], resolver);
+    let series_body = chart_label_body_style(series_tx_pr.and_then(|tx| child(tx, "bodyPr")));
     let defaults = ChartSeriesDataLabels {
+        deleted: None,
         show_val: bool_value("value"),
         show_cat_name: bool_value("categoryName"),
         show_ser_name: bool_value("seriesName"),
@@ -5350,58 +5751,127 @@ fn parse_chartex_series_labels(
         show_bubble_size: false,
         show_legend_key: false,
         position: attr(&labels, "pos"),
-        font_color: extract_axis_tick_label_color(labels, resolver),
+        font_color: series_text_paint.color.clone(),
+        font_paint_authored: series_text_paint.authored.then_some(true),
+        font_hidden: series_text_paint.hidden.then_some(true),
         format_code: child(labels, "numFmt").and_then(|node| attr(&node, "formatCode")),
-        separator: child(labels, "separator")
-            .and_then(|node| node.text())
+        separator: child(labels, "separator").map(|node| node.text().unwrap_or("").to_owned()),
+        font_bold: series_run_props.and_then(|props| chart_text_bool_attr(props, "b")),
+        font_italic: series_run_props.and_then(|props| chart_text_bool_attr(props, "i")),
+        font_language: series_run_props
+            .and_then(|props| props.attribute("lang"))
             .map(ToOwned::to_owned),
-        font_bold: extract_axis_tick_label_bold(labels),
-        font_size_hpt: extract_axis_tick_label_size(labels),
-        font_face: extract_axis_tick_label_face(labels),
-        label_box: None,
+        font_baseline: series_run_props
+            .and_then(|props| props.attribute("baseline"))
+            .and_then(parse_chart_text_percentage),
+        font_size_hpt: series_run_props
+            .and_then(|props| props.attribute("sz"))
+            .and_then(parse_text_font_size_hpt),
+        font_face: series_run_props.and_then(first_latin_typeface),
+        text_rotation: series_body.rotation,
+        text_wrap: series_body.wrap,
+        text_vertical_anchor: series_body.anchor,
+        text_vertical_mode: series_body.vertical_mode,
+        text_l_ins_emu: series_body.left_inset,
+        text_t_ins_emu: series_body.top_inset,
+        text_r_ins_emu: series_body.right_inset,
+        text_b_ins_emu: series_body.bottom_inset,
+        text_body_authored: series_body.authored.then_some(true),
+        text_align: series_tx_pr
+            .and_then(first_paragraph_properties)
+            .and_then(|props| attr(&props, "algn")),
+        label_box: parse_label_box_with_policy(child(labels, "spPr"), resolver, allow_label_paints),
         show_leader_lines: false,
         leader_line_color: None,
         leader_line_width_emu: None,
         leader_line_hidden: None,
         leader_line_dash: None,
     };
-    let mut colors = vec![None; value_count.max(1)];
+    let mut colors = vec![None; value_count];
     let mut has_color = false;
     let mut overrides = Vec::new();
     for label in labels
         .children()
         .filter(|node| node.is_element() && node.tag_name().name() == "dataLabel")
     {
-        let Some(index) = attr(&label, "idx").and_then(|value| value.parse::<usize>().ok()) else {
+        let Some(index) = attr(&label, "idx")
+            .and_then(|value| value.parse::<u32>().ok())
+            .and_then(|value| usize::try_from(value).ok())
+        else {
             continue;
         };
-        if index >= colors.len() {
-            colors.resize(index + 1, None);
+        // CT_DataLabel@idx addresses either a bounded series cache or a bounded
+        // pre-order hierarchy node. It may legitimately exceed `value_count`
+        // for treemap/sunburst, but it must never resize a sparse color vector
+        // from an XML attribute (e.g. idx=4294967295).
+        if index >= MAX_CHART_CACHE_POINTS {
+            continue;
         }
         let tx_pr = child(label, "txPr");
-        let font_color = extract_axis_tick_label_color(label, resolver);
-        if let Some(color) = font_color.clone() {
+        let tx_default_props = tx_pr.and_then(first_paragraph_default_run_props);
+        // The rich-text parser already applies each paragraph's defRPr to its
+        // own runs. Passing the first run as a body default would incorrectly
+        // leak direct formatting into later sibling runs.
+        let rich_runs = tx_pr.and_then(|tx| parse_data_label_rich_body(tx, None, resolver, None));
+        // Paragraph defRPr is already applied to the runs in that paragraph.
+        // It is a point-wide fallback only for a style-only txPr with no rich
+        // text; otherwise it would leak the first paragraph into later ones.
+        let point_default_props = rich_runs.is_none().then_some(tx_default_props).flatten();
+        let text_paint = chart_text_paint([point_default_props], resolver);
+        let font_color = text_paint.color.clone();
+        if let Some(color) = font_color.clone().filter(|_| index < colors.len()) {
             colors[index] = Some(color);
             has_color = true;
         }
+        let body_style = chart_label_body_style(tx_pr.and_then(|tx| child(tx, "bodyPr")));
         let label_visibility = child(label, "visibility");
         overrides.push(ChartDataLabelOverride {
             idx: index as u32,
-            text: tx_pr
-                .map(|node| flatten_rich_text(node, None))
+            text: rich_runs
+                .as_ref()
+                .map(|runs| runs.iter().map(|run| run.text.as_str()).collect())
+                .or_else(|| tx_pr.map(|node| flatten_rich_text(node, None)))
                 .unwrap_or_default(),
-            rich_runs: None,
             position: attr(&label, "pos"),
             font_color,
-            font_size_hpt: extract_axis_tick_label_size(label),
-            font_face: extract_axis_tick_label_face(label),
-            font_bold: extract_axis_tick_label_bold(label),
-            format_code: child(label, "numFmt").and_then(|node| attr(&node, "formatCode")),
-            separator: child(label, "separator")
-                .and_then(|node| node.text())
+            font_paint_authored: text_paint.authored.then_some(true),
+            font_hidden: text_paint.hidden.then_some(true),
+            font_size_hpt: point_default_props
+                .and_then(|props| props.attribute("sz"))
+                .and_then(parse_text_font_size_hpt),
+            font_face: point_default_props.and_then(first_latin_typeface),
+            font_bold: point_default_props.and_then(|props| chart_text_bool_attr(props, "b")),
+            font_italic: point_default_props.and_then(|props| chart_text_bool_attr(props, "i")),
+            font_language: point_default_props
+                .and_then(|props| props.attribute("lang"))
                 .map(ToOwned::to_owned),
+            font_baseline: point_default_props
+                .and_then(|props| props.attribute("baseline"))
+                .and_then(parse_chart_text_percentage),
+            text_rotation: body_style.rotation,
+            text_wrap: body_style.wrap,
+            text_vertical_anchor: body_style.anchor,
+            text_vertical_mode: body_style.vertical_mode,
+            text_l_ins_emu: body_style.left_inset,
+            text_t_ins_emu: body_style.top_inset,
+            text_r_ins_emu: body_style.right_inset,
+            text_b_ins_emu: body_style.bottom_inset,
+            text_body_authored: body_style.authored.then_some(true),
+            text_align: if rich_runs.is_none() {
+                tx_pr
+                    .and_then(first_paragraph_properties)
+                    .and_then(|props| attr(&props, "algn"))
+            } else {
+                None
+            },
+            format_code: child(label, "numFmt").and_then(|node| attr(&node, "formatCode")),
+            separator: child(label, "separator").map(|node| node.text().unwrap_or("").to_owned()),
             manual_layout: None,
-            label_box: None,
+            label_box: parse_label_box_with_policy(
+                child(label, "spPr"),
+                resolver,
+                allow_label_paints,
+            ),
             show_val: label_visibility.and_then(|node| chart_text_bool_attr(node, "value")),
             show_cat_name: label_visibility
                 .and_then(|node| chart_text_bool_attr(node, "categoryName")),
@@ -5410,6 +5880,7 @@ fn parse_chartex_series_labels(
             show_percent: None,
             show_bubble_size: None,
             show_legend_key: None,
+            rich_runs,
             deleted: None,
         });
     }
@@ -5425,6 +5896,12 @@ fn parse_chartex_series_labels(
         let Some(idx) = attr(&hidden, "idx").and_then(|value| value.parse::<u32>().ok()) else {
             continue;
         };
+        if usize::try_from(idx)
+            .ok()
+            .is_none_or(|index| index >= MAX_CHART_CACHE_POINTS)
+        {
+            continue;
+        }
         if let Some(position) = override_positions.get(&idx).copied() {
             overrides[position].deleted = Some(true);
         } else {
@@ -5434,9 +5911,24 @@ fn parse_chartex_series_labels(
                 rich_runs: None,
                 position: None,
                 font_color: None,
+                font_paint_authored: None,
+                font_hidden: None,
                 font_size_hpt: None,
                 font_face: None,
                 font_bold: None,
+                font_italic: None,
+                font_language: None,
+                font_baseline: None,
+                text_rotation: None,
+                text_wrap: None,
+                text_vertical_anchor: None,
+                text_vertical_mode: None,
+                text_l_ins_emu: None,
+                text_t_ins_emu: None,
+                text_r_ins_emu: None,
+                text_b_ins_emu: None,
+                text_body_authored: None,
+                text_align: None,
                 format_code: None,
                 separator: None,
                 manual_layout: None,
@@ -5558,6 +6050,27 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         }
     };
     let primary_data = data_for_series(series_node)?;
+    // Label paint work is bounded per chart, not per CT_Series. Preflight every
+    // visible series that this parser will retain before resolving any of its
+    // gradient/pattern recipes, so several individually valid series cannot
+    // multiply the chart-wide allocation ceiling.
+    let retained_extra_label_series = (chart_type == "clusteredColumn")
+        .then(|| {
+            series_nodes
+                .iter()
+                .copied()
+                .skip(1)
+                .filter(|node| attr(node, "layoutId").as_deref() == Some(chart_type.as_str()))
+                .filter(|node| data_for_series(*node).is_some())
+        })
+        .into_iter()
+        .flatten();
+    let allow_chartex_label_paints = chartex_label_paint_recipes_within_limit(
+        std::iter::once(series_node)
+            .chain(pareto_series_node)
+            .chain(retained_extra_label_series),
+        MAX_CHART_LABEL_PAINT_COMPONENTS,
+    );
 
     // ── chartEx title (MS 2014 chartex ext) ──────────────────────────────────
     // Office may save either DrawingML rich text or the compact
@@ -5799,8 +6312,12 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         None
     };
 
-    let (data_label_colors, data_label_overrides, _) =
-        parse_chartex_series_labels(series_node, raw_values.len(), resolver);
+    let (data_label_colors, data_label_overrides, series_data_labels) = parse_chartex_series_labels(
+        series_node,
+        raw_values.len(),
+        resolver,
+        allow_chartex_label_paints,
+    );
 
     let mut series = vec![ChartSeries {
         name: series_name,
@@ -5852,7 +6369,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
             (!overrides.is_empty()).then_some(overrides)
         },
         data_label_overrides,
-        series_data_labels: None,
+        series_data_labels,
         err_bars: None,
         // chartEx (waterfall) has no `<c:smooth>` concept.
         smooth: None,
@@ -5900,8 +6417,12 @@ pub fn parse_chartex_part_with_references_and_style_parts(
             let overrides = parse_chartex_data_point_overrides(pareto_node, resolver);
             (!overrides.is_empty()).then_some(overrides)
         };
-        let (label_colors, label_overrides, label_defaults) =
-            parse_chartex_series_labels(pareto_node, pareto_series.values.len(), resolver);
+        let (label_colors, label_overrides, label_defaults) = parse_chartex_series_labels(
+            pareto_node,
+            pareto_series.values.len(),
+            resolver,
+            allow_chartex_label_paints,
+        );
         pareto_series.data_label_colors = label_colors;
         pareto_series.data_label_overrides = label_overrides;
         pareto_series.series_data_labels = label_defaults;
@@ -5954,8 +6475,12 @@ pub fn parse_chartex_part_with_references_and_style_parts(
                 let overrides = parse_chartex_data_point_overrides(extra_node, resolver);
                 (!overrides.is_empty()).then_some(overrides)
             };
-            let (label_colors, label_overrides, label_defaults) =
-                parse_chartex_series_labels(extra_node, extra.values.len(), resolver);
+            let (label_colors, label_overrides, label_defaults) = parse_chartex_series_labels(
+                extra_node,
+                extra.values.len(),
+                resolver,
+                allow_chartex_label_paints,
+            );
             extra.data_label_colors = label_colors;
             extra.data_label_overrides = label_overrides;
             extra.series_data_labels = label_defaults;
@@ -6107,37 +6632,6 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         .and_then(extract_axis_tick_label_face)
         .or(style_data_label_face);
     let data_label_position = data_labels.and_then(|labels| attr(&labels, "pos"));
-    if let Some(labels) = data_labels {
-        let visibility = child(labels, "visibility");
-        let visible_attr = |name: &str| -> bool {
-            visibility
-                .and_then(|node| attr(&node, name))
-                .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-        };
-        series[0].series_data_labels = Some(ChartSeriesDataLabels {
-            show_val: visible_attr("value"),
-            show_cat_name: visible_attr("categoryName"),
-            show_ser_name: visible_attr("seriesName"),
-            show_percent: false,
-            show_bubble_size: false,
-            show_legend_key: false,
-            position: data_label_position.clone(),
-            font_color: data_label_font_color.clone(),
-            format_code: child(labels, "numFmt").and_then(|format| attr(&format, "formatCode")),
-            separator: child(labels, "separator")
-                .and_then(|separator| separator.text())
-                .map(|value| value.to_string()),
-            font_bold: data_label_font_bold,
-            font_size_hpt: data_label_font_size_hpt,
-            font_face: data_label_font_face.clone(),
-            label_box: None,
-            show_leader_lines: false,
-            leader_line_color: None,
-            leader_line_width_emu: None,
-            leader_line_hidden: None,
-            leader_line_dash: None,
-        });
-    }
     let (cat_axis_line_color, cat_axis_line_width_emu, cat_axis_line_hidden) = cat_axis
         .map(|axis| extract_axis_line_style(axis, resolver))
         .unwrap_or((None, None, false));
@@ -7319,10 +7813,20 @@ fn parse_data_label_rich_runs(
     cellrange_cache: Option<&str>,
 ) -> Option<Vec<ChartTextRun>> {
     let rich = child(label, "tx").and_then(|tx| child(tx, "rich"))?;
-    let txpr_default = child(label, "txPr").and_then(|tx| {
-        tx.descendants()
-            .find(|node| node.is_element() && matches!(node.tag_name().name(), "rPr" | "defRPr"))
-    });
+    let txpr_default = child(label, "txPr").and_then(first_paragraph_default_run_props);
+    parse_data_label_rich_body(rich, txpr_default, resolver, cellrange_cache)
+}
+
+/// Parse the bounded DrawingML paragraphs carried directly by ChartEx
+/// `<cx:dataLabel><cx:txPr>` as well as classic `<c:tx><c:rich>`. The caller
+/// supplies the effective txPr default because classic labels may keep it in a
+/// sibling element while ChartEx keeps it in this same rich body.
+fn parse_data_label_rich_body(
+    rich: Node,
+    txpr_default: Option<Node>,
+    resolver: &dyn ColorResolver,
+    cellrange_cache: Option<&str>,
+) -> Option<Vec<ChartTextRun>> {
     let mut runs = Vec::new();
     let mut scalar_count = 0usize;
 
@@ -7332,6 +7836,7 @@ fn parse_data_label_rich_runs(
         .take(MAX_DATA_LABEL_RICH_LINES)
         .enumerate()
     {
+        let paragraph_align = child(paragraph, "pPr").and_then(|props| attr(&props, "algn"));
         if paragraph_index > 0 {
             if scalar_count >= MAX_DATA_LABEL_RICH_SCALARS {
                 break;
@@ -7342,17 +7847,38 @@ fn parse_data_label_rich_runs(
                 bold: None,
                 italic: None,
                 color: None,
+                color_paint_authored: None,
+                color_hidden: None,
                 font_face: None,
+                language: None,
+                baseline: None,
+                paragraph_align: None,
             });
             scalar_count += 1;
         }
         let paragraph_default = child(paragraph, "pPr").and_then(|props| child(props, "defRPr"));
-        for run_node in paragraph
-            .children()
-            .filter(|node| node.is_element() && matches!(node.tag_name().name(), "r" | "fld"))
-        {
+        for run_node in paragraph.children().filter(|node| {
+            node.is_element() && matches!(node.tag_name().name(), "r" | "fld" | "br")
+        }) {
             if scalar_count >= MAX_DATA_LABEL_RICH_SCALARS {
                 break;
+            }
+            if run_node.tag_name().name() == "br" {
+                runs.push(ChartTextRun {
+                    text: "\n".to_string(),
+                    font_size_hpt: None,
+                    bold: None,
+                    italic: None,
+                    color: None,
+                    color_paint_authored: None,
+                    color_hidden: None,
+                    font_face: None,
+                    language: None,
+                    baseline: None,
+                    paragraph_align: paragraph_align.clone(),
+                });
+                scalar_count += 1;
+                continue;
             }
             let Some(mut run) =
                 chart_text_run_from_node(run_node, paragraph_default, txpr_default, resolver)
@@ -7369,6 +7895,7 @@ fn parse_data_label_rich_runs(
             scalar_count += bounded.chars().count();
             if !bounded.is_empty() {
                 run.text = bounded;
+                run.paragraph_align = paragraph_align.clone();
                 runs.push(run);
             }
         }
@@ -7384,25 +7911,184 @@ fn parse_data_label_rich_runs(
 /// [`ColorResolver::resolve_shape_fill`] so a `<a:sysClr>`/`<a:schemeClr>` picks
 /// up its transforms (Office writes the default white box as
 /// `<a:sysClr val="window">`).
-fn parse_label_box(sp_pr: Option<Node>, resolver: &dyn ColorResolver) -> Option<ChartLabelBox> {
-    let sp = sp_pr?;
-    let fill = resolver.resolve_shape_fill(sp);
-    let (border_color, border_width_emu) = match child(sp, "ln") {
-        None => (None, None),
-        Some(ln) => {
-            let color = resolver.resolve_shape_fill(ln);
-            let width = ln.attribute("w").and_then(|v| v.parse::<u32>().ok());
-            (color, width)
+fn label_box_paint_component_counts(sp_pr: Node) -> [usize; 2] {
+    [
+        chart_style_paint_component_count(sp_pr).unwrap_or(0),
+        child(sp_pr, "ln")
+            .and_then(chart_style_paint_component_count)
+            .unwrap_or(0),
+    ]
+}
+
+fn label_shape_nodes<'a, 'input: 'a>(
+    d_lbls: Node<'a, 'input>,
+) -> impl Iterator<Item = Node<'a, 'input>> + 'a {
+    d_lbls
+        .children()
+        .filter(|node| {
+            node.is_element() && matches!(node.tag_name().name(), "spPr" | "dLbl" | "dataLabel")
+        })
+        .flat_map(|node| {
+            if node.tag_name().name() == "spPr" {
+                Some(node)
+            } else {
+                child(node, "spPr")
+            }
+        })
+}
+
+fn label_paint_recipes_within_budget<'a, 'input: 'a>(
+    shapes: impl Iterator<Item = Node<'a, 'input>>,
+) -> bool {
+    label_paint_recipes_within_limit(shapes, MAX_CHART_LABEL_PAINT_COMPONENTS)
+}
+
+fn label_paint_recipes_within_limit<'a, 'input: 'a>(
+    shapes: impl Iterator<Item = Node<'a, 'input>>,
+    aggregate_limit: usize,
+) -> bool {
+    let mut total = 0usize;
+    for shape in shapes {
+        for components in label_box_paint_component_counts(shape) {
+            if components > MAX_CHART_LABEL_GRADIENT_STOPS {
+                return false;
+            }
+            let Some(next) = total.checked_add(components) else {
+                return false;
+            };
+            if next > aggregate_limit {
+                return false;
+            }
+            total = next;
         }
-    };
-    if fill.is_none() && border_color.is_none() && border_width_emu.is_none() {
+    }
+    true
+}
+
+fn chartex_label_paint_recipes_within_limit<'a, 'input: 'a>(
+    series: impl Iterator<Item = Node<'a, 'input>>,
+    aggregate_limit: usize,
+) -> bool {
+    label_paint_recipes_within_limit(
+        series
+            .filter_map(|series| child(series, "dataLabels"))
+            .flat_map(label_shape_nodes),
+        aggregate_limit,
+    )
+}
+
+fn parse_label_box_with_policy(
+    sp_pr: Option<Node>,
+    resolver: &dyn ColorResolver,
+    allow_structured_paint: bool,
+) -> Option<ChartLabelBox> {
+    let sp = sp_pr?;
+    if !allow_structured_paint {
+        let fill_choice = sp.children().find(|node| {
+            node.is_element()
+                && matches!(
+                    node.tag_name().name(),
+                    "noFill" | "solidFill" | "gradFill" | "pattFill" | "blipFill" | "grpFill"
+                )
+        });
+        let line = child(sp, "ln");
+        let line_paint = line.and_then(|line| {
+            line.children().find(|node| {
+                node.is_element()
+                    && matches!(
+                        node.tag_name().name(),
+                        "noFill" | "solidFill" | "gradFill" | "pattFill"
+                    )
+            })
+        });
+        if fill_choice.is_none() && line.is_none() {
+            return None;
+        }
+        return Some(ChartLabelBox {
+            fill: None,
+            fill_paint: None,
+            fill_hidden: fill_choice
+                .is_some_and(|paint| paint.tag_name().name() == "noFill")
+                .then_some(true),
+            fill_paint_authored: fill_choice.map(|_| true),
+            border_color: None,
+            border_fill: None,
+            border_width_emu: line
+                .and_then(|line| line.attribute("w"))
+                .and_then(|value| value.parse::<u32>().ok()),
+            border_hidden: line_paint
+                .is_some_and(|paint| paint.tag_name().name() == "noFill")
+                .then_some(true),
+            border_paint_authored: line_paint.map(|_| true),
+            border_dash: line
+                .and_then(|line| child(line, "prstDash"))
+                .and_then(|dash| dash.attribute("val"))
+                .map(ToOwned::to_owned),
+            border_dash_authored: line
+                .and_then(|line| {
+                    line.children().find(|node| {
+                        node.is_element()
+                            && matches!(node.tag_name().name(), "prstDash" | "custDash")
+                    })
+                })
+                .map(|_| true),
+            border_custom_dash: None,
+            border_cap: line
+                .and_then(|line| line.attribute("cap"))
+                .map(ToOwned::to_owned),
+            border_join: line.and_then(|line| {
+                line.children().find_map(|node| {
+                    node.is_element().then(|| match node.tag_name().name() {
+                        "round" => Some("round".to_owned()),
+                        "bevel" => Some("bevel".to_owned()),
+                        "miter" => Some("miter".to_owned()),
+                        _ => None,
+                    })?
+                })
+            }),
+            border_compound: line
+                .and_then(|line| line.attribute("cmpd"))
+                .map(ToOwned::to_owned),
+        });
+    }
+    let fill = extract_direct_shape_fill(Some(sp), resolver);
+    let border = extract_direct_shape_line_from_sp_pr(Some(sp), resolver);
+    if fill.color.is_none()
+        && fill.fill.is_none()
+        && fill.hidden.is_none()
+        && fill.paint_authored.is_none()
+        && border.color.is_none()
+        && border.fill.is_none()
+        && border.width_emu.is_none()
+        && border.hidden.is_none()
+        && border.paint_authored.is_none()
+    {
         return None;
     }
     Some(ChartLabelBox {
-        fill,
-        border_color,
-        border_width_emu,
+        fill: fill.color,
+        fill_paint: fill.fill,
+        fill_hidden: fill.hidden,
+        fill_paint_authored: fill.paint_authored,
+        border_color: border.color,
+        border_fill: border.fill,
+        border_width_emu: border.width_emu,
+        border_hidden: border.hidden,
+        border_paint_authored: border.paint_authored,
+        border_dash: border.dash,
+        border_dash_authored: border.dash_authored,
+        border_custom_dash: border.custom_dash,
+        border_cap: border.cap,
+        border_join: border.join,
+        border_compound: border.compound,
     })
+}
+
+fn parse_label_box(sp_pr: Option<Node>, resolver: &dyn ColorResolver) -> Option<ChartLabelBox> {
+    let allow = sp_pr
+        .map(|shape| label_paint_recipes_within_budget(std::iter::once(shape)))
+        .unwrap_or(true);
+    parse_label_box_with_policy(sp_pr, resolver, allow)
 }
 
 /// Parse ECMA-376 §21.2.2.45 `<c:dispUnits>`. The specification defines each
@@ -7523,9 +8209,42 @@ pub fn parse_series_data_labels(
     resolver: &dyn ColorResolver,
     cellrange_cache: &std::collections::HashMap<u32, String>,
 ) -> (Option<ChartSeriesDataLabels>, Vec<ChartDataLabelOverride>) {
+    let allow_label_paints = child(ser_node, "dLbls")
+        .map(|labels| label_paint_recipes_within_budget(label_shape_nodes(labels)))
+        .unwrap_or(true);
+    parse_series_data_labels_with_paint_policy(
+        ser_node,
+        resolver,
+        cellrange_cache,
+        allow_label_paints,
+    )
+}
+
+fn parse_series_data_labels_with_paint_policy(
+    ser_node: Node,
+    resolver: &dyn ColorResolver,
+    cellrange_cache: &std::collections::HashMap<u32, String>,
+    chart_allows_label_paints: bool,
+) -> (Option<ChartSeriesDataLabels>, Vec<ChartDataLabelOverride>) {
     let Some(d_lbls) = child(ser_node, "dLbls") else {
         return (None, Vec::new());
     };
+    parse_data_labels_node_with_paint_policy(
+        d_lbls,
+        resolver,
+        cellrange_cache,
+        chart_allows_label_paints,
+    )
+}
+
+fn parse_data_labels_node_with_paint_policy(
+    d_lbls: Node,
+    resolver: &dyn ColorResolver,
+    cellrange_cache: &std::collections::HashMap<u32, String>,
+    chart_allows_label_paints: bool,
+) -> (Option<ChartSeriesDataLabels>, Vec<ChartDataLabelOverride>) {
+    let allow_label_paints =
+        chart_allows_label_paints && label_paint_recipes_within_budget(label_shape_nodes(d_lbls));
 
     // CT_Boolean show-flag: element present ⇒ true unless `val` explicitly
     // disables it (§21.2.2, dml-chart.xsd `val` default `true`); element absent
@@ -7538,43 +8257,37 @@ pub fn parse_series_data_labels(
     let format_code = child(d_lbls, "numFmt")
         .and_then(|n| n.attribute("formatCode"))
         .map(|s| s.to_string());
-    let separator = child(d_lbls, "separator")
-        .and_then(|n| n.text())
-        .map(|s| s.to_string());
+    let separator = child(d_lbls, "separator").map(|n| n.text().unwrap_or("").to_string());
     // defRPr fill / bold / size come from the dLbls-level `<c:txPr>`.
     let txpr = child(d_lbls, "txPr");
-    let font_color = txpr.and_then(|tx| {
-        tx.descendants()
-            .find(|n| n.is_element() && n.tag_name().name() == "defRPr")
-            .and_then(|def| resolver.resolve_shape_fill(def))
-    });
-    let font_bold_default = txpr.and_then(|tx| {
-        tx.descendants()
-            .find(|n| {
-                n.is_element() && (n.tag_name().name() == "defRPr" || n.tag_name().name() == "rPr")
-            })
-            .and_then(|n| n.attribute("b"))
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-    });
-    let font_size_default = txpr.and_then(|tx| {
-        tx.descendants()
-            .find(|n| {
-                n.is_element() && (n.tag_name().name() == "defRPr" || n.tag_name().name() == "rPr")
-            })
-            .and_then(|n| n.attribute("sz"))
-            .and_then(parse_text_font_size_hpt)
-    });
-    let font_face_default = txpr.and_then(first_latin_typeface);
+    let default_run_props = txpr.and_then(first_paragraph_default_run_props);
+    let font_bold_default = default_run_props.and_then(|n| chart_text_bool_attr(n, "b"));
+    let font_size_default = default_run_props
+        .and_then(|n| n.attribute("sz"))
+        .and_then(parse_text_font_size_hpt);
+    let font_face_default = default_run_props.and_then(first_latin_typeface);
+    let default_text_paint = chart_text_paint([default_run_props], resolver);
+    let font_color = default_text_paint.color.clone();
+    let font_italic_default = default_run_props.and_then(|props| chart_text_bool_attr(props, "i"));
+    let font_language_default = default_run_props
+        .and_then(|props| props.attribute("lang"))
+        .map(ToOwned::to_owned);
+    let font_baseline_default = default_run_props
+        .and_then(|props| props.attribute("baseline"))
+        .and_then(parse_chart_text_percentage);
+    let body_pr = txpr.and_then(|tx| child(tx, "bodyPr"));
+    let body_style = chart_label_body_style(body_pr);
 
     // §21.2.2.197 series-level callout-box shape (`<c:dLbls><c:spPr>`) and
     // §21.2.2.183/§21.2.2.92 leader-line style. `<c:spPr>` may appear both as a
     // direct child of `<c:dLbls>` (the series default) and inside each
     // `<c:dLbl>` (per-point) — pick the direct child here.
-    let label_box = parse_label_box(
+    let label_box = parse_label_box_with_policy(
         d_lbls
             .children()
             .find(|n| n.is_element() && n.tag_name().name() == "spPr"),
         resolver,
+        allow_label_paints,
     );
     let (
         show_leader_lines,
@@ -7585,6 +8298,7 @@ pub fn parse_series_data_labels(
     ) = parse_leader_lines(d_lbls, resolver);
 
     let series_defaults = ChartSeriesDataLabels {
+        deleted: bool_child(d_lbls, "delete"),
         show_val: bool_attr(d_lbls, "showVal"),
         show_cat_name: bool_attr(d_lbls, "showCatName"),
         show_ser_name: bool_attr(d_lbls, "showSerName"),
@@ -7593,11 +8307,28 @@ pub fn parse_series_data_labels(
         show_legend_key: bool_attr(d_lbls, "showLegendKey"),
         position: position.clone(),
         font_color: font_color.clone(),
+        font_paint_authored: default_text_paint.authored.then_some(true),
+        font_hidden: default_text_paint.hidden.then_some(true),
         format_code,
         separator,
         font_bold: font_bold_default,
+        font_italic: font_italic_default,
+        font_language: font_language_default,
+        font_baseline: font_baseline_default,
         font_size_hpt: font_size_default,
         font_face: font_face_default,
+        text_rotation: body_style.rotation,
+        text_wrap: body_style.wrap,
+        text_vertical_anchor: body_style.anchor,
+        text_vertical_mode: body_style.vertical_mode,
+        text_l_ins_emu: body_style.left_inset,
+        text_t_ins_emu: body_style.top_inset,
+        text_r_ins_emu: body_style.right_inset,
+        text_b_ins_emu: body_style.bottom_inset,
+        text_body_authored: body_style.authored.then_some(true),
+        text_align: txpr
+            .and_then(first_paragraph_properties)
+            .and_then(|props| attr(&props, "algn")),
         label_box,
         show_leader_lines,
         leader_line_color,
@@ -7617,17 +8348,17 @@ pub fn parse_series_data_labels(
             .unwrap_or(0);
         // §21.2.2.43 per-point `<c:delete>` — CT_Boolean, so a bare
         // `<c:delete/>` removes this point's label (val default true).
-        let deleted = bool_child(dl, "delete").unwrap_or(false);
+        let deleted = bool_child(dl, "delete");
         let pos = child(dl, "dLblPos")
             .and_then(|n| n.attribute("val"))
             .map(|s| s.to_string());
         let cache_for_idx = cellrange_cache.get(&idx).map(|s| s.as_str());
-        let rich_runs = if deleted {
+        let rich_runs = if deleted == Some(true) {
             None
         } else {
             parse_data_label_rich_runs(dl, resolver, cache_for_idx)
         };
-        let text = if deleted {
+        let text = if deleted == Some(true) {
             String::new()
         } else if let Some(runs) = rich_runs.as_ref() {
             runs.iter().map(|run| run.text.as_str()).collect()
@@ -7637,52 +8368,42 @@ pub fn parse_series_data_labels(
                 None => cache_for_idx.unwrap_or("").to_string(),
             }
         };
-        // A custom rich-text label carries its direct formatting on
-        // `<c:tx><c:rich><a:p><a:r><a:rPr>`. Those run properties override the
-        // label's `<c:txPr><a:defRPr>` defaults (DrawingML text-property
-        // inheritance). Preserve the first text run's effective style in the
-        // current single-style label model; falling back to txPr keeps labels
-        // without explicit rich-run formatting unchanged.
-        let rich_run_props = child(dl, "tx").and_then(|tx| {
-            tx.descendants()
-                .find(|n| n.is_element() && n.tag_name().name() == "rPr")
-        });
-        let default_run_props = child(dl, "txPr").and_then(|tx| {
-            tx.descendants().find(|node| {
-                node.is_element() && matches!(node.tag_name().name(), "rPr" | "defRPr")
-            })
-        });
-        let first_rich_run = rich_runs
-            .as_ref()
-            .and_then(|runs| runs.iter().find(|run| run.text != "\n"));
-        let font_color = first_rich_run
-            .and_then(|run| run.color.clone())
-            .or_else(|| rich_run_props.and_then(|run| resolver.resolve_shape_fill(run)))
-            .or_else(|| default_run_props.and_then(|run| resolver.resolve_shape_fill(run)));
-        let font_size_hpt = first_rich_run
-            .and_then(|run| run.font_size_hpt)
-            .or_else(|| {
-                rich_run_props
-                    .and_then(|run| run.attribute("sz"))
-                    .or_else(|| default_run_props.and_then(|run| run.attribute("sz")))
-                    .and_then(parse_text_font_size_hpt)
-            });
-        let font_face = first_rich_run
-            .and_then(|run| run.font_face.clone())
-            .or_else(|| rich_run_props.and_then(first_latin_typeface))
-            .or_else(|| default_run_props.and_then(first_latin_typeface));
-        let font_bold = first_rich_run.and_then(|run| run.bold).or_else(|| {
-            rich_run_props
-                .and_then(|run| run.attribute("b"))
-                .or_else(|| default_run_props.and_then(|run| run.attribute("b")))
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        });
+        // Paragraph default character properties apply to all runs. Individual
+        // `<a:rPr>` values remain on `rich_runs` and must never be promoted to
+        // the label-wide fallback used by sibling runs.
+        let default_run_props = child(dl, "txPr").and_then(first_paragraph_default_run_props);
+        let text_paint = chart_text_paint([default_run_props], resolver);
+        let font_color = text_paint.color.clone();
+        let font_size_hpt = default_run_props
+            .and_then(|run| run.attribute("sz"))
+            .and_then(parse_text_font_size_hpt);
+        let font_face = default_run_props.and_then(first_latin_typeface);
+        let font_bold = default_run_props.and_then(|run| chart_text_bool_attr(run, "b"));
+        let font_italic = default_run_props.and_then(|props| chart_text_bool_attr(props, "i"));
+        let font_language = default_run_props
+            .and_then(|props| props.attribute("lang"))
+            .map(ToOwned::to_owned);
+        let font_baseline = default_run_props
+            .and_then(|props| props.attribute("baseline"))
+            .and_then(parse_chart_text_percentage);
+        let rich_body_pr = child(dl, "tx")
+            .and_then(|tx| child(tx, "rich"))
+            .and_then(|rich| child(rich, "bodyPr"));
+        let direct_body_pr = child(dl, "txPr").and_then(|tx| child(tx, "bodyPr"));
+        let label_body = merge_chart_label_body_styles(
+            chart_label_body_style(rich_body_pr),
+            chart_label_body_style(direct_body_pr),
+        );
+        let text_align = child(dl, "txPr")
+            .and_then(first_paragraph_properties)
+            .and_then(|props| attr(&props, "algn"));
         // Per-point callout box (`<c:dLbl>` §21.2.2.47 `<c:spPr>` §21.2.2.197):
         // direct child spPr overrides the series-default box for this one point.
-        let label_box = parse_label_box(
+        let label_box = parse_label_box_with_policy(
             dl.children()
                 .find(|n| n.is_element() && n.tag_name().name() == "spPr"),
             resolver,
+            allow_label_paints,
         );
         // Per-point show-flags (§21.2.2.47 CT_DLbl carries the same show-flag
         // group as CT_DLbls). Read as `Option` so an absent flag falls through
@@ -7695,13 +8416,26 @@ pub fn parse_series_data_labels(
             rich_runs,
             position: pos,
             font_color,
+            font_paint_authored: text_paint.authored.then_some(true),
+            font_hidden: text_paint.hidden.then_some(true),
             font_size_hpt,
             font_face,
             font_bold,
+            font_italic,
+            font_language,
+            font_baseline,
+            text_rotation: label_body.rotation,
+            text_wrap: label_body.wrap,
+            text_vertical_anchor: label_body.anchor,
+            text_vertical_mode: label_body.vertical_mode,
+            text_l_ins_emu: label_body.left_inset,
+            text_t_ins_emu: label_body.top_inset,
+            text_r_ins_emu: label_body.right_inset,
+            text_b_ins_emu: label_body.bottom_inset,
+            text_body_authored: label_body.authored.then_some(true),
+            text_align,
             format_code: child(dl, "numFmt").and_then(|node| attr(&node, "formatCode")),
-            separator: child(dl, "separator")
-                .and_then(|node| node.text())
-                .map(ToOwned::to_owned),
+            separator: child(dl, "separator").map(|node| node.text().unwrap_or("").to_owned()),
             manual_layout: child(dl, "layout").and_then(extract_manual_layout),
             label_box,
             show_val: opt_bool_flag("showVal"),
@@ -7713,11 +8447,25 @@ pub fn parse_series_data_labels(
             // §21.2.2.43 `<c:delete>` — record genuine deletes distinctly from a
             // style-only `<c:dLbl>` so the renderer never mistakes an empty tx
             // (compose-from-flags) for a removed label.
-            deleted: if deleted { Some(true) } else { None },
+            deleted,
         });
     }
 
-    let any_default = series_defaults.show_val
+    let any_authored_boolean = [
+        "showVal",
+        "showCatName",
+        "showSerName",
+        "showPercent",
+        "showBubbleSize",
+        "showLegendKey",
+        "showLeaderLines",
+        "delete",
+    ]
+    .iter()
+    .any(|name| child(d_lbls, name).is_some());
+    let any_default = any_authored_boolean
+        || series_defaults.deleted.is_some()
+        || series_defaults.show_val
         || series_defaults.show_cat_name
         || series_defaults.show_ser_name
         || series_defaults.show_percent
@@ -7725,10 +8473,25 @@ pub fn parse_series_data_labels(
         || series_defaults.show_legend_key
         || series_defaults.position.is_some()
         || series_defaults.font_color.is_some()
+        || series_defaults.font_paint_authored.is_some()
+        || series_defaults.font_hidden.is_some()
         || series_defaults.format_code.is_some()
         || series_defaults.font_bold.is_some()
+        || series_defaults.font_italic.is_some()
+        || series_defaults.font_language.is_some()
+        || series_defaults.font_baseline.is_some()
         || series_defaults.font_size_hpt.is_some()
         || series_defaults.font_face.is_some()
+        || series_defaults.text_rotation.is_some()
+        || series_defaults.text_wrap.is_some()
+        || series_defaults.text_vertical_anchor.is_some()
+        || series_defaults.text_vertical_mode.is_some()
+        || series_defaults.text_l_ins_emu.is_some()
+        || series_defaults.text_t_ins_emu.is_some()
+        || series_defaults.text_r_ins_emu.is_some()
+        || series_defaults.text_b_ins_emu.is_some()
+        || series_defaults.text_body_authored.is_some()
+        || series_defaults.text_align.is_some()
         || series_defaults.label_box.is_some()
         || series_defaults.show_leader_lines
         || series_defaults.leader_line_color.is_some()
@@ -7741,6 +8504,184 @@ pub fn parse_series_data_labels(
         None
     };
     (series_out, overrides)
+}
+
+/// Parse the subset of CT_DLbls that Office permits on a chart-group parent.
+/// MS-OE376 §2.1.1476 excludes collection delete, point dLbl, leader lines,
+/// number/text/shape formatting and txPr at this level. Keeping this parser
+/// separate prevents invalid group content from being deep-parsed or cloned
+/// into every owned series.
+fn parse_chart_group_data_labels(d_lbls: Node) -> Option<ChartSeriesDataLabels> {
+    let position_node = child(d_lbls, "dLblPos");
+    let separator_node = child(d_lbls, "separator");
+    let flag_names = [
+        "showVal",
+        "showCatName",
+        "showSerName",
+        "showPercent",
+        "showBubbleSize",
+        "showLegendKey",
+    ];
+    let has_authored_semantics = position_node.is_some()
+        || separator_node.is_some()
+        || flag_names.iter().any(|name| child(d_lbls, name).is_some());
+    if !has_authored_semantics {
+        return None;
+    }
+    Some(ChartSeriesDataLabels {
+        show_val: bool_child(d_lbls, "showVal").unwrap_or(false),
+        show_cat_name: bool_child(d_lbls, "showCatName").unwrap_or(false),
+        show_ser_name: bool_child(d_lbls, "showSerName").unwrap_or(false),
+        show_percent: bool_child(d_lbls, "showPercent").unwrap_or(false),
+        show_bubble_size: bool_child(d_lbls, "showBubbleSize").unwrap_or(false),
+        show_legend_key: bool_child(d_lbls, "showLegendKey").unwrap_or(false),
+        position: position_node.and_then(|node| attr(&node, "val")),
+        separator: separator_node.map(|node| {
+            node.text()
+                .unwrap_or("")
+                .chars()
+                .take(MAX_DATA_LABEL_RICH_SCALARS)
+                .collect()
+        }),
+        ..ChartSeriesDataLabels::default()
+    })
+}
+
+fn chart_group_separator_projection_within_budget(
+    entries: impl IntoIterator<Item = (usize, usize)>,
+) -> bool {
+    entries
+        .into_iter()
+        .try_fold(0usize, |total, (separator_scalars, owned_series)| {
+            separator_scalars
+                .checked_mul(owned_series)
+                .and_then(|projected| total.checked_add(projected))
+                .filter(|next| *next <= MAX_CHART_CACHE_POINTS)
+        })
+        .is_some()
+}
+
+fn merge_chart_label_boxes(
+    lower: Option<ChartLabelBox>,
+    higher: Option<ChartLabelBox>,
+) -> Option<ChartLabelBox> {
+    let Some(higher) = higher else {
+        return lower;
+    };
+    let mut merged = lower.unwrap_or_default();
+    let higher_fill_authored = higher.fill_paint_authored == Some(true)
+        || higher.fill.is_some()
+        || higher.fill_paint.is_some()
+        || higher.fill_hidden.is_some();
+    if higher_fill_authored {
+        merged.fill = higher.fill;
+        merged.fill_paint = higher.fill_paint;
+        merged.fill_hidden = higher.fill_hidden;
+        merged.fill_paint_authored = higher.fill_paint_authored;
+    }
+    let higher_border_authored = higher.border_paint_authored == Some(true)
+        || higher.border_color.is_some()
+        || higher.border_fill.is_some()
+        || higher.border_hidden.is_some();
+    if higher_border_authored {
+        merged.border_color = higher.border_color;
+        merged.border_fill = higher.border_fill;
+        merged.border_hidden = higher.border_hidden;
+        merged.border_paint_authored = higher.border_paint_authored;
+    }
+    if higher.border_width_emu.is_some() {
+        merged.border_width_emu = higher.border_width_emu;
+    }
+    if higher.border_dash_authored.is_some() {
+        merged.border_dash = higher.border_dash;
+        merged.border_custom_dash = higher.border_custom_dash;
+        merged.border_dash_authored = higher.border_dash_authored;
+    }
+    if higher.border_cap.is_some() {
+        merged.border_cap = higher.border_cap;
+    }
+    if higher.border_join.is_some() {
+        merged.border_join = higher.border_join;
+    }
+    if higher.border_compound.is_some() {
+        merged.border_compound = higher.border_compound;
+    }
+    Some(merged)
+}
+
+fn merge_chart_series_data_labels(
+    lower: Option<ChartSeriesDataLabels>,
+    higher: Option<ChartSeriesDataLabels>,
+    higher_node: Option<Node>,
+) -> Option<ChartSeriesDataLabels> {
+    if higher.is_none() {
+        return lower;
+    }
+    let mut merged = lower.unwrap_or_default();
+    let higher = higher.expect("checked above");
+    let authored_bool = |name: &str| higher_node.is_some_and(|node| child(node, name).is_some());
+    if authored_bool("showVal") {
+        merged.show_val = higher.show_val;
+    }
+    if authored_bool("showCatName") {
+        merged.show_cat_name = higher.show_cat_name;
+    }
+    if authored_bool("showSerName") {
+        merged.show_ser_name = higher.show_ser_name;
+    }
+    if authored_bool("showPercent") {
+        merged.show_percent = higher.show_percent;
+    }
+    if authored_bool("showBubbleSize") {
+        merged.show_bubble_size = higher.show_bubble_size;
+    }
+    if authored_bool("showLegendKey") {
+        merged.show_legend_key = higher.show_legend_key;
+    }
+    if authored_bool("showLeaderLines") {
+        merged.show_leader_lines = higher.show_leader_lines;
+    }
+    if authored_bool("delete") {
+        merged.deleted = higher.deleted;
+    }
+
+    macro_rules! overlay_option {
+        ($field:ident) => {
+            if higher.$field.is_some() {
+                merged.$field = higher.$field;
+            }
+        };
+    }
+    overlay_option!(position);
+    overlay_option!(format_code);
+    overlay_option!(separator);
+    overlay_option!(font_bold);
+    overlay_option!(font_italic);
+    overlay_option!(font_language);
+    overlay_option!(font_baseline);
+    overlay_option!(font_size_hpt);
+    overlay_option!(font_face);
+    overlay_option!(text_rotation);
+    overlay_option!(text_wrap);
+    overlay_option!(text_vertical_anchor);
+    overlay_option!(text_vertical_mode);
+    overlay_option!(text_l_ins_emu);
+    overlay_option!(text_t_ins_emu);
+    overlay_option!(text_r_ins_emu);
+    overlay_option!(text_b_ins_emu);
+    overlay_option!(text_body_authored);
+    overlay_option!(text_align);
+    overlay_option!(leader_line_color);
+    overlay_option!(leader_line_width_emu);
+    overlay_option!(leader_line_hidden);
+    overlay_option!(leader_line_dash);
+    if higher.font_paint_authored == Some(true) {
+        merged.font_color = higher.font_color;
+        merged.font_hidden = higher.font_hidden;
+        merged.font_paint_authored = higher.font_paint_authored;
+    }
+    merged.label_box = merge_chart_label_boxes(merged.label_box, higher.label_box);
+    Some(merged)
 }
 
 /// Read a `<c:numRef><c:numCache>` or `<c:numLit>` block under `parent` and
@@ -8915,6 +9856,72 @@ pub fn parse_chart_part_with_references_and_style_parts(
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "ser")
         .collect();
+    let mut direct_label_shapes = Vec::new();
+    for series in &ser_nodes {
+        if let Some(labels) = child(*series, "dLbls") {
+            direct_label_shapes.extend(label_shape_nodes(labels));
+        }
+        direct_label_shapes.extend(
+            series
+                .children()
+                .filter(|node| node.is_element() && node.tag_name().name() == "trendline")
+                .filter_map(|trendline| child(trendline, "trendlineLbl"))
+                .filter_map(|label| child(label, "spPr")),
+        );
+    }
+    let chart_group_nodes: Vec<_> = plot_area
+        .children()
+        .filter(|node| {
+            node.is_element()
+                && node
+                    .children()
+                    .any(|child| child.is_element() && child.tag_name().name() == "ser")
+        })
+        .collect();
+    let allow_direct_label_paints =
+        label_paint_recipes_within_budget(direct_label_shapes.iter().copied());
+    let mut parsed_group_data_labels = chart_group_nodes
+        .iter()
+        .filter_map(|group| {
+            let labels = child(*group, "dLbls")?;
+            let defaults = parse_chart_group_data_labels(labels);
+            let owned_series = group
+                .children()
+                .filter(|node| node.is_element() && node.tag_name().name() == "ser")
+                .count();
+            Some((group.id(), defaults, owned_series))
+        })
+        .collect::<Vec<_>>();
+    // Projection into series is intentionally bounded chart-wide. A separator
+    // is arbitrary text, so multiplying it across many groups/series must not
+    // amplify a small XML source into unbounded wire/JSON memory. Refuse every
+    // group separator atomically when their combined projection exceeds the
+    // shared chart-point resource ceiling; semantic show flags remain intact.
+    let separators_fit =
+        chart_group_separator_projection_within_budget(parsed_group_data_labels.iter().map(
+            |(_, defaults, owned_series)| {
+                (
+                    defaults
+                        .as_ref()
+                        .and_then(|item| item.separator.as_ref())
+                        .map(|separator| separator.chars().count())
+                        .unwrap_or(0),
+                    *owned_series,
+                )
+            },
+        ));
+    if !separators_fit {
+        for (_, defaults, _) in &mut parsed_group_data_labels {
+            if let Some(defaults) = defaults.as_mut() {
+                defaults.separator = None;
+            }
+        }
+    }
+    let group_data_labels = parsed_group_data_labels
+        .into_iter()
+        .map(|(id, defaults, _)| (id, defaults))
+        .collect::<std::collections::HashMap<_, _>>();
+    let has_group_data_labels = !group_data_labels.is_empty();
 
     let bar_group_nodes: Vec<_> = plot_area
         .children()
@@ -9531,8 +10538,30 @@ pub fn parse_chart_part_with_references_and_style_parts(
             // Series-level `<c:dLbls>` defaults + per-idx custom labels, and
             // error bars (§21.2.2.20, resolved to absolute plus/minus arrays).
             let dlbl_range_cache = collect_dlbl_range_cache(*ser);
-            let (series_data_labels, data_label_overrides) =
-                parse_series_data_labels(*ser, color_resolver, &dlbl_range_cache);
+            let (direct_series_data_labels, direct_data_label_overrides) =
+                parse_series_data_labels_with_paint_policy(
+                    *ser,
+                    color_resolver,
+                    &dlbl_range_cache,
+                    allow_direct_label_paints,
+                );
+            let direct_labels_node = child(*ser, "dLbls");
+            let group_defaults = group
+                .and_then(|owner| group_data_labels.get(&owner.id()))
+                .cloned()
+                // `show_data_labels` is a legacy chart-wide projection. Once
+                // any group block is materialized per owned series, an absent
+                // block on a sibling group means all flags are false; preserve
+                // that explicit effective default so labels cannot leak across
+                // combo-chart groups through the legacy fallback.
+                .or_else(|| has_group_data_labels.then_some(Some(Default::default())))
+                .flatten();
+            let series_data_labels = merge_chart_series_data_labels(
+                group_defaults,
+                direct_series_data_labels,
+                direct_labels_node,
+            );
+            let data_label_overrides = direct_data_label_overrides;
             let visible_error_bar_values = (plot_visible_only == Some(true)).then(|| {
                 values
                     .iter()
@@ -9710,7 +10739,11 @@ pub fn parse_chart_part_with_references_and_style_parts(
                 smooth: extract_series_smooth(*ser).or(chart_smooth_default),
                 // `<c:ser><c:trendline>` (§21.2.2.211) — regression lines. Shared
                 // extractor; the line color resolves through the pptx theme.
-                trend_lines: extract_series_trendlines(*ser, color_resolver),
+                trend_lines: extract_series_trendlines_with_paint_policy(
+                    *ser,
+                    color_resolver,
+                    allow_direct_label_paints,
+                ),
                 // §21.2.2.198 `<c:spPr><a:ln><a:noFill/>` — series connecting line
                 // explicitly off. Only serialized when set, so byte-stable for
                 // series that carry no line-off (the common case).
@@ -12290,6 +13323,178 @@ Subtitle</a:t></a:r></a:p>
     }
 
     #[test]
+    fn classic_chart_group_labels_merge_property_wise_into_owned_series() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart><c:plotArea>
+              <c:barChart><c:barDir val="col"/>
+                <c:ser><c:idx val="0"/><c:val><c:numLit><c:pt idx="0"><c:v>8</c:v></c:pt></c:numLit></c:val>
+                  <c:dLbls><c:dLbl><c:idx val="0"/><c:spPr><a:ln><a:solidFill><a:srgbClr val="778899"/></a:solidFill></a:ln></c:spPr><c:showSerName/></c:dLbl>
+                    <c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:ln></c:spPr>
+                    <c:txPr><a:p><a:pPr><a:defRPr b="1"><a:solidFill><a:srgbClr val="4472C4"/></a:solidFill></a:defRPr></a:pPr></a:p></c:txPr>
+                    <c:showVal val="0"/><c:separator/>
+                  </c:dLbls>
+                </c:ser>
+                <c:ser><c:idx val="1"/><c:val><c:numLit><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:val></c:ser>
+                <c:dLbls><c:dLblPos val="inEnd"/><c:showVal/><c:showCatName/><c:separator>|</c:separator></c:dLbls>
+              </c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let model = parse_chart_part(chart_space_of(&xml).root_element(), &FixtureResolver)
+            .expect("bar chart parses");
+
+        let first = model.series[0]
+            .series_data_labels
+            .as_ref()
+            .expect("merged defaults");
+        assert!(!first.show_val && first.show_cat_name);
+        assert_eq!(first.font_color.as_deref(), Some("4472C4"));
+        assert_eq!(first.font_bold, Some(true));
+        assert_eq!(first.position.as_deref(), Some("inEnd"));
+        assert_eq!(first.separator.as_deref(), Some(""));
+        let first_box = first.label_box.as_ref().expect("merged series box");
+        assert_eq!(first_box.fill, None);
+        assert_eq!(first_box.border_color.as_deref(), Some("445566"));
+
+        let point = &model.series[0].data_label_overrides.as_ref().unwrap()[0];
+        assert_eq!(point.text, "");
+        assert_eq!(point.show_ser_name, Some(true));
+        let point_box = point.label_box.as_ref().expect("merged point box");
+        assert_eq!(point_box.fill, None);
+        assert_eq!(point_box.border_color.as_deref(), Some("778899"));
+
+        let second = model.series[1]
+            .series_data_labels
+            .as_ref()
+            .expect("group defaults");
+        assert!(second.show_val);
+        assert!(second.show_cat_name);
+        assert_eq!(second.position.as_deref(), Some("inEnd"));
+        assert_eq!(second.separator.as_deref(), Some("|"));
+        assert_eq!(second.font_color, None);
+    }
+
+    #[test]
+    fn classic_group_labels_do_not_leak_into_an_unlabelled_combo_group() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea>
+              <c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:val><c:numLit><c:pt idx="0"><c:v>8</c:v></c:pt></c:numLit></c:val></c:ser><c:dLbls><c:showVal/></c:dLbls></c:barChart>
+              <c:lineChart><c:ser><c:idx val="1"/><c:val><c:numLit><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:val></c:ser></c:lineChart>
+            </c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let model = parse_chart_part(chart_space_of(&xml).root_element(), &FixtureResolver)
+            .expect("combo chart parses");
+
+        let bar = model.series[0]
+            .series_data_labels
+            .as_ref()
+            .expect("bar group defaults");
+        assert!(bar.show_val);
+        let line = model.series[1]
+            .series_data_labels
+            .as_ref()
+            .expect("effective absent group defaults");
+        assert!(!line.show_val);
+        assert!(!line.show_cat_name);
+        assert!(!line.show_ser_name);
+        assert!(!line.show_percent);
+    }
+
+    #[test]
+    fn chart_group_separator_projection_uses_one_chart_wide_budget() {
+        assert!(chart_group_separator_projection_within_budget([
+            (MAX_DATA_LABEL_RICH_SCALARS, 128),
+            (MAX_DATA_LABEL_RICH_SCALARS, 128),
+        ]));
+        assert!(!chart_group_separator_projection_within_budget([
+            (MAX_DATA_LABEL_RICH_SCALARS, 128),
+            (MAX_DATA_LABEL_RICH_SCALARS, 128),
+            (1, 1),
+        ]));
+        assert!(!chart_group_separator_projection_within_budget([
+            (MAX_CHART_CACHE_POINTS, 1),
+            (1, 1),
+        ]));
+    }
+
+    #[test]
+    fn chart_group_separator_projection_fails_closed_atomically_in_parser() {
+        let separator = "s".repeat(MAX_DATA_LABEL_RICH_SCALARS);
+        let group = |start: usize, count: usize, separator: &str| {
+            let series = (start..start + count)
+                .map(|index| {
+                    format!(
+                        r#"<c:ser><c:idx val="{index}"/><c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser>"#,
+                    )
+                })
+                .collect::<String>();
+            format!(
+                r#"<c:barChart><c:barDir val="col"/>{series}<c:dLbls><c:showVal/><c:separator>{separator}</c:separator></c:dLbls></c:barChart>"#,
+            )
+        };
+        let exact_groups = format!(
+            "{}{}",
+            group(0, 128, &separator),
+            group(128, 128, &separator),
+        );
+        let exact_xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea>{exact_groups}</c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let exact = parse_chart_part(chart_space_of(&exact_xml).root_element(), &FixtureResolver)
+            .expect("exact projection parses");
+        assert_eq!(
+            exact.series[0]
+                .series_data_labels
+                .as_ref()
+                .and_then(|labels| labels.separator.as_ref())
+                .map(|value| value.chars().count()),
+            Some(MAX_DATA_LABEL_RICH_SCALARS),
+        );
+        assert_eq!(
+            exact.series[255]
+                .series_data_labels
+                .as_ref()
+                .and_then(|labels| labels.separator.as_ref())
+                .map(|value| value.chars().count()),
+            Some(MAX_DATA_LABEL_RICH_SCALARS),
+        );
+
+        let overflow_groups = format!("{exact_groups}{}", group(256, 1, "x"));
+        let overflow_xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea>{overflow_groups}</c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let overflow = parse_chart_part(
+            chart_space_of(&overflow_xml).root_element(),
+            &FixtureResolver,
+        )
+        .expect("overflow projection parses");
+        assert!(overflow.series.iter().all(|series| series
+            .series_data_labels
+            .as_ref()
+            .is_some_and(|labels| labels.separator.is_none())));
+    }
+
+    #[test]
+    fn classic_point_delete_false_overrides_a_deleted_series_label_collection() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea>
+              <c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:val><c:numLit><c:pt idx="0"><c:v>8</c:v></c:pt></c:numLit></c:val>
+                <c:dLbls><c:dLbl><c:idx val="0"/><c:delete val="0"/></c:dLbl><c:delete/></c:dLbls>
+              </c:ser><c:dLbls><c:showVal/></c:dLbls></c:barChart>
+            </c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let model = parse_chart_part(chart_space_of(&xml).root_element(), &FixtureResolver)
+            .expect("bar chart parses");
+
+        let labels = model.series[0]
+            .series_data_labels
+            .as_ref()
+            .expect("deleted collection retained");
+        assert_eq!(labels.deleted, Some(true));
+        assert!(labels.show_val, "group showVal remains the lower default");
+        let point = &model.series[0].data_label_overrides.as_ref().unwrap()[0];
+        assert_eq!(point.deleted, Some(false));
+    }
+
+    #[test]
     fn classic_legend_frame_fill_and_outline_are_preserved() {
         struct TransformAwareLegendResolver;
         impl ColorResolver for TransformAwareLegendResolver {
@@ -12522,7 +13727,7 @@ Subtitle</a:t></a:r></a:p>
                    <c:trendlineLbl>
                      <c:numFmt formatCode="0.00" sourceLinked="0"/>
                      <c:layout><c:manualLayout><c:xMode val="edge"/><c:yMode val="edge"/><c:x val="0.1"/><c:y val="0.2"/></c:manualLayout></c:layout>
-                     <c:tx><c:rich><a:bodyPr/><a:p><a:pPr algn="r"><a:defRPr sz="1800" b="1"><a:solidFill><a:srgbClr val="123456"/></a:solidFill><a:latin typeface="Georgia"/></a:defRPr></a:pPr><a:r><a:rPr sz="2000" b="0" i="1"><a:solidFill><a:srgbClr val="654321"/></a:solidFill></a:rPr><a:t>Authored</a:t></a:r></a:p><a:p><a:r><a:t>fit</a:t></a:r></a:p></c:rich></c:tx>
+                     <c:tx><c:rich><a:bodyPr rot="1800000" wrap="none" anchor="b" lIns="12700"/><a:p><a:pPr algn="r"><a:defRPr sz="1800" b="1"><a:solidFill><a:srgbClr val="123456"/></a:solidFill><a:latin typeface="Georgia"/></a:defRPr></a:pPr><a:r><a:rPr sz="2000" b="0" i="1" lang="en-US" baseline="25000"><a:solidFill><a:srgbClr val="654321"/></a:solidFill></a:rPr><a:t>Authored</a:t></a:r></a:p><a:p><a:r><a:t>fit</a:t></a:r></a:p></c:rich></c:tx>
                      <c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:ln w="25400"><a:solidFill><a:srgbClr val="808080"/></a:solidFill></a:ln></c:spPr>
                      <c:txPr><a:bodyPr/><a:p><a:pPr algn="ctr"><a:defRPr sz="1800" b="1"><a:solidFill><a:srgbClr val="123456"/></a:solidFill><a:latin typeface="Georgia"/></a:defRPr></a:pPr></a:p></c:txPr>
                    </c:trendlineLbl>
@@ -12548,14 +13753,34 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(got[0].disp_eq, Some(true));
         assert_eq!(got[0].disp_r_sqr, Some(true));
         assert_eq!(got[0].label_text.as_deref(), Some("Authored\nfit"));
+        let rich_runs = got[0]
+            .label_rich_runs
+            .as_ref()
+            .expect("trendline rich runs");
+        assert_eq!(
+            rich_runs
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>(),
+            "Authored\nfit"
+        );
+        assert_eq!(rich_runs[0].paragraph_align.as_deref(), Some("r"));
+        assert_eq!(rich_runs[0].italic, Some(true));
+        assert_eq!(rich_runs[2].paragraph_align, None);
         assert_eq!(got[0].label_format_code.as_deref(), Some("0.00"));
         assert_eq!(got[0].label_format_source_linked, Some(false));
-        assert_eq!(got[0].label_font_size_hpt, Some(2000));
-        assert_eq!(got[0].label_font_bold, Some(false));
-        assert_eq!(got[0].label_font_italic, Some(true));
-        assert_eq!(got[0].label_font_color.as_deref(), Some("654321"));
+        assert_eq!(got[0].label_font_size_hpt, Some(1800));
+        assert_eq!(got[0].label_font_bold, Some(true));
+        assert_eq!(got[0].label_font_italic, None);
+        assert_eq!(got[0].label_font_color.as_deref(), Some("123456"));
         assert_eq!(got[0].label_font_face.as_deref(), Some("Georgia"));
-        assert_eq!(got[0].label_text_align.as_deref(), Some("r"));
+        assert_eq!(got[0].label_font_language, None);
+        assert_eq!(got[0].label_font_baseline, None);
+        assert_eq!(got[0].label_text_rotation, Some(1_800_000));
+        assert_eq!(got[0].label_text_wrap.as_deref(), Some("none"));
+        assert_eq!(got[0].label_text_vertical_anchor.as_deref(), Some("b"));
+        assert_eq!(got[0].label_text_l_ins_emu, Some(12_700));
+        assert_eq!(got[0].label_text_align.as_deref(), Some("ctr"));
         let label_box = got[0].label_box.as_ref().expect("trendline label box");
         assert_eq!(label_box.fill.as_deref(), Some("FFFFFF"));
         assert_eq!(label_box.border_color.as_deref(), Some("808080"));
@@ -12574,6 +13799,30 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(got[0].line_hidden, None);
         assert_eq!(got[1].line_hidden, Some(true));
         assert_eq!(got[2].label_text.as_deref(), Some("Cached fit"));
+    }
+
+    #[test]
+    fn trendline_rich_run_paint_does_not_become_the_label_default() {
+        let xml = format!(
+            r#"<c:ser xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:trendline>
+              <c:trendlineType val="linear"/><c:trendlineLbl><c:tx><c:rich>
+                <a:p><a:pPr><a:defRPr><a:noFill/></a:defRPr></a:pPr><a:r><a:t>A</a:t></a:r></a:p>
+                <a:p><a:r><a:t>B</a:t></a:r></a:p>
+              </c:rich></c:tx></c:trendlineLbl>
+            </c:trendline></c:ser>"#
+        );
+        let trendline = extract_series_trendlines(root_of(&xml).root_element(), &StubResolver)
+            .unwrap()
+            .remove(0);
+        assert_eq!(trendline.label_font_color, None);
+        assert_eq!(trendline.label_font_paint_authored, None);
+        assert_eq!(trendline.label_font_hidden, None);
+        let runs = trendline.label_rich_runs.expect("rich runs");
+        assert_eq!(runs[0].color_paint_authored, Some(true));
+        assert_eq!(runs[0].color_hidden, Some(true));
+        assert_eq!(runs[1].text, "\n");
+        assert_eq!(runs[2].color_paint_authored, None);
+        assert_eq!(runs[2].color_hidden, None);
     }
 
     // ========================================================================
@@ -14437,6 +15686,7 @@ Subtitle</a:t></a:r></a:p>
                 <c:showSerName val="0"/>
                 <c:showPercent val="1"/>
                 <c:dLblPos val="ctr"/>
+                <c:txPr><a:bodyPr rot="1800000" wrap="none" anchor="b" vert="vert" lIns="12700" tIns="25400" rIns="38100" bIns="50800"/><a:p><a:pPr algn="ctr"><a:defRPr i="1" lang="ja-JP" baseline="25000"/></a:pPr></a:p></c:txPr>
               </c:dLbls>
             </c:ser>"#
         );
@@ -14451,6 +15701,18 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(defaults.position.as_deref(), Some("ctr"));
         assert_eq!(defaults.format_code.as_deref(), Some("0.0%"));
         assert_eq!(defaults.separator.as_deref(), Some("\n"));
+        assert_eq!(defaults.font_italic, Some(true));
+        assert_eq!(defaults.font_language.as_deref(), Some("ja-JP"));
+        assert_eq!(defaults.font_baseline, Some(0.25));
+        assert_eq!(defaults.text_rotation, Some(1_800_000));
+        assert_eq!(defaults.text_wrap.as_deref(), Some("none"));
+        assert_eq!(defaults.text_vertical_anchor.as_deref(), Some("b"));
+        assert_eq!(defaults.text_vertical_mode.as_deref(), Some("vert"));
+        assert_eq!(defaults.text_l_ins_emu, Some(12_700));
+        assert_eq!(defaults.text_t_ins_emu, Some(25_400));
+        assert_eq!(defaults.text_r_ins_emu, Some(38_100));
+        assert_eq!(defaults.text_b_ins_emu, Some(50_800));
+        assert_eq!(defaults.text_align.as_deref(), Some("ctr"));
 
         assert_eq!(overrides.len(), 1);
         let o = &overrides[0];
@@ -14481,11 +15743,11 @@ Subtitle</a:t></a:r></a:p>
               <c:dLbls>
                 <c:dLbl>
                   <c:idx val="13"/>
-                  <c:tx><c:rich><a:p><a:pPr><a:defRPr sz="800" b="1"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:defRPr></a:pPr>
-                    <a:r><a:rPr sz="1200"><a:solidFill><a:srgbClr val="EC008B"/></a:solidFill></a:rPr><a:t>Employer</a:t></a:r>
+                  <c:tx><c:rich><a:bodyPr rot="-2700000" lIns="1pt"/><a:p><a:pPr algn="r"><a:defRPr sz="800" b="1"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:defRPr></a:pPr>
+                    <a:r><a:rPr sz="1200" i="1" lang="en-US" baseline="-12.5%"><a:solidFill><a:srgbClr val="EC008B"/></a:solidFill></a:rPr><a:t>Employer</a:t></a:r>
                     <a:r><a:rPr sz="1100" b="0"/><a:t> 36.0%</a:t></a:r>
                   </a:p></c:rich></c:tx>
-                  <c:txPr><a:p><a:pPr><a:defRPr sz="900" b="0"><a:solidFill><a:srgbClr val="333333"/></a:solidFill><a:latin typeface="Tx Face"/></a:defRPr></a:pPr></a:p></c:txPr>
+                  <c:txPr><a:bodyPr anchor="b" rIns="-12700"/><a:p><a:pPr><a:defRPr sz="900" b="0"><a:solidFill><a:srgbClr val="333333"/></a:solidFill><a:latin typeface="Tx Face"/></a:defRPr></a:pPr></a:p></c:txPr>
                 </c:dLbl>
               </c:dLbls>
             </c:ser>"#
@@ -14494,9 +15756,18 @@ Subtitle</a:t></a:r></a:p>
         let (_, overrides) = parse_series_data_labels(d.root_element(), &FixtureResolver, &cache);
         let label = &overrides[0];
         assert_eq!(label.text, "Employer 36.0%");
-        assert_eq!(label.font_color.as_deref(), Some("EC008B"));
-        assert_eq!(label.font_size_hpt, Some(1200));
-        assert_eq!(label.font_bold, Some(true));
+        assert_eq!(label.font_color.as_deref(), Some("333333"));
+        assert_eq!(label.font_size_hpt, Some(900));
+        assert_eq!(label.font_bold, Some(false));
+        assert_eq!(label.font_italic, None);
+        assert_eq!(label.font_language, None);
+        assert_eq!(label.font_baseline, None);
+        assert_eq!(label.text_rotation, Some(-2_700_000));
+        assert_eq!(label.text_l_ins_emu, Some(12_700));
+        assert_eq!(label.text_vertical_anchor.as_deref(), Some("b"));
+        assert_eq!(label.text_r_ins_emu, Some(-12_700));
+        assert_eq!(label.text_body_authored, Some(true));
+        assert_eq!(label.text_align, None);
         let runs = label.rich_runs.as_ref().expect("rich runs");
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].text, "Employer");
@@ -14504,11 +15775,96 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(runs[0].bold, Some(true));
         assert_eq!(runs[0].color.as_deref(), Some("EC008B"));
         assert_eq!(runs[0].font_face.as_deref(), Some("Tx Face"));
+        assert_eq!(runs[0].italic, Some(true));
+        assert_eq!(runs[0].language.as_deref(), Some("en-US"));
+        assert_eq!(runs[0].baseline, Some(-0.125));
+        assert_eq!(runs[0].paragraph_align.as_deref(), Some("r"));
         assert_eq!(runs[1].text, " 36.0%");
         assert_eq!(runs[1].font_size_hpt, Some(1100));
         assert_eq!(runs[1].bold, Some(false));
         assert_eq!(runs[1].color.as_deref(), Some("445566"));
         assert_eq!(runs[1].font_face.as_deref(), Some("Tx Face"));
+        assert_eq!(runs[1].paragraph_align.as_deref(), Some("r"));
+    }
+
+    #[test]
+    fn data_label_text_fill_provenance_blocks_lower_color_fallbacks() {
+        let cache = std::collections::HashMap::new();
+        let xml = format!(
+            r#"<c:ser xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:dLbls>
+              <c:txPr><a:p><a:pPr><a:defRPr><a:noFill/></a:defRPr></a:pPr></a:p></c:txPr>
+              <c:dLbl><c:idx val="0"/><c:tx><c:rich><a:p><a:r>
+                <a:rPr><a:blipFill/></a:rPr><a:t>Unresolved</a:t>
+              </a:r></a:p></c:rich></c:tx></c:dLbl>
+            </c:dLbls></c:ser>"#
+        );
+        let document = root_of(&xml);
+        let (defaults, overrides) =
+            parse_series_data_labels(document.root_element(), &FixtureResolver, &cache);
+        let defaults = defaults.expect("series defaults");
+        assert_eq!(defaults.font_paint_authored, Some(true));
+        assert_eq!(defaults.font_hidden, Some(true));
+        assert_eq!(defaults.font_color, None);
+        let label = &overrides[0];
+        assert_eq!(label.font_paint_authored, None);
+        assert_eq!(label.font_hidden, None);
+        assert_eq!(label.font_color, None);
+        let run = &label.rich_runs.as_ref().expect("rich run")[0];
+        assert_eq!(run.color_paint_authored, Some(true));
+        assert_eq!(run.color_hidden, None);
+        assert_eq!(run.color, None);
+    }
+
+    #[test]
+    fn data_label_run_paint_does_not_become_the_point_default() {
+        let cache = std::collections::HashMap::new();
+        let xml = format!(
+            r#"<c:ser xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:dLbls>
+              <c:txPr><a:p><a:pPr><a:defRPr><a:solidFill><a:srgbClr val="008000"/></a:solidFill></a:defRPr></a:pPr></a:p></c:txPr>
+              <c:dLbl><c:idx val="0"/><c:tx><c:rich>
+                <a:p><a:pPr><a:defRPr><a:noFill/></a:defRPr></a:pPr><a:r><a:t>A</a:t></a:r></a:p>
+                <a:p><a:r><a:t>B</a:t></a:r></a:p>
+              </c:rich></c:tx></c:dLbl>
+            </c:dLbls></c:ser>"#
+        );
+        let document = root_of(&xml);
+        let (defaults, overrides) =
+            parse_series_data_labels(document.root_element(), &FixtureResolver, &cache);
+        assert_eq!(defaults.unwrap().font_color.as_deref(), Some("008000"));
+        let label = &overrides[0];
+        assert_eq!(label.font_color, None);
+        assert_eq!(label.font_paint_authored, None);
+        let runs = label.rich_runs.as_ref().expect("rich runs");
+        assert_eq!(runs[0].color_paint_authored, Some(true));
+        assert_eq!(runs[0].color_hidden, Some(true));
+        assert_eq!(runs[1].text, "\n");
+        assert_eq!(runs[2].color_paint_authored, None);
+        assert_eq!(runs[2].color_hidden, None);
+    }
+
+    #[test]
+    fn data_label_rich_break_is_retained_with_paragraph_alignment() {
+        let cache = std::collections::HashMap::new();
+        let xml = format!(
+            r#"<c:ser xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:dLbls><c:dLbl>
+              <c:idx val="0"/><c:tx><c:rich><a:p><a:pPr algn="r"/>
+                <a:r><a:t>A</a:t></a:r><a:br/><a:r><a:t>B</a:t></a:r>
+              </a:p></c:rich></c:tx>
+            </c:dLbl></c:dLbls></c:ser>"#
+        );
+        let document = root_of(&xml);
+        let (_, overrides) =
+            parse_series_data_labels(document.root_element(), &FixtureResolver, &cache);
+        let label = &overrides[0];
+        assert_eq!(label.text, "A\nB");
+        let runs = label.rich_runs.as_ref().expect("rich runs");
+        assert_eq!(
+            runs.iter().map(|run| run.text.as_str()).collect::<Vec<_>>(),
+            vec!["A", "\n", "B"]
+        );
+        assert!(runs
+            .iter()
+            .all(|run| run.paragraph_align.as_deref() == Some("r")));
     }
 
     #[test]
@@ -14758,8 +16114,8 @@ Subtitle</a:t></a:r></a:p>
                   <c:showPercent val="1"/>
                 </c:dLbl>
                 <c:spPr>
-                  <a:solidFill><a:srgbClr val="FEFEFE"/></a:solidFill>
-                  <a:ln w="12700"><a:solidFill><a:srgbClr val="4472C4"/></a:solidFill></a:ln>
+                  <a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FEFEFE"/></a:gs><a:gs pos="100000"><a:srgbClr val="DDEEFF"/></a:gs></a:gsLst><a:lin ang="2700000"/></a:gradFill>
+                  <a:ln w="12700"><a:solidFill><a:srgbClr val="4472C4"/></a:solidFill><a:prstDash val="dash"/><a:round/></a:ln>
                 </c:spPr>
                 <c:showVal val="0"/>
                 <c:showCatName val="1"/>
@@ -14776,9 +16132,15 @@ Subtitle</a:t></a:r></a:p>
             parse_series_data_labels(d.root_element(), &FixtureResolver, &cache);
         let defaults = defaults.expect("series-level dLbls present");
         let box_ = defaults.label_box.expect("series callout box");
-        assert_eq!(box_.fill.as_deref(), Some("FEFEFE"));
+        assert!(box_.fill.is_none());
+        assert!(matches!(
+            box_.fill_paint,
+            Some(ChartStyleFill::Gradient { .. })
+        ));
         assert_eq!(box_.border_color.as_deref(), Some("4472C4"));
         assert_eq!(box_.border_width_emu, Some(12700));
+        assert_eq!(box_.border_dash.as_deref(), Some("dash"));
+        assert_eq!(box_.border_join.as_deref(), Some("round"));
         assert!(defaults.show_leader_lines);
         assert_eq!(defaults.leader_line_color.as_deref(), Some("A6A6A6"));
         assert_eq!(defaults.leader_line_width_emu, Some(9525));
@@ -14790,6 +16152,67 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(obox.fill.as_deref(), Some("FFFFFF"));
         assert_eq!(obox.border_color.as_deref(), Some("4472C4"));
         assert_eq!(obox.border_width_emu, Some(12700));
+    }
+
+    #[test]
+    fn data_label_shape_paints_exceeding_the_recipe_ceiling_fail_closed_atomically() {
+        let stops = (0..=MAX_CHART_LABEL_GRADIENT_STOPS)
+            .map(|index| format!(r#"<a:gs pos="{}"><a:srgbClr val="112233"/></a:gs>"#, index))
+            .collect::<String>();
+        let xml = format!(
+            r#"<c:ser xmlns:c="{C_NS}" xmlns:a="{A_NS}">
+              <c:dLbls>
+                <c:spPr><a:solidFill><a:srgbClr val="445566"/></a:solidFill></c:spPr>
+                <c:dLbl><c:idx val="0"/><c:spPr><a:gradFill><a:gsLst>{stops}</a:gsLst></a:gradFill></c:spPr></c:dLbl>
+                <c:showVal val="1"/>
+              </c:dLbls>
+            </c:ser>"#
+        );
+        let document = root_of(&xml);
+        let cache = std::collections::HashMap::new();
+        let (defaults, overrides) =
+            parse_series_data_labels(document.root_element(), &FixtureResolver, &cache);
+        let series_box = defaults
+            .and_then(|labels| labels.label_box)
+            .expect("authored series label shape");
+        assert_eq!(series_box.fill_paint_authored, Some(true));
+        assert!(series_box.fill.is_none() && series_box.fill_paint.is_none());
+        let point_box = overrides[0]
+            .label_box
+            .as_ref()
+            .expect("authored point label shape");
+        assert_eq!(point_box.fill_paint_authored, Some(true));
+        assert!(point_box.fill.is_none() && point_box.fill_paint.is_none());
+    }
+
+    #[test]
+    fn data_label_fill_and_outline_apply_the_recipe_ceiling_independently() {
+        let stops = (0..2049)
+            .map(|index| format!(r#"<a:gs pos="{}"><a:srgbClr val="112233"/></a:gs>"#, index))
+            .collect::<String>();
+        let xml = format!(
+            r#"<c:ser xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:dLbls>
+              <c:spPr>
+                <a:gradFill><a:gsLst>{stops}</a:gsLst></a:gradFill>
+                <a:ln><a:gradFill><a:gsLst>{stops}</a:gsLst></a:gradFill></a:ln>
+              </c:spPr><c:showVal val="1"/>
+            </c:dLbls></c:ser>"#
+        );
+        let document = root_of(&xml);
+        let cache = std::collections::HashMap::new();
+        let (defaults, _) =
+            parse_series_data_labels(document.root_element(), &FixtureResolver, &cache);
+        let box_ = defaults
+            .and_then(|labels| labels.label_box)
+            .expect("label shape");
+        assert!(matches!(
+            box_.fill_paint,
+            Some(ChartStyleFill::Gradient { .. })
+        ));
+        assert!(matches!(
+            box_.border_fill,
+            Some(ChartStyleFill::Gradient { .. })
+        ));
     }
 
     #[test]
@@ -15793,7 +17216,9 @@ Subtitle</a:t></a:r></a:p>
               <cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="treemap">
                 <cx:dataLabels pos="inEnd">
                   <cx:visibility categoryName="1" value="1"/>
-                  <cx:dataLabel idx="3"><cx:txPr><a:p><a:r><a:rPr sz="900"><a:solidFill><a:srgbClr val="222222"/></a:solidFill></a:rPr><a:t>Custom Leaf&#10;20</a:t></a:r></a:p></cx:txPr></cx:dataLabel>
+                  <cx:spPr><a:solidFill><a:srgbClr val="DDEEFF"/></a:solidFill></cx:spPr>
+                  <cx:txPr><a:bodyPr lIns="1pt" anchor="b"/><a:p><a:pPr algn="l"><a:defRPr><a:solidFill><a:srgbClr val="008000"/></a:solidFill><a:latin typeface="Primary"/></a:defRPr></a:pPr><a:r><a:rPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:latin typeface="Ignored"/></a:rPr><a:t>ignored</a:t></a:r></a:p><a:p><a:pPr algn="r"><a:defRPr><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></a:defRPr></a:pPr></a:p></cx:txPr>
+                  <cx:dataLabel idx="3"><cx:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:ln></cx:spPr><cx:txPr><a:bodyPr rIns="-0.5pt"/><a:p><a:r><a:rPr sz="900" i="1" lang="en-US" baseline="12.5%"><a:noFill/></a:rPr><a:t>Custom Leaf&#10;20</a:t></a:r><a:r><a:t> plain</a:t></a:r></a:p></cx:txPr></cx:dataLabel>
                 </cx:dataLabels>
               </cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart>
             </cx:chartSpace>"#
@@ -15801,13 +17226,171 @@ Subtitle</a:t></a:r></a:p>
         let d = chart_space_of(&xml);
         let m =
             parse_chartex_part(d.root_element(), &FixtureResolver, None).expect("treemap parses");
+        let defaults = m.series[0].series_data_labels.as_ref().expect("defaults");
+        assert_eq!(defaults.font_color.as_deref(), Some("008000"));
+        assert_eq!(defaults.font_paint_authored, Some(true));
+        assert_eq!(defaults.font_hidden, None);
+        assert_eq!(defaults.font_face.as_deref(), Some("Primary"));
+        assert_eq!(defaults.text_align.as_deref(), Some("l"));
+        assert_eq!(defaults.text_l_ins_emu, Some(12_700));
+        assert_eq!(defaults.text_vertical_anchor.as_deref(), Some("b"));
+        assert_eq!(defaults.text_body_authored, Some(true));
+        assert_eq!(
+            defaults
+                .label_box
+                .as_ref()
+                .and_then(|box_| box_.fill.as_deref()),
+            Some("DDEEFF")
+        );
         let overrides = m.series[0].data_label_overrides.as_ref().expect("override");
         assert_eq!(overrides.len(), 1);
         assert_eq!(overrides[0].idx, 3);
-        assert_eq!(overrides[0].text, "Custom Leaf\n20");
-        assert_eq!(overrides[0].font_color.as_deref(), Some("222222"));
-        assert_eq!(overrides[0].font_size_hpt, Some(900));
-        assert_eq!(m.series[0].data_label_colors.as_ref().unwrap().len(), 4);
+        assert_eq!(overrides[0].text, "Custom Leaf\n20 plain");
+        assert_eq!(overrides[0].font_color, None);
+        assert_eq!(overrides[0].font_paint_authored, None);
+        assert_eq!(overrides[0].font_size_hpt, None);
+        assert_eq!(overrides[0].font_italic, None);
+        assert_eq!(overrides[0].font_language, None);
+        assert_eq!(overrides[0].font_baseline, None);
+        assert_eq!(overrides[0].text_r_ins_emu, Some(-6_350));
+        assert_eq!(overrides[0].text_body_authored, Some(true));
+        let rich_runs = overrides[0].rich_runs.as_ref().expect("rich runs");
+        assert_eq!(rich_runs.len(), 2);
+        assert_eq!(rich_runs[0].color, None);
+        assert_eq!(rich_runs[0].color_paint_authored, Some(true));
+        assert_eq!(rich_runs[0].color_hidden, Some(true));
+        assert_eq!(rich_runs[1].color, None);
+        assert_eq!(rich_runs[1].color_paint_authored, None);
+        assert_eq!(
+            overrides[0]
+                .label_box
+                .as_ref()
+                .and_then(|box_| box_.border_color.as_deref()),
+            Some("445566")
+        );
+        assert_eq!(m.series[0].data_label_colors, None);
+    }
+
+    #[test]
+    fn parse_chartex_data_label_index_is_bounded_without_sparse_allocation() {
+        let xml = format!(
+            r#"<cx:chartSpace xmlns:cx="{CX_NS}" xmlns:a="{A_NS}">
+              <cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:lvl ptCount="1"><cx:pt idx="0">1</cx:pt></cx:lvl></cx:numDim></cx:data></cx:chartData>
+              <cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall">
+                <cx:dataLabels><cx:dataLabel idx="4294967295"><cx:txPr><a:p><a:r><a:t>x</a:t></a:r></a:p></cx:txPr></cx:dataLabel></cx:dataLabels>
+                <cx:dataId val="0"/>
+              </cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart>
+            </cx:chartSpace>"#
+        );
+        let document = chart_space_of(&xml);
+        let model = parse_chartex_part(document.root_element(), &FixtureResolver, None)
+            .expect("bounded chart parses");
+        assert_eq!(model.series[0].data_label_colors, None);
+        assert_eq!(model.series[0].data_label_overrides, None);
+    }
+
+    #[test]
+    fn chartex_point_label_paint_budget_is_atomic() {
+        let stops = (0..=MAX_CHART_LABEL_GRADIENT_STOPS)
+            .map(|index| format!(r#"<a:gs pos="{index}"><a:srgbClr val="112233"/></a:gs>"#))
+            .collect::<String>();
+        let xml = format!(
+            r#"<cx:chartSpace xmlns:cx="{CX_NS}" xmlns:a="{A_NS}">
+              <cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:lvl ptCount="1"><cx:pt idx="0">1</cx:pt></cx:lvl></cx:numDim></cx:data></cx:chartData>
+              <cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall">
+                <cx:dataLabels>
+                  <cx:spPr><a:solidFill><a:srgbClr val="445566"/></a:solidFill></cx:spPr>
+                  <cx:dataLabel idx="0"><cx:spPr><a:gradFill><a:gsLst>{stops}</a:gsLst></a:gradFill></cx:spPr></cx:dataLabel>
+                </cx:dataLabels><cx:dataId val="0"/>
+              </cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart>
+            </cx:chartSpace>"#
+        );
+        let document = chart_space_of(&xml);
+        let model = parse_chartex_part(document.root_element(), &FixtureResolver, None)
+            .expect("bounded chart parses");
+        let defaults = model.series[0]
+            .series_data_labels
+            .as_ref()
+            .expect("defaults");
+        let series_box = defaults.label_box.as_ref().expect("series box");
+        assert_eq!(series_box.fill_paint_authored, Some(true));
+        assert!(series_box.fill.is_none() && series_box.fill_paint.is_none());
+        let point_box = model.series[0].data_label_overrides.as_ref().unwrap()[0]
+            .label_box
+            .as_ref()
+            .expect("point box");
+        assert_eq!(point_box.fill_paint_authored, Some(true));
+        assert!(point_box.fill.is_none() && point_box.fill_paint.is_none());
+    }
+
+    #[test]
+    fn chartex_series_share_one_label_paint_component_budget() {
+        let label_shape = r#"<cx:dataLabels><cx:spPr><a:gradFill><a:gsLst>
+          <a:gs pos="0"><a:srgbClr val="112233"/></a:gs>
+          <a:gs pos="100000"><a:srgbClr val="445566"/></a:gs>
+        </a:gsLst></a:gradFill></cx:spPr></cx:dataLabels>"#;
+        let xml = format!(
+            r#"<cx:chartSpace xmlns:cx="{CX_NS}" xmlns:a="{A_NS}">
+              <cx:chart><cx:plotArea><cx:plotAreaRegion>
+                <cx:series layoutId="clusteredColumn">{label_shape}</cx:series>
+                <cx:series layoutId="clusteredColumn">{label_shape}</cx:series>
+              </cx:plotAreaRegion></cx:plotArea></cx:chart>
+            </cx:chartSpace>"#
+        );
+        let document = chart_space_of(&xml);
+        let series = document
+            .root_element()
+            .descendants()
+            .filter(|node| node.is_element() && node.tag_name().name() == "series")
+            .collect::<Vec<_>>();
+
+        assert!(chartex_label_paint_recipes_within_limit(
+            std::iter::once(series[0]),
+            3
+        ));
+        assert!(chartex_label_paint_recipes_within_limit(
+            std::iter::once(series[1]),
+            3
+        ));
+        assert!(!chartex_label_paint_recipes_within_limit(
+            series.iter().copied(),
+            3
+        ));
+
+        // The chart-level decision is applied atomically to every retained
+        // series: authored provenance remains, but no structured recipe is
+        // expanded for an arbitrary prefix of the chart.
+        for series in series {
+            let (_, _, defaults) = parse_chartex_series_labels(series, 1, &FixtureResolver, false);
+            let label_box = defaults
+                .as_ref()
+                .and_then(|labels| labels.label_box.as_ref())
+                .expect("authored label box");
+            assert_eq!(label_box.fill_paint_authored, Some(true));
+            assert!(label_box.fill.is_none() && label_box.fill_paint.is_none());
+        }
+    }
+
+    #[test]
+    fn chartex_empty_run_keeps_point_default_for_composed_label_text() {
+        let xml = format!(
+            r#"<cx:chartSpace xmlns:cx="{CX_NS}" xmlns:a="{A_NS}">
+              <cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:lvl ptCount="1"><cx:pt idx="0">1</cx:pt></cx:lvl></cx:numDim></cx:data></cx:chartData>
+              <cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall">
+                <cx:dataLabels><cx:dataLabel idx="0"><cx:visibility value="1"/><cx:txPr><a:p><a:pPr><a:defRPr><a:solidFill><a:srgbClr val="008000"/></a:solidFill></a:defRPr></a:pPr><a:r><a:t/></a:r></a:p></cx:txPr></cx:dataLabel></cx:dataLabels>
+                <cx:dataId val="0"/>
+              </cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart>
+            </cx:chartSpace>"#
+        );
+        let document = chart_space_of(&xml);
+        let model = parse_chartex_part(document.root_element(), &FixtureResolver, None)
+            .expect("chart parses");
+        let label = &model.series[0].data_label_overrides.as_ref().unwrap()[0];
+        assert_eq!(label.text, "");
+        assert_eq!(label.rich_runs, None);
+        assert_eq!(label.font_color.as_deref(), Some("008000"));
+        assert_eq!(label.font_paint_authored, Some(true));
+        assert_eq!(label.show_val, Some(true));
     }
 
     struct FormulaOnlyTreemapResolver;
@@ -16194,6 +17777,8 @@ Subtitle</a:t></a:r></a:p>
               <cs:plotArea><cs:spPr><a:ln cmpd="thickThin"><a:solidFill><a:srgbClr val="556677"/></a:solidFill><a:custDash/></a:ln></cs:spPr></cs:plotArea>
               <cs:legend><cs:spPr><a:ln><a:solidFill><a:srgbClr val="667788"/></a:solidFill><a:custDash><a:ds d="200000" sp="50000"/></a:custDash></a:ln></cs:spPr></cs:legend>
               <cs:categoryAxis><cs:defRPr sz="700" b="1" i="1"><a:solidFill><a:srgbClr val="778899"/></a:solidFill><a:latin typeface="Axis Face"/></cs:defRPr></cs:categoryAxis>
+              <cs:dataLabelCallout><cs:defRPr sz="850" b="1" i="1" lang="ja-JP" baseline="25000"><a:solidFill><a:srgbClr val="123456"/></a:solidFill><a:latin typeface="Callout Face"/></cs:defRPr><cs:bodyPr rot="-2700000" wrap="none" anchor="b" vert="vert" lIns="12700" tIns="25400" rIns="38100" bIns="50800"/></cs:dataLabelCallout>
+              <cs:trendlineLabel><cs:fontRef idx="minor"><a:srgbClr val="595959"/></cs:fontRef><cs:defRPr lang="en-US" baseline="-12.5%"><a:blipFill/></cs:defRPr><cs:bodyPr rot="1800000" wrap="square" anchor="ctr"/></cs:trendlineLabel>
               <cs:dropLine><cs:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:ln></cs:spPr></cs:dropLine>
               <cs:gridlineMinor><cs:spPr><a:ln><a:noFill/></a:ln></cs:spPr></cs:gridlineMinor>
             </cs:chartStyle>"#,
@@ -16220,7 +17805,7 @@ Subtitle</a:t></a:r></a:p>
             Some(2)
         );
         let roles = model.chart_style_roles.expect("linked role table");
-        assert_eq!(roles.len(), 6);
+        assert_eq!(roles.len(), 8);
         assert_eq!(
             roles["chartArea"].fill_colors.as_deref(),
             Some(&[Some("112233".to_string()), Some("112233".to_string())][..]),
@@ -16274,6 +17859,23 @@ Subtitle</a:t></a:r></a:p>
             roles["categoryAxis"].font_face.as_deref(),
             Some("Axis Face")
         );
+        let callout = &roles["dataLabelCallout"];
+        assert_eq!(callout.font_language.as_deref(), Some("ja-JP"));
+        assert_eq!(callout.font_baseline, Some(0.25));
+        assert_eq!(callout.text_rotation, Some(-2_700_000));
+        assert_eq!(callout.text_wrap.as_deref(), Some("none"));
+        assert_eq!(callout.text_vertical_anchor.as_deref(), Some("b"));
+        assert_eq!(callout.text_vertical_mode.as_deref(), Some("vert"));
+        assert_eq!(callout.text_l_ins_emu, Some(12_700));
+        assert_eq!(callout.text_t_ins_emu, Some(25_400));
+        assert_eq!(callout.text_r_ins_emu, Some(38_100));
+        assert_eq!(callout.text_b_ins_emu, Some(50_800));
+        let trendline_label = &roles["trendlineLabel"];
+        assert_eq!(trendline_label.font_language.as_deref(), Some("en-US"));
+        assert_eq!(trendline_label.font_baseline, Some(-0.125));
+        assert_eq!(trendline_label.font_color, None);
+        assert_eq!(trendline_label.font_paint_authored, Some(true));
+        assert_eq!(trendline_label.text_rotation, Some(1_800_000));
     }
 
     #[test]
