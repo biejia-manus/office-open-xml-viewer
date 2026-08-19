@@ -13555,6 +13555,18 @@ Subtitle</a:t></a:r></a:p>
     }
 
     #[test]
+    fn direct_chart_frame_line_retains_every_compound_kind() {
+        for compound in ["sng", "dbl", "thinThick", "thickThin", "tri"] {
+            let xml = format!(
+                r#"<c:plotArea xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:spPr><a:ln cmpd="{compound}"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:ln></c:spPr></c:plotArea>"#,
+            );
+            let document = root_of(&xml);
+            let line = extract_direct_shape_line(document.root_element(), &FixtureResolver);
+            assert_eq!(line.compound.as_deref(), Some(compound));
+        }
+    }
+
+    #[test]
     fn chart_date1904_variants() {
         // §21.2.2.38: CT_Boolean. Element present + val omitted ⇒ true.
         let ns = "http://schemas.openxmlformats.org/drawingml/2006/chart";

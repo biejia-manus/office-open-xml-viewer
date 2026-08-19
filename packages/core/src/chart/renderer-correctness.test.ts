@@ -347,6 +347,20 @@ describe('chart-space background', () => {
     expect(rec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#0055AA' });
   });
 
+  it('keeps both compound rails inside the rounded chart-space clip', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      roundedCorners: true,
+      chartBorderColor: '0055AA',
+      chartBorderWidthEmu: 25_400,
+      chartBorderCompound: 'dbl',
+    }), RECT, 1);
+
+    expect(rec.clipCalls).toBe(1);
+    // Four clip corners and four corners for each of the two border rails.
+    expect(rec.quadratics).toHaveLength(12);
+  });
+
   it('keeps an explicit false rectangular and preserves rounded noFill clipping', () => {
     const sharp = recordingCtx();
     renderChart(sharp.ctx, baseModel({
@@ -437,9 +451,10 @@ describe('chart-space background', () => {
     expect(linked.rects[0]).toMatchObject({
       x: 0, y: 0, w: 640, h: 360, fs: '[object Object]',
     });
-    expect(linked.strokeRects).toContainEqual(expect.objectContaining({
-      ss: '#445566', lw: 0.75, cap: 'square', join: 'bevel',
-    }));
+    expect(linked.strokeRects.filter(rect => rect.ss === '#445566')).toEqual([
+      expect.objectContaining({ lw: 0.25, cap: 'square', join: 'bevel' }),
+      expect.objectContaining({ lw: 0.25, cap: 'square', join: 'bevel' }),
+    ]);
     expect(linked.strokeRects.find(rect => rect.ss === '#445566')?.dash)
       .toEqual([0.9375, 0.5625]);
 
@@ -3091,10 +3106,16 @@ describe('bar chart authored layout and fills', () => {
     renderChart(linked.ctx, chart, RECT, 1, 30);
     expect(linked.gradients).toHaveLength(1);
     expect(linked.rects).toContainEqual({ x: 64, y: 72, w: 320, h: 108, fs: '[object Object]' });
-    expect(linked.strokeRects).toContainEqual({
-      x: 64.25, y: 72.25, w: 319.5, h: 107.5,
-      ss: '#808080', lw: 0.5, dash: [0.625, 0.375], cap: 'square', join: 'bevel',
-    });
+    expect(linked.strokeRects.filter(rect => rect.ss === '#808080')).toEqual([
+      {
+        x: 64 + 1 / 12, y: 72 + 1 / 12, w: 320 - 1 / 6, h: 108 - 1 / 6,
+        ss: '#808080', lw: 1 / 6, dash: [0.625, 0.375], cap: 'square', join: 'bevel',
+      },
+      {
+        x: 64 + 5 / 12, y: 72 + 5 / 12, w: 320 - 5 / 6, h: 108 - 5 / 6,
+        ss: '#808080', lw: 1 / 6, dash: [0.625, 0.375], cap: 'square', join: 'bevel',
+      },
+    ]);
 
     const directLineGeometry = recordingCtx();
     renderChart(directLineGeometry.ctx, {
@@ -3161,9 +3182,10 @@ describe('bar chart authored layout and fills', () => {
       { position: 1, color: 'rgba(221,238,255,1)' },
     ]);
     expect(linked.rects).toContainEqual(expect.objectContaining({ fs: '[object Object]' }));
-    expect(linked.strokeRects).toContainEqual(expect.objectContaining({
-      ss: '#445566', lw: 0.75, cap: 'square', join: 'bevel',
-    }));
+    expect(linked.strokeRects.filter(rect => rect.ss === '#445566')).toEqual([
+      expect.objectContaining({ lw: 0.25, cap: 'square', join: 'bevel' }),
+      expect.objectContaining({ lw: 0.25, cap: 'square', join: 'bevel' }),
+    ]);
     expect(linked.strokeRects.find(rect => rect.ss === '#445566')?.dash)
       .toEqual([0.9375, 0.5625]);
 

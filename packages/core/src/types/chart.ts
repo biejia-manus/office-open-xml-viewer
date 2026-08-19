@@ -603,8 +603,9 @@ export interface ChartExElementStyle {
   lineCustomDash?: ChartLineDashSegment[] | null;
   lineCap?: string | null;
   lineJoin?: string | null;
-  /** Parsed compound-line token. Retained until bounded Office evidence can
-   * establish chart-frame rail geometry; current frame painters do not guess. */
+  /** Parsed compound-line token. Chart-frame painters use the bounded rail
+   * ratios observed in Office vector output for `dbl`, `thinThick`,
+   * `thickThin`, and `tri`. */
   lineCompound?: string | null;
   /** Fixed zero-based Chart Colors index; absent means relative (`auto`). */
   fillColorIndex?: number | null;

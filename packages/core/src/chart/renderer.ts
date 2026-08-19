@@ -12,6 +12,7 @@ import {
   withChartImageLookup,
 } from './image-fill.js';
 import { mergeChartLabelBoxes, paintChartLabelBox } from './label-box.js';
+import { strokeChartFrameRect } from './compound-frame.js';
 import {
   anchoredDataLabelPoint,
   dataLabelCanvasTextAlign,
@@ -15611,31 +15612,21 @@ function renderChartImpl(
       // `<a:ln>` with no `@w` means width 0 per ECMA-376 §20.1.2.2.24, i.e. invisible;
       // but Excel renders a fill-without-width line as a ~hairline, so we draw 1px to
       // match the app rather than dropping a declared border.
-      ctx.lineWidth = chart.chartBorderWidthEmu
+      const totalLineWidth = chart.chartBorderWidthEmu
         ? Math.max(0.5, chart.chartBorderWidthEmu / EMU_PER_PT) * ptToPx
         : 1;
       ctx.setLineDash(dashPatternForLine(
-        chart.chartBorderCustomDash, chart.chartBorderDash, ctx.lineWidth,
+        chart.chartBorderCustomDash, chart.chartBorderDash, totalLineWidth,
       ));
       ctx.lineCap = chart.chartBorderCap === 'rnd'
         ? 'round' : chart.chartBorderCap === 'sq' ? 'square' : 'butt';
       ctx.lineJoin = chart.chartBorderJoin === 'round' || chart.chartBorderJoin === 'bevel'
         ? chart.chartBorderJoin : 'miter';
       // Inset by half the line width so the full stroke stays inside the rect.
-      const lw = ctx.lineWidth;
-      if (rounded) {
-        chartSpaceRoundedPath(
-          ctx,
-          x + lw / 2,
-          y + lw / 2,
-          Math.max(0, w - lw),
-          Math.max(0, h - lw),
-          Math.max(0, cornerRadius - lw / 2),
-        );
-        ctx.stroke();
-      } else {
-        ctx.strokeRect(x + lw / 2, y + lw / 2, w - lw, h - lw);
-      }
+      strokeChartFrameRect(
+        ctx, x, y, w, h, totalLineWidth, chart.chartBorderCompound,
+        rounded ? cornerRadius : 0,
+      );
         ctx.restore();
       }
     }
