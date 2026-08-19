@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ChartModel, ChartSeries, ChartRect } from '../types/chart';
 import {
+  chartLabelPaintWorkCount,
   classicMarkerPaintWorkCount,
   renderChart as renderChartCore,
 } from './renderer.js';
@@ -532,7 +533,7 @@ describe('classic 3-D compatibility projection', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
       chartType: 'clusteredBar',
-      categories: ['A'],
+      categories: ['Category'],
       series: [series({ values: [5] })],
     }), RECT, 1);
     expect(rec.rects).toHaveLength(1);
@@ -1128,6 +1129,30 @@ describe('classic 3-D compatibility projection', () => {
     expect(labels.texts.some(text => text.text === '-10' || text.text === '20')).toBe(false);
   });
 
+  it('lets point delete=false restore one 3-D label from a deleted series collection', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A', 'B'],
+      valMin: 0, valMax: 100, valAxisMajorUnit: 20,
+      threeD: { rotationX: 15, rotationY: 20, perspective: 30 },
+      series: [series({
+        values: [37, 43],
+        seriesDataLabels: {
+          deleted: true,
+          showVal: true,
+          showCatName: false,
+          showSerName: false,
+          showPercent: false,
+        },
+        dataLabelOverrides: [{ idx: 1, text: '', deleted: false, showVal: true }],
+      })],
+    }), RECT, 1);
+
+    const texts = rec.texts.map(text => text.text);
+    expect(texts).toContain('43');
+    expect(texts).not.toContain('37');
+  });
+
   it('insets 3-D line category labels when crossBetween is between', () => {
     const rec = recordingCtx(() => 5);
     renderChart(rec.ctx, baseModel({
@@ -1382,6 +1407,163 @@ describe('classic 3-D compatibility projection', () => {
           showLegendKey: true,
         },
       })],
+    }), RECT, 1);
+    expect(rec.texts.some(text => text.text === '(too many data points)')).toBe(true);
+    expect(rec.gradients).toHaveLength(0);
+  });
+
+  it('refuses repeated data-label shape gradients before partial callout paint', () => {
+    const rec = recordingCtx();
+    const count = 257;
+    renderChart(rec.ctx, baseModel({
+      chartType: 'pie',
+      categories: Array.from({ length: count }, (_, index) => String(index)),
+      series: [series({
+        values: Array.from({ length: count }, () => 1),
+        seriesDataLabels: {
+          showVal: false,
+          showCatName: true,
+          showSerName: false,
+          showPercent: false,
+          labelBox: {
+            fillPaint: {
+              fillType: 'gradient', gradType: 'linear', angle: 0,
+              stops: Array.from({ length: 4096 }, (_, index) => ({
+                position: index / 4095,
+                color: '112233',
+              })),
+            },
+          },
+        },
+      })],
+    }), RECT, 1);
+    expect(rec.texts.some(text => text.text === '(too many data points)')).toBe(true);
+    expect(rec.gradients).toHaveLength(0);
+  });
+
+  it('bounds ordinary 2-D label shape work at the 256/257 gradient boundary', () => {
+    const build = (count: number): ChartModel => baseModel({
+      chartType: 'line',
+      categories: Array.from({ length: count }, (_, index) => String(index)),
+      series: [series({
+        values: Array.from({ length: count }, (_, index) => index + 1),
+        seriesDataLabels: {
+          showVal: true,
+          showCatName: false,
+          showSerName: false,
+          showPercent: false,
+          labelBox: {
+            fillPaint: {
+              fillType: 'gradient', gradType: 'linear', angle: 0,
+              stops: Array.from({ length: 4096 }, (_, index) => ({
+                position: index / 4095,
+                color: '112233',
+              })),
+            },
+          },
+        },
+      })],
+    });
+    expect(chartLabelPaintWorkCount(build(256), undefined)).toBe(1_048_576);
+    expect(chartLabelPaintWorkCount(build(257), undefined)).toBe(1_048_577);
+    const rec = recordingCtx();
+    renderChart(rec.ctx, build(257), RECT, 1);
+    expect(rec.texts.some(text => text.text === '(too many data points)')).toBe(true);
+    expect(rec.gradients).toHaveLength(0);
+  });
+
+  it('paints the label shape but not glyphs for direct text noFill', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A'],
+      series: [series({
+        values: [42],
+        seriesDataLabels: {
+          showVal: true,
+          showCatName: false,
+          showSerName: false,
+          showPercent: false,
+          fontPaintAuthored: true,
+          fontHidden: true,
+          labelBox: { fill: 'D9EAF7' },
+        },
+      })],
+    }), RECT, 1);
+    expect(rec.rects.some(rect => rect.fs === '#D9EAF7')).toBe(true);
+    expect(rec.texts.some(text => text.text === '42')).toBe(false);
+  });
+
+  it('rejects oversized ChartEx public structure before linked-style projection', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'boxWhisker',
+      chartStyleRoles: { dataLabel: { fontColor: '112233' } },
+      series: Array.from({ length: 10_001 }, (_, index) => series({
+        name: String(index), values: [],
+      })),
+      chartexBox: { categories: [], series: [] },
+    }), RECT, 1);
+    expect(rec.texts.some(text => text.text === '(too many data points)')).toBe(true);
+  });
+
+  it('charges only non-deleted callout labels to the shape-paint budget', () => {
+    const rec = recordingCtx();
+    const count = 257;
+    renderChart(rec.ctx, baseModel({
+      chartType: 'pie',
+      categories: Array.from({ length: count }, (_, index) => String(index)),
+      series: [series({
+        values: Array.from({ length: count }, () => 1),
+        dataLabelOverrides: Array.from({ length: count - 1 }, (_, index) => ({
+          idx: index + 1,
+          text: '',
+          deleted: true,
+        })),
+        seriesDataLabels: {
+          showVal: false,
+          showCatName: true,
+          showSerName: false,
+          showPercent: false,
+          labelBox: {
+            fillPaint: {
+              fillType: 'gradient', gradType: 'linear', angle: 0,
+              stops: Array.from({ length: 4096 }, (_, index) => ({
+                position: index / 4095,
+                color: '112233',
+              })),
+            },
+          },
+        },
+      })],
+    }), RECT, 1);
+    expect(rec.texts.some(text => text.text === '(too many data points)')).toBe(false);
+    expect(rec.gradients).toHaveLength(1);
+  });
+
+  it('charges linked trendline-label shape paint before any series is painted', () => {
+    const rec = recordingCtx();
+    const templateSeries = series({
+      values: [1, 2], trendLines: [{ trendlineType: 'linear', dispEq: true }],
+    });
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      series: Array.from({ length: 257 }, (_, index) => ({
+        ...templateSeries,
+        name: `S${index}`,
+      })),
+      chartStyleRoles: {
+        trendlineLabel: {
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: Array.from({ length: 4096 }, (_, index) => ({
+              position: index / 4095,
+              color: '112233',
+            })),
+          }],
+        },
+      },
     }), RECT, 1);
     expect(rec.texts.some(text => text.text === '(too many data points)')).toBe(true);
     expect(rec.gradients).toHaveLength(0);
@@ -4587,6 +4769,27 @@ describe('CH3 — labels are locale-independent (§18.8.30)', () => {
     }), RECT, 1);
     expect(rec.texts.some(t => t.text.includes('(0.2)'))).toBe(true);
     expect(rec.texts.every(t => !t.text.includes('△'))).toBe(true);
+  });
+
+  it('waterfall preserves rich point-run visibility and linked fallback color', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'waterfall',
+      categories: ['A'],
+      series: [series({
+        values: [1],
+        dataLabelOverrides: [{
+          idx: 0, text: 'HIDDENVISIBLE',
+          richRuns: [
+            { text: 'HIDDEN', colorPaintAuthored: true, colorHidden: true },
+            { text: 'VISIBLE' },
+          ],
+        }],
+      })],
+      chartStyleRoles: { dataLabel: { fontColor: '008000' } },
+    }), RECT, 1);
+    expect(rec.texts.some(text => text.text === 'HIDDEN')).toBe(false);
+    expect(rec.texts).toContainEqual(expect.objectContaining({ text: 'VISIBLE', fillStyle: '#008000' }));
   });
 
   it('waterfall value-axis labels honor the format code (through the §18.8.30 engine)', () => {
@@ -10915,6 +11118,358 @@ describe('CH6-follow — series trendlines (commit 3)', () => {
     expect(rec.paintEvents).not.toContainEqual({ kind: 'stroke', strokeStyle: '#AABBCC' });
   });
 
+  it('applies linked trendline-label text body and structured shape before layout', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, {
+      ...lineWithTrend({
+        trendLines: [{ trendlineType: 'linear', dispEq: true }],
+      }),
+      chartStyleRoles: {
+        trendlineLabel: {
+          fontSizeHpt: 1600,
+          fontBold: true,
+          fontItalic: true,
+          fontColor: '123456',
+          textRotation: 5_400_000,
+          textLInsEmu: 12_700,
+          textRInsEmu: 12_700,
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0, stops: [
+              { position: 0, color: 'FF0000' },
+              { position: 1, color: '0000FF' },
+            ],
+          }],
+          lineColors: ['445566'],
+          lineWidthEmu: 25_400,
+        },
+      },
+    }, RECT, 1);
+
+    const equation = rec.texts.find(text => text.text.startsWith('y = '));
+    expect(equation?.font).toContain('italic bold 16px');
+    expect(equation?.fillStyle).toBe('#123456');
+    expect(rec.rotations).toContainEqual(Math.PI / 2);
+    expect(rec.gradients).toHaveLength(1);
+    expect(rec.strokeRects).toContainEqual(expect.objectContaining({ ss: '#445566', lw: 2 }));
+  });
+
+  it('uses manual trendline-label geometry for the shape and preserves no-wrap text', () => {
+    const rec = recordingCtx();
+    const labelText = 'This authored label remains on one line';
+    renderChart(rec.ctx, lineWithTrend({
+      trendLines: [{
+        trendlineType: 'linear', dispEq: true, labelText,
+        labelTextRotation: 5_400_000,
+        labelTextWrap: 'none',
+        labelManualLayout: {
+          xMode: 'edge', yMode: 'edge', wMode: 'factor', hMode: 'factor',
+          x: 0.1, y: 0.2, w: 0.25, h: 0.1,
+        },
+        labelBox: { fill: 'FF00FF' },
+      }],
+    }), RECT, 1);
+    expect(rec.rects).toContainEqual(expect.objectContaining({
+      w: RECT.w * 0.25,
+      h: RECT.h * 0.1,
+      fs: '#FF00FF',
+    }));
+    expect(rec.rotations).toContainEqual(Math.PI / 2);
+    expect(rec.texts.some(text => text.text === labelText)).toBe(true);
+    expect(rec.texts.some(text => text.text.includes('…'))).toBe(false);
+  });
+
+  it('preserves trendline-label rich runs and paragraph-specific alignment', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, lineWithTrend({
+      trendLines: [{
+        trendlineType: 'linear', dispEq: true,
+        labelText: 'LongLeft\nR',
+        labelRichRuns: [
+          { text: 'LongLeft', color: '112233', paragraphAlign: 'l' },
+          { text: '\n' },
+          { text: 'R', color: '445566', italic: true, paragraphAlign: 'r' },
+        ],
+      }],
+    }), RECT, 1);
+    const left = rec.texts.find(text => text.text === 'LongLeft');
+    const right = rec.texts.find(text => text.text === 'R');
+    expect(left?.fillStyle).toBe('#112233');
+    expect(right?.fillStyle).toBe('#445566');
+    expect(right?.font).toContain('italic');
+    expect((right?.x ?? 0)).toBeGreaterThan(left?.x ?? 0);
+  });
+
+  it('keeps one hidden trendline-label run from hiding its unformatted sibling', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, {
+      ...lineWithTrend({
+        trendLines: [{
+          trendlineType: 'linear', dispEq: true, labelText: 'HIDDENVISIBLE',
+          labelRichRuns: [
+            { text: 'HIDDEN', colorPaintAuthored: true, colorHidden: true },
+            { text: 'VISIBLE' },
+          ],
+        }],
+      }),
+      chartStyleRoles: { trendlineLabel: { fontColor: '008000' } },
+    }, RECT, 1);
+    expect(rec.texts.some(text => text.text === 'HIDDEN')).toBe(false);
+    expect(rec.texts).toContainEqual(expect.objectContaining({ text: 'VISIBLE', fillStyle: '#008000' }));
+  });
+
+  it('keeps direct trendline-label text and no-fill shape ahead of the linked role', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, {
+      ...lineWithTrend({
+        trendLines: [{
+          trendlineType: 'linear', dispEq: true,
+          labelFontSizeHpt: 900,
+          labelFontBold: false,
+          labelFontItalic: false,
+          labelFontColor: '654321',
+          labelTextRotation: 0,
+          labelBox: { fillHidden: true, fillPaintAuthored: true, borderHidden: true },
+        }],
+      }),
+      chartStyleRoles: {
+        trendlineLabel: {
+          fontSizeHpt: 1600, fontBold: true, fontItalic: true, fontColor: '123456',
+          textRotation: 5_400_000,
+          fillPaints: [{ fillType: 'solid', color: 'FF0000' }],
+          lineColors: ['445566'],
+        },
+      },
+    }, RECT, 1);
+
+    const equation = rec.texts.find(text => text.text.startsWith('y = '));
+    expect(equation?.font).toContain('9px');
+    expect(equation?.font).not.toContain('italic');
+    expect(equation?.fillStyle).toBe('#654321');
+    expect(rec.rotations).not.toContainEqual(Math.PI / 2);
+    expect(rec.rects.every(rect => rect.fs !== '#FF0000')).toBe(true);
+    expect(rec.strokeRects.every(rect => rect.ss !== '#445566')).toBe(true);
+  });
+
+  it('applies linked data-label run and body defaults without overriding the series', () => {
+    const linked = recordingCtx();
+    renderChart(linked.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A'],
+      series: [series({
+        values: [1],
+        seriesDataLabels: {
+          showVal: true, showCatName: false, showSerName: false, showPercent: false,
+        },
+      })],
+      chartStyleRoles: {
+        dataLabel: {
+          fontSizeHpt: 1500, fontBold: true, fontItalic: true, fontColor: 'AABBCC',
+          textRotation: 2_700_000,
+        },
+      },
+    }), RECT, 1);
+    const value = linked.texts.find(text => text.text === '1' && text.fillStyle === '#AABBCC');
+    expect(value?.font).toContain('italic bold 15px');
+    expect(value?.fillStyle).toBe('#AABBCC');
+    expect(linked.rotations).toContainEqual(Math.PI / 4);
+
+    const direct = recordingCtx();
+    renderChart(direct.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A'],
+      series: [series({
+        values: [1],
+        seriesDataLabels: {
+          showVal: true, showCatName: false, showSerName: false, showPercent: false,
+          fontSizeHpt: 800, fontBold: false, fontItalic: false, fontColor: '112233',
+          textRotation: 0,
+        },
+      })],
+      chartStyleRoles: {
+        dataLabel: {
+          fontSizeHpt: 1500, fontBold: true, fontItalic: true, fontColor: 'AABBCC',
+          textRotation: 2_700_000,
+        },
+      },
+    }), RECT, 1);
+    const directValue = direct.texts.find(text => text.text === '1' && text.fillStyle === '#112233');
+    expect(directValue?.font).toContain('8px');
+    expect(directValue?.font).not.toContain('italic');
+    expect(directValue?.fillStyle).toBe('#112233');
+    expect(direct.rotations).not.toContainEqual(Math.PI / 4);
+  });
+
+  it('uses linked data-label body formatting in the optional 3-D renderer', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A'],
+      threeD: { rotationX: 15, rotationY: 20, perspective: 30 },
+      series: [series({
+        values: [1],
+        seriesDataLabels: {
+          showVal: true, showCatName: false, showSerName: false, showPercent: false,
+        },
+      })],
+      chartStyleRoles: {
+        dataLabel: {
+          fontSizeHpt: 1400,
+          fontItalic: true,
+          fontColor: 'AABBCC',
+          fontBaseline: 0.25,
+          textRotation: 5_400_000,
+          textLInsEmu: 12_700,
+        },
+      },
+    }), RECT, 1);
+
+    const value = rec.texts.find(text => text.text === '1' && text.fillStyle === '#AABBCC');
+    expect(value?.font).toContain('italic 14px');
+    expect(rec.rotations).toContainEqual(Math.PI / 2);
+  });
+
+  it('keeps optional 3-D edge labels inside the clamped plot after alignment resolution', () => {
+    const rec = recordingCtx();
+    const label = 'A deliberately wide automatic label near the projected plot edge';
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A'],
+      threeD: { rotationX: 15, rotationY: 20, perspective: 30 },
+      series: [series({
+        values: [1],
+        dataLabelOverrides: [{ idx: 0, text: label, position: 'r' }],
+      })],
+    }), RECT, 1);
+
+    const value = rec.texts.find(text => text.text.startsWith('A deliberately'));
+    expect(value?.align).toBe('left');
+    const labelClip = rec.clips
+      .filter(clip => value != null && value.y >= clip.y && value.y <= clip.y + clip.h)
+      .sort((a, b) => a.w * a.h - b.w * b.h)[0];
+    expect(labelClip).toBeDefined();
+    expect((value as TextCall).x).toBeGreaterThanOrEqual((labelClip as { x: number }).x - 1e-6);
+  });
+
+  it('applies linked callout paint and body formatting to pie data labels', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'pie',
+      categories: ['A', 'B'],
+      series: [series({
+        values: [1, 1],
+        seriesDataLabels: {
+          showVal: false, showCatName: true, showSerName: false, showPercent: false,
+          labelBox: {},
+        },
+      })],
+      chartStyleRoles: {
+        dataLabelCallout: {
+          fontItalic: true,
+          fontColor: 'AABBCC',
+          textRotation: 2_700_000,
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0, stops: [
+              { position: 0, color: 'FF0000' },
+              { position: 1, color: '0000FF' },
+            ],
+          }],
+          lineColors: ['445566'],
+          lineWidthEmu: 25_400,
+        },
+      },
+    }), RECT, 1);
+
+    const labels = rec.texts.filter(text => text.text === 'A' || text.text === 'B');
+    expect(labels.length).toBeGreaterThan(0);
+    expect(labels.every(text => text.font?.includes('italic'))).toBe(true);
+    expect(rec.rotations).toContainEqual(Math.PI / 4);
+    expect(rec.gradients.length).toBeGreaterThan(0);
+    expect(rec.strokeRects).toContainEqual(expect.objectContaining({ ss: '#445566', lw: 2 }));
+  });
+
+  it('does not turn an ordinary indexed data label into a linked callout', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'waterfall',
+      categories: ['A'],
+      series: [series({
+        values: [1],
+        seriesDataLabels: {
+          showVal: true, showCatName: false, showSerName: false, showPercent: false,
+        },
+        dataLabelOverrides: [{ idx: 0, text: '1' }],
+      })],
+      chartStyleRoles: {
+        dataLabelCallout: {
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0, stops: [
+              { position: 0, color: 'FF0000' },
+              { position: 1, color: '0000FF' },
+            ],
+          }],
+          lineColors: ['445566'],
+          lineWidthEmu: 25_400,
+        },
+      },
+    }), RECT, 1);
+    expect(rec.texts.some(text => text.text === '1')).toBe(true);
+    expect(rec.gradients).toHaveLength(0);
+    expect(rec.strokeRects.some(rect => rect.ss === '#445566')).toBe(false);
+  });
+
+  it('merges point, series, and linked callout properties without reviving text noFill', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'pie',
+      categories: ['A'],
+      series: [series({
+        values: [1],
+        seriesDataLabels: {
+          showVal: false, showCatName: true, showSerName: false, showPercent: false,
+          labelBox: { fill: '224466' },
+        },
+        dataLabelOverrides: [{
+          idx: 0,
+          text: '',
+          fontPaintAuthored: true,
+          fontHidden: true,
+          labelBox: { borderWidthEmu: 25_400 },
+        }],
+      })],
+      chartStyleRoles: {
+        dataLabelCallout: {
+          fontColor: 'AABBCC',
+          fillColors: ['00FF00'],
+          lineColors: ['FF0000'],
+        },
+      },
+    }), RECT, 1);
+    expect(rec.rects.some(rect => rect.fs === '#224466')).toBe(true);
+    expect(rec.strokeRects).toContainEqual(expect.objectContaining({ ss: '#FF0000', lw: 2 }));
+    expect(rec.texts.some(text => text.text === 'A')).toBe(false);
+  });
+
+  it('rotates a legend key and its linked data-label text as one measured block', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A'],
+      series: [series({
+        values: [1],
+        seriesDataLabels: {
+          showVal: true, showCatName: false, showSerName: false, showPercent: false,
+          showLegendKey: true,
+        },
+      })],
+      chartStyleRoles: {
+        dataLabel: { fontItalic: true, textRotation: 5_400_000 },
+      },
+    }), RECT, 1);
+
+    expect(rec.texts.some(text => text.text === '1' && text.font?.includes('italic'))).toBe(true);
+    expect(rec.rotations).toContainEqual(Math.PI / 2);
+  });
+
   it('suppresses a trendline when the linked trendline role declares noFill', () => {
     const without = dashSegRecordingCtx();
     renderChart(without.ctx, lineWithTrend({}), RECT, 1);
@@ -11949,6 +12504,60 @@ describe('CH13 — stock chart (high/low/close)', () => {
     expect(rec.paintEvents.some(event =>
       event.kind === 'stroke' && event.strokeStyle === '#AA0000'
     )).toBe(true);
+  });
+
+  it('paints stock-series defaults and per-point rich callout labels', () => {
+    const rec = recordingCtx();
+    const model = stockModel();
+    model.series[2] = series({
+      name: 'Close',
+      values: [32, 35, 34],
+      seriesDataLabels: {
+        showVal: true,
+        showCatName: true,
+        showSerName: false,
+        showPercent: false,
+        fontColor: '008000',
+        separator: ' | ',
+      },
+      dataLabelOverrides: [{
+        idx: 1,
+        text: 'Close custom',
+        richRuns: [{ text: 'Close custom', italic: true }],
+        labelBox: { fill: 'FFF2CC', fillPaintAuthored: true },
+      }],
+    });
+
+    renderChart(rec.ctx, model, RECT, 1);
+
+    expect(rec.texts.map(text => text.text)).toEqual(
+      expect.arrayContaining(['1/5/2002 | 32', 'Close custom', '1/7/2002 | 34']),
+    );
+    expect(rec.rects.some(rect => rect.fs === '#FFF2CC')).toBe(true);
+  });
+
+  it('lets a point-level delete=false restore one stock label from a deleted collection', () => {
+    const rec = recordingCtx();
+    const model = stockModel();
+    model.series[2] = series({
+      name: 'Close',
+      values: [32, 35, 34],
+      seriesDataLabels: {
+        deleted: true,
+        showVal: true,
+        showCatName: false,
+        showSerName: false,
+        showPercent: false,
+      },
+      dataLabelOverrides: [{ idx: 1, text: '', deleted: false, showVal: true }],
+    });
+
+    renderChart(rec.ctx, model, RECT, 1);
+
+    const texts = rec.texts.map(text => text.text);
+    expect(texts).toContain('35');
+    expect(texts).not.toContain('32');
+    expect(texts).not.toContain('34');
   });
 
   it('draws authored stock-chart minor ticks', () => {
@@ -13995,6 +14604,25 @@ describe('CH15 — chartEx sunburst', () => {
     });
   }
 
+  it('preserves rich hierarchy-label runs through the shared ChartEx resolver', () => {
+    const rec = ringRecordingCtx();
+    renderChart(rec.ctx, sunburstModel({
+      series: [series({
+        values: [1],
+        dataLabelOverrides: [{
+          idx: 0, text: 'HIDDENVISIBLE',
+          richRuns: [
+            { text: 'HIDDEN', colorPaintAuthored: true, colorHidden: true },
+            { text: 'VISIBLE' },
+          ],
+        }],
+      })],
+      chartStyleRoles: { dataLabel: { fontColor: '008000' } },
+    }), RECT, 1);
+    expect(rec.fontTexts.some(text => text.text === 'HIDDEN')).toBe(false);
+    expect(rec.fontTexts).toContainEqual(expect.objectContaining({ text: 'VISIBLE', fill: '#008000' }));
+  });
+
   it('rejects oversized hierarchy rows and paths before allocating the tree', () => {
     for (const rows of [
       Array.from({ length: 10_001 }, (_, index) => ({ path: [`N${index}`], size: 1 })),
@@ -14016,6 +14644,47 @@ describe('CH15 — chartEx sunburst', () => {
       .not.toThrow();
     expect(rec.fontTexts.map(text => text.text)).not.toContain('(too many data points)');
     expect(rec.arcs.length).toBeGreaterThan(0);
+  });
+
+  it('charges label-shape paint by interned hierarchy node rather than source row', () => {
+    const gradient = {
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 0,
+      stops: Array.from({ length: 4096 }, (_, index) => ({
+        position: index / 4095,
+        color: '112233',
+      })),
+    };
+    const build = (depth: number): ChartModel => sunburstModel({
+      series: [series({
+        values: [1],
+        seriesDataLabels: {
+          showVal: false,
+          showCatName: true,
+          showSerName: false,
+          showPercent: false,
+          labelBox: { fillPaint: gradient },
+        },
+      })],
+      chartexSunburst: {
+        rows: [{
+          path: Array.from({ length: depth }, (_, index) => `D${index}`),
+          size: 1,
+        }],
+      },
+    });
+    expect(chartLabelPaintWorkCount(build(1), undefined)).toBe(4096);
+    expect(chartLabelPaintWorkCount(build(256), undefined)).toBe(1_048_576);
+    expect(chartLabelPaintWorkCount(build(257), undefined)).toBe(1_048_577);
+    const sparse = build(1);
+    sparse.chartexSunburst = {
+      rows: [
+        ...Array.from({ length: 256 }, (_, index) => ({ path: [`Z${index}`], size: 0 })),
+        { path: ['Visible'], size: 1 },
+      ],
+    };
+    expect(chartLabelPaintWorkCount(sparse, undefined)).toBe(4096);
   });
 
   it('draws three concentric rings (Branch / Stem / Leaf) with distinct radii', () => {
@@ -14882,6 +15551,40 @@ describe('CH15 — chartEx treemap', () => {
     expect(north).toMatchObject({ align: 'left', baseline: 'bottom' });
     expect(fifty).toMatchObject({ align: 'left', baseline: 'bottom' });
     expect((fifty as TextCall).y).toBeGreaterThan((north as TextCall).y);
+  });
+
+  it('keeps centered automatic parent and leaf text inside an inBase treemap tile', () => {
+    const rec = recordingCtx();
+    const model = baseModel({
+      chartType: 'treemap',
+      chartexAccents: ['5B9BD5'],
+      chartexTreemap: {
+        parentLabelLayout: 'overlapping',
+        rows: [{ path: ['Group', 'Leaf'], size: 1 }],
+      },
+      series: [series({
+        values: [1],
+        seriesDataLabels: {
+          showVal: false,
+          showCatName: true,
+          showSerName: false,
+          showPercent: false,
+          position: 'inBase',
+          textAlign: 'ctr',
+          fontSizeHpt: 1000,
+        },
+      })],
+    });
+    renderChart(rec.ctx, model, { x: 0, y: 0, w: 160, h: 120 }, 1);
+
+    const tile = rec.strokeRects[0];
+    const labels = rec.texts.filter(text => text.text === 'Group' || text.text === 'Leaf');
+    expect(labels.map(text => text.text)).toEqual(expect.arrayContaining(['Group', 'Leaf']));
+    for (const label of labels) {
+      expect(label.align).toBe('center');
+      expect(label.x - (label.width ?? 0) / 2).toBeGreaterThanOrEqual(tile.x - 1e-6);
+      expect(label.x + (label.width ?? 0) / 2).toBeLessThanOrEqual(tile.x + tile.w + 1e-6);
+    }
   });
 
   it('applies ChartEx per-label overrides by hierarchy-node preorder index', () => {
