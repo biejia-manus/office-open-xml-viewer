@@ -13124,6 +13124,10 @@ describe('CH13 — stock chart (high/low/close)', () => {
     valMax: 70,
     stockHiLowLines: true,
     stockHiLowLineColor: '595959',
+    stockAutomaticStyle: {
+      lineColor: '000000', lineWidthEmu: 12700,
+      upFillColor: 'F9F9F9', downFillColor: '3F3F3F',
+    },
     series: [
       series({ name: 'High', values: [55, 57, 57] }),
       series({ name: 'Low', values: [11, 12, 13] }),
@@ -13257,11 +13261,118 @@ describe('CH13 — stock chart (high/low/close)', () => {
       && segment.cap === 'round' && segment.join === 'bevel')).toBe(true);
   });
 
-  it('falls back to a default gray hi-lo line when no color is given', () => {
+  it('uses the bounded automatic line recipe for an empty stock drop-line element', () => {
     const rec = segRecordingCtx();
-    // stockHiLowLineColor omitted → renderer default '#595959'.
-    renderChart(rec.ctx, stockModel({ stockHiLowLineColor: null }), RECT, 1);
-    expect(hiLoLines(rec.segs).length).toBe(3);
+    renderChart(rec.ctx, stockModel({
+      stockHiLowLines: false,
+      stockDropLines: {},
+      stockAutomaticStyle: {
+        lineColor: '240000', lineWidthEmu: 12700,
+        upFillColor: 'F9F9F9', downFillColor: '493F3F',
+      },
+    }), RECT, 1);
+    const lines = rec.segs.filter(segment => segment.ss === '#240000');
+    expect(lines).toHaveLength(3);
+    expect(lines.every(segment => segment.lw === 1)).toBe(true);
+
+    const unresolved = segRecordingCtx();
+    renderChart(unresolved.ctx, stockModel({
+      stockHiLowLines: false,
+      stockDropLines: {},
+      stockAutomaticStyle: null,
+    }), RECT, 1);
+    expect(unresolved.segs.some(segment => segment.ss === '#000000')).toBe(false);
+
+    for (const stockDropLines of [
+      { paintAuthored: true, widthEmu: 12700 },
+      {},
+    ]) {
+      const authoredUnresolved = segRecordingCtx();
+      renderChart(authoredUnresolved.ctx, stockModel({
+        stockHiLowLines: false,
+        stockDropLines,
+        chartStyleRoles: stockDropLines.paintAuthored === true ? undefined : {
+          dropLine: { linePaintAuthored: true, lineWidthEmu: 12700 },
+        },
+        stockAutomaticStyle: {
+          lineColor: '240000', lineWidthEmu: 12700,
+          upFillColor: 'F9F9F9', downFillColor: '493F3F',
+        },
+      }), RECT, 1);
+      expect(authoredUnresolved.segs.some(segment => segment.ss === '#240000')).toBe(false);
+    }
+
+    const linkedGeometryOnly = segRecordingCtx();
+    renderChart(linkedGeometryOnly.ctx, stockModel({
+      stockHiLowLines: false,
+      stockDropLines: {},
+      chartStyleRoles: {
+        dropLine: { lineWidthEmu: 25400, lineDash: 'dash' },
+      },
+      stockAutomaticStyle: {
+        lineColor: '240000', lineWidthEmu: 12700,
+        upFillColor: 'F9F9F9', downFillColor: '493F3F',
+      },
+    }), RECT, 1);
+    const geometryLines = linkedGeometryOnly.segs.filter(segment => segment.ss === '#240000');
+    expect(geometryLines).toHaveLength(3);
+    expect(geometryLines.every(segment => segment.lw === 2 && segment.dash.length > 0)).toBe(true);
+  });
+
+  it('uses parser-resolved automatic stock line paint only when the element exists', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, stockModel({
+      stockHiLowLineColor: null,
+      stockHiLowLineStyle: {},
+      stockAutomaticStyle: {
+        lineColor: '240000', lineWidthEmu: 12700,
+        upFillColor: 'F9F9F9', downFillColor: '493F3F',
+      },
+    }), RECT, 1);
+    const automatic = rec.segs.filter(segment => segment.ss === '#240000');
+    expect(automatic).toHaveLength(3);
+    expect(automatic.every(segment => segment.lw === 1)).toBe(true);
+
+    const absent = segRecordingCtx();
+    renderChart(absent.ctx, stockModel({
+      stockHiLowLines: undefined,
+      stockHiLowLineColor: null,
+      stockHiLowLineStyle: null,
+      stockAutomaticStyle: {
+        lineColor: '240000', lineWidthEmu: 12700,
+        upFillColor: 'F9F9F9', downFillColor: '493F3F',
+      },
+    }), RECT, 1);
+    expect(absent.segs.some(segment => segment.ss === '#240000')).toBe(false);
+  });
+
+  it('maps secondary stock series and its right value axis through one scale', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, stockModel({
+      valMin: 0,
+      valMax: 10,
+      secondaryValAxis: {
+        min: 0, max: 100, majorUnit: 50,
+        title: null, hidden: false, lineHidden: false,
+        lineColor: '00AA00', lineWidthEmu: 12700,
+        majorTickMark: 'cross', tickLabelPos: 'nextTo',
+      },
+      series: [
+        series({ name: 'High', values: [55, 57, 57], useSecondaryAxis: true }),
+        series({ name: 'Low', values: [11, 12, 13], useSecondaryAxis: true }),
+        series({ name: 'Close', values: [32, 35, 34], useSecondaryAxis: true }),
+      ],
+    }), RECT, 1);
+
+    expect(hiLoLines(rec.segs)).toHaveLength(3);
+    expect(hiLoLines(rec.segs).every(line =>
+      line.y0 >= RECT.y && line.y0 <= RECT.y + RECT.h
+      && line.y1 >= RECT.y && line.y1 <= RECT.y + RECT.h
+    )).toBe(true);
+    expect(rec.segs.some(line => line.ss === '#00AA00'
+      && Math.abs(line.x1 - line.x0) < 0.01
+      && Math.abs(line.y1 - line.y0) > 100)).toBe(true);
+    expect(rec.texts.map(text => text.text)).toContain('100');
   });
 
   it('honors a stock-series point marker override without changing sibling ticks', () => {
@@ -13453,6 +13564,107 @@ describe('CH13 — stock chart (high/low/close)', () => {
       && rect.dash.length > 0 && rect.cap === 'round' && rect.join === 'bevel')).toBe(true);
   });
 
+  it('applies bounded automatic stock bar paint after direct and linked paint', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, stockModel({
+      stockUpDownBars: true,
+      stockUpDownBarStyle: {
+        gapWidthPercent: 100,
+        up: {},
+        down: { fillColor: 'CC0000', lineHidden: true },
+      },
+      stockAutomaticStyle: {
+        lineColor: '240000', lineWidthEmu: 12700,
+        upFillColor: 'F9F9F9', downFillColor: '493F3F',
+      },
+      series: [
+        series({ name: 'Open', values: [20, 45, 25] }),
+        series({ name: 'High', values: [55, 57, 57] }),
+        series({ name: 'Low', values: [11, 12, 13] }),
+        series({ name: 'Close', values: [40, 30, 25] }),
+      ],
+    }), RECT, 1);
+
+    expect(rec.rects.filter(rect => rect.fs === '#F9F9F9')).toHaveLength(1);
+    expect(rec.rects.filter(rect => rect.fs === '#CC0000')).toHaveLength(1);
+    expect(rec.strokeRects.filter(rect => rect.ss === '#240000' && rect.lw === 1)).toHaveLength(1);
+
+    const unresolved = recordingCtx();
+    renderChart(unresolved.ctx, stockModel({
+      stockUpDownBars: true,
+      stockUpDownBarStyle: { gapWidthPercent: 100, up: {}, down: {} },
+      stockAutomaticStyle: null,
+      series: [
+        series({ name: 'Open', values: [20, 45] }),
+        series({ name: 'High', values: [55, 57] }),
+        series({ name: 'Low', values: [11, 12] }),
+        series({ name: 'Close', values: [40, 30] }),
+      ],
+    }), RECT, 1);
+    expect(unresolved.rects.filter(rect => rect.fs === '#FFFFFF' || rect.fs === '#000000'))
+      .toHaveLength(0);
+    expect(unresolved.strokeRects.filter(rect => rect.ss === '#000000')).toHaveLength(0);
+
+    const authoredUnresolved = recordingCtx();
+    renderChart(authoredUnresolved.ctx, stockModel({
+      stockUpDownBars: true,
+      stockUpDownBarStyle: {
+        gapWidthPercent: 100,
+        up: {
+          fill: { fillType: 'gradient', gradType: 'linear', angle: 0, stops: [] },
+        },
+        down: {},
+      },
+      series: [
+        series({ name: 'Open', values: [20] }),
+        series({ name: 'High', values: [55] }),
+        series({ name: 'Low', values: [11] }),
+        series({ name: 'Close', values: [40] }),
+      ],
+    }), RECT, 1);
+    expect(authoredUnresolved.rects.filter(rect => rect.fs === '#F9F9F9')).toHaveLength(0);
+
+    const authoredUnresolvedProvenance = recordingCtx();
+    renderChart(authoredUnresolvedProvenance.ctx, stockModel({
+      stockUpDownBars: true,
+      stockUpDownBarStyle: {
+        gapWidthPercent: 100,
+        up: { fillPaintAuthored: true, linePaintAuthored: true },
+        down: { fillHidden: true, lineHidden: true },
+      },
+      series: [
+        series({ name: 'Open', values: [20] }),
+        series({ name: 'High', values: [55] }),
+        series({ name: 'Low', values: [11] }),
+        series({ name: 'Close', values: [40] }),
+      ],
+    }), RECT, 1);
+    expect(authoredUnresolvedProvenance.rects.filter(rect => rect.fs === '#F9F9F9'))
+      .toHaveLength(0);
+    expect(authoredUnresolvedProvenance.strokeRects.filter(rect => rect.ss === '#000000'))
+      .toHaveLength(0);
+  });
+
+  it('keeps automatic up/down bars correct across zero and missing points', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, stockModel({
+      valMin: -20,
+      valMax: 20,
+      stockUpDownBars: true,
+      stockUpDownBarStyle: { gapWidthPercent: 100, up: {}, down: {} },
+      series: [
+        series({ name: 'Open', values: [-10, 10, null] }),
+        series({ name: 'High', values: [15, 15, 15] }),
+        series({ name: 'Low', values: [-15, -15, -15] }),
+        series({ name: 'Close', values: [10, -10, 5] }),
+      ],
+    }), RECT, 1);
+
+    expect(rec.rects.filter(rect => rect.fs === '#F9F9F9')).toHaveLength(1);
+    expect(rec.rects.filter(rect => rect.fs === '#3F3F3F')).toHaveLength(1);
+    expect(rec.strokeRects.filter(rect => rect.ss === '#000000')).toHaveLength(2);
+  });
+
   it('uses the shared structured-fill renderer for stock up/down bars', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, stockModel({
@@ -13503,7 +13715,7 @@ describe('CH13 — stock chart (high/low/close)', () => {
       ],
     }), RECT, 1);
 
-    expect(rec.rects.filter(rect => rect.fs === '#000000')).toHaveLength(3);
+    expect(rec.rects.filter(rect => rect.fs === '#3F3F3F')).toHaveLength(3);
     expect(rec.arcs).toHaveLength(4); // three plotted High points + one legend marker
     expect(rec.texts.map(text => text.text)).toEqual(expect.arrayContaining(['High', 'Low', 'Close']));
   });

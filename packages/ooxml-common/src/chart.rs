@@ -176,6 +176,10 @@ pub struct ChartExElementStyle {
     /// compatibility; gradient and pattern outlines are retained here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_paints: Option<Vec<Option<ChartStyleFill>>>,
+    /// A linked outline recipe was authored even when its paint is not
+    /// representable by the current shared fill model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_paint_authored: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_width_emu: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -844,7 +848,7 @@ pub struct ChartModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stock_hi_low_lines: Option<bool>,
     /// `<c:hiLowLines><c:spPr><a:ln><a:solidFill>` resolved color (hex, no `#`).
-    /// `None` = the renderer's default gray. Only meaningful with
+    /// `None` leaves direct paint omitted. Only meaningful with
     /// `stock_hi_low_lines == Some(true)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stock_hi_low_line_color: Option<String>,
@@ -856,6 +860,10 @@ pub struct ChartModel {
     /// Parsed `<c:upDownBars>` gap and direct up/down bar paint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stock_up_down_bar_style: Option<ChartStockUpDownBarStyle>,
+    /// Bounded Office automatic paint for empty stock decorations. Kept
+    /// separate from direct/linked paint so renderer precedence is explicit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock_automatic_style: Option<ChartStockAutomaticStyle>,
     /// `<c:surfaceChart|surface3DChart><c:wireframe>` effective boolean.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface_wireframe: Option<bool>,
@@ -964,9 +972,13 @@ pub struct ChartStockBarPaint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<ChartStyleFill>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_paint_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_hidden: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_paint_authored: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_width_emu: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -987,12 +999,23 @@ pub struct ChartStockUpDownBarStyle {
     pub down: ChartStockBarPaint,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartStockAutomaticStyle {
+    pub line_color: String,
+    pub line_width_emu: u32,
+    pub up_fill_color: String,
+    pub down_fill_color: String,
+}
+
 /// Direct DrawingML line paint for group-owned chart decoration geometry.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartDecorationLineStyle {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint_authored: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width_emu: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4469,25 +4492,14 @@ fn parse_chart_decoration_line_style(
     resolver: &dyn ColorResolver,
 ) -> ChartDecorationLineStyle {
     let direct = extract_direct_shape_line(node, resolver);
-    let hidden = if direct.hidden == Some(true) {
-        Some(true)
-    } else if direct.color.is_some()
-        || direct.width_emu.is_some()
-        || direct.dash.is_some()
-        || direct.cap.is_some()
-        || direct.join.is_some()
-    {
-        Some(false)
-    } else {
-        None
-    };
     ChartDecorationLineStyle {
         color: direct.color,
+        paint_authored: direct.paint_authored,
         width_emu: direct.width_emu,
         dash: direct.dash,
         cap: direct.cap,
         join: direct.join,
-        hidden,
+        hidden: direct.hidden,
     }
 }
 
@@ -4504,8 +4516,10 @@ fn parse_chart_up_down_bar_paint(
     ChartStockBarPaint {
         fill_color: direct_fill.color,
         fill: direct_fill.fill,
+        fill_paint_authored: direct_fill.paint_authored,
         fill_hidden: direct_fill.hidden,
         line_color: direct_line.color,
+        line_paint_authored: direct_line.paint_authored,
         line_width_emu: direct_line.width_emu,
         line_dash: direct_line.dash,
         line_cap: direct_line.cap,
@@ -5102,6 +5116,9 @@ fn parse_chartex_element_style(
         .as_ref()
         .and_then(|document| child(document.root_element(), "ln"));
     let local_line_fill_authored = local_line.is_some_and(shape_has_fill_choice);
+    let line_paint_authored = (local_line_fill_authored
+        || inherited_line.is_some_and(shape_has_fill_choice))
+    .then_some(true);
     let line_component_count = if local_line_fill_authored {
         local_line
             .and_then(chart_style_paint_component_count)
@@ -5275,6 +5292,7 @@ fn parse_chartex_element_style(
         fill_no_style,
         line_colors,
         line_paints,
+        line_paint_authored,
         line_width_emu,
         line_hidden,
         line_no_style,
@@ -7285,6 +7303,7 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
         stock_hi_low_line_color: None,
         stock_up_down_bars: None,
         stock_up_down_bar_style: None,
+        stock_automatic_style: None,
         surface_wireframe: None,
         surface_band_formats: None,
         legacy_chart_style: None,
@@ -9868,6 +9887,40 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     } else {
         (None, None, None, None, None, None)
     };
+    // Empty stock-decoration paint is application-defined. Retain only the
+    // bounded Office rules observed across 3/4-series stock charts, omitted
+    // and explicit legacy styles, direct/noFill controls, and a substituted
+    // dark-1 theme. Styles outside this observed set stay unresolved instead
+    // of receiving a guessed palette.
+    let stock_has_decoration = stock_drop_lines.is_some()
+        || stock_hi_low_lines == Some(true)
+        || stock_up_down_bars == Some(true);
+    let stock_automatic_style = if chart_type == "stock" && stock_has_decoration {
+        let tint_amounts = match legacy_chart_style.unwrap_or(2) {
+            1 => Some((0.75, 0.15)),
+            2 | 10 => Some((0.95, 0.05)),
+            _ => None,
+        };
+        tint_amounts.and_then(|(up_tint, down_tint)| {
+            let dark = color_resolver.resolve_scheme_color("dk1")?;
+            Some(ChartStockAutomaticStyle {
+                line_color: dark.clone(),
+                line_width_emu: 12_700,
+                up_fill_color: crate::color::apply_signed_tint_or_shade(
+                    &dark,
+                    up_tint,
+                    color_resolver.tint_mode(),
+                ),
+                down_fill_color: crate::color::apply_signed_tint_or_shade(
+                    &dark,
+                    down_tint,
+                    color_resolver.tint_mode(),
+                ),
+            })
+        })
+    } else {
+        None
+    };
     let surface_wireframe = find_chart("surfaceChart")
         .or_else(|| find_chart("surface3DChart"))
         .and_then(|surface| bool_child(surface, "wireframe"));
@@ -12063,6 +12116,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         stock_hi_low_line_color,
         stock_up_down_bars,
         stock_up_down_bar_style,
+        stock_automatic_style,
         surface_wireframe,
         surface_band_formats,
         legacy_chart_style,
@@ -12414,6 +12468,7 @@ mod tests {
             stock_hi_low_line_color: None,
             stock_up_down_bars: None,
             stock_up_down_bar_style: None,
+            stock_automatic_style: None,
             surface_wireframe: None,
             surface_band_formats: None,
             legacy_chart_style: None,
@@ -14375,6 +14430,25 @@ Subtitle</a:t></a:r></a:p>
 
         fn implicit_outline_only_negative_column_style(&self) -> bool {
             true
+        }
+    }
+
+    struct DarkRedFixtureResolver;
+
+    impl ColorResolver for DarkRedFixtureResolver {
+        fn resolve_solid_fill(&self, node: Node) -> Option<String> {
+            FixtureResolver.resolve_solid_fill(node)
+        }
+
+        fn resolve_scheme_color(&self, name: &str) -> Option<String> {
+            match name {
+                "tx1" | "dk1" => Some("240000".to_string()),
+                _ => FixtureResolver.resolve_scheme_color(name),
+            }
+        }
+
+        fn resolve_series_accent(&self, idx: usize) -> Option<String> {
+            FixtureResolver.resolve_series_accent(idx)
         }
     }
 
@@ -18471,6 +18545,7 @@ Subtitle</a:t></a:r></a:p>
               <cs:dataLabelCallout><cs:defRPr sz="850" b="1" i="1" lang="ja-JP" baseline="25000"><a:solidFill><a:srgbClr val="123456"/></a:solidFill><a:latin typeface="Callout Face"/></cs:defRPr><cs:bodyPr rot="-2700000" wrap="none" anchor="b" vert="vert" lIns="12700" tIns="25400" rIns="38100" bIns="50800"/></cs:dataLabelCallout>
               <cs:trendlineLabel><cs:fontRef idx="minor"><a:srgbClr val="595959"/></cs:fontRef><cs:defRPr lang="en-US" baseline="-12.5%"><a:blipFill/></cs:defRPr><cs:bodyPr rot="1800000" wrap="square" anchor="ctr"/></cs:trendlineLabel>
               <cs:dropLine><cs:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:ln></cs:spPr></cs:dropLine>
+              <cs:seriesLine><cs:lnRef idx="1"><cs:styleClr val="auto"/></cs:lnRef></cs:seriesLine>
               <cs:gridlineMinor><cs:spPr><a:ln><a:noFill/></a:ln></cs:spPr></cs:gridlineMinor>
             </cs:chartStyle>"#,
         );
@@ -18479,10 +18554,22 @@ Subtitle</a:t></a:r></a:p>
               <a:srgbClr val="AA0000"/><a:srgbClr val="00AA00"/>
             </cs:colorStyle>"#,
         );
+        let theme = format!(
+            r#"<a:theme xmlns:a="{A_NS}"><a:themeElements>
+              <a:fmtScheme name="geometry-only line recipe">
+                <a:fillStyleLst/>
+                <a:lnStyleLst><a:ln w="25400"><a:prstDash val="dash"/></a:ln></a:lnStyleLst>
+                <a:effectStyleLst/><a:bgFillStyleLst/>
+              </a:fmtScheme>
+            </a:themeElements></a:theme>"#,
+        );
+        let resolver = FormatSchemeFixtureResolver {
+            format_scheme: crate::theme::ThemeFormatScheme::parse(&theme),
+        };
         let chart_doc = root_of(&chart_xml);
         let model = parse_chart_part_with_style_parts(
             chart_doc.root_element(),
-            &FixtureResolver,
+            &resolver,
             Some(&style_xml),
             Some(&colors_xml),
         )
@@ -18496,12 +18583,16 @@ Subtitle</a:t></a:r></a:p>
             Some(2)
         );
         let roles = model.chart_style_roles.expect("linked role table");
-        assert_eq!(roles.len(), 8);
+        assert_eq!(roles.len(), 9);
         assert_eq!(
             roles["chartArea"].fill_colors.as_deref(),
             Some(&[Some("112233".to_string()), Some("112233".to_string())][..]),
         );
         assert_eq!(roles["dropLine"].line_width_emu, Some(12_700));
+        assert_eq!(roles["dropLine"].line_paint_authored, Some(true));
+        assert_eq!(roles["seriesLine"].line_width_emu, Some(25_400));
+        assert_eq!(roles["seriesLine"].line_dash.as_deref(), Some("dash"));
+        assert_eq!(roles["seriesLine"].line_paint_authored, None);
         assert_eq!(
             roles["chartArea"].line_custom_dash.as_deref(),
             Some(
@@ -19631,7 +19722,8 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(drop_lines.dash.as_deref(), Some("dashDot"));
         assert_eq!(drop_lines.cap.as_deref(), Some("sq"));
         assert_eq!(drop_lines.join.as_deref(), Some("round"));
-        assert_eq!(drop_lines.hidden, Some(false));
+        assert_eq!(drop_lines.hidden, None);
+        assert_eq!(drop_lines.paint_authored, Some(true));
         // hiLowLines present + its resolved line color; no upDownBars in fixture.
         assert_eq!(m.stock_hi_low_lines, Some(true));
         assert_eq!(m.stock_hi_low_line_color.as_deref(), Some("808080"));
@@ -19641,8 +19733,38 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(hi_low.dash.as_deref(), Some("dot"));
         assert_eq!(hi_low.cap.as_deref(), Some("rnd"));
         assert_eq!(hi_low.join.as_deref(), Some("bevel"));
-        assert_eq!(hi_low.hidden, Some(false));
+        assert_eq!(hi_low.hidden, None);
+        assert_eq!(hi_low.paint_authored, Some(true));
         assert_eq!(m.stock_up_down_bars, None);
+    }
+
+    #[test]
+    fn stock_group_series_retain_secondary_value_axis_binding() {
+        let series = |index: u32, value: u32| {
+            format!(
+                r#"<c:ser><c:idx val="{index}"/><c:cat><c:strLit><c:pt idx="0"><c:v>A</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:pt idx="0"><c:v>{value}</c:v></c:pt></c:numLit></c:val></c:ser>"#,
+            )
+        };
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart><c:plotArea>
+              <c:stockChart>{}{}{}<c:hiLowLines/><c:axId val="1"/><c:axId val="3"/></c:stockChart>
+              <c:catAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="3"/></c:catAx>
+              <c:valAx><c:axId val="2"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>
+              <c:valAx><c:axId val="3"/><c:axPos val="r"/><c:crossAx val="1"/></c:valAx>
+            </c:plotArea></c:chart></c:chartSpace>"#,
+            series(0, 55),
+            series(1, 11),
+            series(2, 32),
+        );
+        let document = chart_space_of(&xml);
+        let model = parse_chart_part(document.root_element(), &FixtureResolver).expect("stock");
+
+        assert_eq!(model.chart_type, "stock");
+        assert!(model.secondary_val_axis.is_some());
+        assert!(model
+            .series
+            .iter()
+            .all(|stock_series| stock_series.use_secondary_axis == Some(true)));
     }
 
     #[test]
@@ -19657,6 +19779,56 @@ Subtitle</a:t></a:r></a:p>
         let style = model.stock_hi_low_line_style.expect("high-low style");
         assert_eq!(style.hidden, Some(true));
         assert_eq!(style.width_emu, Some(12_700));
+    }
+
+    #[test]
+    fn stock_automatic_paint_is_theme_aware_and_limited_to_observed_styles() {
+        let group = format!(
+            r#"<c:stockChart>{CH13_SER}<c:hiLowLines/><c:upDownBars><c:upBars/><c:downBars/></c:upDownBars></c:stockChart>"#,
+        );
+        let parse = |style: Option<u8>, resolver: &dyn ColorResolver| {
+            let xml = chart_space_with_group(&group);
+            let xml = match style {
+                Some(style) => xml.replacen(
+                    "<c:chart>",
+                    &format!(r#"<c:style val="{style}"/><c:chart>"#),
+                    1,
+                ),
+                None => xml,
+            };
+            let document = chart_space_of(&xml);
+            parse_chart_part(document.root_element(), resolver).expect("stock")
+        };
+
+        let default_style = parse(None, &FixtureResolver)
+            .stock_automatic_style
+            .expect("omitted style uses the observed default stock recipe");
+        assert_eq!(default_style.line_color, "000000");
+        assert_eq!(default_style.line_width_emu, 12_700);
+        assert_eq!(default_style.up_fill_color, "F9F9F9");
+        assert_eq!(default_style.down_fill_color, "3F3F3F");
+
+        let explicit_style_two = parse(Some(2), &FixtureResolver)
+            .stock_automatic_style
+            .expect("explicit style 2 uses the observed default stock recipe");
+        assert_eq!(explicit_style_two, default_style);
+
+        let style_one = parse(Some(1), &FixtureResolver)
+            .stock_automatic_style
+            .expect("style 1 recipe");
+        assert_eq!(style_one.up_fill_color, "E1E1E1");
+        assert_eq!(style_one.down_fill_color, "6C6C6C");
+
+        let themed = parse(Some(10), &DarkRedFixtureResolver)
+            .stock_automatic_style
+            .expect("style 10 recipe");
+        assert_eq!(themed.line_color, "240000");
+        assert_eq!(themed.up_fill_color, "F9F9F9");
+        assert_eq!(themed.down_fill_color, "493F3F");
+
+        assert!(parse(Some(48), &FixtureResolver)
+            .stock_automatic_style
+            .is_none());
     }
 
     /// A stock chart WITHOUT `<c:hiLowLines>` but WITH `<c:upDownBars>`: the
@@ -19683,19 +19855,24 @@ Subtitle</a:t></a:r></a:p>
         let m = parse_chart_part(d.root_element(), &FixtureResolver).expect("stock parses");
         let drop_lines = m.stock_drop_lines.expect("stock drop lines");
         assert_eq!(drop_lines.hidden, Some(true));
+        assert_eq!(drop_lines.paint_authored, Some(true));
         assert_eq!(m.stock_hi_low_lines, Some(false));
         assert_eq!(m.stock_hi_low_line_color, None);
         assert_eq!(m.stock_up_down_bars, Some(true));
         let style = m.stock_up_down_bar_style.expect("up/down style");
         assert_eq!(style.gap_width_percent, 80.0);
         assert_eq!(style.up.fill_color.as_deref(), Some("00AA00"));
+        assert_eq!(style.up.fill_paint_authored, Some(true));
         assert_eq!(style.up.line_color.as_deref(), Some("006600"));
+        assert_eq!(style.up.line_paint_authored, Some(true));
         assert_eq!(style.up.line_width_emu, Some(12700));
         assert_eq!(style.up.line_dash.as_deref(), Some("dash"));
         assert_eq!(style.up.line_cap.as_deref(), Some("sq"));
         assert_eq!(style.up.line_join.as_deref(), Some("round"));
         assert_eq!(style.down.fill_hidden, Some(true));
+        assert_eq!(style.down.fill_paint_authored, Some(true));
         assert_eq!(style.down.line_hidden, Some(true));
+        assert_eq!(style.down.line_paint_authored, Some(true));
         assert_eq!(style.down.line_width_emu, Some(25400));
         assert_eq!(style.down.line_join.as_deref(), Some("bevel"));
     }
