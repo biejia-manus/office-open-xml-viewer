@@ -6345,27 +6345,53 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
             })
             .unwrap_or(0)
     };
+    // MS-ODRAWXML §2.24.4.19 defines this closed set.  Preserve a future
+    // identifier verbatim, but let it own the chart-wide fail-closed result:
+    // otherwise a preceding known series or a trailing `paretoLine` could
+    // silently normalize the chart to a visually similar implemented layout.
+    const KNOWN_SERIES_LAYOUTS: [&str; 8] = [
+        "boxWhisker",
+        "clusteredColumn",
+        "funnel",
+        "paretoLine",
+        "regionMap",
+        "sunburst",
+        "treemap",
+        "waterfall",
+    ];
+    let unknown_series = series_nodes.iter().copied().find(|node| {
+        !attr(node, "layoutId")
+            .is_some_and(|layout| KNOWN_SERIES_LAYOUTS.contains(&layout.as_str()))
+    });
     // A Pareto plot is represented by an ordinary owner series plus an
     // auxiliary `paretoLine` whose `ownerIdx` names the owner's original
     // document-order series index (CT_Series@ownerIdx, [MS-ODRAWXML]
     // 2.24.3.77). This is independent of `formatIdx`; select the linked owner
     // even when a hidden or auxiliary series appears first.
-    let pareto_pair = series_nodes.iter().copied().find_map(|pareto| {
-        if attr(&pareto, "layoutId").as_deref() != Some("paretoLine") {
-            return None;
-        }
-        let owner_idx = attr(&pareto, "ownerIdx")?.parse::<usize>().ok()?;
-        let owner = *all_series_nodes.get(owner_idx)?;
-        let owner_is_hidden = attr(&owner, "hidden")
-            .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
-        (owner != pareto
-            && !owner_is_hidden
-            && attr(&owner, "layoutId").as_deref() != Some("paretoLine"))
-        .then_some((owner, pareto))
-    });
-    let (series_node, pareto_series_node) = pareto_pair
-        .map(|(owner, pareto)| (owner, Some(pareto)))
-        .unwrap_or((*series_nodes.first()?, None));
+    let pareto_pair = if unknown_series.is_none() {
+        series_nodes.iter().copied().find_map(|pareto| {
+            if attr(&pareto, "layoutId").as_deref() != Some("paretoLine") {
+                return None;
+            }
+            let owner_idx = attr(&pareto, "ownerIdx")?.parse::<usize>().ok()?;
+            let owner = *all_series_nodes.get(owner_idx)?;
+            let owner_is_hidden = attr(&owner, "hidden")
+                .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+            (owner != pareto
+                && !owner_is_hidden
+                && attr(&owner, "layoutId").as_deref() != Some("paretoLine"))
+            .then_some((owner, pareto))
+        })
+    } else {
+        None
+    };
+    let (series_node, pareto_series_node) = if let Some(unknown) = unknown_series {
+        (unknown, None)
+    } else {
+        pareto_pair
+            .map(|(owner, pareto)| (owner, Some(pareto)))
+            .unwrap_or((*series_nodes.first()?, None))
+    };
     let layout_id = attr(&series_node, "layoutId").unwrap_or_default();
     // [MS-ODRAWXML] represents a histogram as a clusteredColumn series with a
     // CT_Binning child; `histogram` is not an ST_SeriesLayout enumeration.
@@ -18262,6 +18288,39 @@ Subtitle</a:t></a:r></a:p>
                 vec![Some(3.0), Some(2.0), Some(1.0)]
             );
             assert!(model.categories.is_empty());
+        }
+    }
+
+    #[test]
+    fn parse_chartex_preserves_an_unknown_future_layout_without_guessing() {
+        for series_xml in [
+            r#"<cx:series layoutId="futureLayout"><cx:dataId val="0"/></cx:series>"#,
+            r#"<cx:series layoutId="clusteredColumn"><cx:dataId val="0"/></cx:series>
+               <cx:series layoutId="futureLayout"><cx:dataId val="0"/></cx:series>"#,
+            r#"<cx:series layoutId="futureLayout"><cx:dataId val="0"/></cx:series>
+               <cx:series layoutId="paretoLine" ownerIdx="0"><cx:dataId val="0"/></cx:series>"#,
+        ] {
+            let xml = format!(
+                r#"<cx:chartSpace xmlns:cx="{CX_NS}">
+                  <cx:chartData><cx:data id="0">
+                    <cx:strDim type="cat"><cx:lvl ptCount="2"><cx:pt idx="0">A</cx:pt><cx:pt idx="1">B</cx:pt></cx:lvl></cx:strDim>
+                    <cx:numDim type="val"><cx:lvl ptCount="2"><cx:pt idx="0">2</cx:pt><cx:pt idx="1">-1</cx:pt></cx:lvl></cx:numDim>
+                  </cx:data></cx:chartData>
+                  <cx:chart><cx:plotArea><cx:plotAreaRegion>{series_xml}</cx:plotAreaRegion></cx:plotArea></cx:chart>
+                </cx:chartSpace>"#
+            );
+            let document = chart_space_of(&xml);
+            let model = parse_chartex_part(document.root_element(), &FixtureResolver, None)
+                .expect("future ChartEx layout remains inspectable");
+
+            assert_eq!(model.chart_type, "futureLayout");
+            assert_eq!(model.categories, vec!["A", "B"]);
+            assert_eq!(model.series[0].values, vec![Some(2.0), Some(-1.0)]);
+            assert!(model.chartex_histogram_binning.is_none());
+            assert!(model.chartex_box.is_none());
+            assert!(model.chartex_sunburst.is_none());
+            assert!(model.chartex_treemap.is_none());
+            assert!(model.chartex_region_map.is_none());
         }
     }
 

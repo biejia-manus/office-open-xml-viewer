@@ -116,13 +116,20 @@ recorded in [Chart compatibility evidence and scope](chart-compatibility-evidenc
 
 ## ChartEx layouts
 
+MS-ODRAWXML §2.24.4.19 defines exactly eight `ST_SeriesLayout` values:
+`boxWhisker`, `clusteredColumn`, `funnel`, `paretoLine`, `regionMap`,
+`sunburst`, `treemap`, and `waterfall`. Histogram and Pareto are semantic
+forms of `clusteredColumn`/`paretoLine`; no additional layout identifier is
+inferred from cached values. A future identifier outside the current schema is
+retained verbatim and reaches the explicit unsupported-chart placeholder.
+
 | ID | Layout | Status | Notes |
 | --- | --- | --- |
-| X-LAYOUT-001 | Waterfall, histogram/Pareto, funnel | Supported | Includes bounded layout data and shared Chart Style paint. |
+| X-LAYOUT-001 | Waterfall, clustered column (including histogram), Pareto/`paretoLine`, funnel | Supported | Includes bounded layout data and shared Chart Style paint. |
 | X-LAYOUT-002 | Box-and-whisker | Supported | Includes mean/outlier/non-outlier roles and visibility controls. |
 | X-LAYOUT-003 | Treemap and sunburst | Supported | Hierarchy depth/slot budgets apply before tree construction. |
 | X-LAYOUT-004 | Region Map | Partial | Deterministic offline country geometry only; external geocoding is out of scope. |
-| X-LAYOUT-005 | Unknown or future `layoutId` values | Missing | Fail closed with a placeholder; no layout is guessed from sample data. |
+| X-LAYOUT-005 | Unknown or future `layoutId` values | Supported | Preserved verbatim and failed closed with a placeholder; no layout is guessed from cached values or a visually similar known family. |
 
 ## Maintenance rules
 
