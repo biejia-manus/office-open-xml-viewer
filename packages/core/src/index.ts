@@ -1,6 +1,7 @@
 export type {
   ArrowEnd,
   Bullet,
+  DrawingMLCustomDashSegment,
   EquationRun,
   Fill,
   FillRect,
@@ -58,6 +59,7 @@ export type {
   ChartDisplayUnits,
   ChartDisplayUnitsLabel,
   ChartExElementStyle,
+  ChartLineDashSegment,
   ChartexHistogramBinning,
   ChartexBoxSeries,
   ChartexBoxWhisker,

@@ -1,5 +1,5 @@
 import type { ChartModel, ChartRect } from '../types/chart.js';
-import { pptxPresetDashArray } from '../draw/dash.js';
+import { drawingmlLineDashArray } from '../draw/dash.js';
 import { resolveFill } from '../shape/paint.js';
 import { axisLineWidthPx } from './axis-style.js';
 
@@ -15,7 +15,7 @@ export function paintLegendFrame(
   shapeRotationDeg = 0,
 ): void {
   if ((!chart.legendFill && !chart.legendFillColor || chart.legendFillHidden === true)
-    && (!chart.legendLineColor || chart.legendLineHidden === true)) return;
+    && (!chart.legendLineFill && !chart.legendLineColor || chart.legendLineHidden === true)) return;
   ctx.save();
   if (chart.legendFillHidden !== true && (chart.legendFill || chart.legendFillColor)) {
     const fill = chart.legendFill
@@ -31,15 +31,28 @@ export function paintLegendFrame(
     }
   }
   if (chart.legendLineHidden !== true
-    && chart.legendLineColor && bounds.w > 0 && bounds.h > 0) {
+    && (chart.legendLineFill || chart.legendLineColor) && bounds.w > 0 && bounds.h > 0) {
     const width = axisLineWidthPx(chart.legendLineWidthEmu, ptToPx);
-    ctx.strokeStyle = `#${chart.legendLineColor}`;
+    const stroke = chart.legendLineFill
+      ? resolveFill(
+          chart.legendLineFill, ctx,
+          bounds.x, bounds.y, bounds.w, bounds.h,
+          shapeRotationDeg,
+        )
+      : chart.legendLineColor ? `#${chart.legendLineColor}` : null;
+    if (!stroke) {
+      ctx.restore();
+      return;
+    }
+    ctx.strokeStyle = stroke;
     ctx.lineWidth = width;
     ctx.lineCap = chart.legendLineCap === 'rnd'
       ? 'round' : chart.legendLineCap === 'sq' ? 'square' : 'butt';
     ctx.lineJoin = chart.legendLineJoin === 'round' || chart.legendLineJoin === 'bevel'
       ? chart.legendLineJoin : 'miter';
-    ctx.setLineDash(pptxPresetDashArray(chart.legendLineDash ?? 'solid', width));
+    ctx.setLineDash(drawingmlLineDashArray(
+      chart.legendLineCustomDash, chart.legendLineDash, width,
+    ));
     ctx.strokeRect(
       bounds.x + width / 2,
       bounds.y + width / 2,

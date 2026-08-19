@@ -86,6 +86,7 @@ import {
 import { effectiveDataLabelText } from './data-label-content.js';
 import { placeTrendlineLabel } from './trendline-label.js';
 import { paintLegendFrame } from './legend-frame.js';
+import { paintPlotAreaFrame } from './plot-area-frame.js';
 import { applyPlotVisibleOnly } from './source-visibility.js';
 import {
   boundDataLabelText,
@@ -95,7 +96,7 @@ import {
   type DataLabelRect,
 } from './data-label-layout.js';
 import { hexToRgba, resolveFill } from '../shape/paint.js';
-import { pptxPresetDashArray } from '../draw/dash.js';
+import { drawingmlLineDashArray, pptxPresetDashArray } from '../draw/dash.js';
 import {
   isObservedAutomaticSurfaceCamera,
   legacyPattern2Color,
@@ -1376,7 +1377,7 @@ function drawLegendForLayout(
   // rectangle. The shared resolver applies all four factor/edge modes relative
   // to this automatic box, including the schema's omitted-mode=factor default.
   const ml = chart.legendManualLayout;
-  const manualBox = ml && ml.w > 0 && ml.h > 0
+  const manualBox = ml
     ? resolveManualLayoutRect(ml, { x, y, w, h }, defaultBox)
     : null;
   if (manualBox) {
@@ -3579,7 +3580,7 @@ function renderBarChart(
     ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
   }
 
-  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
+  paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
 
   // `axMax`/`step` (primary) and `sMin`/`sMax`/`sStep` (secondary) were computed
   // above the `pad` block so the gutters could be sized to the labels. The
@@ -5250,6 +5251,63 @@ function chartStyleRoleMarker(
   };
 }
 
+interface EffectiveFrameLineStyle {
+  color?: string | null;
+  fill?: ChartModel['plotAreaLineFill'];
+  widthEmu?: number | null;
+  dash?: string | null;
+  dashAuthored?: boolean | null;
+  customDash?: ChartModel['plotAreaLineCustomDash'];
+  cap?: string | null;
+  join?: string | null;
+  compound?: string | null;
+  hidden?: boolean | null;
+  paintAuthored?: boolean | null;
+}
+
+/** Merge one chart-frame outline property-by-property. Direct DrawingML paint
+ * and dash choices remain authoritative; linked Chart Style geometry fills
+ * only genuinely omitted properties. */
+function effectiveFrameLineStyle(
+  chart: ChartModel,
+  direct: EffectiveFrameLineStyle,
+  linked: ChartExStyle | null | undefined,
+): EffectiveFrameLineStyle {
+  if (!linked || linked.lineNoStyle === true) return direct;
+  let { color, fill, hidden } = direct;
+  const directPaint = direct.paintAuthored === true
+    || fill != null || color != null || hidden === true;
+  if (!directPaint) {
+    if (linked.lineHidden === true) {
+      hidden = true;
+    } else {
+      fill = chartExStyleLinePaint(linked, 0);
+      color = fill == null ? chartExStyleColor(chart, linked, 'line', 0, 1) : null;
+    }
+  }
+  let dash = direct.dash;
+  let customDash = direct.customDash;
+  let dashAuthored = direct.dashAuthored;
+  if (dashAuthored !== true && dash == null && customDash == null) {
+    dash = linked.lineDash;
+    customDash = linked.lineCustomDash;
+    dashAuthored = linked.lineDashAuthored;
+  }
+  return {
+    color,
+    fill,
+    hidden,
+    paintAuthored: direct.paintAuthored,
+    widthEmu: direct.widthEmu ?? linked.lineWidthEmu,
+    dash,
+    dashAuthored,
+    customDash,
+    cap: direct.cap ?? linked.lineCap,
+    join: direct.join ?? linked.lineJoin,
+    compound: direct.compound ?? linked.lineCompound,
+  };
+}
+
 function chartStyleRoleLegend(chart: ChartModel): ChartModel {
   const linked = chart.chartStyleRoles?.legend;
   if (!linked) return chart;
@@ -5269,44 +5327,47 @@ function chartStyleRoleLegend(chart: ChartModel): ChartModel {
     }
   }
 
-  let legendLineColor = chart.legendLineColor;
-  let legendLineWidthEmu = chart.legendLineWidthEmu;
-  let legendLineDash = chart.legendLineDash;
-  let legendLineCap = chart.legendLineCap;
-  let legendLineJoin = chart.legendLineJoin;
-  let legendLineHidden = chart.legendLineHidden;
-  const directLinePaint = chart.legendLinePaintAuthored === true
-    || legendLineColor != null || legendLineHidden === true;
-  if (linked.lineNoStyle !== true) {
-    if (!directLinePaint) {
-      if (linked.lineHidden === true) legendLineHidden = true;
-      else legendLineColor = chartExStyleColor(chart, linked, 'line', 0, 1);
-    }
-    legendLineWidthEmu ??= linked.lineWidthEmu;
-    legendLineDash ??= linked.lineDash;
-    legendLineCap ??= linked.lineCap;
-    legendLineJoin ??= linked.lineJoin;
-  }
+  const legendLine = effectiveFrameLineStyle(chart, {
+    color: chart.legendLineColor,
+    fill: chart.legendLineFill,
+    widthEmu: chart.legendLineWidthEmu,
+    dash: chart.legendLineDash,
+    dashAuthored: chart.legendLineDashAuthored,
+    customDash: chart.legendLineCustomDash,
+    cap: chart.legendLineCap,
+    join: chart.legendLineJoin,
+    compound: chart.legendLineCompound,
+    hidden: chart.legendLineHidden,
+    paintAuthored: chart.legendLinePaintAuthored,
+  }, linked);
   if (legendFill === chart.legendFill
     && legendFillColor === chart.legendFillColor
     && legendFillHidden === chart.legendFillHidden
-    && legendLineColor === chart.legendLineColor
-    && legendLineWidthEmu === chart.legendLineWidthEmu
-    && legendLineDash === chart.legendLineDash
-    && legendLineCap === chart.legendLineCap
-    && legendLineJoin === chart.legendLineJoin
-    && legendLineHidden === chart.legendLineHidden) return chart;
+    && legendLine.color === chart.legendLineColor
+    && legendLine.fill === chart.legendLineFill
+    && legendLine.widthEmu === chart.legendLineWidthEmu
+    && legendLine.dash === chart.legendLineDash
+    && legendLine.dashAuthored === chart.legendLineDashAuthored
+    && legendLine.customDash === chart.legendLineCustomDash
+    && legendLine.cap === chart.legendLineCap
+    && legendLine.join === chart.legendLineJoin
+    && legendLine.compound === chart.legendLineCompound
+    && legendLine.hidden === chart.legendLineHidden) return chart;
   return {
     ...chart,
     legendFill,
     legendFillColor,
     legendFillHidden,
-    legendLineColor,
-    legendLineWidthEmu,
-    legendLineDash,
-    legendLineCap,
-    legendLineJoin,
-    legendLineHidden,
+    legendLineColor: legendLine.color,
+    legendLineFill: legendLine.fill,
+    legendLineWidthEmu: legendLine.widthEmu,
+    legendLineDash: legendLine.dash,
+    legendLineDashAuthored: legendLine.dashAuthored,
+    legendLineCustomDash: legendLine.customDash,
+    legendLineCap: legendLine.cap,
+    legendLineJoin: legendLine.join,
+    legendLineCompound: legendLine.compound,
+    legendLineHidden: legendLine.hidden,
   };
 }
 
@@ -5329,44 +5390,47 @@ function chartStyleRolePlotArea(chart: ChartModel): ChartModel {
     }
   }
 
-  let plotAreaLineColor = chart.plotAreaLineColor;
-  let plotAreaLineWidthEmu = chart.plotAreaLineWidthEmu;
-  let plotAreaLineDash = chart.plotAreaLineDash;
-  let plotAreaLineCap = chart.plotAreaLineCap;
-  let plotAreaLineJoin = chart.plotAreaLineJoin;
-  let plotAreaLineHidden = chart.plotAreaLineHidden;
-  const directLinePaint = chart.plotAreaLinePaintAuthored === true
-    || plotAreaLineColor != null || plotAreaLineHidden === true;
-  if (linked.lineNoStyle !== true) {
-    if (!directLinePaint) {
-      if (linked.lineHidden === true) plotAreaLineHidden = true;
-      else plotAreaLineColor = chartExStyleColor(chart, linked, 'line', 0, 1);
-    }
-    plotAreaLineWidthEmu ??= linked.lineWidthEmu;
-    plotAreaLineDash ??= linked.lineDash;
-    plotAreaLineCap ??= linked.lineCap;
-    plotAreaLineJoin ??= linked.lineJoin;
-  }
+  const plotAreaLine = effectiveFrameLineStyle(chart, {
+    color: chart.plotAreaLineColor,
+    fill: chart.plotAreaLineFill,
+    widthEmu: chart.plotAreaLineWidthEmu,
+    dash: chart.plotAreaLineDash,
+    dashAuthored: chart.plotAreaLineDashAuthored,
+    customDash: chart.plotAreaLineCustomDash,
+    cap: chart.plotAreaLineCap,
+    join: chart.plotAreaLineJoin,
+    compound: chart.plotAreaLineCompound,
+    hidden: chart.plotAreaLineHidden,
+    paintAuthored: chart.plotAreaLinePaintAuthored,
+  }, linked);
   if (plotAreaFill === chart.plotAreaFill
     && plotAreaBg === chart.plotAreaBg
     && plotAreaFillHidden === chart.plotAreaFillHidden
-    && plotAreaLineColor === chart.plotAreaLineColor
-    && plotAreaLineWidthEmu === chart.plotAreaLineWidthEmu
-    && plotAreaLineDash === chart.plotAreaLineDash
-    && plotAreaLineCap === chart.plotAreaLineCap
-    && plotAreaLineJoin === chart.plotAreaLineJoin
-    && plotAreaLineHidden === chart.plotAreaLineHidden) return chart;
+    && plotAreaLine.color === chart.plotAreaLineColor
+    && plotAreaLine.fill === chart.plotAreaLineFill
+    && plotAreaLine.widthEmu === chart.plotAreaLineWidthEmu
+    && plotAreaLine.dash === chart.plotAreaLineDash
+    && plotAreaLine.dashAuthored === chart.plotAreaLineDashAuthored
+    && plotAreaLine.customDash === chart.plotAreaLineCustomDash
+    && plotAreaLine.cap === chart.plotAreaLineCap
+    && plotAreaLine.join === chart.plotAreaLineJoin
+    && plotAreaLine.compound === chart.plotAreaLineCompound
+    && plotAreaLine.hidden === chart.plotAreaLineHidden) return chart;
   return {
     ...chart,
     plotAreaFill,
     plotAreaBg,
     plotAreaFillHidden,
-    plotAreaLineColor,
-    plotAreaLineWidthEmu,
-    plotAreaLineDash,
-    plotAreaLineCap,
-    plotAreaLineJoin,
-    plotAreaLineHidden,
+    plotAreaLineColor: plotAreaLine.color,
+    plotAreaLineFill: plotAreaLine.fill,
+    plotAreaLineWidthEmu: plotAreaLine.widthEmu,
+    plotAreaLineDash: plotAreaLine.dash,
+    plotAreaLineDashAuthored: plotAreaLine.dashAuthored,
+    plotAreaLineCustomDash: plotAreaLine.customDash,
+    plotAreaLineCap: plotAreaLine.cap,
+    plotAreaLineJoin: plotAreaLine.join,
+    plotAreaLineCompound: plotAreaLine.compound,
+    plotAreaLineHidden: plotAreaLine.hidden,
   };
 }
 
@@ -5392,86 +5456,48 @@ function chartStyleRoleChartArea(chart: ChartModel): ChartModel {
     }
   }
 
-  let chartBorderColor = chart.chartBorderColor;
-  let chartBorderWidthEmu = chart.chartBorderWidthEmu;
-  let chartBorderDash = chart.chartBorderDash;
-  let chartBorderCap = chart.chartBorderCap;
-  let chartBorderJoin = chart.chartBorderJoin;
-  let chartBorderHidden = chart.chartBorderHidden;
-  const directLinePaint = chart.chartBorderPaintAuthored === true
-    || chartBorderColor != null || chartBorderHidden === true;
-  if (linked.lineNoStyle !== true) {
-    if (!directLinePaint) {
-      if (linked.lineHidden === true) chartBorderHidden = true;
-      else chartBorderColor = chartExStyleColor(chart, linked, 'line', 0, 1);
-    }
-    chartBorderWidthEmu ??= linked.lineWidthEmu;
-    chartBorderDash ??= linked.lineDash;
-    chartBorderCap ??= linked.lineCap;
-    chartBorderJoin ??= linked.lineJoin;
-  }
+  const chartBorder = effectiveFrameLineStyle(chart, {
+    color: chart.chartBorderColor,
+    fill: chart.chartBorderLineFill,
+    widthEmu: chart.chartBorderWidthEmu,
+    dash: chart.chartBorderDash,
+    dashAuthored: chart.chartBorderDashAuthored,
+    customDash: chart.chartBorderCustomDash,
+    cap: chart.chartBorderCap,
+    join: chart.chartBorderJoin,
+    compound: chart.chartBorderCompound,
+    hidden: chart.chartBorderHidden,
+    paintAuthored: chart.chartBorderPaintAuthored,
+  }, linked);
   if (chartFill === chart.chartFill
     && chartBg === chart.chartBg
     && chartFillHidden === chart.chartFillHidden
-    && chartBorderColor === chart.chartBorderColor
-    && chartBorderWidthEmu === chart.chartBorderWidthEmu
-    && chartBorderDash === chart.chartBorderDash
-    && chartBorderCap === chart.chartBorderCap
-    && chartBorderJoin === chart.chartBorderJoin
-    && chartBorderHidden === chart.chartBorderHidden) return chart;
+    && chartBorder.color === chart.chartBorderColor
+    && chartBorder.fill === chart.chartBorderLineFill
+    && chartBorder.widthEmu === chart.chartBorderWidthEmu
+    && chartBorder.dash === chart.chartBorderDash
+    && chartBorder.dashAuthored === chart.chartBorderDashAuthored
+    && chartBorder.customDash === chart.chartBorderCustomDash
+    && chartBorder.cap === chart.chartBorderCap
+    && chartBorder.join === chart.chartBorderJoin
+    && chartBorder.compound === chart.chartBorderCompound
+    && chartBorder.hidden === chart.chartBorderHidden) return chart;
   return {
     ...chart,
     chartFill,
     chartBg,
     chartFillHidden,
-    chartBorderColor,
-    chartBorderWidthEmu,
-    chartBorderDash,
-    chartBorderCap,
-    chartBorderJoin,
-    chartBorderHidden,
+    chartBorderColor: chartBorder.color,
+    chartBorderLineFill: chartBorder.fill,
+    chartBorderWidthEmu: chartBorder.widthEmu,
+    chartBorderDash: chartBorder.dash,
+    chartBorderDashAuthored: chartBorder.dashAuthored,
+    chartBorderCustomDash: chartBorder.customDash,
+    chartBorderCap: chartBorder.cap,
+    chartBorderJoin: chartBorder.join,
+    chartBorderCompound: chartBorder.compound,
+    chartBorderHidden: chartBorder.hidden,
   };
-}
-
-function paintPlotAreaFill(
-  ctx: CanvasRenderingContext2D,
-  chart: ChartModel,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  ptToPx: number,
-  shapeRotationDeg = 0,
-): void {
-  if (chart.plotAreaFillHidden !== true) {
-    const fill = chart.plotAreaFill
-      ? resolveFill(chart.plotAreaFill, ctx, x, y, w, h, shapeRotationDeg)
-      : chart.plotAreaBg ? `#${chart.plotAreaBg}` : null;
-    if (fill) {
-      ctx.fillStyle = fill;
-      ctx.fillRect(x, y, w, h);
-    }
-  }
-  if (chart.plotAreaLineHidden !== true && chart.plotAreaLineColor) {
-    const lineWidth = chart.plotAreaLineWidthEmu
-      ? Math.max(0.5, chart.plotAreaLineWidthEmu / EMU_PER_PT) * ptToPx
-      : 1;
-    ctx.save();
-    ctx.strokeStyle = `#${chart.plotAreaLineColor}`;
-    ctx.lineWidth = lineWidth;
-    ctx.setLineDash(dashPatternForPreset(chart.plotAreaLineDash ?? undefined, lineWidth));
-    ctx.lineCap = chart.plotAreaLineCap === 'rnd'
-      ? 'round' : chart.plotAreaLineCap === 'sq' ? 'square' : 'butt';
-    ctx.lineJoin = chart.plotAreaLineJoin === 'round' || chart.plotAreaLineJoin === 'bevel'
-      ? chart.plotAreaLineJoin : 'miter';
-    ctx.strokeRect(
-      x + lineWidth / 2,
-      y + lineWidth / 2,
-      Math.max(0, w - lineWidth),
-      Math.max(0, h - lineWidth),
-    );
-    ctx.restore();
-  }
 }
 
 /** Materialize the linked decoration roles that an optional family renderer
@@ -6110,7 +6136,7 @@ function renderLineChart(
     ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
   }
 
-  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
+  paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
 
   // Value axis is vertical → its length is the plot height (axis-length-aware
   // auto major unit, same model as the bar/column renderer). `planValueAxis`
@@ -6640,7 +6666,7 @@ function renderStockChart(
     ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
   }
 
-  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
+  paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
 
   // ── Value-axis extent: across every series' plotted values (the hi-lo line
   // needs both the low and high extremes). Authored bounds are retained and
@@ -7010,6 +7036,7 @@ function renderSurfaceChart(
   chart: ChartModel,
   r: ChartRect,
   ptToPx: number,
+  shapeRotationDeg = 0,
 ): void {
   const { x, y, w, h } = r;
   const categories = chartCategories(chart);
@@ -7179,6 +7206,7 @@ function renderSurfaceChart(
     chart.titleManualLayout || !chart.titleRichRuns?.length ? w : pw, h,
     y + titleBand.topPad, titleBand.fontPx,
   );
+  paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
 
   const projection = planChartThreeDProjection(surfaceView, { x: px0, y: py0, w: pw, h: ph }, {
     // Surface rows occupy a real series axis rather than the compact prism
@@ -7793,7 +7821,7 @@ function renderAreaChart(
     ph = Math.max(1, ph - (dataTableLayout.totalHeight - dataTableBaseH));
   }
 
-  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
+  paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
 
   // Primary extent from the PRIMARY series only (secondary series live on their
   // own axis). When `sec` is null every series is primary, byte-identical to
@@ -8414,13 +8442,16 @@ function renderOfPieChart(
   chart: ChartModel,
   r: ChartRect,
   ptToPx: number,
+  shapeRotationDeg = 0,
 ): void {
   const source = chart.series[0];
   if (!source) return;
   const values = source.values.map(value => value == null ? 0 : Math.abs(value));
   const secondarySet = ofPieSecondaryIndices(chart, values);
   if (secondarySet.size === 0) {
-    renderPieChart(ctx, { ...chart, chartType: 'pie' }, r, false, ptToPx);
+    renderPieChart(
+      ctx, { ...chart, chartType: 'pie' }, r, false, ptToPx, shapeRotationDeg,
+    );
     return;
   }
   const primary: OfPiePoint[] = [];
@@ -8448,6 +8479,7 @@ function renderOfPieChart(
   );
   const { px0, py0, pw, ph } = frame.plotRect;
   if (!(pw > 0) || !(ph > 0)) return;
+  paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
   const options = chart.ofPie;
   const sizeRatio = Math.max(0.05, Math.min(2, (options?.secondPieSizePercent ?? 75) / 100));
   const gapUnits = Math.max(0, options?.gapWidthPercent ?? 150) / 100;
@@ -8537,7 +8569,14 @@ function renderOfPieChart(
   }
 }
 
-function renderPieChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: ChartRect, isDoughnut: boolean, ptToPx: number): void {
+function renderPieChart(
+  ctx: CanvasRenderingContext2D,
+  chart: ChartModel,
+  r: ChartRect,
+  isDoughnut: boolean,
+  ptToPx: number,
+  shapeRotationDeg = 0,
+): void {
   const { x, y, w, h } = r;
   const s = chart.series[0]; if (!s) return;
   const cats = (s.categories && s.categories.length > 0) ? s.categories : chart.categories;
@@ -8567,6 +8606,9 @@ function renderPieChart(ctx: CanvasRenderingContext2D, chart: ChartModel, r: Cha
   drawChartTitleForLayout(ctx, chart, x, y, w, h, y + frame.title.topPad, titleFontPx);
 
   const { px0: plotLeft, py0: plotTop, pw, ph } = frame.plotRect;
+  paintPlotAreaFrame(
+    ctx, chart, plotLeft, plotTop, pw, ph, ptToPx, shapeRotationDeg,
+  );
   const cx2 = frame.center.cx;
   const cy2 = frame.center.cy;
   const outerR = Math.min(pw, ph) * 0.42;
@@ -9705,6 +9747,9 @@ function renderRadarChart(
   drawChartTitleForLayout(ctx, chart, x, y, w, h, y + frame.title.topPad, titleFontPx);
 
   const { px0: plotLeft, py0: plotTop, pw, ph } = frame.plotRect;
+  paintPlotAreaFrame(
+    ctx, chart, plotLeft, plotTop, pw, ph, ptToPx, shapeRotationDeg,
+  );
   const cx2 = frame.center.cx;
   const cy2 = frame.center.cy;
   const rd  = Math.min(pw, ph) * 0.38;
@@ -10395,7 +10440,7 @@ function renderScatterChart(
   });
   if (pw <= 0 || ph <= 0) return;
 
-  paintPlotAreaFill(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
+  paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
 
   // X / Y data extents. Secondary-group points have their own independent
   // top/right value axes and therefore must not stretch the primary scales.
@@ -11340,6 +11385,15 @@ function dashPatternForPreset(preset: string | undefined, lineWidth = 1): number
   return pptxPresetDashArray(preset ?? 'solid', scale);
 }
 
+function dashPatternForLine(
+  customDash: ChartModel['chartBorderCustomDash'],
+  preset: string | null | undefined,
+  lineWidth = 1,
+): number[] {
+  const scale = Number.isFinite(lineWidth) && lineWidth > 0 ? lineWidth : 1;
+  return drawingmlLineDashArray(customDash, preset, scale);
+}
+
 /** True when the series carries any explicit `<c:marker>` detail (symbol, size,
  *  fill, line, line width) or per-point `<c:dPt>` marker overrides — i.e. a reason to route
  *  through {@link drawMarker} instead of the line/area family's historical
@@ -11731,6 +11785,15 @@ function chartExStyleFillPaint(
   const paints = style?.fillPaints;
   if (!paints?.length) return null;
   return paints[(style?.fillColorIndex ?? index) % paints.length] ?? null;
+}
+
+function chartExStyleLinePaint(
+  style: ChartExStyle | null | undefined,
+  index: number,
+): ChartModel['plotAreaLineFill'] {
+  const paints = style?.linePaints;
+  if (!paints?.length) return null;
+  return paints[(style?.lineColorIndex ?? index) % paints.length] ?? null;
 }
 
 /** Resolve one ChartEx style paint layer. `undefined` means this layer supplied
@@ -12408,9 +12471,11 @@ function renderWaterfallChart(
     legendSideReserveFrac: 0,
     legendReserve: leg,
     pad,
+    honorPlotAreaManualLayout: true,
   });
   drawChartTitleForLayout(ctx, chart, x, y, w, h, y + frame.title.topPad, frame.title.fontPx);
   const { px0, py0, pw, ph } = frame.plotRect;
+  paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
   const plan = planValueAxis(chart, rawMin, rawMax, ph / ptToPx);
   const yOf = (value: number): number => py0 + ph - plan.frac(value) * ph;
 
@@ -12727,9 +12792,11 @@ function renderFunnelChart(
     legendSideReserveFrac: 0.22,
     legendReserve: leg,
     pad,
+    honorPlotAreaManualLayout: true,
   });
   drawChartTitleForLayout(ctx, chart, x, y, w, h, y + frame.title.topPad, frame.title.fontPx);
   const { px0, py0, pw, ph } = frame.plotRect;
+  paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
   const rowH = ph / n;
   const gapWidthPct = resolveCategoryGapWidthPercent(chart.barGapWidth, 'chartex');
   const barH = rowH / (1 + gapWidthPct / 100);
@@ -13148,8 +13215,10 @@ function renderBoxWhiskerChart(
     legendSideReserveFrac: 0.22,
     legendReserve: leg,
     pad,
+    honorPlotAreaManualLayout: true,
   });
   const { px0, py0, pw, ph } = frame.plotRect;
+  paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
 
   const cats = box.categories;
   const nCat = cats.length;
@@ -13799,9 +13868,11 @@ function renderSunburstChart(
     legendSideReserveFrac: 0,
     legendReserve: leg,
     radialGapFrac: 0.02,
+    honorPlotAreaManualLayout: true,
   });
   drawChartTitleForLayout(ctx, chart, x, y, w, h, y + frame.title.topPad, frame.title.fontPx);
   const { px0, py0, pw, ph } = frame.plotRect;
+  paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
   const cx = px0 + pw / 2;
   const cy = py0 + ph / 2;
   const outerR = Math.min(pw, ph) * 0.46;
@@ -14115,9 +14186,11 @@ function renderTreemapChart(
     legendSideReserveFrac: 0,
     legendReserve: leg,
     radialGapFrac: 0.015,
+    honorPlotAreaManualLayout: true,
   });
   drawChartTitleForLayout(ctx, chart, r.x, r.y, r.w, r.h, r.y + frame.title.topPad, frame.title.fontPx);
   const { px0, py0, pw, ph } = frame.plotRect;
+  paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
   const plotBounds = { x: px0, y: py0, w: pw, h: ph };
 
   const parentMode = treemap.parentLabelLayout ?? 'overlapping';
@@ -14541,20 +14614,28 @@ export function renderChart(
       ctx.fillRect(x, y, w, h);
     }
 
-    // Explicit chart border — drawn ONLY when the XML declared a paintable
-    // `<c:chartSpace><c:spPr><a:ln><a:solidFill>` (chartBorderColor is null
-    // otherwise; there is no default Excel-style frame). Width comes from
+    // Explicit chart border — drawn only when DrawingML declares a paintable
+    // line. Width comes from
     // `<a:ln@w>` (EMU → pt → px); absent width falls back to a 1px hairline.
-    if (chart.chartBorderHidden !== true && chart.chartBorderColor) {
+    if (chart.chartBorderHidden !== true
+      && (chart.chartBorderLineFill || chart.chartBorderColor)) {
       ctx.save();
-      ctx.strokeStyle = `#${chart.chartBorderColor}`;
+      const stroke = chart.chartBorderLineFill
+        ? resolveFill(chart.chartBorderLineFill, ctx, x, y, w, h, shapeRotationDeg)
+        : chart.chartBorderColor ? `#${chart.chartBorderColor}` : null;
+      if (!stroke) {
+        ctx.restore();
+      } else {
+        ctx.strokeStyle = stroke;
       // `<a:ln>` with no `@w` means width 0 per ECMA-376 §20.1.2.2.24, i.e. invisible;
       // but Excel renders a fill-without-width line as a ~hairline, so we draw 1px to
       // match the app rather than dropping a declared border.
       ctx.lineWidth = chart.chartBorderWidthEmu
         ? Math.max(0.5, chart.chartBorderWidthEmu / EMU_PER_PT) * ptToPx
         : 1;
-      ctx.setLineDash(dashPatternForPreset(chart.chartBorderDash ?? undefined, ctx.lineWidth));
+      ctx.setLineDash(dashPatternForLine(
+        chart.chartBorderCustomDash, chart.chartBorderDash, ctx.lineWidth,
+      ));
       ctx.lineCap = chart.chartBorderCap === 'rnd'
         ? 'round' : chart.chartBorderCap === 'sq' ? 'square' : 'butt';
       ctx.lineJoin = chart.chartBorderJoin === 'round' || chart.chartBorderJoin === 'bevel'
@@ -14574,7 +14655,8 @@ export function renderChart(
       } else {
         ctx.strokeRect(x + lw / 2, y + lw / 2, w - lw, h - lw);
       }
-      ctx.restore();
+        ctx.restore();
+      }
     }
 
     // chartEx box-and-whisker / sunburst / treemap carry their data in the structured
@@ -14624,7 +14706,7 @@ export function renderChart(
       drawChartTextBoxes(ctx, chart, rect, ptToPx);
       return;
     }
-    if (regionMap?.render(ctx, chart, rect, ptToPx)) {
+    if (regionMap?.render(ctx, chart, rect, ptToPx, shapeRotationDeg)) {
       drawChartTextBoxes(ctx, chart, rect, ptToPx);
       return;
     }
@@ -14646,11 +14728,11 @@ export function renderChart(
       case 'stackedAreaPct':
         renderAreaChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'pie':
-        renderPieChart(ctx, chart, rect, false, ptToPx); break;
+        renderPieChart(ctx, chart, rect, false, ptToPx, shapeRotationDeg); break;
       case 'ofPie':
-        renderOfPieChart(ctx, chart, rect, ptToPx); break;
+        renderOfPieChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'doughnut':
-        renderPieChart(ctx, chart, rect, true, ptToPx); break;
+        renderPieChart(ctx, chart, rect, true, ptToPx, shapeRotationDeg); break;
       case 'radar':
         renderRadarChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'scatter':
@@ -14678,7 +14760,7 @@ export function renderChart(
       case 'stock':
         renderStockChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'surface':
-        renderSurfaceChart(ctx, chart, rect, ptToPx); break;
+        renderSurfaceChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'boxWhisker':
         renderBoxWhiskerChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'sunburst':

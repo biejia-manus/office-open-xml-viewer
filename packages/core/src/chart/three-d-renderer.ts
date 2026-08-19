@@ -75,6 +75,7 @@ import {
 } from './three-d-stroke.js';
 import { buildThreeDOutlineTopology } from './three-d-outline.js';
 import { paintLegendFrame } from './legend-frame.js';
+import { paintPlotAreaFrame } from './plot-area-frame.js';
 import { resolveFill } from '../shape/paint.js';
 
 interface ThreeDLegendTextStyle {
@@ -1059,6 +1060,7 @@ function titleAndPlot(
   rect: ChartRect,
   ptToPx: number,
   orientation: 'vertical' | 'horizontal' | 'radial',
+  shapeRotationDeg: number,
 ): { plot: ChartRect; legend: ChartRect | null; legendMeasure: ThreeDLegendMeasure } {
   const band = cartesianTitleBand(chart, rect.h, ptToPx);
   if (chart.title) {
@@ -1142,6 +1144,9 @@ function titleAndPlot(
     w: Math.max(1, frame.plotRect.pw),
     h: Math.max(1, frame.plotRect.ph),
   };
+  paintPlotAreaFrame(
+    ctx, chart, plot.x, plot.y, plot.w, plot.h, ptToPx, shapeRotationDeg,
+  );
   const defaultLegend = !legendReserve ? null
     : legendReserve.side === 'r'
       ? { x: rect.x + rect.w - legendReserve.reserveW, y: plot.y, w: legendReserve.reserveW, h: plot.h }
@@ -2159,7 +2164,7 @@ function renderCartesian(
   const stacked = chart.chartType.startsWith('stacked');
   const depthArranged = bars && !stacked && chart.threeD.barGrouping === 'standard';
   const { plot, legend, legendMeasure } = titleAndPlot(
-    ctx, chart, rect, ptToPx, horizontal ? 'horizontal' : 'vertical',
+    ctx, chart, rect, ptToPx, horizontal ? 'horizontal' : 'vertical', shapeRotationDeg,
   );
   const projection = planChartThreeDProjection(chart.threeD, plot, {
     // Office places bar/column prisms in a compact depth box, while line and
@@ -3307,7 +3312,9 @@ function renderPie(
   if (!(maxMagnitude > 0)) return true;
   const scaledTotal = values.reduce((sum, item) => sum + item.value / maxMagnitude, 0);
   if (!(scaledTotal > 0) || !Number.isFinite(scaledTotal)) return true;
-  const { plot, legend, legendMeasure } = titleAndPlot(ctx, chart, rect, ptToPx, 'radial');
+  const { plot, legend, legendMeasure } = titleAndPlot(
+    ctx, chart, rect, ptToPx, 'radial', shapeRotationDeg,
+  );
   // Pie is a cylindrical sector in X/Z with thickness on Y. Its authored
   // depth/gap fields do not control the radial solid (the depth=100/2000
   // Office references are pixel-identical), but rotX/rotY/perspective must use

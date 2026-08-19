@@ -87,6 +87,16 @@ const MAX_CHART_CACHE_POINTS: usize = 1_048_576;
 // All field references are ECMA-376 / ISO-29500 part 1 §21.2 (DrawingML Charts)
 // as documented on the TS side; see that file for the per-field spec citations.
 
+/// One DrawingML custom-dash atom, normalized to line-width multipliers.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartLineDashSegment {
+    /// Dash length as a multiplier of the rendered line width.
+    pub dash: f64,
+    /// Following space as a multiplier of the rendered line width.
+    pub space: f64,
+}
+
 /// Effective paint for one role in an Office 2013+ Chart Style part.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -124,14 +134,27 @@ pub struct ChartExElementStyle {
     pub fill_no_style: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_colors: Option<Vec<Option<String>>>,
+    /// Per-color-style-index DrawingML outline recipes after `phClr`
+    /// substitution. Solid paints remain duplicated in `line_colors` for wire
+    /// compatibility; gradient and pattern outlines are retained here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_paints: Option<Vec<Option<ChartStyleFill>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_width_emu: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_dash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_dash_authored: Option<bool>,
+    /// DrawingML `<a:custDash>` atoms. Presence (including an empty list) is
+    /// distinct from omission and overrides any inherited preset dash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_custom_dash: Option<Vec<ChartLineDashSegment>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_cap: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_join: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_compound: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_hidden: Option<bool>,
     /// The linked Chart Style selected the `NoStyle` line recipe rather than
@@ -287,13 +310,21 @@ pub struct ChartModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_area_line_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_line_fill: Option<ChartStyleFill>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_area_line_width_emu: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_area_line_dash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_line_dash_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_line_custom_dash: Option<Vec<ChartLineDashSegment>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_area_line_cap: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_area_line_join: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_line_compound: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_area_line_hidden: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -418,13 +449,21 @@ pub struct ChartModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart_border_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_border_line_fill: Option<ChartStyleFill>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart_border_width_emu: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart_border_dash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_border_dash_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_border_custom_dash: Option<Vec<ChartLineDashSegment>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart_border_cap: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart_border_join: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_border_compound: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart_border_hidden: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -538,15 +577,23 @@ pub struct ChartModel {
     /// `<c:legend><c:spPr><a:ln>` explicit frame stroke (hex, no `#`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend_line_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_line_fill: Option<ChartStyleFill>,
     /// `<c:legend><c:spPr><a:ln@w>` frame stroke width in EMU.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend_line_width_emu: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend_line_dash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_line_dash_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_line_custom_dash: Option<Vec<ChartLineDashSegment>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend_line_cap: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend_line_join: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend_line_compound: Option<String>,
     /// Explicit `<c:legend><c:spPr><a:ln><a:noFill/>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend_line_hidden: Option<bool>,
@@ -1881,8 +1928,10 @@ pub struct LegendManualLayout {
     pub h_mode: String,
     pub x: f64,
     pub y: f64,
-    pub w: f64,
-    pub h: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub w: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h: Option<f64>,
 }
 
 /// Indexed classic-chart legend entry override (`CT_LegendEntry`).
@@ -2700,7 +2749,7 @@ pub fn extract_manual_layout(layout_node: Node) -> Option<ChartManualLayout> {
 
 /// `<c:legend><c:layout><c:manualLayout>` (ECMA-376 §21.2.2.31) → a
 /// [`LegendManualLayout`]. Unlike the plot/title layout, the legend variant has
-/// no `layoutTarget` and always carries explicit `w`/`h` (defaulting to 0).
+/// no `layoutTarget`; optional `w`/`h` retain their authored presence.
 /// `legend_node` is the `<c:legend>` element. `None` when it has no manual layout.
 pub fn extract_legend_manual_layout(legend_node: Node) -> Option<LegendManualLayout> {
     let layout = child(legend_node, "layout")?;
@@ -2712,8 +2761,8 @@ pub fn extract_legend_manual_layout(legend_node: Node) -> Option<LegendManualLay
         h_mode: manual.h_mode,
         x: manual.x,
         y: manual.y,
-        w: manual.w.unwrap_or(0.0),
-        h: manual.h.unwrap_or(0.0),
+        w: manual.w,
+        h: manual.h,
     })
 }
 
@@ -3327,10 +3376,14 @@ struct DirectShapeFill {
 #[derive(Default)]
 struct DirectShapeLine {
     color: Option<String>,
+    fill: Option<ChartStyleFill>,
     width_emu: Option<u32>,
     dash: Option<String>,
+    dash_authored: Option<bool>,
+    custom_dash: Option<Vec<ChartLineDashSegment>>,
     cap: Option<String>,
     join: Option<String>,
+    compound: Option<String>,
     hidden: Option<bool>,
     paint_authored: Option<bool>,
 }
@@ -3381,8 +3434,11 @@ fn extract_direct_shape_fill(shape: Option<Node>, resolver: &dyn ColorResolver) 
 }
 
 fn extract_direct_shape_line(node: Node, resolver: &dyn ColorResolver) -> DirectShapeLine {
+    use crate::line::LineDash;
+
     let shape = child(node, "spPr");
     let line = shape.and_then(|shape| child(shape, "ln"));
+    let parsed_line = line.map(|line| parse_chart_style_line(line, resolver, None));
     let paint_authored = line
         .and_then(|line| {
             line.children().find(|child| {
@@ -3395,26 +3451,50 @@ fn extract_direct_shape_line(node: Node, resolver: &dyn ColorResolver) -> Direct
         })
         .map(|_| true);
     let (color, width_emu, no_fill) = extract_sp_pr_ln_style(node, resolver);
-    let dash = line
-        .and_then(|line| child(line, "prstDash"))
-        .and_then(|dash| dash.attribute("val"))
-        .map(ToOwned::to_owned);
-    let cap = line
-        .and_then(|line| line.attribute("cap"))
-        .map(ToOwned::to_owned);
-    let join = line.and_then(|line| {
-        line.children()
-            .find(|node| {
-                node.is_element() && matches!(node.tag_name().name(), "round" | "bevel" | "miter")
-            })
-            .map(|node| node.tag_name().name().to_owned())
-    });
+    let fill = parsed_line
+        .as_ref()
+        .and_then(|line| line.paint.as_ref())
+        .and_then(chart_style_fill_from_line_paint);
+    let dash = parsed_line
+        .as_ref()
+        .and_then(|line| match line.dash.as_ref() {
+            Some(LineDash::Preset(value)) => value.clone(),
+            _ => None,
+        });
+    let custom_dash = parsed_line
+        .as_ref()
+        .and_then(|line| match line.dash.as_ref() {
+            Some(LineDash::Custom(stops)) => Some(
+                stops
+                    .iter()
+                    .map(|stop| ChartLineDashSegment {
+                        dash: stop.dash / 100_000.0,
+                        space: stop.space / 100_000.0,
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        });
     DirectShapeLine {
         color: if no_fill { None } else { color },
+        fill,
         width_emu,
         dash,
-        cap,
-        join,
+        dash_authored: parsed_line
+            .as_ref()
+            .and_then(|line| line.dash.as_ref())
+            .map(|_| true),
+        custom_dash,
+        cap: parsed_line.as_ref().and_then(|line| line.cap.clone()),
+        join: parsed_line
+            .as_ref()
+            .and_then(|line| match line.join.as_ref() {
+                Some(crate::line::LineJoin::Round) => Some("round".to_owned()),
+                Some(crate::line::LineJoin::Bevel) => Some("bevel".to_owned()),
+                Some(crate::line::LineJoin::Miter { .. }) => Some("miter".to_owned()),
+                None => None,
+            }),
+        compound: parsed_line.and_then(|line| line.compound),
         hidden: no_fill.then_some(true),
         paint_authored,
     }
@@ -3427,10 +3507,14 @@ struct LegendFrameStyle {
     fill_hidden: Option<bool>,
     fill_paint_authored: Option<bool>,
     line_color: Option<String>,
+    line_fill: Option<ChartStyleFill>,
     line_width_emu: Option<u32>,
     line_dash: Option<String>,
+    line_dash_authored: Option<bool>,
+    line_custom_dash: Option<Vec<ChartLineDashSegment>>,
     line_cap: Option<String>,
     line_join: Option<String>,
+    line_compound: Option<String>,
     line_hidden: Option<bool>,
     line_paint_authored: Option<bool>,
 }
@@ -3454,10 +3538,14 @@ fn extract_legend_frame_style(root: Node, resolver: &dyn ColorResolver) -> Legen
         fill_hidden: direct_fill.hidden,
         fill_paint_authored: direct_fill.paint_authored,
         line_color: direct_line.color,
+        line_fill: direct_line.fill,
         line_width_emu: direct_line.width_emu,
         line_dash: direct_line.dash,
+        line_dash_authored: direct_line.dash_authored,
+        line_custom_dash: direct_line.custom_dash,
         line_cap: direct_line.cap,
         line_join: direct_line.join,
+        line_compound: direct_line.compound,
         line_hidden: direct_line.hidden,
         line_paint_authored: direct_line.paint_authored,
     }
@@ -4155,6 +4243,32 @@ fn parse_chart_style_paint(
     })
 }
 
+fn chart_style_fill_from_line_paint(paint: &crate::line::LinePaint) -> Option<ChartStyleFill> {
+    match paint {
+        crate::line::LinePaint::NoFill => None,
+        crate::line::LinePaint::Solid { color } => {
+            color.clone().map(|color| ChartStyleFill::Solid { color })
+        }
+        crate::line::LinePaint::Gradient(Some(gradient)) => Some(ChartStyleFill::Gradient {
+            stops: gradient.stops.clone(),
+            angle: gradient.angle,
+            grad_type: gradient.grad_type.clone(),
+            scaled: gradient.scaled,
+            path: gradient.path.clone(),
+            fill_to_rect: gradient.fill_to_rect.clone(),
+            tile_rect: gradient.tile_rect.clone(),
+            flip: gradient.flip.clone(),
+            rot_with_shape: gradient.rot_with_shape,
+        }),
+        crate::line::LinePaint::Gradient(None) => None,
+        crate::line::LinePaint::Pattern(pattern) => Some(ChartStyleFill::Pattern {
+            fg: pattern.fg.clone(),
+            bg: pattern.bg.clone(),
+            preset: pattern.preset.clone(),
+        }),
+    }
+}
+
 /// Returns the structured-fill component count without resolving colors or
 /// sorting gradient stops. Chart Style expands one authored recipe over every
 /// Chart Colors entry, so this preflight must run before the palette loop.
@@ -4217,6 +4331,16 @@ fn parse_chart_style_line(
     let adapter = ColorResolverThemeAdapter(resolver);
     let style_resolver = crate::color::StyleMatrixColorResolver::new(&adapter, placeholder);
     crate::line::parse_line_properties(line, &style_resolver, resolver.tint_mode())
+}
+
+fn parse_chart_style_line_paint(
+    line: Node,
+    resolver: &dyn ColorResolver,
+    placeholder: Option<&str>,
+) -> Option<crate::line::LinePaint> {
+    let adapter = ColorResolverThemeAdapter(resolver);
+    let style_resolver = crate::color::StyleMatrixColorResolver::new(&adapter, placeholder);
+    crate::line::parse_line_paint(line, &style_resolver, resolver.tint_mode())
 }
 
 fn chart_style_line_ref_xml(
@@ -4401,69 +4525,138 @@ fn parse_chartex_element_style(
         })
         .filter(|colors| colors.iter().any(Option::is_some));
 
-    let lines = placeholders
+    let local_line = local_sp_pr.and_then(|sp_pr| child(sp_pr, "ln"));
+    let inherited_line = line_recipe_doc
+        .as_ref()
+        .and_then(|document| child(document.root_element(), "ln"));
+    let local_line_fill_authored = local_line.is_some_and(shape_has_fill_choice);
+    let line_component_count = if local_line_fill_authored {
+        local_line
+            .and_then(chart_style_paint_component_count)
+            .or(Some(0))
+    } else {
+        match line_recipe.as_ref() {
+            Some(Err(())) => Some(0),
+            Some(Ok(_)) => inherited_line
+                .and_then(chart_style_paint_component_count)
+                .or(Some(0)),
+            None => None,
+        }
+    };
+    let line_entry_count = placeholders.len().min(MAX_CHART_COLOR_STYLE_ENTRIES);
+    let parsed_line_entries = chart_style_paint_entry_limit(
+        line_component_count,
+        line_entry_count,
+        MAX_CHART_STYLE_PAINT_COMPONENTS,
+    );
+
+    // Width/dash/cap/join/compound are invariant across Chart Colors palette
+    // entries. Parse that geometry once; only line paint needs placeholder
+    // substitution for every color. This prevents an authored unbounded-style
+    // custom dash from becoming palette-size × dash-size work.
+    let first_placeholder = placeholders.first().and_then(|accent| {
+        chart_style_placeholder(line_ref, resolver, *accent, accents, color_style_method)
+    });
+    let inherited_geometry = match line_recipe.as_ref() {
+        Some(Err(())) => Some(LineProperties {
+            paint: Some(LinePaint::NoFill),
+            ..LineProperties::default()
+        }),
+        Some(Ok(_)) => inherited_line
+            .map(|line| parse_chart_style_line(line, resolver, first_placeholder.as_deref())),
+        None => None,
+    };
+    let local_geometry =
+        local_line.map(|line| parse_chart_style_line(line, resolver, first_placeholder.as_deref()));
+    let first_line = match (local_geometry, inherited_geometry) {
+        (Some(local), Some(inherited)) => Some(local.with_fallback(&inherited)),
+        (Some(local), None) => Some(local),
+        (None, inherited) => inherited,
+    };
+
+    let resolved_line_paints = placeholders
         .iter()
-        .map(|accent| {
+        .take(MAX_CHART_COLOR_STYLE_ENTRIES)
+        .enumerate()
+        .map(|(index, accent)| {
+            if index >= parsed_line_entries {
+                return None;
+            }
             let placeholder =
                 chart_style_placeholder(line_ref, resolver, *accent, accents, color_style_method);
             let inherited = match line_recipe.as_ref() {
-                Some(Err(())) => Some(LineProperties {
-                    paint: Some(LinePaint::NoFill),
-                    ..LineProperties::default()
-                }),
-                Some(Ok(_)) => line_recipe_doc.as_ref().and_then(|document| {
-                    child(document.root_element(), "ln")
-                        .map(|line| parse_chart_style_line(line, resolver, placeholder.as_deref()))
+                Some(Err(())) => Some(LinePaint::NoFill),
+                Some(Ok(_)) => inherited_line.and_then(|line| {
+                    parse_chart_style_line_paint(line, resolver, placeholder.as_deref())
                 }),
                 None => None,
             };
-            let local = local_sp_pr
-                .and_then(|sp_pr| child(sp_pr, "ln"))
-                .map(|line| parse_chart_style_line(line, resolver, placeholder.as_deref()));
-            match (local, inherited) {
-                (Some(local), Some(inherited)) => Some(local.with_fallback(&inherited)),
-                (Some(local), None) => Some(local),
-                (None, inherited) => inherited,
+            let local = local_line.and_then(|line| {
+                parse_chart_style_line_paint(line, resolver, placeholder.as_deref())
+            });
+            if local_line_fill_authored {
+                local
+            } else {
+                local.or(inherited)
             }
         })
-        .take(MAX_CHART_COLOR_STYLE_ENTRIES)
         .collect::<Vec<_>>();
-    let line_hidden = lines
-        .iter()
-        .all(|line| {
-            matches!(
-                line.as_ref().and_then(|line| line.paint.as_ref()),
-                Some(LinePaint::NoFill)
-            )
-        })
-        .then_some(true);
+    let line_hidden = (resolved_line_paints.iter().any(Option::is_some)
+        && resolved_line_paints
+            .iter()
+            .all(|paint| matches!(paint, Some(LinePaint::NoFill))))
+    .then_some(true);
     let line_colors = (!line_hidden.unwrap_or(false))
         .then(|| {
-            lines
+            resolved_line_paints
                 .iter()
-                .map(
-                    |line| match line.as_ref().and_then(|line| line.paint.as_ref()) {
-                        Some(LinePaint::Solid { color }) => color.clone(),
-                        _ => None,
-                    },
-                )
+                .map(|paint| match paint {
+                    Some(LinePaint::Solid { color }) => color.clone(),
+                    _ => None,
+                })
                 .collect::<Vec<_>>()
         })
         .filter(|colors| colors.iter().any(Option::is_some));
-    let first_line = lines.iter().flatten().next();
+    let line_paints = (!line_hidden.unwrap_or(false))
+        .then(|| {
+            resolved_line_paints
+                .iter()
+                .map(|paint| paint.as_ref().and_then(chart_style_fill_from_line_paint))
+                .collect::<Vec<_>>()
+        })
+        .filter(|paints| paints.iter().any(Option::is_some));
     let line_width_emu = first_line
+        .as_ref()
         .and_then(|line| line.width)
         .and_then(|width| u32::try_from(width).ok());
-    let line_dash = first_line.and_then(|line| match line.dash.as_ref() {
-        Some(LineDash::Preset(value)) => value.clone(),
-        _ => None,
-    });
-    let line_join = first_line.and_then(|line| match line.join.as_ref() {
-        Some(LineJoin::Round) => Some("round".to_owned()),
-        Some(LineJoin::Bevel) => Some("bevel".to_owned()),
-        Some(LineJoin::Miter { .. }) => Some("miter".to_owned()),
-        None => None,
-    });
+    let line_dash = first_line
+        .as_ref()
+        .and_then(|line| match line.dash.as_ref() {
+            Some(LineDash::Preset(value)) => value.clone(),
+            _ => None,
+        });
+    let line_custom_dash = first_line
+        .as_ref()
+        .and_then(|line| match line.dash.as_ref() {
+            Some(LineDash::Custom(stops)) => Some(
+                stops
+                    .iter()
+                    .map(|stop| ChartLineDashSegment {
+                        dash: stop.dash / 100_000.0,
+                        space: stop.space / 100_000.0,
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        });
+    let line_join = first_line
+        .as_ref()
+        .and_then(|line| match line.join.as_ref() {
+            Some(LineJoin::Round) => Some("round".to_owned()),
+            Some(LineJoin::Bevel) => Some("bevel".to_owned()),
+            Some(LineJoin::Miter { .. }) => Some("miter".to_owned()),
+            None => None,
+        });
     let (font_size_hpt, font_bold, font_color, font_face) =
         extract_chartex_style_text_props(Some(style_node), resolver);
     let font_italic = extract_chartex_style_text_italic(Some(style_node));
@@ -4480,12 +4673,19 @@ fn parse_chartex_element_style(
         fill_paint_authored,
         fill_no_style,
         line_colors,
+        line_paints,
         line_width_emu,
         line_hidden,
         line_no_style,
         line_dash,
-        line_cap: first_line.and_then(|line| line.cap.clone()),
+        line_dash_authored: first_line
+            .as_ref()
+            .and_then(|line| line.dash.as_ref())
+            .map(|_| true),
+        line_custom_dash,
+        line_cap: first_line.as_ref().and_then(|line| line.cap.clone()),
         line_join,
+        line_compound: first_line.as_ref().and_then(|line| line.compound.clone()),
         fill_color_index: chart_style_reference_index(fill_ref),
         line_color_index: chart_style_reference_index(line_ref),
     }
@@ -4606,6 +4806,33 @@ fn chart_style_role_fill_component_count(
     }
 }
 
+fn chart_style_role_line_component_count(
+    role: Node,
+    resolver: &dyn ColorResolver,
+) -> Option<usize> {
+    if let Some(line) = child(role, "spPr").and_then(|sp_pr| child(sp_pr, "ln")) {
+        if shape_has_fill_choice(line) {
+            return Some(chart_style_paint_component_count(line).unwrap_or(0));
+        }
+    }
+    let Some(line_ref) = child(role, "lnRef") else {
+        return Some(0);
+    };
+    match chart_style_line_ref_xml(line_ref, resolver) {
+        Some(Ok(xml)) => {
+            let document = crate::depth::parse_guarded(&xml).ok()?;
+            let root = document.root_element();
+            let line =
+                child(root, "ln").or_else(|| (root.tag_name().name() == "ln").then_some(root));
+            Some(
+                line.and_then(chart_style_paint_component_count)
+                    .unwrap_or(0),
+            )
+        }
+        Some(Err(())) | None => Some(0),
+    }
+}
+
 fn parse_chart_style_role_table(
     style_root: Node,
     resolver: &dyn ColorResolver,
@@ -4632,7 +4859,9 @@ fn parse_chart_style_role_table(
     // role×palette expansion. The per-role guard remains a second line of
     // defence; this aggregate guard bounds all roles together.
     let fill_components = role_nodes.iter().try_fold(0usize, |total, role| {
-        let components = chart_style_role_fill_component_count(*role, resolver)?;
+        let fill_components = chart_style_role_fill_component_count(*role, resolver)?;
+        let line_components = chart_style_role_line_component_count(*role, resolver)?;
+        let components = fill_components.checked_add(line_components)?;
         total.checked_add(components.checked_mul(palette_entries)?)
     })?;
     if fill_components > MAX_CHART_STYLE_PAINT_COMPONENTS {
@@ -6019,10 +6248,14 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         plot_area_fill_hidden: None,
         plot_area_fill_paint_authored: None,
         plot_area_line_color: None,
+        plot_area_line_fill: None,
         plot_area_line_width_emu: None,
         plot_area_line_dash: None,
+        plot_area_line_dash_authored: None,
+        plot_area_line_custom_dash: None,
         plot_area_line_cap: None,
         plot_area_line_join: None,
+        plot_area_line_compound: None,
         plot_area_line_hidden: None,
         plot_area_line_paint_authored: None,
         chart_bg,
@@ -6092,10 +6325,14 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         val_axis_font_bold,
         val_axis_font_italic,
         chart_border_color: chart_line_style.color,
+        chart_border_line_fill: chart_line_style.fill,
         chart_border_width_emu: chart_line_style.width_emu,
         chart_border_dash: chart_line_style.dash,
+        chart_border_dash_authored: chart_line_style.dash_authored,
+        chart_border_custom_dash: chart_line_style.custom_dash,
         chart_border_cap: chart_line_style.cap,
         chart_border_join: chart_line_style.join,
+        chart_border_compound: chart_line_style.compound,
         chart_border_hidden: chart_line_style.hidden,
         chart_border_paint_authored: chart_line_style.paint_authored,
         secondary_val_axis: None,
@@ -6119,10 +6356,14 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         legend_fill_hidden: legend_frame.fill_hidden,
         legend_fill_paint_authored: legend_frame.fill_paint_authored,
         legend_line_color: legend_frame.line_color,
+        legend_line_fill: legend_frame.line_fill,
         legend_line_width_emu: legend_frame.line_width_emu,
         legend_line_dash: legend_frame.line_dash,
+        legend_line_dash_authored: legend_frame.line_dash_authored,
+        legend_line_custom_dash: legend_frame.line_custom_dash,
         legend_line_cap: legend_frame.line_cap,
         legend_line_join: legend_frame.line_join,
+        legend_line_compound: legend_frame.line_compound,
         legend_line_hidden: legend_frame.line_hidden,
         legend_line_paint_authored: legend_frame.line_paint_authored,
         theme_major_font_latin: resolver.theme_major_font_latin(),
@@ -10148,10 +10389,14 @@ pub fn parse_chart_part_with_references_and_style_parts(
         plot_area_fill_hidden: plot_area_fill_style.hidden,
         plot_area_fill_paint_authored: plot_area_fill_style.paint_authored,
         plot_area_line_color: plot_area_line_style.color,
+        plot_area_line_fill: plot_area_line_style.fill,
         plot_area_line_width_emu: plot_area_line_style.width_emu,
         plot_area_line_dash: plot_area_line_style.dash,
+        plot_area_line_dash_authored: plot_area_line_style.dash_authored,
+        plot_area_line_custom_dash: plot_area_line_style.custom_dash,
         plot_area_line_cap: plot_area_line_style.cap,
         plot_area_line_join: plot_area_line_style.join,
+        plot_area_line_compound: plot_area_line_style.compound,
         plot_area_line_hidden: plot_area_line_style.hidden,
         plot_area_line_paint_authored: plot_area_line_style.paint_authored,
         chart_bg,
@@ -10221,10 +10466,14 @@ pub fn parse_chart_part_with_references_and_style_parts(
         val_axis_font_bold,
         val_axis_font_italic,
         chart_border_color: chart_line_style.color,
+        chart_border_line_fill: chart_line_style.fill,
         chart_border_width_emu: chart_line_style.width_emu,
         chart_border_dash: chart_line_style.dash,
+        chart_border_dash_authored: chart_line_style.dash_authored,
+        chart_border_custom_dash: chart_line_style.custom_dash,
         chart_border_cap: chart_line_style.cap,
         chart_border_join: chart_line_style.join,
+        chart_border_compound: chart_line_style.compound,
         chart_border_hidden: chart_line_style.hidden,
         chart_border_paint_authored: chart_line_style.paint_authored,
         secondary_val_axis,
@@ -10246,10 +10495,14 @@ pub fn parse_chart_part_with_references_and_style_parts(
         legend_fill_hidden: legend_frame.fill_hidden,
         legend_fill_paint_authored: legend_frame.fill_paint_authored,
         legend_line_color: legend_frame.line_color,
+        legend_line_fill: legend_frame.line_fill,
         legend_line_width_emu: legend_frame.line_width_emu,
         legend_line_dash: legend_frame.line_dash,
+        legend_line_dash_authored: legend_frame.line_dash_authored,
+        legend_line_custom_dash: legend_frame.line_custom_dash,
         legend_line_cap: legend_frame.line_cap,
         legend_line_join: legend_frame.line_join,
+        legend_line_compound: legend_frame.line_compound,
         legend_line_hidden: legend_frame.line_hidden,
         legend_line_paint_authored: legend_frame.line_paint_authored,
         theme_major_font_latin,
@@ -10498,10 +10751,14 @@ mod tests {
             plot_area_fill_hidden: None,
             plot_area_fill_paint_authored: None,
             plot_area_line_color: None,
+            plot_area_line_fill: None,
             plot_area_line_width_emu: None,
             plot_area_line_dash: None,
+            plot_area_line_dash_authored: None,
+            plot_area_line_custom_dash: None,
             plot_area_line_cap: None,
             plot_area_line_join: None,
+            plot_area_line_compound: None,
             plot_area_line_hidden: None,
             plot_area_line_paint_authored: None,
             chart_bg: Some("FFFFFF".to_string()),
@@ -10559,10 +10816,14 @@ mod tests {
             val_axis_title_vertical_mode: None,
             val_axis_title_manual_layout: None,
             chart_border_color: None,
+            chart_border_line_fill: None,
             chart_border_width_emu: None,
             chart_border_dash: None,
+            chart_border_dash_authored: None,
+            chart_border_custom_dash: None,
             chart_border_cap: None,
             chart_border_join: None,
+            chart_border_compound: None,
             chart_border_hidden: None,
             chart_border_paint_authored: None,
             cat_axis_crosses: None,
@@ -10603,10 +10864,14 @@ mod tests {
             legend_fill_hidden: None,
             legend_fill_paint_authored: None,
             legend_line_color: None,
+            legend_line_fill: None,
             legend_line_width_emu: None,
             legend_line_dash: None,
+            legend_line_dash_authored: None,
+            legend_line_custom_dash: None,
             legend_line_cap: None,
             legend_line_join: None,
+            legend_line_compound: None,
             legend_line_hidden: None,
             legend_line_paint_authored: None,
             theme_major_font_latin: None,
@@ -10724,6 +10989,18 @@ mod tests {
         let (show, pos) = extract_legend(d.root_element());
         assert!(show);
         assert_eq!(pos.as_deref(), Some("t"));
+    }
+
+    #[test]
+    fn legend_manual_layout_preserves_omitted_width_and_height() {
+        let document = root_of(
+            r#"<c:legend xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:layout><c:manualLayout><c:x val="0.1"/><c:y val="0.2"/></c:manualLayout></c:layout></c:legend>"#,
+        );
+        let layout = extract_legend_manual_layout(document.root_element()).expect("manual layout");
+        assert_eq!(layout.x, 0.1);
+        assert_eq!(layout.y, 0.2);
+        assert_eq!(layout.w, None);
+        assert_eq!(layout.h, None);
     }
 
     #[test]
@@ -11708,6 +11985,21 @@ Subtitle</a:t></a:r></a:p>
     }
 
     #[test]
+    fn direct_line_preserves_structured_paint_and_bare_dash_choice() {
+        let document = root_of(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:spPr><a:ln><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="112233"/></a:gs><a:gs pos="100000"><a:srgbClr val="AABBCC"/></a:gs></a:gsLst><a:lin ang="2700000"/></a:gradFill><a:prstDash/></a:ln></c:spPr></c:chartSpace>"#,
+        );
+        let line = extract_direct_shape_line(document.root_element(), &StubResolver);
+        assert!(matches!(
+            line.fill,
+            Some(ChartStyleFill::Gradient { angle, .. }) if (angle - 45.0).abs() < 1e-9
+        ));
+        assert_eq!(line.color, None);
+        assert_eq!(line.dash, None);
+        assert_eq!(line.dash_authored, Some(true));
+    }
+
+    #[test]
     fn parse_chart_part_wires_rounded_chart_space_gradient_to_the_shared_model() {
         let document = root_of(
             r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:roundedCorners/><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart></c:plotArea></c:chart><c:spPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="112233"/></a:gs><a:gs pos="100000"><a:srgbClr val="AABBCC"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill></c:spPr></c:chartSpace>"#,
@@ -11726,7 +12018,7 @@ Subtitle</a:t></a:r></a:p>
     #[test]
     fn parse_chart_part_preserves_direct_plot_area_fill_provenance() {
         let gradient = root_of(
-            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart><c:spPr><a:gradFill rotWithShape="0"><a:gsLst><a:gs pos="0"><a:srgbClr val="112233"/></a:gs><a:gs pos="100000"><a:srgbClr val="AABBCC"/></a:gs></a:gsLst><a:lin ang="2700000"/></a:gradFill><a:ln w="12700" cap="rnd"><a:solidFill><a:srgbClr val="445566"/></a:solidFill><a:prstDash val="dashDot"/><a:bevel/></a:ln></c:spPr></c:plotArea></c:chart></c:chartSpace>"#,
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart><c:spPr><a:gradFill rotWithShape="0"><a:gsLst><a:gs pos="0"><a:srgbClr val="112233"/></a:gs><a:gs pos="100000"><a:srgbClr val="AABBCC"/></a:gs></a:gsLst><a:lin ang="2700000"/></a:gradFill><a:ln w="12700" cap="rnd" cmpd="thinThick"><a:solidFill><a:srgbClr val="445566"/></a:solidFill><a:custDash><a:ds d="125000" sp="75000"/></a:custDash><a:bevel/></a:ln></c:spPr></c:plotArea></c:chart></c:chartSpace>"#,
         );
         let model = parse_chart_part(gradient.root_element(), &FixtureResolver)
             .expect("classic chart parses");
@@ -11742,9 +12034,19 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(model.plot_area_fill_paint_authored, Some(true));
         assert_eq!(model.plot_area_line_color.as_deref(), Some("445566"));
         assert_eq!(model.plot_area_line_width_emu, Some(12700));
-        assert_eq!(model.plot_area_line_dash.as_deref(), Some("dashDot"));
+        assert_eq!(model.plot_area_line_dash, None);
+        assert_eq!(
+            model.plot_area_line_custom_dash.as_deref(),
+            Some(
+                &[ChartLineDashSegment {
+                    dash: 1.25,
+                    space: 0.75,
+                }][..]
+            ),
+        );
         assert_eq!(model.plot_area_line_cap.as_deref(), Some("rnd"));
         assert_eq!(model.plot_area_line_join.as_deref(), Some("bevel"));
+        assert_eq!(model.plot_area_line_compound.as_deref(), Some("thinThick"));
         assert_eq!(model.plot_area_line_hidden, None);
         assert_eq!(model.plot_area_line_paint_authored, Some(true));
 
@@ -12010,7 +12312,7 @@ Subtitle</a:t></a:r></a:p>
               </c:ser></c:barChart></c:plotArea>
               <c:legend><c:legendPos val="r"/><c:spPr>
                 <a:solidFill><a:schemeClr val="accent1"><a:lumMod val="20000"/><a:lumOff val="80000"/></a:schemeClr></a:solidFill>
-                <a:ln w="3175" cap="sq"><a:solidFill><a:srgbClr val="808080"/></a:solidFill><a:prstDash val="sysDash"/><a:round/></a:ln>
+                <a:ln w="3175" cap="sq" cmpd="dbl"><a:solidFill><a:srgbClr val="808080"/></a:solidFill><a:custDash><a:ds d="200000" sp="50000"/></a:custDash><a:round/></a:ln>
               </c:spPr></c:legend>
             </c:chart></c:chartSpace>"#,
         );
@@ -12028,9 +12330,12 @@ Subtitle</a:t></a:r></a:p>
         assert!(serialized.get("legendFillHidden").is_none());
         assert_eq!(serialized["legendLineColor"], "808080");
         assert_eq!(serialized["legendLineWidthEmu"], 3175);
-        assert_eq!(serialized["legendLineDash"], "sysDash");
+        assert!(serialized.get("legendLineDash").is_none());
+        assert_eq!(serialized["legendLineCustomDash"][0]["dash"], 2.0);
+        assert_eq!(serialized["legendLineCustomDash"][0]["space"], 0.5);
         assert_eq!(serialized["legendLineCap"], "sq");
         assert_eq!(serialized["legendLineJoin"], "round");
+        assert_eq!(serialized["legendLineCompound"], "dbl");
         assert_eq!(serialized["legendLinePaintAuthored"], true);
         assert!(serialized.get("legendLineHidden").is_none());
     }
@@ -15885,7 +16190,9 @@ Subtitle</a:t></a:r></a:p>
         let style_xml = format!(
             r#"<cs:chartStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}">
               <cs:dataPointMarkerLayout symbol="diamond" size="9"/>
-              <cs:chartArea><cs:spPr><a:solidFill><a:srgbClr val="112233"/></a:solidFill></cs:spPr></cs:chartArea>
+              <cs:chartArea><cs:spPr><a:solidFill><a:srgbClr val="112233"/></a:solidFill><a:ln cmpd="dbl"><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="334455"/></a:gs><a:gs pos="100000"><a:srgbClr val="DDEEFF"/></a:gs></a:gsLst><a:lin ang="2700000"/></a:gradFill><a:custDash><a:ds d="125000" sp="75000"/></a:custDash></a:ln></cs:spPr></cs:chartArea>
+              <cs:plotArea><cs:spPr><a:ln cmpd="thickThin"><a:solidFill><a:srgbClr val="556677"/></a:solidFill><a:custDash/></a:ln></cs:spPr></cs:plotArea>
+              <cs:legend><cs:spPr><a:ln><a:solidFill><a:srgbClr val="667788"/></a:solidFill><a:custDash><a:ds d="200000" sp="50000"/></a:custDash></a:ln></cs:spPr></cs:legend>
               <cs:categoryAxis><cs:defRPr sz="700" b="1" i="1"><a:solidFill><a:srgbClr val="778899"/></a:solidFill><a:latin typeface="Axis Face"/></cs:defRPr></cs:categoryAxis>
               <cs:dropLine><cs:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:ln></cs:spPr></cs:dropLine>
               <cs:gridlineMinor><cs:spPr><a:ln><a:noFill/></a:ln></cs:spPr></cs:gridlineMinor>
@@ -15913,12 +16220,44 @@ Subtitle</a:t></a:r></a:p>
             Some(2)
         );
         let roles = model.chart_style_roles.expect("linked role table");
-        assert_eq!(roles.len(), 4);
+        assert_eq!(roles.len(), 6);
         assert_eq!(
             roles["chartArea"].fill_colors.as_deref(),
             Some(&[Some("112233".to_string()), Some("112233".to_string())][..]),
         );
         assert_eq!(roles["dropLine"].line_width_emu, Some(12_700));
+        assert_eq!(
+            roles["chartArea"].line_custom_dash.as_deref(),
+            Some(
+                &[ChartLineDashSegment {
+                    dash: 1.25,
+                    space: 0.75,
+                }][..]
+            ),
+        );
+        assert_eq!(roles["chartArea"].line_compound.as_deref(), Some("dbl"));
+        assert!(matches!(
+            roles["chartArea"]
+                .line_paints
+                .as_ref()
+                .and_then(|paints| paints.first())
+                .and_then(Option::as_ref),
+            Some(ChartStyleFill::Gradient { angle, .. }) if (*angle - 45.0).abs() < 1e-9
+        ));
+        assert_eq!(roles["plotArea"].line_custom_dash.as_deref(), Some(&[][..]));
+        assert_eq!(
+            roles["plotArea"].line_compound.as_deref(),
+            Some("thickThin")
+        );
+        assert_eq!(
+            roles["legend"].line_custom_dash.as_deref(),
+            Some(
+                &[ChartLineDashSegment {
+                    dash: 2.0,
+                    space: 0.5,
+                }][..]
+            ),
+        );
         assert_eq!(
             roles["dropLine"]
                 .line_colors
