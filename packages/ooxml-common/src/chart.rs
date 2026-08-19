@@ -15363,9 +15363,9 @@ Subtitle</a:t></a:r></a:p>
                   <c:axPos val="b"/>
                   <c:numFmt formatCode="m/d/yyyy"/>
                   <c:baseTimeUnit val="months"/>
-                  <c:majorUnit val="2"/>
+                  <c:majorUnit val="1.5"/>
                   <c:majorTimeUnit val="months"/>
-                  <c:minorUnit val="1"/>
+                  <c:minorUnit val="0.5"/>
                   <c:minorTimeUnit val="months"/>
                 </c:dateAx>
                 <c:valAx><c:axPos val="l"/></c:valAx>
@@ -15381,9 +15381,9 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(m.cat_axis_format_code.as_deref(), Some("m/d/yyyy"));
         assert_eq!(m.cat_axis_is_date, Some(true));
         assert_eq!(m.cat_axis_base_time_unit.as_deref(), Some("months"));
-        assert_eq!(m.cat_axis_major_unit, Some(2.0));
+        assert_eq!(m.cat_axis_major_unit, Some(1.5));
         assert_eq!(m.cat_axis_major_time_unit.as_deref(), Some("months"));
-        assert_eq!(m.cat_axis_minor_unit, Some(1.0));
+        assert_eq!(m.cat_axis_minor_unit, Some(0.5));
         assert_eq!(m.cat_axis_minor_time_unit.as_deref(), Some("months"));
         assert!(!m.cat_axis_hidden);
     }
