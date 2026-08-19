@@ -592,6 +592,8 @@ export interface ChartExElementStyle {
   lineColors?: Array<string | null> | null;
   /** Structured outline paints after `phClr` substitution/transforms. */
   linePaints?: Array<SolidFill | GradientFill | PatternFill | null> | null;
+  /** A linked outline was authored even when its paint is unsupported. */
+  linePaintAuthored?: boolean | null;
   lineWidthEmu?: number | null;
   lineHidden?: boolean | null;
   /** Linked Chart Style uses `NoStyle`, not an authored no-fill outline. */
@@ -1247,7 +1249,7 @@ export interface ChartModel {
   stockHiLowLines?: boolean | null;
   /**
    * `<c:hiLowLines><c:spPr><a:ln><a:solidFill>` resolved color (hex, no `#`).
-   * null = the renderer's default gray hi-lo line.
+   * null leaves direct paint omitted; linked/automatic layers resolve later.
    */
   stockHiLowLineColor?: string | null;
   /**
@@ -1259,6 +1261,17 @@ export interface ChartModel {
   stockUpDownBars?: boolean | null;
   /** Parsed `<c:upDownBars>` geometry and direct up/down bar paint. */
   stockUpDownBarStyle?: ChartStockUpDownBarStyle | null;
+  /**
+   * Bounded Office automatic paint for otherwise-empty stock decorations.
+   * This is resolved by the parser from the legacy chart style and theme; it
+   * stays separate from authored/linked paint so precedence remains explicit.
+   */
+  stockAutomaticStyle?: {
+    lineColor: string;
+    lineWidthEmu: number;
+    upFillColor: string;
+    downFillColor: string;
+  } | null;
   /** `<c:surfaceChart|surface3DChart><c:wireframe>` effective boolean. */
   surfaceWireframe?: boolean | null;
   /** `<c:bandFmts>` indexed low-to-high (§21.2.2.13/14). */
@@ -1340,8 +1353,12 @@ export interface ChartModel {
 export interface ChartStockBarPaint {
   fillColor?: string | null;
   fill?: SolidFill | GradientFill | PatternFill | null;
+  /** Direct/linked fill owns this component even when it cannot be resolved. */
+  fillPaintAuthored?: boolean | null;
   fillHidden?: boolean | null;
   lineColor?: string | null;
+  /** Direct/linked outline owns this component even when it cannot be resolved. */
+  linePaintAuthored?: boolean | null;
   lineWidthEmu?: number | null;
   lineDash?: string | null;
   lineCap?: string | null;
@@ -1358,6 +1375,8 @@ export interface ChartStockUpDownBarStyle {
 
 export interface ChartDecorationLineStyle {
   color?: string | null;
+  /** Direct/linked outline owns this component even when it cannot be resolved. */
+  paintAuthored?: boolean | null;
   widthEmu?: number | null;
   dash?: string | null;
   cap?: string | null;

@@ -133,6 +133,7 @@ export interface ChartDataTable {
 }
 export interface ChartDecorationLineStyle {
     color?: string | null;
+    paintAuthored?: boolean | null;
     widthEmu?: number | null;
     dash?: string | null;
     cap?: string | null;
@@ -211,6 +212,7 @@ export interface ChartExElementStyle {
     fillNoStyle?: boolean | null;
     lineColors?: Array<string | null> | null;
     linePaints?: Array<SolidFill | GradientFill | PatternFill | null> | null;
+    linePaintAuthored?: boolean | null;
     lineWidthEmu?: number | null;
     lineHidden?: boolean | null;
     lineNoStyle?: boolean | null;
@@ -515,6 +517,12 @@ export interface ChartModel {
     stockHiLowLineColor?: string | null;
     stockUpDownBars?: boolean | null;
     stockUpDownBarStyle?: ChartStockUpDownBarStyle | null;
+    stockAutomaticStyle?: {
+        lineColor: string;
+        lineWidthEmu: number;
+        upFillColor: string;
+        downFillColor: string;
+    } | null;
     surfaceWireframe?: boolean | null;
     surfaceBandFormats?: ChartSurfaceBandFormat[] | null;
     legacyChartStyle?: number | null;
@@ -674,8 +682,10 @@ export interface ChartSeriesDataLabels {
 export interface ChartStockBarPaint {
     fillColor?: string | null;
     fill?: SolidFill | GradientFill | PatternFill | null;
+    fillPaintAuthored?: boolean | null;
     fillHidden?: boolean | null;
     lineColor?: string | null;
+    linePaintAuthored?: boolean | null;
     lineWidthEmu?: number | null;
     lineDash?: string | null;
     lineCap?: string | null;

@@ -5031,7 +5031,7 @@ function applyDecorationLineStyle(
   style: ChartDecorationLineStyle,
   ptToPx: number,
 ): boolean {
-  if (style.hidden === true) return false;
+  if (style.hidden === true || (style.paintAuthored === true && style.color == null)) return false;
   ctx.strokeStyle = `#${style.color ?? '000000'}`;
   ctx.lineWidth = style.widthEmu != null
     ? axisLineWidthPx(style.widthEmu, ptToPx)
@@ -5049,15 +5049,25 @@ function chartStyleRoleLine(
 ): ChartDecorationLineStyle {
   const linked = chart.chartStyleRoles?.[role];
   const linkedApplies = linked != null && linked.lineNoStyle !== true;
+  const directPaintAuthored = direct.paintAuthored === true
+    || direct.color != null || direct.hidden === true;
+  const linkedPaintAuthored = linkedApplies && (linked.linePaintAuthored === true
+    || linked.lineHidden === true
+    || linked.lineColors?.some(color => color != null) === true
+    || linked.linePaints?.some(paint => paint != null) === true);
   return {
     color: direct.color
-      ?? (linkedApplies ? chartExStyleColor(chart, linked, 'line', 0, 1) : null),
+      ?? (!directPaintAuthored && linkedApplies
+        ? chartExStyleColor(chart, linked, 'line', 0, 1) : null),
+    paintAuthored: directPaintAuthored
+      ? direct.paintAuthored
+      : linkedPaintAuthored ? true : undefined,
     widthEmu: direct.widthEmu ?? (linkedApplies ? linked.lineWidthEmu : null),
     dash: direct.dash ?? (linkedApplies ? linked.lineDash : null),
     cap: direct.cap ?? (linkedApplies ? linked.lineCap : null),
     join: direct.join ?? (linkedApplies ? linked.lineJoin : null),
     hidden: direct.hidden
-      ?? (direct.color == null && linkedApplies && linked.lineHidden === true ? true : null),
+      ?? (!directPaintAuthored && linkedApplies && linked.lineHidden === true ? true : null),
   };
 }
 
@@ -5070,25 +5080,44 @@ function chartStyleRoleBarPaint(
   const fillApplies = linked != null && linked.fillNoStyle !== true;
   const lineApplies = linked != null && linked.lineNoStyle !== true;
   const linkedFill = linked?.fillPaints?.[0];
+  const directFillAuthored = direct.fillPaintAuthored === true
+    || direct.fillColor != null || direct.fill != null || direct.fillHidden === true;
+  const directLineAuthored = direct.linePaintAuthored === true
+    || direct.lineColor != null || direct.lineHidden === true;
+  const linkedFillAuthored = fillApplies && (linked.fillPaintAuthored === true
+    || linked.fillHidden === true || linkedFill != null
+    || linked.fillColors?.some(color => color != null) === true);
+  const linkedLineAuthored = lineApplies && (linked.linePaintAuthored === true
+    || linked.lineHidden === true
+    || linked.lineColors?.some(color => color != null) === true
+    || linked.linePaints?.some(paint => paint != null) === true);
   return {
     fillColor: direct.fillColor
-      ?? (fillApplies ? chartExStyleColor(chart, linked, 'fill', 0, 1) : null),
+      ?? (!directFillAuthored && fillApplies
+        ? chartExStyleColor(chart, linked, 'fill', 0, 1) : null),
     fill: direct.fill ?? (
-      direct.fillColor == null && direct.fillHidden !== true && fillApplies
+      !directFillAuthored && fillApplies
         && linkedFill != null
         && linkedFill.fillType !== 'image'
         && linkedFill.fillType !== 'none' ? linkedFill : null
     ),
+    fillPaintAuthored: directFillAuthored
+      ? direct.fillPaintAuthored
+      : linkedFillAuthored ? true : undefined,
     fillHidden: direct.fillHidden
-      ?? (fillApplies && linked.fillHidden === true ? true : null),
+      ?? (!directFillAuthored && fillApplies && linked.fillHidden === true ? true : null),
     lineColor: direct.lineColor
-      ?? (lineApplies ? chartExStyleColor(chart, linked, 'line', 0, 1) : null),
+      ?? (!directLineAuthored && lineApplies
+        ? chartExStyleColor(chart, linked, 'line', 0, 1) : null),
+    linePaintAuthored: directLineAuthored
+      ? direct.linePaintAuthored
+      : linkedLineAuthored ? true : undefined,
     lineWidthEmu: direct.lineWidthEmu ?? (lineApplies ? linked.lineWidthEmu : null),
     lineDash: direct.lineDash ?? (lineApplies ? linked.lineDash : null),
     lineCap: direct.lineCap ?? (lineApplies ? linked.lineCap : null),
     lineJoin: direct.lineJoin ?? (lineApplies ? linked.lineJoin : null),
     lineHidden: direct.lineHidden
-      ?? (lineApplies && linked.lineHidden === true ? true : null),
+      ?? (!directLineAuthored && lineApplies && linked.lineHidden === true ? true : null),
   };
 }
 
@@ -6118,7 +6147,12 @@ function drawUpDownBars(
   slotWidth: number,
   style: ChartStockUpDownBarStyle,
   ptToPx: number,
-  useLegacyDefaultPaint: boolean,
+  automaticPaint?: {
+    lineColor: string;
+    lineWidthEmu: number;
+    upFillColor: string;
+    downFillColor: string;
+  },
   shapeRotationDeg = 0,
 ): void {
   const gapPercent = Number.isFinite(style.gapWidthPercent) && style.gapWidthPercent >= 0
@@ -6134,25 +6168,40 @@ function drawUpDownBars(
     const barHeight = Math.abs(endY - startY);
     if (!(barWidth > 0) || !(barHeight > 0) || !Number.isFinite(barHeight)) continue;
     const paint = end >= start ? style.up : style.down;
-    const defaultFill = end >= start ? 'FFFFFF' : '000000';
+    const fillOwned = paint.fillPaintAuthored === true
+      || paint.fill != null || paint.fillColor != null || paint.fillHidden === true;
+    const automaticFill = fillOwned
+      ? undefined
+      : end >= start ? automaticPaint?.upFillColor : automaticPaint?.downFillColor;
+    const fillColor = paint.fillColor ?? automaticFill;
     const barX = toX(index) - barWidth / 2;
     const barY = Math.min(startY, endY);
-    if (!paint.fillHidden && (paint.fill != null || paint.fillColor != null || useLegacyDefaultPaint)) {
-      ctx.fillStyle = paint.fill
-        ? (resolveFill(paint.fill, ctx, barX, barY, barWidth, barHeight, shapeRotationDeg)
-          ?? `#${paint.fillColor ?? defaultFill}`)
-        : `#${paint.fillColor ?? defaultFill}`;
-      ctx.fillRect(barX, barY, barWidth, barHeight);
+    if (!paint.fillHidden && (paint.fill != null || fillColor != null)) {
+      const resolvedFill = paint.fill
+        ? resolveFill(paint.fill, ctx, barX, barY, barWidth, barHeight, shapeRotationDeg)
+        : `#${fillColor}`;
+      // An authored/linked structured fill owns this component even when it
+      // cannot be resolved. Do not replace it with application-default paint.
+      if (resolvedFill != null) {
+        ctx.fillStyle = resolvedFill;
+        ctx.fillRect(barX, barY, barWidth, barHeight);
+      }
     }
-    if (!paint.lineHidden && (
-      paint.lineColor != null || paint.lineWidthEmu != null || useLegacyDefaultPaint
+    const lineOwned = paint.linePaintAuthored === true
+      || paint.lineColor != null || paint.lineHidden === true;
+    const lineColor = paint.lineColor ?? (lineOwned ? undefined : automaticPaint?.lineColor);
+    const lineWidthEmu = paint.lineWidthEmu
+      ?? (lineOwned ? undefined : automaticPaint?.lineWidthEmu);
+    if (!paint.lineHidden
+      && (paint.linePaintAuthored !== true || lineColor != null) && (
+      lineColor != null || lineWidthEmu != null
     )) {
       const previousDash = ctx.getLineDash();
       const previousCap = ctx.lineCap;
       const previousJoin = ctx.lineJoin;
-      ctx.strokeStyle = `#${paint.lineColor ?? '000000'}`;
-      ctx.lineWidth = paint.lineWidthEmu != null
-        ? axisLineWidthPx(paint.lineWidthEmu, ptToPx)
+      ctx.strokeStyle = `#${lineColor ?? '000000'}`;
+      ctx.lineWidth = lineWidthEmu != null
+        ? axisLineWidthPx(lineWidthEmu, ptToPx)
         : Math.max(1, 0.75 * ptToPx);
       ctx.setLineDash(dashPatternForPreset(paint.lineDash ?? undefined, ctx.lineWidth));
       ctx.lineCap = paint.lineCap === 'rnd'
@@ -6203,7 +6252,10 @@ function drawLineGroupDecorations(
         // Empty upBars/downBars paint is application-defined. The retained
         // Office observation is limited to classic Style 2; other styles keep
         // the geometry/model but do not receive a guessed white/black paint.
-        chart.legacyChartStyle === 2,
+        chart.legacyChartStyle === 2 ? {
+          lineColor: '000000', lineWidthEmu: 9525,
+          upFillColor: 'FFFFFF', downFillColor: '000000',
+        } : undefined,
         shapeRotationDeg,
       );
     }
@@ -7020,6 +7072,11 @@ function renderStockChart(
   const openS = openIdx >= 0 ? series[openIdx] : undefined;
   const upDownStartS = series[0] as ChartSeries | undefined;
   const upDownEndS = series.at(-1) as ChartSeries | undefined;
+  const sec = chart.secondaryValAxis && series.some(stockSeries =>
+    stockSeries.useSecondaryAxis === true
+  ) ? chart.secondaryValAxis : null;
+  const isSecondarySeries = (stockSeries: ChartSeries): boolean =>
+    sec != null && stockSeries.useSecondaryAxis === true;
 
   // ── Shared Cartesian frame (mirrors renderLineChart's band computation) ──
   const titleBand = measuredCartesianTitleBand(ctx, chart, w, h, ptToPx);
@@ -7047,9 +7104,35 @@ function renderStockChart(
     : catAxisLabelBandH(catAxFontPx, chart.catAxisLabelOffsetPercent))
     + catTitleH + legBottomH;
 
+  const phEst = h - padT - padB;
+  const secScale = computeSecondaryAxis(sec, series, phEst / ptToPx);
+  const secTickFontPx = Math.max(8, Math.min(11, h / 20));
+  const secFontPx = chartTextFontSizePx(sec?.fontSizeHpt, ptToPx) ?? secTickFontPx;
+  let secLabelBandW = 0;
+  if (sec && secScale && !sec.hidden) {
+    const previousFont = ctx.font;
+    ctx.font = chartFontCss(
+      secFontPx,
+      chartFontFamily(chart, sec.fontFace, 'minor'),
+      sec.fontBold ?? false,
+      sec.fontItalic ?? false,
+    );
+    let maxLabelWidth = 0;
+    for (const value of secScale.majorLines) {
+      maxLabelWidth = Math.max(maxLabelWidth, ctx.measureText(formatAxisTickWithUnits(
+        value, sec.formatCode ?? null, chart.date1904, sec.displayUnits,
+      )).width);
+    }
+    secLabelBandW = maxLabelWidth + 18;
+    ctx.font = previousFont;
+  }
+  const secTitleBandW = sec?.title
+    ? axisTitleFontPx(sec.titleFontSizeHpt, ptToPx) + 8
+    : 0;
+
   const pad = {
     t: padT,
-    r: legRightW + w * 0.05,
+    r: legRightW + w * 0.05 + secLabelBandW + secTitleBandW,
     b: padB,
     l: legLeftW + Math.max(valAxFontPx * 2.2 + 10 + valTitleW, dataTableHeaderW),
   };
@@ -7082,6 +7165,7 @@ function renderStockChart(
   let dataMin = Infinity;
   let dataMax = -Infinity;
   for (const s of series) {
+    if (isSecondarySeries(s)) continue;
     for (let ci = 0; ci < n; ci++) {
       const v = s.values[ci];
       if (v == null) continue;
@@ -7090,6 +7174,7 @@ function renderStockChart(
     }
   }
   for (const stockSeries of series) {
+    if (isSecondarySeries(stockSeries)) continue;
     forEachErrorBarEndpoint(
       stockSeries,
       'y',
@@ -7107,6 +7192,9 @@ function renderStockChart(
   const plan = planValueAxis(chart, dataMin, dataMax, ph / ptToPx);
   if (plan.max - plan.min === 0) return;
   const toY = (v: number) => py0 + ph - plan.frac(v) * ph;
+  const toYSecondary = secScale?.makeToY(py0, ph) ?? toY;
+  const toYFor = (stockSeries: ChartSeries): ((value: number) => number) =>
+    isSecondarySeries(stockSeries) ? toYSecondary : toY;
 
   // Category X mapping — stock charts use crossBetween="between" by default so
   // the first/last hi-lo line isn't flush against the axes (matches Excel).
@@ -7152,6 +7240,10 @@ function renderStockChart(
     }
   }
 
+  if (sec && secScale) {
+    drawSecondaryValueGridlines(ctx, sec, secScale, toYSecondary, px0, pw, ptToPx);
+  }
+
   // Axis rules (bottom = category, left = value).
   const stockCatLine = resolveAxisLine(chart.catAxisLineColor, chart.catAxisLineWidthEmu, ptToPx);
   const stockValLine = resolveAxisLine(chart.valAxisLineColor, chart.valAxisLineWidthEmu, ptToPx);
@@ -7172,14 +7264,22 @@ function renderStockChart(
   // and area charts. A stock drop line connects the category axis to the
   // envelope of every finite stock value at that category.
   if (chart.stockDropLines) {
-    const dropLineStyle = chartStyleRoleLine(chart, chart.stockDropLines, 'dropLine');
-    if (applyDecorationLineStyle(ctx, dropLineStyle, ptToPx)) {
+    const linked = chartStyleRoleLine(chart, chart.stockDropLines, 'dropLine');
+    const dropLineStyle = {
+      ...linked,
+      color: linked.color ?? (linked.paintAuthored === true
+        ? null : chart.stockAutomaticStyle?.lineColor),
+      widthEmu: linked.widthEmu ?? chart.stockAutomaticStyle?.lineWidthEmu,
+    };
+    if ((dropLineStyle.paintAuthored !== true || dropLineStyle.color != null)
+      && (dropLineStyle.color != null || dropLineStyle.widthEmu != null
+      || dropLineStyle.dash != null) && applyDecorationLineStyle(ctx, dropLineStyle, ptToPx)) {
       drawDropLineEnvelopes(
         ctx,
         series,
         n,
         toX,
-        () => toY,
+        stockSeries => toYFor(stockSeries),
         () => py0 + ph,
         (stockSeries, index) => stockSeries.values[index] ?? null,
       );
@@ -7189,10 +7289,15 @@ function renderStockChart(
   // ── First/last-series up-down bars (§21.2.2.218/227). Shared with ordinary
   // line-chart up/down bars so gap geometry and direct paint cannot drift.
   if (chart.stockUpDownBars && upDownStartS && upDownEndS) {
-    const style = chart.stockUpDownBarStyle ?? {
+    const directStyle = chart.stockUpDownBarStyle ?? {
       gapWidthPercent: 150,
       up: {},
       down: {},
+    };
+    const style = {
+      ...directStyle,
+      up: chartStyleRoleBarPaint(chart, directStyle.up, 'upBar'),
+      down: chartStyleRoleBarPaint(chart, directStyle.down, 'downBar'),
     };
     const slotWidth = dateAxisPlan
       ? (dateAxisPlan.categoryBandFractions[0] ?? 0) * pw
@@ -7201,36 +7306,39 @@ function renderStockChart(
       ctx,
       index => upDownStartS.values[index] ?? null,
       index => upDownEndS.values[index] ?? null,
-      n, toX, toY, toY,
-      slotWidth, style, ptToPx, true, shapeRotationDeg,
+      n, toX, toYFor(upDownStartS), toYFor(upDownEndS),
+      slotWidth, style, ptToPx, chart.stockAutomaticStyle ?? undefined, shapeRotationDeg,
     );
   }
 
-  // ── Hi-lo lines: vertical Low↔High per category. Drawn when the file declares
-  // `<c:hiLowLines>` (the normal case) OR whenever both High and Low series are
-  // present — a stock chart without them is degenerate. Color from the resolved
-  // `<c:hiLowLines>` line fill, else a neutral gray. ──
-  const drawHiLo = (chart.stockHiLowLines ?? true) && highS != null && lowS != null;
+  // ── Hi-lo lines: vertical Low↔High per category. CT_StockChart makes
+  // `<c:hiLowLines>` optional, so absence must remain absence; only a present
+  // element receives linked or bounded automatic paint. ──
+  const drawHiLo = chart.stockHiLowLines === true && highS != null && lowS != null;
   if (drawHiLo && highS && lowS) {
     const directStyle = chart.stockHiLowLineStyle ?? {
       color: chart.stockHiLowLineColor ?? null,
     };
     const linkedStyle = chartStyleRoleLine(chart, directStyle, 'hiLoLine');
-    const lineStyle = linkedStyle.color == null
-      && linkedStyle.widthEmu == null
-      && linkedStyle.dash == null
-      && linkedStyle.hidden == null
-      ? { ...linkedStyle, color: '595959' }
-      : linkedStyle;
-    if (applyDecorationLineStyle(ctx, lineStyle, ptToPx)) {
+    const lineStyle = {
+      ...linkedStyle,
+      color: linkedStyle.color ?? (linkedStyle.paintAuthored === true
+        ? null : chart.stockAutomaticStyle?.lineColor),
+      widthEmu: linkedStyle.widthEmu ?? chart.stockAutomaticStyle?.lineWidthEmu,
+    };
+    if ((lineStyle.paintAuthored !== true || lineStyle.color != null)
+      && (lineStyle.color != null || lineStyle.widthEmu != null || lineStyle.dash != null)
+      && applyDecorationLineStyle(ctx, lineStyle, ptToPx)) {
       for (let ci = 0; ci < n; ci++) {
         const hi = highS.values[ci];
         const lo = lowS.values[ci];
         if (hi == null || lo == null) continue;
         const cx = toX(ci);
+        const highToY = toYFor(highS);
+        const lowToY = toYFor(lowS);
         ctx.beginPath();
-        ctx.moveTo(cx, toY(hi));
-        ctx.lineTo(cx, toY(lo));
+        ctx.moveTo(cx, highToY(hi));
+        ctx.lineTo(cx, lowToY(lo));
         ctx.stroke();
       }
     }
@@ -7254,7 +7362,7 @@ function renderStockChart(
       const v = s.values[ci];
       if (v == null) continue;
       const cx = toX(ci);
-      const cy = toY(v);
+      const cy = toYFor(s)(v);
       const point = pointOverrides.get(ci);
       if (point?.markerSymbol === 'none' || (point?.markerSymbol == null && s.markerSymbol === 'none')) {
         continue;
@@ -7313,7 +7421,7 @@ function renderStockChart(
         chartStyleRoleErrorBar(chart, errorBars),
         n,
         toX,
-        toY,
+        toYFor(stockSeries),
         index => stockSeries.values[index] ?? 0,
         color,
       );
@@ -7340,7 +7448,7 @@ function renderStockChart(
       cats,
       true,
       toX,
-      toY,
+      toYFor(stockSeries),
       ph,
       ptToPx,
       chart.date1904,
@@ -7349,9 +7457,11 @@ function renderStockChart(
       { x: px0, y: py0, w: pw, h: ph },
       r,
       face => chartFontFamily(chart, face, 'minor'),
-      chart.valAxisDisplayUnits,
+      isSecondarySeries(stockSeries) ? sec?.displayUnits : chart.valAxisDisplayUnits,
       pointIndex => dataLabelLegendKey(seriesIndex, pointIndex),
-      value => dataLabelWithinAxisMaximum(chart, value, plan.max),
+      value => dataLabelWithinAxisMaximum(
+        chart, value, isSecondarySeries(stockSeries) ? secScale?.max ?? plan.max : plan.max,
+      ),
       shapeRotationDeg,
     );
   }
@@ -7420,6 +7530,15 @@ function renderStockChart(
         );
       }
     }
+  }
+
+  if (sec && secScale) {
+    const primaryLabelColor = chart.valAxisFontColor ? `#${chart.valAxisFontColor}` : '#555';
+    drawSecondaryValueAxis(
+      ctx, chart, sec, secScale, toYSecondary, r,
+      px0, py0, pw, ph, ptToPx,
+      secFontPx, secLabelBandW, primaryLabelColor, chart.date1904,
+    );
   }
 
   if (dataTableLayout) {
