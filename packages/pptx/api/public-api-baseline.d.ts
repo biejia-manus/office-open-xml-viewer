@@ -213,7 +213,7 @@ export interface ChartExElementStyle {
     textRInsEmu?: number | null;
     textBInsEmu?: number | null;
     textBodyAuthored?: boolean | null;
-    fillPaints?: Array<SolidFill | GradientFill | PatternFill | null> | null;
+    fillPaints?: Array<Fill | null> | null;
     fillColors?: Array<string | null> | null;
     fillHidden?: boolean | null;
     fillPaintAuthored?: boolean | null;
@@ -879,8 +879,13 @@ export type HyperlinkTarget = {
 export interface ImageFill {
     fillType: 'image';
     imagePath: string;
+    svgImagePath?: string;
     mimeType: string;
+    dpi?: number;
+    rotWithShape?: boolean;
+    srcRect?: SrcRect;
     fillRect?: FillRect;
+    stretch?: boolean;
     tile?: TileInfo;
     alpha?: number;
     duotone?: Duotone;
@@ -1653,6 +1658,12 @@ export type SpaceLine = {
     type: 'pts';
     val: number;
 };
+export interface SrcRect {
+    l: number;
+    t: number;
+    r: number;
+    b: number;
+}
 export interface Stroke {
     color: string;
     width: number;
@@ -1776,11 +1787,11 @@ export interface TextSelectionContextOptions {
     readonly maxRunLocators?: number;
 }
 export interface TileInfo {
-    tx: number;
-    ty: number;
-    sx: number;
-    sy: number;
-    flip: string;
+    tx?: number;
+    ty?: number;
+    sx?: number;
+    sy?: number;
+    flip?: string;
     algn?: string;
 }
 export interface ViewerContextMenuEvent<TContext> {

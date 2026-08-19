@@ -5,6 +5,12 @@
 
 import type { ChartDataLabelOverride, ChartDecorationLineStyle, ChartDisplayUnits, ChartLabelBox, ChartLegendEntryOverride, ChartManualLayout, ChartModel, ChartRect, ChartSeries, ChartSeriesDataLabels, ChartStockUpDownBarStyle, ChartStyleRole, ChartTextBox, ChartTextRun, ChartTrendline, SecondaryValueAxis } from '../types/chart';
 import type { Fill } from '../types/common';
+import {
+  chartImageFillPaintWorkUpperBound,
+  paintChartImageFill,
+  type ChartImageLookup,
+  withChartImageLookup,
+} from './image-fill.js';
 import { mergeChartLabelBoxes, paintChartLabelBox } from './label-box.js';
 import {
   anchoredDataLabelPoint,
@@ -18,15 +24,22 @@ import {
   type DataLabelTextStyle,
 } from './data-label-style.js';
 import {
+  classicMarkerPointIsPainted,
+  chartDataTableFamilyIsPainted,
+  dataLabelLegendKeyCount,
+  deletedLegendEntryIndices,
   effectiveMarkerSymbol,
   hasVisiblePointMarkerOverride,
   markersSuppressedByChartStyle,
   markerFillColorFor,
   markerFillPaintFor,
   markerPaintComponents,
+  markerSymbolConsumesFill,
+  pointHasMarkerDetail,
   seriesMarkerFillColor,
   seriesMarkerFillPaint,
   seriesLegendMarkerIsVisible,
+  seriesHasMarkerDetail,
 } from './marker-style.js';
 import {
   AXIS_OUTER_TEXT_MARGIN_PT,
@@ -84,6 +97,12 @@ import {
 } from './box-whisker.js';
 import { planParetoLayout } from './pareto-layout.js';
 import { planDateCategoryAxis } from './date-axis.js';
+import {
+  classicCanvasPointCount,
+  classicCanvasPointFamilyIsPainted,
+  MAX_CANVAS_CHART_POINTS,
+  sourceChartStructureCount,
+} from './resource-limits.js';
 import {
   THREE_D_MAX_SHAPE_FACES_PER_DATUM,
   type ChartThreeDRenderer,
@@ -423,7 +442,7 @@ type ChartDataTableLayout = {
  * Keeping this gate beside the shared layout prevents family renderers from
  * inventing different applicability rules. */
 function chartHasDataTable(chart: ChartModel): boolean {
-  return chart.dataTable != null && chart.chartType !== 'scatter';
+  return chart.dataTable != null && chartDataTableFamilyIsPainted(chart.chartType);
 }
 
 function chartDataTableRows(chart: ChartModel): Array<{ series: ChartSeries; sourceIndex: number }> {
@@ -549,6 +568,10 @@ function drawChartDataTable(
     chart.scatterStyle,
     false,
     chart.categories,
+    [],
+    true,
+    [],
+    chart.radarStyle,
   );
   ctx.beginPath();
   ctx.rect(tableX, tableY, tableWidth, layout.totalHeight);
@@ -705,6 +728,7 @@ function scatterSeriesDrawsLine(
 function legendMarkerFor(
   chartType: string | undefined,
   scatterStyle: string | null | undefined,
+  radarStyle: string | null | undefined,
   series: ChartSeries[],
   entryIndex: number,
 ): LegendMarker | null {
@@ -713,10 +737,10 @@ function legendMarkerFor(
   const family = s.seriesType ?? chartType;
   const isStock = family === 'stock';
   const isLineFamily = family === 'line' || family === 'stackedLine' ||
-    family === 'stackedLinePct' || isStock;
+    family === 'stackedLinePct' || family === 'radar' || isStock;
   const isScatter = family === 'scatter';
   if (!isLineFamily && !isScatter) return null;
-  if (!seriesLegendMarkerIsVisible(chartType, scatterStyle, s)) return null;
+  if (!seriesLegendMarkerIsVisible(chartType, scatterStyle, s, radarStyle)) return null;
   const symbol = s.markerSymbol ?? (isStock ? 'none' : 'circle');
   const base = chartColor(entryIndex, s); // '#RRGGBB'
   const fill = seriesMarkerFillColor(s, base.replace(/^#/, ''));
@@ -758,7 +782,8 @@ function drawLegendSwatch(
     // Excel's legend marker is about 7pt beside a 12pt label; keeping it near
     // 0.58× the row height also leaves the surrounding key visually balanced.
     drawMarker(
-      ctx, x + w / 2, y + h / 2, marker.symbol, h * 0.58, marker.fill, marker.line, 1,
+      ctx, x + w / 2, y + h / 2, marker.symbol, h * 0.58 / ptToPx,
+      marker.fill, marker.line, ptToPx,
       marker.lineWidthEmu != null ? axisLineWidthPx(marker.lineWidthEmu, ptToPx) : undefined,
       marker.fillPaint, shapeRotationDeg,
     );
@@ -785,7 +810,8 @@ function drawLegendSwatch(
       ctx.lineWidth = previousWidth;
       if (marker) {
         drawMarker(
-          ctx, x + w / 2, y + h / 2, marker.symbol, h * 0.58, marker.fill, marker.line, 1,
+          ctx, x + w / 2, y + h / 2, marker.symbol, h * 0.58 / ptToPx,
+          marker.fill, marker.line, ptToPx,
           marker.lineWidthEmu != null ? axisLineWidthPx(marker.lineWidthEmu, ptToPx) : undefined,
           marker.fillPaint, shapeRotationDeg,
         );
@@ -809,7 +835,8 @@ function drawLegendSwatch(
     ctx.stroke();
     if (marker) {
       drawMarker(
-        ctx, x + w / 2, y + h / 2, marker.symbol, h * 0.58, marker.fill, marker.line, 1,
+        ctx, x + w / 2, y + h / 2, marker.symbol, h * 0.58 / ptToPx,
+        marker.fill, marker.line, ptToPx,
         marker.lineWidthEmu != null ? axisLineWidthPx(marker.lineWidthEmu, ptToPx) : undefined,
         marker.fillPaint, shapeRotationDeg,
       );
@@ -900,6 +927,7 @@ function buildLegendEntries(
   fillPaints: ReadonlyArray<Fill | null | undefined> = [],
   pieVaryColors = true,
   entryOverrides: readonly ChartLegendEntryOverride[] = [],
+  radarStyle?: string | null,
 ): LegendEntry[] {
   if (varyByPoint || legendIsCategoryDriven(chartType)) {
     // Category-driven: one entry per data point of the first series, labeled by
@@ -944,7 +972,7 @@ function buildLegendEntries(
     const family = s.seriesType ?? chartType;
     const lineVisible = s.lineHidden !== true;
     const lineColor = lineVisible ? (s.lineColor ?? null) : null;
-    const marker = legendMarkerFor(chartType, scatterStyle, series, i);
+    const marker = legendMarkerFor(chartType, scatterStyle, radarStyle, series, i);
     const swatchStyle: LegendSwatchStyle = family === 'stock' && !lineVisible && !marker
       ? 'none'
       : legendSwatchStyle(family);
@@ -989,6 +1017,8 @@ function createDataLabelLegendKeyResolver(
     chart.categories,
     [],
     chart.varyColors !== false,
+    [],
+    chart.radarStyle,
   );
   return (seriesIndex, pointIndex) => {
     const entry = entries[categoryDriven ? pointIndex : seriesIndex];
@@ -1133,6 +1163,7 @@ function measuredLegendReserve(
     [],
     chart.varyColors !== false,
     chart.legendEntries ?? [],
+    chart.radarStyle,
   );
   const entryStyles = entries.map(entry =>
     legendEntryTextStyle(chart, style, entry.textOverride, ptToPx)
@@ -1193,6 +1224,7 @@ function drawLegend(
     fillPaints,
     pieVaryColors,
     chartForEntryStyles?.legendEntries ?? [],
+    chartForEntryStyles?.radarStyle,
   );
   const canReuseMeasure = measured != null
     && measured.measuredLabels.length === entries.length
@@ -4082,7 +4114,7 @@ function renderBarChart(
         if (symbol === 'none') continue;
         const markerX = categoryCenterX(ci);
         const markerY = yOf(value);
-        if (seriesHasMarkerDetail(series)) {
+        if (seriesHasMarkerDetail(series) || pointHasMarkerDetail(point)) {
           const lineWidthEmu = point?.markerLineWidthEmu ?? series.markerLineWidthEmu;
           drawMarker(
             ctx, markerX, markerY, symbol,
@@ -4827,7 +4859,7 @@ function renderBarChart(
           const point = pointOverrides.get(ci);
           const symbol = effectiveMarkerSymbol(s, point, 'circle', seriesMarkersVisible);
           if (symbol === 'none') continue;
-          if (hasMarkerDetail) {
+          if (hasMarkerDetail || pointHasMarkerDetail(point)) {
             const lineWidthEmu = point?.markerLineWidthEmu ?? s.markerLineWidthEmu;
             drawMarker(
               ctx, lx, ly, symbol,
@@ -5036,12 +5068,15 @@ function chartStyleRoleBarPaint(
   const linked = chart.chartStyleRoles?.[role];
   const fillApplies = linked != null && linked.fillNoStyle !== true;
   const lineApplies = linked != null && linked.lineNoStyle !== true;
+  const linkedFill = linked?.fillPaints?.[0];
   return {
     fillColor: direct.fillColor
       ?? (fillApplies ? chartExStyleColor(chart, linked, 'fill', 0, 1) : null),
     fill: direct.fill ?? (
       direct.fillColor == null && direct.fillHidden !== true && fillApplies
-        ? linked?.fillPaints?.[0] : null
+        && linkedFill != null
+        && linkedFill.fillType !== 'image'
+        && linkedFill.fillType !== 'none' ? linkedFill : null
     ),
     fillHidden: direct.fillHidden
       ?? (fillApplies && linked.fillHidden === true ? true : null),
@@ -5361,7 +5396,9 @@ function chartStyleRoleMarker(
     : undefined;
   const markerFillPaint = direct.markerFillPaint !== undefined
     ? direct.markerFillPaint
-    : linkedFillPaint?.fillType === 'gradient' || linkedFillPaint?.fillType === 'pattern'
+    : linkedFillPaint?.fillType === 'gradient'
+        || linkedFillPaint?.fillType === 'pattern'
+        || linkedFillPaint?.fillType === 'image'
       ? linkedFillPaint
       : undefined;
   const markerFillPaintAuthored = directFillAuthored
@@ -6752,8 +6789,8 @@ function renderLineChart(
             : undefined,
           ci => {
             if (!drawMarkers) return 0;
-            if (!hasMarkerDetail) return markerR;
             const dpt = pointOverrides.get(ci);
+            if (!hasMarkerDetail && !pointHasMarkerDetail(dpt)) return markerR;
             const symbol = effectiveMarkerSymbol(s, dpt, 'circle', seriesMarkersVisible);
             if (symbol === 'none') return 0;
             return ((dpt?.markerSize ?? s.markerSize ?? 5) / 2) * ptToPx;
@@ -6775,8 +6812,8 @@ function renderLineChart(
       if (!stacked && s.values[ci] == null && dispBlanks !== 'zero') continue;
       const pv = plotted(si, ci);
       if (drawMarkers) {
-        if (hasMarkerDetail) {
-          const dpt = pointOverrides.get(ci);
+        const dpt = pointOverrides.get(ci);
+        if (hasMarkerDetail || pointHasMarkerDetail(dpt)) {
           const symbol = effectiveMarkerSymbol(s, dpt, 'circle', seriesMarkersVisible);
           if (symbol !== 'none') {
             const sizePt = dpt?.markerSize ?? s.markerSize ?? 5;
@@ -7254,8 +7291,12 @@ function renderStockChart(
     }
   };
   drawStockTick(openS, openIdx, 'left');
-  if (highS?.markerSymbol != null) drawStockTick(highS, highIdx, 'both');
-  if (lowS?.markerSymbol != null) drawStockTick(lowS, lowIdx, 'both');
+  if (highS?.markerSymbol != null || (highS && hasVisiblePointMarkerOverride(highS))) {
+    drawStockTick(highS, highIdx, 'both');
+  }
+  if (lowS?.markerSymbol != null || (lowS && hasVisiblePointMarkerOverride(lowS))) {
+    drawStockTick(lowS, lowIdx, 'both');
+  }
   drawStockTick(closeS, closeIdx, 'right');
 
   // CT_LineSer error bars remain attached to their authored stock series.
@@ -8487,7 +8528,7 @@ function renderAreaChart(
           const symbol = effectiveMarkerSymbol(s, dpt, 'circle', seriesMarkersVisible);
           if (symbol === 'none') continue;
           const px = toX(ci); const py = yOf(plottedOf(ci));
-          if (seriesHasMarkerDetail(s)) {
+          if (seriesHasMarkerDetail(s) || pointHasMarkerDetail(dpt)) {
             const sizePt = dpt?.markerSize ?? s.markerSize ?? 5;
             const fill = markerFillColorFor(s, dpt, ci, color);
             const line = dpt?.markerLine ?? s.markerLine ?? null;
@@ -11361,8 +11402,8 @@ function renderScatterChart(
  *  is 5). `fill` and `line` are hex strings; a leading `#` is tolerated so
  *  callers that route through `chartColor` (which returns `#RRGGBB`)
  *  don't end up double-prefixing into an invalid `##RRGGBB`. `line` may
- *  be null in which case no outline is drawn. `picture` fails closed because
- *  the chart model does not yet carry the marker image relationship. */
+ *  be null in which case no outline is drawn. `picture` uses the host-warmed
+ *  image lookup and fails closed when its authored relationship is unresolved. */
 function drawMarker(
   ctx: CanvasRenderingContext2D,
   cx: number, cy: number,
@@ -11392,9 +11433,28 @@ function drawMarker(
     ctx.strokeStyle = lineCss;
     ctx.lineWidth = lineWidthPx;
   }
+  const imageFill = fillPaint?.fillType === 'image' ? fillPaint : undefined;
+  const fillCurrentPath = () => {
+    if (!imageFill) {
+      if (fillPaint !== null) ctx.fill();
+      return;
+    }
+    ctx.save();
+    ctx.clip();
+    paintChartImageFill(
+      ctx, imageFill, cx - half, cy - half, sizePx, sizePx, ptToPx, shapeRotationDeg,
+    );
+    ctx.restore();
+  };
   switch (symbol) {
     case 'square': {
-      ctx.fillRect(cx - half, cy - half, sizePx, sizePx);
+      if (imageFill) {
+        ctx.beginPath();
+        ctx.rect(cx - half, cy - half, sizePx, sizePx);
+        fillCurrentPath();
+      } else if (fillPaint !== null) {
+        ctx.fillRect(cx - half, cy - half, sizePx, sizePx);
+      }
       if (line) ctx.strokeRect(cx - half, cy - half, sizePx, sizePx);
       break;
     }
@@ -11405,7 +11465,7 @@ function drawMarker(
       ctx.lineTo(cx, cy + half);
       ctx.lineTo(cx - half, cy);
       ctx.closePath();
-      ctx.fill();
+      fillCurrentPath();
       if (line) ctx.stroke();
       break;
     }
@@ -11415,12 +11475,12 @@ function drawMarker(
       ctx.lineTo(cx + half, cy + half);
       ctx.lineTo(cx - half, cy + half);
       ctx.closePath();
-      ctx.fill();
+      fillCurrentPath();
       if (line) ctx.stroke();
       break;
     }
     case 'x': {
-      ctx.strokeStyle = ctx.fillStyle;
+      ctx.strokeStyle = lineCss ?? ctx.fillStyle;
       ctx.lineWidth = Math.max(1, sizePx * 0.18);
       ctx.beginPath();
       ctx.moveTo(cx - half, cy - half); ctx.lineTo(cx + half, cy + half);
@@ -11429,7 +11489,7 @@ function drawMarker(
       break;
     }
     case 'plus': {
-      ctx.strokeStyle = ctx.fillStyle;
+      ctx.strokeStyle = lineCss ?? ctx.fillStyle;
       ctx.lineWidth = Math.max(1, sizePx * 0.18);
       ctx.beginPath();
       ctx.moveTo(cx - half, cy); ctx.lineTo(cx + half, cy);
@@ -11448,21 +11508,38 @@ function drawMarker(
         if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
       }
       ctx.closePath();
-      ctx.fill();
+      fillCurrentPath();
       if (line) ctx.stroke();
       break;
     }
     case 'dot': {
-      // Excel's "dot" is a small filled circle ~half the size of "circle".
-      ctx.beginPath(); ctx.arc(cx, cy, Math.max(1, sizePx * 0.25), 0, Math.PI * 2); ctx.fill();
+      // ECMA-376 §21.2.3.27: width=1/2 and height=1/5 of marker size.
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, sizePx * 0.25, sizePx * 0.1, 0, 0, Math.PI * 2);
+      fillCurrentPath();
+      if (line) ctx.stroke();
       break;
     }
     case 'dash': {
-      const dh = Math.max(1, sizePx * 0.25);
-      ctx.fillRect(cx - half, cy - dh / 2, sizePx, dh);
+      // ECMA-376 §21.2.3.27: height=1/5 of marker size.
+      const dh = sizePx * 0.2;
+      if (imageFill) {
+        ctx.beginPath(); ctx.rect(cx - half, cy - dh / 2, sizePx, dh); fillCurrentPath();
+      } else if (fillPaint !== null) {
+        ctx.fillRect(cx - half, cy - dh / 2, sizePx, dh);
+      }
+      if (line) ctx.strokeRect(cx - half, cy - dh / 2, sizePx, dh);
       break;
     }
     case 'picture': {
+      if (imageFill) {
+        paintChartImageFill(
+          ctx, imageFill, cx - half, cy - half, sizePx, sizePx, ptToPx, shapeRotationDeg,
+        );
+      }
+      // Fill and line are independent CT_ShapeProperties components. An
+      // authored noFill/unresolved blip must not suppress the picture outline.
+      if (line) ctx.strokeRect(cx - half, cy - half, sizePx, sizePx);
       ctx.restore();
       return;
     }
@@ -11470,7 +11547,7 @@ function drawMarker(
     default: {
       ctx.beginPath();
       ctx.arc(cx, cy, half, 0, Math.PI * 2);
-      ctx.fill();
+      fillCurrentPath();
       if (line) ctx.stroke();
       break;
     }
@@ -12074,26 +12151,6 @@ function dashPatternForLine(
   return drawingmlLineDashArray(customDash, preset, scale);
 }
 
-/** True when the series carries any explicit `<c:marker>` detail (symbol, size,
- *  fill, line, line width) or per-point `<c:dPt>` marker overrides — i.e. a reason to route
- *  through {@link drawMarker} instead of the line/area family's historical
- *  fixed-circle fast path. A series without any of these keeps the exact prior
- *  circle marker (byte-stable), so charts that never parsed marker detail are
- *  unchanged. `markerSymbol: "none"` counts as detail (it disables the marker),
- *  handled by the caller's showMarker gate. */
-function seriesHasMarkerDetail(s: ChartSeries): boolean {
-  return (
-    s.markerSymbol != null ||
-    s.markerSize != null ||
-    s.markerFill != null ||
-    s.markerFillPaint !== undefined ||
-    s.markerFillPaintAuthored === true ||
-    s.markerLine != null ||
-    s.markerLineWidthEmu != null ||
-    (s.dataPointOverrides != null && s.dataPointOverrides.length > 0)
-  );
-}
-
 /** Draw error bars for a category-axis series (line / area). Mirrors the scatter
  *  {@link drawSeriesErrorBars} cap/dash geometry, but maps points by CATEGORY
  *  INDEX (`xAt(ci)`) with a per-series value→px mapping (`yAt`) instead of the
@@ -12501,7 +12558,24 @@ function chartExStylePaintDecision(
   const paint = chartExStyleFillPaint(style, index);
   if (paint) return paint;
   const color = chartExStyleColor(chart, style, 'fill', index, count);
-  return color ? { fillType: 'solid', color } : undefined;
+  if (color) return { fillType: 'solid', color };
+  return style.fillPaintAuthored === true ? null : undefined;
+}
+
+function chartExMarkerPaint(
+  chart: ChartModel,
+  index: number,
+  count: number,
+  localStyle: ChartExStyle | null | undefined,
+  legacyColor: string | null | undefined,
+  linkedStyle: ChartExStyle | null | undefined,
+): Fill | null {
+  const local = chartExStylePaintDecision(chart, localStyle, index, count);
+  if (local !== undefined) return local;
+  if (legacyColor) return { fillType: 'solid', color: legacyColor };
+  const linked = chartExStylePaintDecision(chart, linkedStyle, index, count);
+  if (linked !== undefined) return linked;
+  return { fillType: 'solid', color: chartExSemanticFill(chart, index, count) };
 }
 
 function chartExDataPointPaint(
@@ -12702,45 +12776,7 @@ function chartExLegendSeries(
 // point into several synchronous Canvas calls can monopolize the UI thread.
 // Refuse an oversized paint atomically instead of drawing a misleading prefix.
 // This is an availability boundary, not an automatic chart-layout heuristic.
-const MAX_CANVAS_CHART_POINTS = 10_000;
 
-/** Bound public-model structure before visibility/style projection clones it.
- * Package parsers already apply the same class of availability limits, but a
- * caller may construct `ChartModel` directly. This is intentionally family
- * neutral so ChartEx arrays cannot bypass the classic-family preflight. */
-function sourceChartStructureCount(chart: ChartModel): number {
-  let total = 0;
-  const add = (count: number): boolean => {
-    if (!Number.isSafeInteger(count) || count < 0
-      || count > MAX_CANVAS_CHART_POINTS - total) return false;
-    total += count;
-    return true;
-  };
-  for (const series of chart.series) {
-    if (!add(Math.max(
-      1,
-      series.values.length,
-      series.categories?.length ?? 0,
-      series.bubbleSizes?.length ?? 0,
-      series.dataPointOverrides?.length ?? 0,
-      series.dataLabelOverrides?.length ?? 0,
-      series.trendLines?.length ?? 0,
-    ))) return MAX_CANVAS_CHART_POINTS + 1;
-  }
-  if (!add(chart.chartexSunburst?.rows.length ?? 0)
-    || !add(chart.chartexTreemap?.rows.length ?? 0)
-    || !add(chart.chartexRegionMap?.rows.length ?? 0)
-    || !add(chart.chartexBox?.categories.length ?? 0)
-    || !add(chart.chartexBox?.series.length ?? 0)) {
-    return MAX_CANVAS_CHART_POINTS + 1;
-  }
-  for (const series of chart.chartexBox?.series ?? []) {
-    for (const values of series.valuesByCategory) {
-      if (!add(values.length)) return MAX_CANVAS_CHART_POINTS + 1;
-    }
-  }
-  return total;
-}
 // Marker gradients are resolved for each painted marker. Bound both one
 // recipe and the chart-wide stop registrations so a valid public model cannot
 // turn a bounded point count into unbounded synchronous Canvas work.
@@ -12752,13 +12788,6 @@ const MAX_CANVAS_LABEL_PAINT_COMPONENTS = MAX_CANVAS_MARKER_PAINT_COMPONENTS;
 // of stack-safety boundary for caller-constructed public ChartModel objects.
 const MAX_CANVAS_HIERARCHY_DEPTH = 512;
 
-const CLASSIC_CANVAS_POINT_FAMILIES = new Set([
-  'clusteredBar', 'clusteredBarH', 'stackedBar', 'stackedBarH',
-  'stackedBarPct', 'stackedBarHPct', 'clusteredColumn',
-  'line', 'stackedLine', 'stackedLinePct',
-  'area', 'stackedArea', 'stackedAreaPct',
-  'pie', 'doughnut', 'radar', 'scatter', 'bubble', 'stock', 'surface',
-]);
 const CLASSIC_THREE_D_FAMILIES = new Set([
   'pie',
   'line', 'stackedLine', 'stackedLinePct',
@@ -12766,66 +12795,6 @@ const CLASSIC_THREE_D_FAMILIES = new Set([
   'clusteredBar', 'clusteredBarH',
   'stackedBar', 'stackedBarH', 'stackedBarPct', 'stackedBarHPct',
 ]);
-
-/**
- * Count the point slots a classic Canvas renderer may expand. ChartEx families
- * keep their semantic preflights (histogram counts bounded output bins rather
- * than raw observations; hierarchy/box count their structured models).
- */
-function classicCanvasPointCount(chart: ChartModel): number | null {
-  if (!CLASSIC_CANVAS_POINT_FAMILIES.has(chart.chartType)) return null;
-  let total = 0;
-  for (const series of chart.series) {
-    let errorBarPoints = 0;
-    for (const errorBars of series.errBars ?? []) {
-      errorBarPoints = Math.max(errorBarPoints, errorBars.plus.length, errorBars.minus.length);
-    }
-    const points = Math.max(
-      1,
-      chart.categories.length,
-      series.categories?.length ?? 0,
-      series.values.length,
-      series.bubbleSizes?.length ?? 0,
-      series.dataPointOverrides?.length ?? 0,
-      series.dataLabelOverrides?.length ?? 0,
-      series.trendLines?.length ?? 0,
-      errorBarPoints,
-    );
-    if (!Number.isSafeInteger(points) || points > MAX_CANVAS_CHART_POINTS - total) {
-      return MAX_CANVAS_CHART_POINTS + 1;
-    }
-    total += points;
-  }
-  return total;
-}
-
-function classicMarkerPointIsPainted(
-  chart: ChartModel,
-  series: ChartSeries,
-  family: string,
-  index: number,
-  scatterHasNumericX: boolean,
-): boolean {
-  const value = series.values[index];
-  let painted = value != null;
-  if (!painted && (family === 'line' || family === 'stackedLine'
-    || family === 'stackedLinePct')) {
-    const renderedByLineFamily = chart.chartType === 'line'
-      || chart.chartType === 'stackedLine' || chart.chartType === 'stackedLinePct';
-    painted = renderedByLineFamily
-      && (chart.chartType !== 'line' || chart.dispBlanksAs === 'zero');
-  }
-  if (!painted) return false;
-  if (family === 'scatter' && scatterHasNumericX) {
-    const category = (series.categories ?? chart.categories)[index];
-    if (category == null || !Number.isFinite(Number.parseFloat(category))) return false;
-  }
-  if (family === 'scatter' && chart.chartType === 'bubble') {
-    return (chart.bubbleScale ?? 100) > 0
-      && visibleBubbleSize(chart, series.bubbleSizes?.[index]) != null;
-  }
-  return true;
-}
 
 function classicDataLabelPointIsPainted(
   chart: ChartModel,
@@ -12860,30 +12829,44 @@ function classicDataLabelPointIsPainted(
   return true;
 }
 
-function dataLabelLegendKeyCount(
+function markerKeyPaintSizesPx(
   chart: ChartModel,
   series: ChartSeries,
-  family: string,
-  pointCount: number,
-  scatterHasNumericX: boolean,
-): number {
-  if (!series.seriesDataLabels && !(series.dataLabelOverrides?.length)) return 0;
-  const overrides = indexPointOverrides(series.dataLabelOverrides);
-  let count = 0;
-  for (let index = 0; index < pointCount; index++) {
-    const point = overrides.get(index);
-    if (dataLabelIsDeleted(series.seriesDataLabels, point)) continue;
-    if ((point?.showLegendKey ?? series.seriesDataLabels?.showLegendKey ?? false) !== true) continue;
-    if (!classicMarkerPointIsPainted(chart, series, family, index, scatterHasNumericX)) continue;
-    count++;
+  ptToPx: number,
+): { legend: number; table: number; labels: number } {
+  const legendFontPx = chartTextFontSizePx(chart.legendFontSizeHpt, ptToPx) ?? 10 * ptToPx;
+  const tableFontPx = chartTextFontSizePx(chart.dataTable?.fontSizeHpt, ptToPx) ?? 9 * ptToPx;
+  let labelFontPx = chartTextFontSizePx(
+    series.seriesDataLabels?.fontSizeHpt ?? chart.dataLabelFontSizeHpt,
+    ptToPx,
+  ) ?? 10 * ptToPx;
+  for (const label of series.dataLabelOverrides ?? []) {
+    labelFontPx = Math.max(
+      labelFontPx,
+      chartTextFontSizePx(label.fontSizeHpt, ptToPx) ?? labelFontPx,
+    );
   }
-  return count;
+  // Side legends retain at most two lines. Their marker receives 0.58× the
+  // final row height; data-table and data-label keys are no larger than their
+  // respective font boxes. Use those actual consumer bounds, not markerSize.
+  return {
+    legend: Math.max(2, (2 * legendFontPx + LEGEND_ROW_EXTRA_PX) * 0.58),
+    table: Math.max(2, tableFontPx),
+    labels: Math.max(2, labelFontPx),
+  };
 }
 
 /** @internal Exported for resource-boundary regression tests; package entry
  * points do not expose the renderer module as public API. */
-export function classicMarkerPaintWorkCount(chart: ChartModel): number | null {
-  if (!CLASSIC_CANVAS_POINT_FAMILIES.has(chart.chartType)) return null;
+export function classicMarkerPaintWorkCount(
+  chart: ChartModel,
+  imageLookup?: ChartImageLookup,
+  ptToPx = PT_TO_PX,
+  chartRect?: ChartRect,
+): number | null {
+  const hasClassicMarkers = classicCanvasPointFamilyIsPainted(chart.chartType);
+  const hasBoxMarkers = chart.chartexBox != null;
+  if (!hasClassicMarkers && !hasBoxMarkers) return null;
   const scatterHasNumericX = chart.series.some(series => {
     const family = series.seriesType ?? chart.chartType;
     if (family !== 'scatter') return false;
@@ -12894,10 +12877,26 @@ export function classicMarkerPaintWorkCount(chart: ChartModel): number | null {
   const dataTableMarkerKeysVisible = chartHasDataTable(chart)
     && chartCategories(chart).length > 0
     && chart.dataTable?.showKeys === true;
+  const deletedLegendEntries = deletedLegendEntryIndices(chart);
+  const bubbleScale = chart.chartType === 'bubble' && chartRect
+    ? bubbleSizeToDiameterScale(
+        chart,
+        chart.series.map((series, index) => makeScatterSeriesLayer(chart, series, index)),
+        !scatterHasNumericX,
+        chartRect.w,
+        chartRect.h,
+      )
+    : 0;
   let total = 0;
-  const chargePaint = (paint: Fill | null | undefined, repetitions = 1): boolean => {
+  const chargePaint = (
+    paint: Fill | null | undefined,
+    repetitions = 1,
+    sizePx = Math.max(2, 5 * ptToPx),
+  ): boolean => {
     if (repetitions <= 0 || paint == null) return true;
-    const components = markerPaintComponents(paint);
+    const components = paint.fillType === 'image'
+      ? chartImageFillPaintWorkUpperBound(paint, imageLookup, sizePx, sizePx, ptToPx)
+      : markerPaintComponents(paint);
     if (paint.fillType === 'gradient' && components > MAX_CANVAS_MARKER_GRADIENT_STOPS) {
       return false;
     }
@@ -12908,7 +12907,7 @@ export function classicMarkerPaintWorkCount(chart: ChartModel): number | null {
     total += components * repetitions;
     return true;
   };
-  for (let seriesIndex = 0; seriesIndex < chart.series.length; seriesIndex++) {
+  if (hasClassicMarkers) for (let seriesIndex = 0; seriesIndex < chart.series.length; seriesIndex++) {
     const series = chart.series[seriesIndex];
     const family = series.seriesType ?? chart.chartType;
     const markerFamily = family === 'line' || family === 'stackedLine'
@@ -12944,23 +12943,61 @@ export function classicMarkerPaintWorkCount(chart: ChartModel): number | null {
         chart, series, family, index, scatterHasNumericX,
       )) continue;
       const point = overrides.get(index);
-      if (effectiveMarkerSymbol(series, point, 'circle', seriesVisible) === 'none') continue;
+      const symbol = effectiveMarkerSymbol(series, point, 'circle', seriesVisible);
+      if (!markerSymbolConsumesFill(symbol)) continue;
       const paint = markerFillPaintFor(series, point, index);
-      if (!chargePaint(paint)) return MAX_CANVAS_MARKER_PAINT_COMPONENTS + 1;
+      let sizePx = Math.max(2, (point?.markerSize ?? series.markerSize ?? 5) * ptToPx);
+      if (family === 'scatter' && chart.chartType === 'bubble') {
+        const size = visibleBubbleSize(chart, series.bubbleSizes?.[index]);
+        sizePx = size == null ? 0 : bubbleSizeMagnitude(chart, size) * bubbleScale;
+      } else if (family === 'radar' && point?.markerSize == null && series.markerSize == null
+        && chartRect) {
+        sizePx = Math.max(4 * ptToPx, Math.min(chartRect.w, chartRect.h) * 0.025);
+      }
+      if (!chargePaint(paint, 1, sizePx)) return MAX_CANVAS_MARKER_PAINT_COMPONENTS + 1;
     }
 
-    if (seriesLegendMarkerIsVisible(chart.chartType, chart.scatterStyle, series)) {
-      let repeatedKeys = 0;
-      const legendEntryDeleted = chart.legendEntries?.some(entry =>
-        entry.idx === seriesIndex && entry.deleted === true
-      ) === true;
-      if (chart.showLegend && !legendEntryDeleted) repeatedKeys++;
-      if (dataTableMarkerKeysVisible) repeatedKeys++;
-      repeatedKeys += dataLabelLegendKeyCount(
+    const seriesKeySymbol = series.markerSymbol ?? (family === 'stock' ? 'none' : 'circle');
+    if (markerSymbolConsumesFill(seriesKeySymbol) && seriesLegendMarkerIsVisible(
+      chart.chartType, chart.scatterStyle, series, chart.radarStyle,
+    )) {
+      const legendEntryDeleted = deletedLegendEntries.has(seriesIndex);
+      const labelKeys = dataLabelLegendKeyCount(
         chart, series, family, pointCount, scatterHasNumericX,
       );
-      if (!chargePaint(seriesMarkerFillPaint(series), repeatedKeys)) {
+      const keySizes = markerKeyPaintSizesPx(chart, series, ptToPx);
+      const keyPaint = seriesMarkerFillPaint(series);
+      if ((chart.showLegend && !legendEntryDeleted
+          && !chargePaint(keyPaint, 1, keySizes.legend))
+        || (dataTableMarkerKeysVisible && !chargePaint(keyPaint, 1, keySizes.table))
+        || !chargePaint(keyPaint, labelKeys, keySizes.labels)) {
         return MAX_CANVAS_MARKER_PAINT_COMPONENTS + 1;
+      }
+    }
+  }
+  const box = chart.chartexBox;
+  if (box) {
+    const seriesCount = box.series.length;
+    const markerStyle = chart.chartexDataPointMarkerStyle ?? chart.chartexDataPointStyle;
+    const symbol = chart.chartStyleMarkerSymbol ?? chart.chartexMarkerSymbol ?? 'circle';
+    if (markerSymbolConsumesFill(symbol)) {
+      for (let seriesIndex = 0; seriesIndex < seriesCount; seriesIndex++) {
+        const series = box.series[seriesIndex];
+        if (!series.showNonoutliers && !series.showOutliers) continue;
+        let repetitions = 0;
+        for (const values of series.valuesByCategory) {
+          const stats = computeBoxWhiskerStats(values, series.quartileMethod);
+          if (!stats) continue;
+          if (series.showNonoutliers) repetitions += stats.inner.length;
+          if (series.showOutliers) repetitions += stats.outliers.length;
+        }
+        const styleIndex = chartExSeriesFormatIndex(series, seriesIndex);
+        const paint = chartExMarkerPaint(
+          chart, styleIndex, seriesCount, series.chartexStyle, series.color, markerStyle,
+        );
+        if (!chargePaint(paint, repetitions, Math.max(2, 3 * ptToPx))) {
+          return MAX_CANVAS_MARKER_PAINT_COMPONENTS + 1;
+        }
       }
     }
   }
@@ -13998,7 +14035,6 @@ function renderBoxWhiskerChart(
   // 3pt observation/outlier dots and a 6pt mean `x`, independent of box width.
   // The linked recipe still supplies the marker symbol and paint.
   const observationMarkerSizePt = 3;
-  const observationMarkerRadiusPx = observationMarkerSizePt * ptToPx / 2;
   const meanMarkerRadiusPx = 3 * ptToPx;
   const box = chart.chartexBox;
   if (!box || box.categories.length === 0 || box.series.length === 0) return;
@@ -14366,7 +14402,7 @@ function renderBoxWhiskerChart(
           : 1;
       const lineEdge = chartExStyleColor(chart, lineStyle, 'line', styleIndex, nSer);
       const markerFill = chartExStyleColor(chart, markerStyle, 'fill', styleIndex, nSer);
-      const markerFillPaint = chartExDataPointPaint(
+      const markerFillPaint = chartExMarkerPaint(
         chart, styleIndex, nSer, s.chartexStyle, s.color, markerStyle,
       );
       const markerEdge = chartExStyleColor(chart, markerStyle, 'line', styleIndex, nSer);
@@ -14443,44 +14479,24 @@ function renderBoxWhiskerChart(
       // Interior sample points. Excel overlays the raw non-outlier values on
       // the box/whiskers when cx:visibility@nonoutliers is enabled.
       if (s.showNonoutliers) {
-        const pR = observationMarkerRadiusPx;
         const pointSymbol = chart.chartStyleMarkerSymbol ?? chart.chartexMarkerSymbol ?? 'circle';
         for (const point of stats.inner) {
           if (pointSymbol === 'none') continue;
           const markerLineVisible = applySeriesLine(markerStyle, markerEdge ?? edge);
           const pointY = yOf(point);
-          if (markerFillPaint) {
-            ctx.fillStyle = chartExFillStyle(
-              ctx,
-              markerFillPaint,
-              cx - pR,
-              pointY - pR,
-              pR * 2,
-              pR * 2,
-              markerFill ? `#${markerFill}` : fill,
-              shapeRotationDeg,
-            );
-          }
-          if (pointSymbol === 'circle') {
-            ctx.beginPath();
-            ctx.arc(cx, pointY, pR, 0, Math.PI * 2);
-            if (markerFillPaint) ctx.fill();
-            if (markerLineVisible) ctx.stroke();
-          } else {
-            drawMarker(
-              ctx,
-              cx,
-              pointY,
-              pointSymbol,
-              observationMarkerSizePt,
-              markerFillPaint ? (markerFill ? `#${markerFill}` : fill) : 'transparent',
-              markerLineVisible ? (markerEdge ? `#${markerEdge}` : edge) : null,
-              ptToPx,
-              ctx.lineWidth,
-              markerFillPaint,
-              shapeRotationDeg,
-            );
-          }
+          drawMarker(
+            ctx,
+            cx,
+            pointY,
+            pointSymbol,
+            observationMarkerSizePt,
+            markerFillPaint ? (markerFill ? `#${markerFill}` : fill) : 'transparent',
+            markerLineVisible ? (markerEdge ? `#${markerEdge}` : edge) : null,
+            ptToPx,
+            ctx.lineWidth,
+            markerFillPaint,
+            shapeRotationDeg,
+          );
         }
       }
 
@@ -14499,42 +14515,23 @@ function renderBoxWhiskerChart(
       // Outlier dots.
       if (s.showOutliers) {
         const pointSymbol = chart.chartStyleMarkerSymbol ?? chart.chartexMarkerSymbol ?? 'circle';
-        const oR = observationMarkerRadiusPx;
         for (const o of stats.outliers) {
           if (pointSymbol === 'none') continue;
           const markerLineVisible = applySeriesLine(markerStyle, markerEdge ?? edge);
           const outlierY = yOf(o);
-          if (markerFillPaint) {
-            ctx.fillStyle = chartExFillStyle(
-              ctx,
-              markerFillPaint,
-              cx - oR,
-              outlierY - oR,
-              oR * 2,
-              oR * 2,
-              markerFill ? `#${markerFill}` : fill,
-              shapeRotationDeg,
-            );
-          }
-          if (pointSymbol === 'circle') {
-            ctx.beginPath(); ctx.arc(cx, outlierY, oR, 0, Math.PI * 2);
-            if (markerFillPaint) ctx.fill();
-            if (markerLineVisible) ctx.stroke();
-          } else {
-            drawMarker(
-              ctx,
-              cx,
-              outlierY,
-              pointSymbol,
-              observationMarkerSizePt,
-              markerFillPaint ? (markerFill ? `#${markerFill}` : fill) : 'transparent',
-              markerLineVisible ? (markerEdge ? `#${markerEdge}` : edge) : null,
-              ptToPx,
-              ctx.lineWidth,
-              markerFillPaint,
-              shapeRotationDeg,
-            );
-          }
+          drawMarker(
+            ctx,
+            cx,
+            outlierY,
+            pointSymbol,
+            observationMarkerSizePt,
+            markerFillPaint ? (markerFill ? `#${markerFill}` : fill) : 'transparent',
+            markerLineVisible ? (markerEdge ? `#${markerEdge}` : edge) : null,
+            ptToPx,
+            ctx.lineWidth,
+            markerFillPaint,
+            shapeRotationDeg,
+          );
         }
       }
     }
@@ -15537,7 +15534,7 @@ function chartSpaceRoundedPath(
  * Render a chart (background frame + dispatch on `chartType`).
  * `rect` is in pixel coordinates on the target canvas.
  */
-export function renderChart(
+function renderChartImpl(
   ctx: CanvasRenderingContext2D,
   chart: ChartModel,
   rect: ChartRect,
@@ -15558,6 +15555,8 @@ export function renderChart(
   threeD?: ChartThreeDRenderer,
   /** Optional offline Region Map renderer. */
   regionMap?: ChartRegionMapRenderer,
+  /** Host-warmed image cache used by picture-fill availability preflight. */
+  imageLookup?: ChartImageLookup,
 ): void {
   // The per-family renderers (and the early-return/default text paths below)
   // mutate shared canvas state — textAlign, textBaseline, font, fillStyle,
@@ -15657,9 +15656,9 @@ export function renderChart(
     }
 
     const classicPointCount = classicCanvasPointCount(chart);
-    const classicMarkerPaintWork = classicPointCount != null
-      && classicPointCount <= MAX_CANVAS_CHART_POINTS
-      ? classicMarkerPaintWorkCount(chart) : null;
+    const classicMarkerPaintWork = (classicPointCount != null || chart.chartexBox != null)
+      && (classicPointCount ?? 0) <= MAX_CANVAS_CHART_POINTS
+      ? classicMarkerPaintWorkCount(chart, imageLookup, ptToPx, rect) : null;
     const classicThreeDWork = classicThreeDWorkCount(chart, threeD);
     const classicLabelPaintWork = chartLabelPaintWorkCount(chart, threeD);
     if (
@@ -15766,4 +15765,21 @@ export function renderChart(
   } finally {
     ctx.restore();
   }
+}
+
+export function renderChart(
+  ctx: CanvasRenderingContext2D,
+  chart: ChartModel,
+  rect: ChartRect,
+  ptToPx: number = PT_TO_PX,
+  shapeRotationDeg = 0,
+  threeD?: ChartThreeDRenderer,
+  regionMap?: ChartRegionMapRenderer,
+  imageLookup?: ChartImageLookup,
+): void {
+  withChartImageLookup(imageLookup, () => {
+    renderChartImpl(
+      ctx, chart, rect, ptToPx, shapeRotationDeg, threeD, regionMap, imageLookup,
+    );
+  });
 }

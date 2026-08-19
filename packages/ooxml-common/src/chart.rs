@@ -249,6 +249,38 @@ pub enum ChartStyleFill {
         bg: String,
         preset: String,
     },
+    /// DrawingML picture fill retained by relationship path. Image bytes stay
+    /// in the owning OPC package and are fetched/decoded lazily by the host.
+    #[serde(rename = "image", rename_all = "camelCase")]
+    Image {
+        image_path: String,
+        mime_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        svg_image_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dpi: Option<u32>,
+        #[serde(
+            rename = "rotWithShape",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        rot_with_shape: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        src_rect: Option<crate::blip::SrcRect>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fill_rect: Option<crate::fill::FillRect>,
+        /// Presence of the normative `<a:stretch>` fill-mode choice. Kept
+        /// separately because an empty stretch has no fillRect but is distinct
+        /// from an omitted, default-less EG_FillModeProperties choice.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        stretch: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tile: Option<crate::fill::TileInfo>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alpha: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duotone: Option<crate::blip::Duotone>,
+    },
 }
 
 /// One authored `<c:surfaceChart|surface3DChart><c:bandFmts><c:bandFmt>`.
@@ -2290,6 +2322,127 @@ pub trait ColorResolver {
     }
 }
 
+/// OPC relationship scope for a chart picture fill. A chart part and its
+/// linked Chart Style part each own an independent `.rels` file, so an `rId`
+/// is meaningful only together with this source part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartImageSource {
+    Chart,
+    Style,
+    Theme,
+}
+
+/// Host-owned relationship resolver for DrawingML images embedded in charts.
+/// The shared parser retains only a normalized package path and MIME type; it
+/// never reads or copies image bytes into the chart wire model.
+pub trait ChartImageResolver {
+    fn resolve_image(
+        &self,
+        source: ChartImageSource,
+        relationship_id: &str,
+    ) -> Option<(String, String)>;
+}
+
+struct EmptyChartImageResolver;
+
+impl ChartImageResolver for EmptyChartImageResolver {
+    fn resolve_image(
+        &self,
+        _source: ChartImageSource,
+        _relationship_id: &str,
+    ) -> Option<(String, String)> {
+        None
+    }
+}
+
+/// Bounded, path-only relationship index shared by the three package parsers.
+/// It deliberately stores no media bytes; the renderer fetches the selected
+/// paths through the document's existing lazy media callback.
+#[derive(Debug, Clone, Default)]
+pub struct ChartImageRelationships {
+    chart: BTreeMap<String, (String, String)>,
+    style: BTreeMap<String, (String, String)>,
+    theme: BTreeMap<String, (String, String)>,
+}
+
+impl ChartImageRelationships {
+    pub fn insert_part_relationships(
+        &mut self,
+        source: ChartImageSource,
+        source_part_path: &str,
+        relationships_xml: &str,
+    ) {
+        let base_dir = source_part_path
+            .rsplit_once('/')
+            .map_or("", |(directory, _)| directory);
+        let target = match source {
+            ChartImageSource::Chart => &mut self.chart,
+            ChartImageSource::Style => &mut self.style,
+            ChartImageSource::Theme => &mut self.theme,
+        };
+        for (relationship_id, relationship) in crate::rels::parse_rels(relationships_xml) {
+            if relationship.mode != crate::rels::TargetMode::Internal
+                || !relationship
+                    .relationship_type
+                    .as_deref()
+                    .is_some_and(|kind| {
+                        kind.strip_suffix("/image").is_some_and(|base| {
+                            base == crate::ns::relationships::TRANSITIONAL
+                                || base == crate::ns::relationships::STRICT
+                        })
+                    })
+            {
+                continue;
+            }
+            let path = crate::rels::resolve_target(base_dir, &relationship.target);
+            let mime = crate::blip::mime_from_ext(&path).to_owned();
+            target.insert(relationship_id, (path, mime));
+        }
+    }
+}
+
+impl ChartImageResolver for ChartImageRelationships {
+    fn resolve_image(
+        &self,
+        source: ChartImageSource,
+        relationship_id: &str,
+    ) -> Option<(String, String)> {
+        let relationships = match source {
+            ChartImageSource::Chart => &self.chart,
+            ChartImageSource::Style => &self.style,
+            ChartImageSource::Theme => &self.theme,
+        };
+        relationships.get(relationship_id).cloned()
+    }
+}
+
+/// Borrowed resolver composition used by package hosts: chart/style
+/// relationships are local to one chart, while theme relationships are shared
+/// by every chart in the document. Keeping them as two borrowed indexes avoids
+/// cloning a potentially large theme relationship table per chart.
+pub struct ChartImageResolverChain<'a> {
+    primary: &'a dyn ChartImageResolver,
+    fallback: &'a dyn ChartImageResolver,
+}
+
+impl<'a> ChartImageResolverChain<'a> {
+    pub fn new(primary: &'a dyn ChartImageResolver, fallback: &'a dyn ChartImageResolver) -> Self {
+        Self { primary, fallback }
+    }
+}
+
+impl ChartImageResolver for ChartImageResolverChain<'_> {
+    fn resolve_image(
+        &self,
+        source: ChartImageSource,
+        relationship_id: &str,
+    ) -> Option<(String, String)> {
+        self.primary
+            .resolve_image(source, relationship_id)
+            .or_else(|| self.fallback.resolve_image(source, relationship_id))
+    }
+}
+
 /// The direct `CT_ColorMapping` carried by `<c:chartSpace><c:clrMapOvr>`
 /// (ECMA-376 §21.2.2.30; `dml-chart.xsd::CT_ChartSpace`). Unlike PresentationML
 /// `<p:clrMapOvr>`, this element is not a `CT_ColorMappingOverride` choice: its
@@ -3641,7 +3794,15 @@ struct DirectShapeLine {
 }
 
 fn extract_direct_shape_fill(shape: Option<Node>, resolver: &dyn ColorResolver) -> DirectShapeFill {
-    let fill_paint = shape.and_then(|shape| parse_chart_style_paint(shape, resolver, None));
+    let fill_paint = shape.and_then(|shape| {
+        parse_chart_style_paint(
+            shape,
+            resolver,
+            None,
+            &EmptyChartImageResolver,
+            ChartImageSource::Chart,
+        )
+    });
     let paint_authored = shape
         .and_then(|shape| {
             shape.children().find(|node| {
@@ -3663,14 +3824,15 @@ fn extract_direct_shape_fill(shape: Option<Node>, resolver: &dyn ColorResolver) 
     });
     let (color, fill, hidden) = match fill_paint {
         Some(ChartStylePaint::NoFill) => (None, None, Some(true)),
-        Some(ChartStylePaint::Fill(Some(fill))) => {
+        Some(ChartStylePaint::Fill(fill)) => {
+            let fill = *fill;
             let color = match &fill {
                 ChartStyleFill::Solid { color } => Some(color.clone()),
                 _ => resolved_shape_fill.clone(),
             };
             (color, Some(fill), None)
         }
-        Some(ChartStylePaint::Fill(None)) => (
+        Some(ChartStylePaint::Unresolved) => (
             resolved_shape_fill.clone(),
             resolved_shape_fill.map(|color| ChartStyleFill::Solid { color }),
             None,
@@ -4384,7 +4546,8 @@ fn resolve_chart_style_color(
 #[derive(Debug, Clone, PartialEq)]
 enum ChartStylePaint {
     NoFill,
-    Fill(Option<ChartStyleFill>),
+    Unresolved,
+    Fill(Box<ChartStyleFill>),
 }
 
 fn chart_style_reference_color(
@@ -4486,10 +4649,108 @@ fn chart_style_reference_index(reference: Option<Node>) -> Option<usize> {
     }
 }
 
+fn parse_chart_image_fill(
+    blip_fill: Node,
+    color_resolver: &dyn ColorResolver,
+    image_resolver: &dyn ChartImageResolver,
+    source: ChartImageSource,
+) -> Option<ChartStyleFill> {
+    let blip = child(blip_fill, "blip")?;
+    let mut duotone_count = 0usize;
+    let has_unsupported_effect = blip.children().any(|node| {
+        if !node.is_element() {
+            return false;
+        }
+        match node.tag_name().name() {
+            "alphaModFix" | "extLst" => false,
+            "duotone" => {
+                duotone_count += 1;
+                duotone_count > 1
+            }
+            _ => true,
+        }
+    });
+    if has_unsupported_effect {
+        return None;
+    }
+    let alpha_effects_valid = blip
+        .children()
+        .filter(|node| node.is_element() && node.tag_name().name() == "alphaModFix")
+        .all(|node| {
+            node.attribute("amt").is_none_or(|value| {
+                crate::units::drawingml_percentage_to_fraction(value)
+                    .is_some_and(|fraction| fraction >= 0.0)
+            })
+        });
+    if !alpha_effects_valid {
+        return None;
+    }
+    let resolved_svg = crate::blip::svg_blip_rid(blip)
+        .and_then(|relationship_id| image_resolver.resolve_image(source, &relationship_id));
+    let resolved_raster = {
+        crate::blip::blip_embed_rid(&blip)
+            .and_then(|relationship_id| image_resolver.resolve_image(source, &relationship_id))
+    };
+    let (image_path, mime_type, svg_image_path) = match (resolved_raster, resolved_svg) {
+        (Some((path, mime)), Some((svg_path, _))) => (path, mime, Some(svg_path)),
+        (Some((path, mime)), None) => (path, mime, None),
+        (None, Some((path, mime))) => (path, mime, None),
+        (None, None) => return None,
+    };
+    let adapter = ColorResolverThemeAdapter(color_resolver);
+    let src_rect = crate::blip::parse_src_rect(blip_fill);
+    let alpha = crate::blip::parse_blip_alpha(blip_fill);
+    // CT_Blip owns the effect sequence. A sibling <a:duotone> directly under
+    // blipFill is not schema-valid and must not silently become a compatibility
+    // fallback for chart markers.
+    let duotone = child(blip, "duotone").and_then(|_| {
+        crate::blip::parse_blip_duotone(blip_fill, &adapter, color_resolver.tint_mode())
+    });
+    if duotone_count == 1 && duotone.is_none() {
+        return None;
+    }
+    let tile_node = child(blip_fill, "tile");
+    let stretch_node = child(blip_fill, "stretch");
+    // EG_FillModeProperties is optional and has no schema default. When absent
+    // (or malformed with both choices), retain authored provenance outside this
+    // recipe but do not invent stretch/tile semantics.
+    if tile_node.is_some() == stretch_node.is_some() {
+        return None;
+    }
+    let tile = tile_node.map(crate::fill::parse_tile);
+    let stretch = stretch_node.is_some();
+    let fill_rect = stretch_node.and_then(crate::fill::parse_fill_rect);
+    let dpi = blip_fill
+        .attribute("dpi")
+        .and_then(|value| value.parse::<u32>().ok());
+    let rot_with_shape = blip_fill
+        .attribute("rotWithShape")
+        .and_then(|value| match value {
+            "1" | "true" => Some(true),
+            "0" | "false" => Some(false),
+            _ => None,
+        });
+    Some(ChartStyleFill::Image {
+        image_path,
+        mime_type,
+        svg_image_path,
+        dpi,
+        rot_with_shape,
+        src_rect,
+        fill_rect,
+        stretch,
+        tile,
+        alpha,
+        duotone,
+    })
+}
+
 fn parse_chart_style_paint(
     container: Node,
     resolver: &dyn ColorResolver,
     placeholder: Option<&str>,
+    image_resolver: &dyn ChartImageResolver,
+    image_source: ChartImageSource,
 ) -> Option<ChartStylePaint> {
     let adapter = ColorResolverThemeAdapter(resolver);
     let style_resolver = crate::color::StyleMatrixColorResolver::new(&adapter, placeholder);
@@ -4497,31 +4758,41 @@ fn parse_chart_style_paint(
         return Some(ChartStylePaint::NoFill);
     }
     if let Some(fill) = child(container, "solidFill") {
-        return Some(ChartStylePaint::Fill(
+        return Some(
             resolve_chart_style_color(fill, resolver, placeholder)
-                .map(|color| ChartStyleFill::Solid { color }),
-        ));
+                .map(|color| ChartStylePaint::Fill(Box::new(ChartStyleFill::Solid { color })))
+                .unwrap_or(ChartStylePaint::Unresolved),
+        );
     }
     if let Some(fill) = child(container, "gradFill") {
-        return Some(ChartStylePaint::Fill(
-            crate::fill::parse_grad_fill(fill, &style_resolver, resolver.tint_mode()).map(
-                |gradient| ChartStyleFill::Gradient {
-                    stops: gradient.stops,
-                    angle: gradient.angle,
-                    grad_type: gradient.grad_type,
-                    scaled: gradient.scaled,
-                    path: gradient.path,
-                    fill_to_rect: gradient.fill_to_rect,
-                    tile_rect: gradient.tile_rect,
-                    flip: gradient.flip,
-                    rot_with_shape: gradient.rot_with_shape,
-                },
-            ),
-        ));
+        return Some(
+            crate::fill::parse_grad_fill(fill, &style_resolver, resolver.tint_mode())
+                .map(|gradient| {
+                    ChartStylePaint::Fill(Box::new(ChartStyleFill::Gradient {
+                        stops: gradient.stops,
+                        angle: gradient.angle,
+                        grad_type: gradient.grad_type,
+                        scaled: gradient.scaled,
+                        path: gradient.path,
+                        fill_to_rect: gradient.fill_to_rect,
+                        tile_rect: gradient.tile_rect,
+                        flip: gradient.flip,
+                        rot_with_shape: gradient.rot_with_shape,
+                    }))
+                })
+                .unwrap_or(ChartStylePaint::Unresolved),
+        );
+    }
+    if let Some(fill) = child(container, "blipFill") {
+        return Some(
+            parse_chart_image_fill(fill, resolver, image_resolver, image_source)
+                .map(|fill| ChartStylePaint::Fill(Box::new(fill)))
+                .unwrap_or(ChartStylePaint::Unresolved),
+        );
     }
     child(container, "pattFill").map(|fill| {
         let pattern = crate::fill::parse_patt_fill(fill, &style_resolver, resolver.tint_mode());
-        ChartStylePaint::Fill(Some(ChartStyleFill::Pattern {
+        ChartStylePaint::Fill(Box::new(ChartStyleFill::Pattern {
             fg: pattern.fg,
             bg: pattern.bg,
             preset: pattern.preset,
@@ -4562,7 +4833,10 @@ fn chart_style_paint_component_count(container: Node) -> Option<usize> {
     if child(container, "noFill").is_some() {
         return Some(0);
     }
-    if child(container, "solidFill").is_some() || child(container, "pattFill").is_some() {
+    if child(container, "solidFill").is_some()
+        || child(container, "pattFill").is_some()
+        || child(container, "blipFill").is_some()
+    {
         return Some(1);
     }
     child(container, "gradFill").map(|gradient| {
@@ -4697,6 +4971,8 @@ fn parse_chartex_element_style(
     resolver: &dyn ColorResolver,
     accents: Option<&[Option<String>]>,
     color_style_method: Option<&str>,
+    image_resolver: &dyn ChartImageResolver,
+    image_source: ChartImageSource,
 ) -> ChartExElementStyle {
     use crate::line::{LineDash, LineJoin, LinePaint, LineProperties};
 
@@ -4762,8 +5038,15 @@ fn parse_chartex_element_style(
         }
         let placeholder =
             chart_style_placeholder(fill_ref, resolver, *accent, accents, color_style_method);
-        let local_paint = local_sp_pr
-            .and_then(|sp_pr| parse_chart_style_paint(sp_pr, resolver, placeholder.as_deref()));
+        let local_paint = local_sp_pr.and_then(|sp_pr| {
+            parse_chart_style_paint(
+                sp_pr,
+                resolver,
+                placeholder.as_deref(),
+                image_resolver,
+                image_source,
+            )
+        });
         let paint = if local_fill_authored {
             local_paint
         } else {
@@ -4774,6 +5057,8 @@ fn parse_chartex_element_style(
                         document.root_element(),
                         resolver,
                         placeholder.as_deref(),
+                        image_resolver,
+                        ChartImageSource::Theme,
                     )
                 }),
                 None => None,
@@ -4791,7 +5076,7 @@ fn parse_chartex_element_style(
             fills
                 .iter()
                 .map(|paint| match paint {
-                    Some(ChartStylePaint::Fill(fill)) => fill.clone(),
+                    Some(ChartStylePaint::Fill(fill)) => Some((**fill).clone()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -4802,9 +5087,10 @@ fn parse_chartex_element_style(
             fills
                 .iter()
                 .map(|paint| match paint {
-                    Some(ChartStylePaint::Fill(Some(ChartStyleFill::Solid { color }))) => {
-                        Some(color.clone())
-                    }
+                    Some(ChartStylePaint::Fill(fill)) => match fill.as_ref() {
+                        ChartStyleFill::Solid { color } => Some(color.clone()),
+                        _ => None,
+                    },
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -5153,6 +5439,7 @@ fn parse_chart_style_role_table(
     resolver: &dyn ColorResolver,
     palette: Option<&[Option<String>]>,
     color_style_method: Option<&str>,
+    image_resolver: &dyn ChartImageResolver,
 ) -> Option<BTreeMap<String, ChartExElementStyle>> {
     let role_nodes = style_root
         .children()
@@ -5188,8 +5475,14 @@ fn parse_chart_style_role_table(
             .into_iter()
             .map(|role| {
                 let name = role.tag_name().name().to_owned();
-                let style =
-                    parse_chartex_element_style(role, resolver, palette, color_style_method);
+                let style = parse_chartex_element_style(
+                    role,
+                    resolver,
+                    palette,
+                    color_style_method,
+                    image_resolver,
+                    ChartImageSource::Style,
+                );
                 (name, style)
             })
             .collect(),
@@ -5464,6 +5757,24 @@ pub fn parse_chartex_part_with_style_parts(
         style_xml,
         color_style_xml,
         &mut references,
+    )
+}
+
+pub fn parse_chartex_part_with_style_parts_and_images(
+    chartspace_root: Node,
+    resolver: &dyn ColorResolver,
+    style_xml: Option<&str>,
+    color_style_xml: Option<&str>,
+    image_resolver: &dyn ChartImageResolver,
+) -> Option<ChartModel> {
+    let mut references = EmptyChartReferenceResolver;
+    parse_chartex_part_with_references_style_parts_and_images(
+        chartspace_root,
+        resolver,
+        style_xml,
+        color_style_xml,
+        &mut references,
+        image_resolver,
     )
 }
 
@@ -5958,6 +6269,24 @@ pub fn parse_chartex_part_with_references_and_style_parts(
     color_style_xml: Option<&str>,
     references: &mut dyn ChartReferenceResolver,
 ) -> Option<ChartModel> {
+    parse_chartex_part_with_references_style_parts_and_images(
+        chartspace_root,
+        resolver,
+        style_xml,
+        color_style_xml,
+        references,
+        &EmptyChartImageResolver,
+    )
+}
+
+pub fn parse_chartex_part_with_references_style_parts_and_images(
+    chartspace_root: Node,
+    resolver: &dyn ColorResolver,
+    style_xml: Option<&str>,
+    color_style_xml: Option<&str>,
+    references: &mut dyn ChartReferenceResolver,
+    image_resolver: &dyn ChartImageResolver,
+) -> Option<ChartModel> {
     let root = chartspace_root;
     let chart_node = root
         .descendants()
@@ -6137,6 +6466,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
             resolver,
             style_palette,
             chartex_color_style_method.as_deref(),
+            image_resolver,
         )
     });
     let chartex_data_point_style = chart_style_roles
@@ -6177,7 +6507,7 @@ pub fn parse_chartex_part_with_references_and_style_parts(
 
     // ── chartEx box-and-whisker structured parse ─────────────────────────────
     let chartex_box = if chart_type == "boxWhisker" {
-        parse_chartex_boxwhisker(root, resolver, references)
+        parse_chartex_boxwhisker(root, resolver, references, image_resolver)
     } else {
         None
     };
@@ -6302,8 +6632,16 @@ pub fn parse_chartex_part_with_references_and_style_parts(
         })
         .and_then(|fill| resolver.resolve_solid_fill(fill));
     let (line_color, line_width_emu, line_no_fill) = extract_sp_pr_ln_style(series_node, resolver);
-    let chartex_style = child(series_node, "spPr")
-        .map(|_| parse_chartex_element_style(series_node, resolver, None, None));
+    let chartex_style = child(series_node, "spPr").map(|_| {
+        parse_chartex_element_style(
+            series_node,
+            resolver,
+            None,
+            None,
+            image_resolver,
+            ChartImageSource::Chart,
+        )
+    });
     let line_hidden = if line_no_fill {
         Some(true)
     } else if line_color.is_some() || line_width_emu.is_some() {
@@ -6392,8 +6730,16 @@ pub fn parse_chartex_part_with_references_and_style_parts(
             child(pareto_node, "spPr").and_then(|shape| resolver.resolve_shape_fill(shape));
         let (pareto_line_color, pareto_line_width_emu, pareto_line_no_fill) =
             extract_sp_pr_ln_style(pareto_node, resolver);
-        let pareto_chartex_style = child(pareto_node, "spPr")
-            .map(|_| parse_chartex_element_style(pareto_node, resolver, None, None));
+        let pareto_chartex_style = child(pareto_node, "spPr").map(|_| {
+            parse_chartex_element_style(
+                pareto_node,
+                resolver,
+                None,
+                None,
+                image_resolver,
+                ChartImageSource::Chart,
+            )
+        });
         let mut pareto_series = series[0].clone();
         pareto_series.name = series_name_for(pareto_node, references);
         pareto_series.chartex_format_idx = Some(series_format_index(pareto_node));
@@ -6452,8 +6798,16 @@ pub fn parse_chartex_part_with_references_and_style_parts(
                 child(extra_node, "spPr").and_then(|shape| resolver.resolve_shape_fill(shape));
             let (extra_line_color, extra_line_width_emu, extra_line_no_fill) =
                 extract_sp_pr_ln_style(extra_node, resolver);
-            let extra_chartex_style = child(extra_node, "spPr")
-                .map(|_| parse_chartex_element_style(extra_node, resolver, None, None));
+            let extra_chartex_style = child(extra_node, "spPr").map(|_| {
+                parse_chartex_element_style(
+                    extra_node,
+                    resolver,
+                    None,
+                    None,
+                    image_resolver,
+                    ChartImageSource::Chart,
+                )
+            });
             let mut extra = series[0].clone();
             extra.name = extra_name;
             extra.chartex_format_idx = Some(series_format_index(extra_node));
@@ -6974,6 +7328,7 @@ fn parse_chartex_boxwhisker(
     root: Node,
     resolver: &dyn ColorResolver,
     references: &mut dyn ChartReferenceResolver,
+    image_resolver: &dyn ChartImageResolver,
 ) -> Option<ChartexBoxWhisker> {
     // Build id -> <cx:data> lookup.
     let data_by_id: std::collections::HashMap<String, Node> = root
@@ -7117,8 +7472,16 @@ fn parse_chartex_boxwhisker(
                 color: child(*s, "spPr").and_then(|shape| resolver.resolve_shape_fill(shape)),
                 line_color: extract_sp_pr_ln_style(*s, resolver).0,
                 line_width_emu: extract_sp_pr_ln_style(*s, resolver).1,
-                chartex_style: child(*s, "spPr")
-                    .map(|_| parse_chartex_element_style(*s, resolver, None, None)),
+                chartex_style: child(*s, "spPr").map(|_| {
+                    parse_chartex_element_style(
+                        *s,
+                        resolver,
+                        None,
+                        None,
+                        image_resolver,
+                        ChartImageSource::Chart,
+                    )
+                }),
                 values_by_category,
                 mean_marker: bool_attr("meanMarker", true),
                 mean_line: bool_attr("meanLine", false),
@@ -7537,11 +7900,20 @@ pub fn parse_marker_block(
     marker_node: Option<Node>,
     resolver: &dyn ColorResolver,
 ) -> ParsedMarkerBlock {
+    parse_marker_block_with_images(marker_node, resolver, &EmptyChartImageResolver)
+}
+
+pub fn parse_marker_block_with_images(
+    marker_node: Option<Node>,
+    resolver: &dyn ColorResolver,
+    image_resolver: &dyn ChartImageResolver,
+) -> ParsedMarkerBlock {
     let mut paint_budget = MAX_CHART_MARKER_PAINT_COMPONENTS;
     let mut paint_budget_exceeded = false;
     parse_marker_block_with_budget(
         marker_node,
         resolver,
+        image_resolver,
         &mut paint_budget,
         &mut paint_budget_exceeded,
     )
@@ -7550,6 +7922,7 @@ pub fn parse_marker_block(
 fn parse_marker_block_with_budget(
     marker_node: Option<Node>,
     resolver: &dyn ColorResolver,
+    image_resolver: &dyn ChartImageResolver,
     paint_budget: &mut usize,
     paint_budget_exceeded: &mut bool,
 ) -> ParsedMarkerBlock {
@@ -7608,9 +7981,15 @@ fn parse_marker_block_with_budget(
     // A resolved solid already has the compact legacy `markerFill` wire field.
     // Retain the structured union only when it carries geometry/pattern data;
     // this keeps existing solid-marker output byte-stable.
-    let fill_paint = direct_fill
-        .fill
-        .filter(|fill| !matches!(fill, ChartStyleFill::Solid { .. }));
+    let fill_paint = if !(within_recipe_limit && within_chart_budget) {
+        None
+    } else if let Some(blip_fill) = sp_pr.and_then(|shape| child(shape, "blipFill")) {
+        parse_chart_image_fill(blip_fill, resolver, image_resolver, ChartImageSource::Chart)
+    } else {
+        direct_fill
+            .fill
+            .filter(|fill| !matches!(fill, ChartStyleFill::Solid { .. }))
+    };
     let line = sp_pr.and_then(|p| child(p, "ln")).and_then(|ln| {
         if child(ln, "noFill").is_some() {
             // Keep direct marker-outline noFill distinct from an omitted line
@@ -7658,11 +8037,20 @@ pub fn parse_data_point_overrides(
     ser_node: Node,
     resolver: &dyn ColorResolver,
 ) -> Vec<ChartDataPointOverride> {
+    parse_data_point_overrides_with_images(ser_node, resolver, &EmptyChartImageResolver)
+}
+
+pub fn parse_data_point_overrides_with_images(
+    ser_node: Node,
+    resolver: &dyn ColorResolver,
+    image_resolver: &dyn ChartImageResolver,
+) -> Vec<ChartDataPointOverride> {
     let mut paint_budget = MAX_CHART_MARKER_PAINT_COMPONENTS;
     let mut paint_budget_exceeded = false;
     parse_data_point_overrides_with_budget(
         ser_node,
         resolver,
+        image_resolver,
         &mut paint_budget,
         &mut paint_budget_exceeded,
     )
@@ -7671,6 +8059,7 @@ pub fn parse_data_point_overrides(
 fn parse_data_point_overrides_with_budget(
     ser_node: Node,
     resolver: &dyn ColorResolver,
+    image_resolver: &dyn ChartImageResolver,
     paint_budget: &mut usize,
     paint_budget_exceeded: &mut bool,
 ) -> Vec<ChartDataPointOverride> {
@@ -7694,7 +8083,13 @@ fn parse_data_point_overrides_with_budget(
             marker_fill_paint_authored,
             marker_line,
             marker_line_width_emu,
-        ) = parse_marker_block_with_budget(mk, resolver, paint_budget, paint_budget_exceeded);
+        ) = parse_marker_block_with_budget(
+            mk,
+            resolver,
+            image_resolver,
+            paint_budget,
+            paint_budget_exceeded,
+        );
         let explosion = extract_dpt_explosion(dpt);
         result.push(ChartDataPointOverride {
             idx,
@@ -9246,6 +9641,24 @@ pub fn parse_chart_part_with_style_parts(
     )
 }
 
+pub fn parse_chart_part_with_style_parts_and_images(
+    chart_root: Node,
+    color_resolver: &dyn ColorResolver,
+    style_xml: Option<&str>,
+    color_style_xml: Option<&str>,
+    image_resolver: &dyn ChartImageResolver,
+) -> Option<ChartModel> {
+    let mut references = EmptyChartReferenceResolver;
+    parse_chart_part_with_references_style_parts_and_images(
+        chart_root,
+        color_resolver,
+        style_xml,
+        color_style_xml,
+        &mut references,
+        image_resolver,
+    )
+}
+
 /// Parse a legacy chart with an optional package-supplied formula resolver.
 /// Authored caches and literals always win; the resolver is called only for a
 /// formula-only reference. This keeps series identity and field dispatch in the
@@ -9270,6 +9683,24 @@ pub fn parse_chart_part_with_references_and_style_parts(
     style_xml: Option<&str>,
     color_style_xml: Option<&str>,
     references: &mut dyn ChartReferenceResolver,
+) -> Option<ChartModel> {
+    parse_chart_part_with_references_style_parts_and_images(
+        chart_root,
+        color_resolver,
+        style_xml,
+        color_style_xml,
+        references,
+        &EmptyChartImageResolver,
+    )
+}
+
+pub fn parse_chart_part_with_references_style_parts_and_images(
+    chart_root: Node,
+    color_resolver: &dyn ColorResolver,
+    style_xml: Option<&str>,
+    color_style_xml: Option<&str>,
+    references: &mut dyn ChartReferenceResolver,
+    image_resolver: &dyn ChartImageResolver,
 ) -> Option<ChartModel> {
     let root = chart_root;
     let plot_visible_only = child(root, "chart").and_then(|chart| bool_child(chart, "plotVisOnly"));
@@ -9311,6 +9742,7 @@ pub fn parse_chart_part_with_references_and_style_parts(
             color_resolver,
             style_palette,
             chart_style_color_method.as_deref(),
+            image_resolver,
         )
     });
     let marker_layout = style_doc
@@ -9452,11 +9884,18 @@ pub fn parse_chart_part_with_references_and_style_parts(
                         .and_then(|node| node.attribute("val"))
                         .and_then(|value| value.parse::<u32>().ok())?;
                     let shape = child(format, "spPr");
-                    let (fill, fill_hidden) = match shape
-                        .and_then(|node| parse_chart_style_paint(node, color_resolver, None))
-                    {
+                    let (fill, fill_hidden) = match shape.and_then(|node| {
+                        parse_chart_style_paint(
+                            node,
+                            color_resolver,
+                            None,
+                            &EmptyChartImageResolver,
+                            ChartImageSource::Chart,
+                        )
+                    }) {
                         Some(ChartStylePaint::NoFill) => (None, Some(true)),
-                        Some(ChartStylePaint::Fill(fill)) => (fill, None),
+                        Some(ChartStylePaint::Fill(fill)) => (Some(*fill), None),
+                        Some(ChartStylePaint::Unresolved) => (None, None),
                         None => (None, None),
                     };
                     let (line_color, line_width_emu, line_hidden) =
@@ -10392,6 +10831,7 @@ pub fn parse_chart_part_with_references_and_style_parts(
                 parse_data_point_overrides_with_budget(
                     *ser,
                     color_resolver,
+                    image_resolver,
                     &mut marker_paint_budget,
                     &mut marker_paint_budget_exceeded,
                 )
@@ -10526,6 +10966,7 @@ pub fn parse_chart_part_with_references_and_style_parts(
             ) = parse_marker_block_with_budget(
                 marker_node,
                 color_resolver,
+                image_resolver,
                 &mut marker_paint_budget,
                 &mut marker_paint_budget_exceeded,
             );
@@ -10593,11 +11034,19 @@ pub fn parse_chart_part_with_references_and_style_parts(
                 .descendants()
                 .find(|node| node.is_element() && node.tag_name().name() == "invertSolidFillFmt");
             let inverted_shape = inverted_format.and_then(|format| child(format, "spPr"));
-            let inverted_paint = inverted_shape
-                .and_then(|shape| parse_chart_style_paint(shape, color_resolver, None));
+            let inverted_paint = inverted_shape.and_then(|shape| {
+                parse_chart_style_paint(
+                    shape,
+                    color_resolver,
+                    None,
+                    &EmptyChartImageResolver,
+                    ChartImageSource::Chart,
+                )
+            });
             let (mut inverted_fill, mut inverted_fill_hidden) = match inverted_paint {
                 Some(ChartStylePaint::NoFill) => (None, Some(true)),
-                Some(ChartStylePaint::Fill(fill)) => (fill, None),
+                Some(ChartStylePaint::Fill(fill)) => (Some(*fill), None),
+                Some(ChartStylePaint::Unresolved) => (None, None),
                 None => (None, None),
             };
             let (mut inverted_line_color, mut inverted_line_width_emu, inverted_line_no_fill) =
@@ -10661,8 +11110,16 @@ pub fn parse_chart_part_with_references_and_style_parts(
                 // grammar as ChartEx. Reuse the bounded element-style carrier
                 // so classic 3-D line/area rendering does not discard authored
                 // dash/cap/join while color/width keep their legacy fields.
-                chartex_style: child(*ser, "spPr")
-                    .map(|_| parse_chartex_element_style(*ser, color_resolver, None, None)),
+                chartex_style: child(*ser, "spPr").map(|_| {
+                    parse_chartex_element_style(
+                        *ser,
+                        color_resolver,
+                        None,
+                        None,
+                        image_resolver,
+                        ChartImageSource::Chart,
+                    )
+                }),
                 line_color,
                 line_width_emu,
                 three_d_shape: child(*ser, "shape")
@@ -15521,6 +15978,227 @@ Subtitle</a:t></a:r></a:p>
     }
 
     #[test]
+    fn parse_marker_block_retains_resolved_picture_fill_geometry() {
+        struct Images;
+        impl ChartImageResolver for Images {
+            fn resolve_image(
+                &self,
+                source: ChartImageSource,
+                relationship_id: &str,
+            ) -> Option<(String, String)> {
+                if source != ChartImageSource::Chart {
+                    return None;
+                }
+                match relationship_id {
+                    "rId1" => Some(("xl/media/marker.png".to_owned(), "image/png".to_owned())),
+                    "rIdSvg" => {
+                        Some(("xl/media/marker.svg".to_owned(), "image/svg+xml".to_owned()))
+                    }
+                    _ => None,
+                }
+            }
+        }
+        let xml = format!(
+            r#"<c:marker xmlns:c="{C_NS}" xmlns:a="{A_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main">
+              <c:symbol val="picture"/><c:size val="9"/>
+              <c:spPr><a:blipFill dpi="192" rotWithShape="0"><a:blip r:embed="rId1"><a:alphaModFix amt="50000"/><a:alphaModFix amt="50000"/><a:extLst><a:ext uri="{{96DAC541-7B7A-43D3-8B79-37D633B846F1}}"><asvg:svgBlip r:embed="rIdSvg"/></a:ext></a:extLst></a:blip>
+                <a:srcRect l="10000" t="20000" r="30000" b="40000"/>
+                <a:stretch><a:fillRect l="-5000"/></a:stretch>
+              </a:blipFill></c:spPr>
+            </c:marker>"#
+        );
+        let d = root_of(&xml);
+        let (_, _, fill, fill_paint, fill_authored, _, _) =
+            parse_marker_block_with_images(Some(d.root_element()), &FixtureResolver, &Images);
+        assert_eq!(fill, None);
+        assert_eq!(fill_authored, Some(true));
+        assert_eq!(
+            fill_paint,
+            Some(ChartStyleFill::Image {
+                image_path: "xl/media/marker.png".to_owned(),
+                mime_type: "image/png".to_owned(),
+                svg_image_path: Some("xl/media/marker.svg".to_owned()),
+                dpi: Some(192),
+                rot_with_shape: Some(false),
+                src_rect: Some(crate::blip::SrcRect {
+                    l: 0.1,
+                    t: 0.2,
+                    r: 0.3,
+                    b: 0.4,
+                }),
+                fill_rect: Some(crate::fill::FillRect {
+                    l: -0.05,
+                    ..Default::default()
+                }),
+                stretch: true,
+                tile: None,
+                alpha: Some(0.25),
+                duotone: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_marker_block_does_not_invent_an_omitted_picture_fill_mode() {
+        struct Images;
+        impl ChartImageResolver for Images {
+            fn resolve_image(
+                &self,
+                source: ChartImageSource,
+                relationship_id: &str,
+            ) -> Option<(String, String)> {
+                (source == ChartImageSource::Chart && relationship_id == "rId1")
+                    .then(|| ("xl/media/marker.png".to_owned(), "image/png".to_owned()))
+            }
+        }
+        for fill_mode in ["", "<a:stretch/><a:tile/>"] {
+            let xml = format!(
+                r#"<c:marker xmlns:c="{C_NS}" xmlns:a="{A_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                  <c:symbol val="picture"/><c:spPr><a:blipFill><a:blip r:embed="rId1"/>{fill_mode}</a:blipFill></c:spPr>
+                </c:marker>"#
+            );
+            let document = root_of(&xml);
+            let (_, _, _, paint, authored, _, _) = parse_marker_block_with_images(
+                Some(document.root_element()),
+                &FixtureResolver,
+                &Images,
+            );
+            assert_eq!(paint, None);
+            assert_eq!(authored, Some(true));
+        }
+    }
+
+    #[test]
+    fn parse_marker_block_ignores_schema_invalid_sibling_duotone() {
+        struct Images;
+        impl ChartImageResolver for Images {
+            fn resolve_image(
+                &self,
+                source: ChartImageSource,
+                relationship_id: &str,
+            ) -> Option<(String, String)> {
+                (source == ChartImageSource::Chart && relationship_id == "rId1")
+                    .then(|| ("xl/media/marker.png".to_owned(), "image/png".to_owned()))
+            }
+        }
+        let xml = format!(
+            r#"<c:marker xmlns:c="{C_NS}" xmlns:a="{A_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <c:symbol val="picture"/><c:spPr><a:blipFill><a:blip r:embed="rId1"/>
+                <a:duotone><a:srgbClr val="000000"/><a:srgbClr val="FFFFFF"/></a:duotone>
+                <a:stretch/></a:blipFill></c:spPr>
+            </c:marker>"#
+        );
+        let document = root_of(&xml);
+        let (_, _, _, paint, _, _, _) = parse_marker_block_with_images(
+            Some(document.root_element()),
+            &FixtureResolver,
+            &Images,
+        );
+        let Some(ChartStyleFill::Image { duotone, .. }) = paint else {
+            panic!("expected resolved image fill");
+        };
+        assert_eq!(duotone, None);
+    }
+
+    #[test]
+    fn parse_marker_block_fails_closed_for_multiple_duotone_effects() {
+        struct Images;
+        impl ChartImageResolver for Images {
+            fn resolve_image(
+                &self,
+                source: ChartImageSource,
+                relationship_id: &str,
+            ) -> Option<(String, String)> {
+                (source == ChartImageSource::Chart && relationship_id == "rId1")
+                    .then(|| ("xl/media/marker.png".to_owned(), "image/png".to_owned()))
+            }
+        }
+        let xml = format!(
+            r#"<c:marker xmlns:c="{C_NS}" xmlns:a="{A_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <c:symbol val="picture"/><c:spPr><a:blipFill><a:blip r:embed="rId1">
+                <a:duotone><a:srgbClr val="000000"/><a:srgbClr val="FFFFFF"/></a:duotone>
+                <a:duotone><a:srgbClr val="112233"/><a:srgbClr val="DDEEFF"/></a:duotone>
+              </a:blip><a:stretch/></a:blipFill></c:spPr>
+            </c:marker>"#
+        );
+        let document = root_of(&xml);
+        let (_, _, _, paint, authored, _, _) = parse_marker_block_with_images(
+            Some(document.root_element()),
+            &FixtureResolver,
+            &Images,
+        );
+        assert_eq!(paint, None);
+        assert_eq!(authored, Some(true));
+    }
+
+    #[test]
+    fn parse_marker_block_fails_closed_for_malformed_supported_effects() {
+        struct Images;
+        impl ChartImageResolver for Images {
+            fn resolve_image(
+                &self,
+                source: ChartImageSource,
+                relationship_id: &str,
+            ) -> Option<(String, String)> {
+                (source == ChartImageSource::Chart && relationship_id == "rId1")
+                    .then(|| ("xl/media/marker.png".to_owned(), "image/png".to_owned()))
+            }
+        }
+        for effect in [
+            "<a:alphaModFix amt=\"not-a-number\"/>",
+            "<a:duotone><a:srgbClr val=\"000000\"/></a:duotone>",
+        ] {
+            let xml = format!(
+                r#"<c:marker xmlns:c="{C_NS}" xmlns:a="{A_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                  <c:symbol val="picture"/><c:spPr><a:blipFill><a:blip r:embed="rId1">{effect}</a:blip><a:stretch/></a:blipFill></c:spPr>
+                </c:marker>"#
+            );
+            let document = root_of(&xml);
+            let (_, _, _, paint, authored, _, _) = parse_marker_block_with_images(
+                Some(document.root_element()),
+                &FixtureResolver,
+                &Images,
+            );
+            assert_eq!(paint, None, "effect must fail closed: {effect}");
+            assert_eq!(authored, Some(true));
+        }
+    }
+
+    #[test]
+    fn parse_marker_block_charges_picture_fill_to_the_aggregate_budget() {
+        struct Images;
+        impl ChartImageResolver for Images {
+            fn resolve_image(
+                &self,
+                source: ChartImageSource,
+                relationship_id: &str,
+            ) -> Option<(String, String)> {
+                (source == ChartImageSource::Chart && relationship_id == "rId1")
+                    .then(|| ("xl/media/marker.png".to_owned(), "image/png".to_owned()))
+            }
+        }
+        let xml = format!(
+            r#"<c:marker xmlns:c="{C_NS}" xmlns:a="{A_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <c:symbol val="picture"/><c:spPr><a:blipFill><a:blip r:embed="rId1"/>
+                <a:stretch/></a:blipFill></c:spPr>
+            </c:marker>"#
+        );
+        let document = root_of(&xml);
+        let mut budget = 0;
+        let mut exceeded = false;
+        let (_, _, _, paint, authored, _, _) = parse_marker_block_with_budget(
+            Some(document.root_element()),
+            &FixtureResolver,
+            &Images,
+            &mut budget,
+            &mut exceeded,
+        );
+        assert!(exceeded);
+        assert_eq!(paint, None);
+        assert_eq!(authored, Some(true));
+    }
+
+    #[test]
     fn parse_marker_block_rejects_gradient_beyond_resource_ceiling_before_expansion() {
         let stops = (0..=MAX_CHART_MARKER_GRADIENT_STOPS)
             .map(|index| format!(r#"<a:gs pos="{}"><a:srgbClr val="112233"/></a:gs>"#, index))
@@ -15559,6 +16237,7 @@ Subtitle</a:t></a:r></a:p>
         let _points = parse_data_point_overrides_with_budget(
             document.root_element(),
             &FixtureResolver,
+            &EmptyChartImageResolver,
             &mut component_budget,
             &mut paint_budget_exceeded,
         );
@@ -17947,6 +18626,89 @@ Subtitle</a:t></a:r></a:p>
     }
 
     #[test]
+    fn linked_marker_style_retains_picture_relationship_from_style_part() {
+        struct Images;
+        impl ChartImageResolver for Images {
+            fn resolve_image(
+                &self,
+                source: ChartImageSource,
+                relationship_id: &str,
+            ) -> Option<(String, String)> {
+                (source == ChartImageSource::Style && relationship_id == "rIdPic").then(|| {
+                    (
+                        "word/media/style-marker.png".to_owned(),
+                        "image/png".to_owned(),
+                    )
+                })
+            }
+        }
+        let chart_xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea><c:lineChart>
+              <c:ser><c:idx val="0"/><c:order val="0"/>
+                <c:cat><c:strLit><c:ptCount val="1"/><c:pt idx="0"><c:v>A</c:v></c:pt></c:strLit></c:cat>
+                <c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val>
+              </c:ser></c:lineChart></c:plotArea></c:chart></c:chartSpace>"#
+        );
+        let style_xml = format!(
+            r#"<cs:chartStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <cs:dataPointMarker><cs:spPr><a:blipFill><a:blip r:embed="rIdPic"/>
+                <a:tile tx="12700" ty="25400" sx="50000" sy="50000" flip="xy" algn="ctr"/>
+              </a:blipFill></cs:spPr></cs:dataPointMarker>
+            </cs:chartStyle>"#
+        );
+        let document = root_of(&chart_xml);
+        let model = parse_chart_part_with_style_parts_and_images(
+            document.root_element(),
+            &FixtureResolver,
+            Some(&style_xml),
+            None,
+            &Images,
+        )
+        .expect("classic chart parses");
+        let role = &model.chart_style_roles.expect("linked roles")["dataPointMarker"];
+        assert_eq!(role.fill_paint_authored, Some(true));
+        assert!(matches!(
+            role.fill_paints.as_ref().and_then(|paints| paints[0].as_ref()),
+            Some(ChartStyleFill::Image { image_path, tile: Some(tile), .. })
+                if image_path == "word/media/style-marker.png"
+                    && tile.tx == Some(12_700)
+                    && tile.ty == Some(25_400)
+                    && tile.sx.is_some_and(|value| (value - 0.5).abs() < 1e-9)
+                    && tile.flip.as_deref() == Some("xy")
+                    && tile.algn.as_deref() == Some("ctr")
+        ));
+    }
+
+    #[test]
+    fn chart_image_relationships_accept_only_normative_image_types() {
+        let transitional = crate::ns::relationships::TRANSITIONAL;
+        let strict = crate::ns::relationships::STRICT;
+        let rels = format!(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rTransitional" Type="{transitional}/image" Target="../media/a.png"/>
+              <Relationship Id="rStrict" Type="{strict}/image" Target="../media/b.svg"/>
+              <Relationship Id="rVendor" Type="urn:vendor/image" Target="../media/c.png"/>
+              <Relationship Id="rRemote" Type="https://attacker.invalid/image" Target="../media/d.png"/>
+              <Relationship Id="rExternal" Type="{transitional}/image" Target="https://example.invalid/e.png" TargetMode="External"/>
+              <Relationship Id="rMissing" Target="../media/f.png"/>
+            </Relationships>"#
+        );
+        let mut images = ChartImageRelationships::default();
+        images.insert_part_relationships(ChartImageSource::Chart, "xl/charts/chart1.xml", &rels);
+        assert_eq!(
+            images.resolve_image(ChartImageSource::Chart, "rTransitional"),
+            Some(("xl/media/a.png".to_owned(), "image/png".to_owned())),
+        );
+        assert_eq!(
+            images.resolve_image(ChartImageSource::Chart, "rStrict"),
+            Some(("xl/media/b.svg".to_owned(), "image/svg+xml".to_owned())),
+        );
+        for id in ["rVendor", "rRemote", "rExternal", "rMissing"] {
+            assert_eq!(images.resolve_image(ChartImageSource::Chart, id), None);
+        }
+    }
+
+    #[test]
     fn linked_chart_style_role_table_fails_closed_before_oversized_expansion() {
         let roles = CHART_STYLE_ROLE_NAMES
             .iter()
@@ -17969,6 +18731,7 @@ Subtitle</a:t></a:r></a:p>
             &FixtureResolver,
             Some(&palette),
             Some("cycle"),
+            &EmptyChartImageResolver,
         )
         .is_none());
     }
@@ -18015,6 +18778,7 @@ Subtitle</a:t></a:r></a:p>
             &resolver,
             Some(&palette),
             Some("cycle"),
+            &EmptyChartImageResolver,
         )
         .is_none());
 
@@ -18038,6 +18802,7 @@ Subtitle</a:t></a:r></a:p>
             &resolver,
             Some(&palette),
             Some("cycle"),
+            &EmptyChartImageResolver,
         )
         .expect("unsupported local fills suppress inherited gradient work");
         assert!(table
@@ -18130,6 +18895,50 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(s1.values_by_category, vec![vec![5.0], vec![7.0, 9.0]]);
         assert!(!s1.mean_marker && s1.mean_line && !s1.show_outliers && s1.show_nonoutliers);
         assert_eq!(s1.quartile_method, "inclusive");
+    }
+
+    #[test]
+    fn parse_chartex_boxwhisker_retains_direct_picture_marker_relationship() {
+        struct Images;
+        impl ChartImageResolver for Images {
+            fn resolve_image(
+                &self,
+                source: ChartImageSource,
+                relationship_id: &str,
+            ) -> Option<(String, String)> {
+                (source == ChartImageSource::Chart && relationship_id == "rIdBox")
+                    .then(|| ("xl/media/box.svg".to_owned(), "image/svg+xml".to_owned()))
+            }
+        }
+        let xml = format!(
+            r#"<cx:chartSpace xmlns:cx="{CX_NS}" xmlns:a="{A_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <cx:chartData><cx:data id="0"><cx:strDim type="cat"><cx:lvl ptCount="1"><cx:pt idx="0">A</cx:pt></cx:lvl></cx:strDim>
+                <cx:numDim type="val"><cx:lvl ptCount="1"><cx:pt idx="0">1</cx:pt></cx:lvl></cx:numDim></cx:data></cx:chartData>
+              <cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="boxWhisker">
+                <cx:tx><cx:txData><cx:v>S</cx:v></cx:txData></cx:tx><cx:dataId val="0"/>
+                <cx:spPr><a:blipFill rotWithShape="1"><a:blip><a:extLst><a:ext uri="{{96DAC541-7B7A-43D3-8B79-37D633B846F1}}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="rIdBox"/></a:ext></a:extLst></a:blip><a:stretch/></a:blipFill></cx:spPr>
+                <cx:layoutPr><cx:visibility nonoutliers="1" outliers="1"/></cx:layoutPr>
+              </cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart>
+            </cx:chartSpace>"#
+        );
+        let document = chart_space_of(&xml);
+        let model = parse_chartex_part_with_style_parts_and_images(
+            document.root_element(),
+            &FixtureResolver,
+            None,
+            None,
+            &Images,
+        )
+        .expect("box chart parses");
+        assert!(matches!(
+            model.chartex_box.as_ref().and_then(|box_chart| box_chart.series[0]
+                .chartex_style.as_ref())
+                .and_then(|style| style.fill_paints.as_ref())
+                .and_then(|paints| paints.first())
+                .and_then(Option::as_ref),
+            Some(ChartStyleFill::Image { image_path, rot_with_shape: Some(true), .. })
+                if image_path == "xl/media/box.svg"
+        ));
     }
 
     #[test]
