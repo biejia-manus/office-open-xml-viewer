@@ -235,6 +235,8 @@ export type SlideElement = ShapeElement | PictureElement | TableElement | ChartE
 
 export interface MediaElement {
   type: 'media';
+  /** `<p:nvPicPr><p:cNvPr @id>` for the media frame. */
+  id?: string;
   x: number;
   y: number;
   width: number;
@@ -437,6 +439,8 @@ export interface Sp3d {
 
 export interface TableElement {
   type: 'table';
+  /** `<p:nvGraphicFramePr><p:cNvPr @id>` for the table frame. */
+  id?: string;
   x: number;
   y: number;
   width: number;
@@ -487,6 +491,8 @@ export interface TableCell {
  */
 export interface ChartElement {
   type: 'chart';
+  /** `<p:nvGraphicFramePr><p:cNvPr @id>` for the chart frame. */
+  id?: string;
   /** Frame geometry on the slide, in EMU. */
   x: number;
   y: number;
@@ -507,6 +513,8 @@ export interface ChartElement {
 
 export interface PictureElement {
   type: 'picture';
+  /** The source drawing node's `<p:cNvPr @id>`. */
+  id?: string;
   x: number;
   y: number;
   width: number;
