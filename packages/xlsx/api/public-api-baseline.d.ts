@@ -313,7 +313,7 @@ export interface ChartExElementStyle {
     textRInsEmu?: number | null;
     textBInsEmu?: number | null;
     textBodyAuthored?: boolean | null;
-    fillPaints?: Array<SolidFill | GradientFill | PatternFill | null> | null;
+    fillPaints?: Array<Fill | null> | null;
     fillColors?: Array<string | null> | null;
     fillHidden?: boolean | null;
     fillPaintAuthored?: boolean | null;
@@ -1037,8 +1037,13 @@ export interface ImageAnchor {
 export interface ImageFill {
     fillType: 'image';
     imagePath: string;
+    svgImagePath?: string;
     mimeType: string;
+    dpi?: number;
+    rotWithShape?: boolean;
+    srcRect?: SrcRect;
     fillRect?: FillRect;
+    stretch?: boolean;
     tile?: TileInfo;
     alpha?: number;
     duotone?: Duotone__emitterCollision1;
@@ -1720,6 +1725,12 @@ export interface SparklineGroup {
     colorLow?: string;
     sparklines: Sparkline[];
 }
+export interface SrcRect {
+    l: number;
+    t: number;
+    r: number;
+    b: number;
+}
 export interface Styles {
     fonts: CellFont[];
     fills: CellFill[];
@@ -1754,11 +1765,11 @@ export interface TableInfo {
     columns: TableColumnInfo[];
 }
 export interface TileInfo {
-    tx: number;
-    ty: number;
-    sx: number;
-    sy: number;
-    flip: string;
+    tx?: number;
+    ty?: number;
+    sx?: number;
+    sy?: number;
+    flip?: string;
     algn?: string;
 }
 export interface ViewerContextMenuEvent<TContext> {

@@ -8,6 +8,7 @@ import type {
   ChartSeries,
 } from '../types/chart.js';
 import type { Fill } from '../types/common.js';
+import { paintChartImageFill } from './image-fill.js';
 import {
   effectiveMarkerSymbol,
   hasVisiblePointMarkerOverride,
@@ -15,6 +16,7 @@ import {
   markerFillPaintFor,
   seriesMarkerFillColor,
   seriesMarkerFillPaint,
+  seriesHasMarkerDetail,
 } from './marker-style.js';
 import { dataLabelIsDeleted } from './data-label-style.js';
 
@@ -825,6 +827,7 @@ function paintThreeDMarker(
   lineWidth: number,
   fillPaint: Fill | null | undefined = undefined,
   shapeRotationDeg = 0,
+  ptToPx = PT_TO_PX,
 ): void {
   if (!(size > 0) || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
   const radius = size / 2;
@@ -847,16 +850,7 @@ function paintThreeDMarker(
       ctx.closePath();
       break;
     case 'x':
-    case 'plus':
-    case 'dash': {
-      if (symbol === 'dash') {
-        ctx.moveTo(point.x - radius, point.y);
-        ctx.lineTo(point.x + radius, point.y);
-        ctx.strokeStyle = line;
-        ctx.lineWidth = lineWidth;
-        ctx.stroke();
-        return;
-      }
+    case 'plus': {
       const diagonal = symbol === 'x';
       ctx.moveTo(point.x - radius, point.y + (diagonal ? -radius : 0));
       ctx.lineTo(point.x + radius, point.y + (diagonal ? radius : 0));
@@ -867,6 +861,11 @@ function paintThreeDMarker(
       ctx.stroke();
       return;
     }
+    case 'dash':
+      // ECMA-376 ST_MarkerStyle `dash` is the same filled short rectangle in
+      // the 2-D and optional 3-D paths; unlike x/plus it consumes fill paint.
+      ctx.rect(point.x - radius, point.y - size * 0.1, size, size * 0.2);
+      break;
     case 'star': {
       for (let index = 0; index < 10; index++) {
         const angle = -Math.PI / 2 + index * Math.PI / 5;
@@ -879,17 +878,27 @@ function paintThreeDMarker(
       break;
     }
     case 'dot':
-      ctx.arc(point.x, point.y, Math.max(1, radius * 0.35), 0, Math.PI * 2);
+      // ECMA-376 §21.2.3.27: width=1/2 and height=1/5 of marker size.
+      ctx.ellipse(point.x, point.y, size * 0.25, size * 0.1, 0, 0, Math.PI * 2);
       break;
-    case 'picture':
-      // The chart model has no embedded marker image carrier. Failing closed
-      // is preferable to fabricating a circle with unrelated semantics.
+    case 'picture': {
+      if (fillPaint?.fillType === 'image') {
+        paintChartImageFill(
+          ctx, fillPaint, point.x - radius, point.y - radius, size, size, ptToPx,
+          shapeRotationDeg,
+        );
+      }
+      ctx.strokeStyle = line;
+      ctx.lineWidth = lineWidth;
+      ctx.strokeRect(point.x - radius, point.y - radius, size, size);
       return;
+    }
     default:
       ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
       break;
   }
-  const resolved = fillPaint === undefined
+  const imageFill = fillPaint?.fillType === 'image' ? fillPaint : undefined;
+  const resolved = imageFill ? null : fillPaint === undefined
     ? (fill === 'transparent' ? null : fill)
     : fillPaint == null
       ? null
@@ -899,6 +908,14 @@ function paintThreeDMarker(
   if (resolved != null) {
     ctx.fillStyle = resolved;
     ctx.fill();
+  } else if (imageFill) {
+    ctx.save();
+    ctx.clip();
+    paintChartImageFill(
+      ctx, imageFill, point.x - radius, point.y - radius, size, size, ptToPx,
+      shapeRotationDeg,
+    );
+    ctx.restore();
   }
   ctx.strokeStyle = line;
   ctx.lineWidth = lineWidth;
@@ -1449,6 +1466,7 @@ function paintThreeDLineLegendKey(
     markerLineWidth,
     seriesMarkerFillPaint(series),
     shapeRotationDeg,
+    ptToPx,
   );
 }
 
@@ -3042,8 +3060,10 @@ function renderCartesian(
           );
         }
       }
-      const seriesMarkersVisible = series.showMarker === true && series.markerSymbol !== 'none';
-      if (chart.chartType.toLowerCase().includes('line')
+      const seriesMarkersVisible = (areaFamily
+        ? series.showMarker === true || seriesHasMarkerDetail(series)
+        : series.showMarker === true) && series.markerSymbol !== 'none';
+      if ((chart.chartType.toLowerCase().includes('line') || areaFamily)
         && (seriesMarkersVisible || hasVisiblePointMarkerOverride(series))) {
         for (let categoryIndex = 0; categoryIndex < points.length; categoryIndex++) {
           const point = points[categoryIndex];
@@ -3072,7 +3092,7 @@ function renderCartesian(
               ctx, point, symbol, Math.max(2, sizePt) * ptToPx,
               markerFill === '00000000' ? 'transparent' : `#${markerFill}`,
               `#${markerLine}`, markerLineWidth,
-              markerFillPaint, shapeRotationDeg,
+              markerFillPaint, shapeRotationDeg, ptToPx,
             ));
         }
       }

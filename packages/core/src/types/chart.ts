@@ -578,9 +578,9 @@ export interface ChartExElementStyle {
   /**
    * Per-color-style-index DrawingML fill recipes after `phClr` substitution.
    * Uses the same shared fill model as DrawingML shapes and cell-adjacent
-   * drawing content; image fills are not emitted by the Chart Style parser.
+   * drawing content, including relationship-backed picture fills.
    */
-  fillPaints?: Array<SolidFill | GradientFill | PatternFill | null> | null;
+  fillPaints?: Array<Fill | null> | null;
   /** Per-color-style-index fills after `phClr` substitution and transforms. */
   fillColors?: Array<string | null> | null;
   fillHidden?: boolean | null;
