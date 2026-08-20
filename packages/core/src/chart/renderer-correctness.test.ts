@@ -23,6 +23,7 @@ import {
   collectChartMarkerImageFills,
   collectChartMarkerImageFillsForCharts,
 } from './image-fill.js';
+import { MAX_CANVAS_CHART_POINTS, sourceChartStructureCount } from './resource-limits.js';
 
 const testThreeD = { render: renderSimpleThreeDChart };
 
@@ -104,6 +105,46 @@ it('does not prefetch bubble pictures for points whose sizes cannot paint', () =
   expect(collectChartMarkerImageFills(model)).toEqual([]);
   expect(collectChartMarkerImageFills({ ...model, bubbleScale: 0 })).toEqual([]);
 });
+
+it('uses the owning bubble group settings for prefetch and paint work', () => {
+  const picture = {
+    fillType: 'image' as const,
+    imagePath: 'xl/media/group-bubble.png',
+    mimeType: 'image/png',
+    stretch: true,
+  };
+  const model = baseModel({
+    chartType: 'scatter',
+    categories: ['1'],
+    chartStyleRoles: {
+      dataPoint: { fillPaints: [picture], fillPaintAuthored: true },
+    },
+    series: [
+      series({ values: [1], seriesType: 'scatter', markerSymbol: 'none' }),
+      series({ values: [2], seriesType: 'scatter', bubbleSizes: [-25] }),
+    ],
+    plotGroups: [
+      plotGroup('scatter', 0, 1, { scatterStyle: 'line' }),
+      plotGroup('bubble', 1, 1, { bubbleScale: 0, showNegativeBubbles: true }),
+    ],
+  });
+  const bitmap = { width: 8, height: 8 } as unknown as CanvasImageSource;
+  expect(collectChartMarkerImageFills(model)).toEqual([]);
+  expect(classicMarkerPaintWorkCount(model, () => bitmap, 1, RECT)).toBe(0);
+
+  const visible = {
+    ...model,
+    plotGroups: [
+      plotGroup('scatter', 0, 1, { scatterStyle: 'line' }),
+      plotGroup('bubble', 1, 1, { bubbleScale: 100, showNegativeBubbles: true }),
+    ],
+  };
+  expect(collectChartMarkerImageFills(visible)).toEqual([picture]);
+  expect(classicMarkerPaintWorkCount(visible, () => bitmap, 1, RECT)).toBe(1);
+  const rec = recordingCtx();
+  renderChartCore(rec.ctx, visible, RECT, 1, 0, testThreeD, undefined, () => bitmap);
+  expect(rec.drawImages).toHaveLength(1);
+});
 const renderChart: typeof renderChartCore = (
   ctx, chart, rect, ptToPx, shapeRotationDeg, threeD = testThreeD,
 ) => renderChartCore(ctx, chart, rect, ptToPx, shapeRotationDeg, threeD);
@@ -139,12 +180,14 @@ interface Recorded {
   translations: Array<{ x: number; y: number }>;
   drawImages: unknown[][];
   filledPaths: Array<{ points: Array<{ x: number; y: number }>; fillStyle: string }>;
+  strokedPaths: Array<{ points: Array<{ x: number; y: number }>; strokeStyle: string }>;
   strokeDetails: Array<{
     strokeStyle: string; lineWidth: number; dash: number[]; cap: string; join: string;
   }>;
   paintEvents: Array<
     | { kind: 'stroke'; strokeStyle: string }
     | { kind: 'fill'; fillStyle: string }
+    | { kind: 'rect'; fillStyle: string }
     | { kind: 'text'; text: string }
   >;
 }
@@ -212,6 +255,7 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
   const translations: Recorded['translations'] = [];
   const drawImages: unknown[][] = [];
   const filledPaths: Recorded['filledPaths'] = [];
+  const strokedPaths: Recorded['strokedPaths'] = [];
   const strokeDetails: Recorded['strokeDetails'] = [];
   const paintEvents: Recorded['paintEvents'] = [];
   let dash: number[] = [];
@@ -247,8 +291,10 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
         case 'measureText':
           return (t: string) => ({ width: textWidth(t) });
         case 'fillRect':
-          return (x: number, y: number, w: number, h: number) =>
+          return (x: number, y: number, w: number, h: number) => {
+            paintEvents.push({ kind: 'rect', fillStyle: String(state.fillStyle) });
             rects.push({ x, y, w, h, fs: String(state.fillStyle) });
+          };
         case 'fillText':
           return (text: string, x: number, y: number) => {
             paintEvents.push({ kind: 'text', text: String(text) });
@@ -302,6 +348,12 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
           return () => {
             const strokeStyle = String(state.strokeStyle);
             paintEvents.push({ kind: 'stroke', strokeStyle });
+            if (pathPoints.length > 0) {
+              strokedPaths.push({
+                points: pathPoints.map(point => ({ ...point })),
+                strokeStyle,
+              });
+            }
             strokeDetails.push({
               strokeStyle,
               lineWidth: Number(state.lineWidth),
@@ -361,6 +413,7 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
     translations,
     drawImages,
     filledPaths,
+    strokedPaths,
     strokeDetails,
     paintEvents,
   };
@@ -403,7 +456,451 @@ function series(over: Partial<ChartSeries>): ChartSeries {
   return { name: '', color: null, values: [], ...over };
 }
 
+function plotGroup(
+  kind: NonNullable<ChartModel['plotGroups']>[number]['kind'],
+  seriesStart: number,
+  seriesCount: number,
+  over: Partial<NonNullable<ChartModel['plotGroups']>[number]> = {},
+): NonNullable<ChartModel['plotGroups']>[number] {
+  return {
+    kind,
+    seriesStart,
+    seriesCount,
+    categoryAxis: 'primary',
+    valueAxis: 'primary',
+    seriesAxis: 'none',
+    ...over,
+  };
+}
+
 const RECT: ChartRect = { x: 0, y: 0, w: 640, h: 360 };
+
+describe('ordered classic plot groups', () => {
+  it.each([
+    {
+      kind: 'line' as const,
+      chartType: 'line',
+      group: { grouping: 'standard' },
+      seriesType: 'line',
+    },
+    {
+      kind: 'area' as const,
+      chartType: 'area',
+      group: { grouping: 'standard' },
+      seriesType: 'area',
+    },
+    {
+      kind: 'bar' as const,
+      chartType: 'clusteredBar',
+      group: { grouping: 'clustered', barDirection: 'col' },
+      seriesType: 'bar',
+    },
+    {
+      kind: 'scatter' as const,
+      chartType: 'scatter',
+      group: { scatterStyle: 'lineMarker' },
+      seriesType: 'scatter',
+    },
+  ])('keeps a single $kind group byte-equivalent to the legacy projection', entry => {
+    const base = baseModel({
+      chartType: entry.chartType,
+      scatterStyle: entry.kind === 'scatter' ? 'lineMarker' : null,
+      categories: entry.kind === 'scatter' ? ['1', '2'] : ['A', 'B'],
+      series: [series({
+        values: [1, 2], seriesType: entry.seriesType,
+        showMarker: true, markerSymbol: 'circle',
+      })],
+    });
+    const signature = (model: ChartModel) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, model, RECT, 1);
+      return {
+        rects: rec.rects,
+        strokes: rec.strokeDetails,
+        paths: rec.strokedPaths,
+        fills: rec.filledPaths,
+        arcs: rec.arcs,
+        texts: rec.texts,
+      };
+    };
+    expect(signature({
+      ...base,
+      plotGroups: [plotGroup(entry.kind, 0, 1, entry.group)],
+    })).toEqual(signature(base));
+  });
+
+  it('keeps a single negative column group byte-equivalent to the legacy projection', () => {
+    const base = baseModel({
+      chartType: 'clusteredBar',
+      categories: ['Jan', 'Feb', 'Mar', 'Apr'],
+      series: [series({
+        values: [150, -300, 450, -120],
+        seriesType: 'bar',
+        invertIfNegative: true,
+      })],
+    });
+    const signature = (model: ChartModel) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, model, RECT, 1);
+      return {
+        rects: rec.rects,
+        strokes: rec.strokeDetails,
+        paths: rec.strokedPaths,
+        fills: rec.filledPaths,
+        texts: rec.texts,
+      };
+    };
+    expect(signature({
+      ...base,
+      series: base.series.map(entry => ({
+        ...entry,
+        barGroupIndex: 0,
+        barGroupGrouping: 'clustered',
+        barGroupDirection: 'col',
+      })),
+      plotGroups: [plotGroup('bar', 0, 1, {
+        grouping: 'clustered', barDirection: 'col',
+      })],
+    })).toEqual(signature(base));
+  });
+
+  it('fails closed before painting a mixed 2-D and 3-D plot', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A'],
+      series: [
+        series({ color: 'FF0000', values: [2], seriesType: 'bar' }),
+        series({ color: '0000FF', values: [3], seriesType: 'bar' }),
+      ],
+      plotGroups: [plotGroup('bar', 0, 1), plotGroup('bar3D', 1, 1)],
+    }), RECT, 1);
+    expect(rec.texts.map(item => item.text)).toContain('Unsupported chart');
+    expect(rec.rects).toEqual([]);
+    expect(rec.filledPaths).toEqual([]);
+  });
+
+  it('composites scatter and bubble groups in source order', () => {
+    const render = (bubbleFirst: boolean): Recorded => {
+      const scatter = series({
+        color: '0066CC', values: [1, 3], categories: ['0', '2'],
+        seriesType: 'scatter', showMarker: false,
+      });
+      const bubble = series({
+        color: 'FF8800', values: [2], categories: ['1'], bubbleSizes: [100],
+        seriesType: 'scatter', markerSymbol: 'circle',
+      });
+      const ordered = bubbleFirst ? [bubble, scatter] : [scatter, bubble];
+      const groups = bubbleFirst
+        ? [
+            plotGroup('bubble', 0, 1, { categoryAxis: 'secondary', valueAxis: 'secondary' }),
+            plotGroup('scatter', 1, 1, { scatterStyle: 'line' }),
+          ]
+        : [
+            plotGroup('scatter', 0, 1, { scatterStyle: 'line' }),
+            plotGroup('bubble', 1, 1, { categoryAxis: 'secondary', valueAxis: 'secondary' }),
+          ];
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'scatter', categories: ['0', '2'], series: ordered, plotGroups: groups,
+        secondaryCatAxis: {
+          min: 0, max: 2, title: null, hidden: false, lineHidden: true,
+          majorTickMark: 'none',
+        },
+        secondaryValAxis: {
+          min: 0, max: 4, title: null, hidden: false, lineHidden: true,
+          majorTickMark: 'none',
+        },
+      }), RECT, 1);
+      return rec;
+    };
+    const eventOrder = (rec: Recorded): [number, number] => [
+      rec.paintEvents.findIndex(event => event.kind === 'stroke' && event.strokeStyle === '#0066CC'),
+      rec.paintEvents.findIndex(event => event.kind === 'fill' && event.fillStyle === '#FF8800'),
+    ];
+    const scatterFirst = eventOrder(render(false));
+    const bubbleFirst = eventOrder(render(true));
+    expect(scatterFirst[0]).toBeGreaterThanOrEqual(0);
+    expect(scatterFirst[1]).toBeGreaterThan(scatterFirst[0]);
+    expect(bubbleFirst[1]).toBeGreaterThanOrEqual(0);
+    expect(bubbleFirst[0]).toBeGreaterThan(bubbleFirst[1]);
+  });
+
+  it('isolates stacked values between separate line groups', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'stackedLine',
+      categories: ['A'],
+      valMin: 0,
+      valMax: 30,
+      series: [
+        series({ values: [10], markerSymbol: 'circle', seriesType: 'line' }),
+        series({ values: [10], markerSymbol: 'circle', seriesType: 'line' }),
+        series({ values: [2], markerSymbol: 'circle', seriesType: 'line' }),
+      ],
+      plotGroups: [
+        plotGroup('line', 0, 2, { grouping: 'stacked' }),
+        plotGroup('line', 2, 1, { grouping: 'standard' }),
+      ],
+    }), RECT, 1);
+    expect(rec.arcs).toHaveLength(3);
+    expect(rec.arcs[1].y).toBeLessThan(rec.arcs[0].y);
+    expect(rec.arcs[2].y).toBeGreaterThan(rec.arcs[0].y);
+    expect(rec.arcs[2].y).toBeGreaterThan(rec.arcs[1].y);
+  });
+
+  it.each(['line', 'area'] as const)(
+    'keeps a secondary percent-stacked %s group on its own normalized axis',
+    kind => {
+      const renderSecondary = (values: [number, number], grouping: string): Recorded => {
+        const rec = recordingCtx();
+        renderChart(rec.ctx, baseModel({
+          chartType: kind,
+          categories: ['A'],
+          valMin: 0,
+          valMax: 100,
+          secondaryValAxis: {
+            min: 0, max: 1, title: null, hidden: false, lineHidden: false,
+            majorTickMark: 'none', formatCode: '0%',
+          },
+          series: [
+            series({ values: [100], markerSymbol: 'none', seriesType: kind }),
+            series({ values: [values[0]], markerSymbol: 'circle', seriesType: kind }),
+            series({ values: [values[1]], markerSymbol: 'circle', seriesType: kind }),
+          ],
+          plotGroups: [
+            plotGroup(kind, 0, 1, { grouping: 'standard' }),
+            plotGroup(kind, 1, 2, { grouping, valueAxis: 'secondary' }),
+          ],
+        }), RECT, 1);
+        return rec;
+      };
+      const percent = renderSecondary([60, 40], 'percentStacked');
+      const normalized = renderSecondary([0.6, 1], 'standard');
+      expect(percent.arcs).toHaveLength(2);
+      expect(percent.arcs.map(arc => arc.y)).toEqual(normalized.arcs.map(arc => arc.y));
+    },
+  );
+
+  it('keeps a percent-stacked area group in ratio space on a raw shared axis', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A'],
+      valMin: 0,
+      valMax: 100,
+      series: [
+        series({ color: '666666', values: [100], seriesType: 'bar', barGroupIndex: 0 }),
+        series({ color: 'FF0000', values: [60], seriesType: 'area', showMarker: true }),
+        series({ color: '00AA00', values: [40], seriesType: 'area', showMarker: true }),
+      ],
+      plotGroups: [
+        plotGroup('bar', 0, 1, { grouping: 'clustered', barDirection: 'col' }),
+        plotGroup('area', 1, 2, { grouping: 'percentStacked' }),
+      ],
+    }), RECT, 1);
+    expect(rec.arcs).toHaveLength(2);
+    expect(rec.arcs.every(arc => arc.y > RECT.h * 0.65)).toBe(true);
+    expect(rec.arcs[1].y).toBeLessThan(rec.arcs[0].y);
+  });
+
+  it.each([
+    { chartType: 'clusteredBar', firstDirection: 'col', secondDirection: 'bar' },
+    { chartType: 'clusteredBarH', firstDirection: 'bar', secondDirection: 'col' },
+  ] as const)('retains mixed bar directions over the first group axes ($chartType)', ({
+    chartType, firstDirection, secondDirection,
+  }) => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType,
+      categories: ['A', 'B', 'C', 'D', 'E', 'F'],
+      valMin: 0,
+      valMax: 5,
+      series: [
+        series({ color: 'FF0000', values: [4, 4, 4, 4, 4, 4], seriesType: 'bar', barGroupIndex: 0, barGroupDirection: firstDirection }),
+        series({ color: '0000FF', values: [3, 3, 3, 3, 3, 3], seriesType: 'bar', barGroupIndex: 1, barGroupDirection: secondDirection }),
+      ],
+      plotGroups: [
+        plotGroup('bar', 0, 1, { grouping: 'clustered', barDirection: firstDirection }),
+        plotGroup('bar', 1, 1, { grouping: 'clustered', barDirection: secondDirection }),
+      ],
+    }), RECT, 1);
+    const red = rec.rects.find(rect => rect.fs === '#FF0000');
+    const blue = rec.rects.find(rect => rect.fs === '#0000FF');
+    expect(red).toBeDefined();
+    expect(blue).toBeDefined();
+    const first = red as NonNullable<typeof red>;
+    const second = blue as NonNullable<typeof blue>;
+    expect(firstDirection === 'bar' ? first.w > first.h : first.h > first.w).toBe(true);
+    expect(secondDirection === 'bar' ? second.w > second.h : second.h > second.w).toBe(true);
+    expect(rec.texts.map(item => item.text)).not.toContain('Unsupported chart');
+  });
+
+  it('does not extrapolate mixed bar-direction ownership beyond the observed pair', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A'],
+      series: [
+        series({ values: [1], seriesType: 'bar' }),
+        series({ values: [2], seriesType: 'bar' }),
+        series({ values: [3], seriesType: 'bar' }),
+      ],
+      plotGroups: [
+        plotGroup('bar', 0, 1, { barDirection: 'col' }),
+        plotGroup('bar', 1, 1, { barDirection: 'bar' }),
+        plotGroup('bar', 2, 1, { barDirection: 'col' }),
+      ],
+    }), RECT, 1);
+    expect(rec.texts.map(item => item.text)).toContain('Unsupported chart');
+    expect(rec.rects).toEqual([]);
+  });
+
+  it.each([
+    { overlayKind: 'line' as const, overlayEvent: 'stroke' as const },
+    { overlayKind: 'area' as const, overlayEvent: 'fill' as const },
+  ])('keeps the observed fixed bar/$overlayKind family layer after reversed XML order', ({
+    overlayKind, overlayEvent,
+  }) => {
+    const rec = recordingCtx();
+    const overlay = series({
+      color: 'FF0000', lineColor: 'FF0000', values: [2, 3],
+      seriesType: overlayKind, showMarker: false,
+    });
+    const bar = series({
+      color: '0000FF', values: [1, 2], seriesType: 'bar', barGroupIndex: 1,
+    });
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar', categories: ['A', 'B'],
+      // The overlay precedes the bar in XML/model order. Office nevertheless
+      // keeps line above bars and area behind bars for these observed pairs.
+      series: [overlay, bar],
+      plotGroups: [
+        plotGroup(overlayKind, 0, 1, { grouping: 'standard' }),
+        plotGroup('bar', 1, 1, { grouping: 'clustered', barDirection: 'col' }),
+      ],
+    }), RECT, 1);
+    const overlayIndex = rec.paintEvents.findIndex(event => overlayEvent === 'fill'
+      ? event.kind === 'fill' && event.fillStyle === '#FF0000'
+      : event.kind === 'stroke' && event.strokeStyle === '#FF0000');
+    const barIndex = rec.paintEvents.findIndex(event =>
+      event.kind === 'rect' && event.fillStyle === '#0000FF'
+    );
+    expect(overlayIndex).toBeGreaterThanOrEqual(0);
+    expect(barIndex).toBeGreaterThanOrEqual(0);
+    if (overlayKind === 'line') expect(overlayIndex).toBeGreaterThan(barIndex);
+    else expect(overlayIndex).toBeLessThan(barIndex);
+  });
+
+  it.each(['line', 'area'] as const)(
+    'fails closed for an unimplemented secondary category-axis %s group',
+    kind => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: kind,
+        categories: ['A'],
+        secondaryCatAxis: {
+          min: null, max: null, title: null, hidden: false, lineHidden: false,
+          majorTickMark: 'none',
+        },
+        secondaryValAxis: {
+          min: 0, max: 2, title: null, hidden: false, lineHidden: false,
+          majorTickMark: 'none',
+        },
+        series: [
+          series({ values: [1], seriesType: kind }),
+          series({ values: [1], seriesType: kind, useSecondaryAxis: true }),
+        ],
+        plotGroups: [
+          plotGroup(kind, 0, 1, { grouping: 'standard' }),
+          plotGroup(kind, 1, 1, {
+            categoryAxis: 'secondary', valueAxis: 'secondary', grouping: 'standard',
+          }),
+        ],
+      }), RECT, 1);
+      expect(rec.texts.map(item => item.text)).toContain('Unsupported chart');
+      expect(rec.strokedPaths).toEqual([]);
+      expect(rec.rects).toEqual([]);
+    },
+  );
+
+  it('fails closed when public empty-group metadata disagrees with the visible family', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      series: [series({ values: [1] })],
+      plotGroups: [plotGroup('bar', 0, 0), plotGroup('pie', 0, 1)],
+    }), RECT, 1);
+    expect(rec.texts.map(item => item.text)).toContain('Unsupported chart');
+  });
+
+  it('keeps stock role ownership and paints a later line group', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      stockHiLowLines: true,
+      stockHiLowLineColor: '123456',
+      series: [
+        series({ values: [5, 6], seriesType: 'stock' }),
+        series({ values: [1, 2], seriesType: 'stock' }),
+        series({ values: [3, 4], seriesType: 'stock' }),
+        series({
+          color: 'FF0000', lineColor: 'FF0000', values: [2, 5],
+          seriesType: 'line', showMarker: false,
+          chartexStyle: { lineDash: 'dash', lineCap: 'rnd', lineJoin: 'bevel' },
+        }),
+      ],
+      plotGroups: [plotGroup('stock', 0, 3), plotGroup('line', 3, 1)],
+    }), RECT, 1);
+    expect(rec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#123456' });
+    expect(rec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#FF0000' });
+    const hiLow = rec.strokedPaths.find(path => path.strokeStyle === '#123456'
+      && path.points.length === 2 && path.points[0].x === path.points[1].x);
+    const overlay = rec.strokedPaths.find(path => path.strokeStyle === '#FF0000'
+      && path.points.length >= 2 && path.points[0].x !== path.points.at(-1)?.x);
+    expect(hiLow).toBeDefined();
+    expect(overlay).toBeDefined();
+    expect(rec.strokeDetails.some(detail => detail.strokeStyle === '#FF0000'
+      && detail.dash.length > 0 && detail.cap === 'round' && detail.join === 'bevel')).toBe(true);
+  });
+
+  it('bounds group metadata and rejects malformed public ranges', () => {
+    const emptyGroups = Array.from(
+      { length: MAX_CANVAS_CHART_POINTS + 1 },
+      () => plotGroup('pie', 0, 0),
+    );
+    expect(sourceChartStructureCount(baseModel({ plotGroups: emptyGroups })))
+      .toBe(MAX_CANVAS_CHART_POINTS + 1);
+    expect(sourceChartStructureCount(baseModel({
+      series: [series({ values: [1] })],
+      plotGroups: [plotGroup('line', 1, 1)],
+    }))).toBe(MAX_CANVAS_CHART_POINTS + 1);
+  });
+
+  it('plans many line groups without rescanning every group per group', () => {
+    let axisReads = 0;
+    const groupCount = 200;
+    const groups = Array.from({ length: groupCount }, (_, index) => ({
+      kind: 'line' as const,
+      seriesStart: index,
+      seriesCount: 1,
+      categoryAxis: 'primary' as const,
+      get valueAxis() { axisReads++; return 'primary' as const; },
+      seriesAxis: 'none' as const,
+      grouping: index % 2 === 0 ? 'standard' : 'stacked',
+    }));
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A'], plotGroups: groups,
+      series: Array.from({ length: groupCount }, (_, index) => series({
+        values: [index + 1], seriesType: 'line', lineHidden: true,
+        showMarker: false, markerSymbol: 'none',
+      })),
+    }), RECT, 1);
+    expect(axisReads).toBeLessThan(groupCount * 12);
+  });
+});
 
 describe('chart-space background', () => {
   it('fills the complete chart rectangle, including the axis-label gutters', () => {
@@ -4036,6 +4533,13 @@ describe('bar chart authored layout and fills', () => {
         series({
           seriesType: 'scatter', categories: ['0.5', '1.5'], values: [2, 8],
           markerSymbol: 'circle', markerFill: '1696D2', showMarker: true,
+          useSecondaryAxis: true,
+        }),
+      ],
+      plotGroups: [
+        plotGroup('bar', 0, 1, { grouping: 'clustered', barDirection: 'bar' }),
+        plotGroup('scatter', 1, 1, {
+          categoryAxis: 'secondary', valueAxis: 'secondary', scatterStyle: 'marker',
         }),
       ],
       secondaryCatAxis: {
@@ -4050,6 +4554,94 @@ describe('bar chart authored layout and fills', () => {
     expect(points).toHaveLength(2);
     expect(points[0].x).toBeLessThan(points[1].x);
     expect(points[0].y).toBeGreaterThan(points[1].y);
+  });
+
+  it('retains an Office-authored horizontal bar/scatter overlay with ambiguous bottom axes', () => {
+    const rec = recordingCtx();
+    const hiddenAxis = {
+      min: 0,
+      max: 2,
+      title: null,
+      hidden: true,
+      lineHidden: true,
+      majorTickMark: 'none',
+    } as const;
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBarH',
+      categories: ['A', 'B'],
+      series: [
+        series({ seriesType: 'bar', values: [0, 0] }),
+        series({
+          seriesType: 'scatter', categories: ['0.5', '1.5'], values: [2, 1],
+          markerSymbol: 'circle', markerFill: '1696D2', showMarker: true,
+          useSecondaryAxis: true,
+        }),
+      ],
+      plotGroups: [
+        plotGroup('bar', 0, 1, {
+          grouping: 'clustered', barDirection: 'bar', valueAxis: 'unresolved',
+        }),
+        plotGroup('scatter', 1, 1, {
+          categoryAxis: 'unresolved', valueAxis: 'secondary', scatterStyle: 'marker',
+        }),
+      ],
+      secondaryCatAxis: hiddenAxis,
+      secondaryValAxis: hiddenAxis,
+    }), RECT, 1);
+    expect(rec.texts.map(text => text.text)).not.toContain('Unsupported chart');
+    expect(rec.arcs).toHaveLength(2);
+  });
+
+  it('retains a primary stacked-area group with a primary line overlay', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'stackedArea',
+      categories: ['A', 'B'],
+      series: [
+        series({ color: '99CCFF', seriesType: 'area', values: [20, 30] }),
+        series({ color: '4472C4', seriesType: 'area', values: [10, 15] }),
+        series({ color: '000000', seriesType: 'line', values: [25, 35] }),
+      ],
+      plotGroups: [
+        plotGroup('area', 0, 2, { grouping: 'stacked' }),
+        plotGroup('line', 2, 1, { grouping: 'standard' }),
+      ],
+    }), RECT, 1);
+    expect(rec.texts.map(text => text.text)).not.toContain('Unsupported chart');
+    expect(rec.filledPaths.length).toBeGreaterThan(0);
+    expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#000000')).toBe(true);
+  });
+
+  it('retains two same-direction column groups with a secondary line group', () => {
+    const rec = recordingCtx();
+    const secondary = {
+      min: 0,
+      max: 1,
+      title: null,
+      hidden: false,
+      lineHidden: false,
+      majorTickMark: 'none',
+    } as const;
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B'],
+      secondaryValAxis: secondary,
+      series: [
+        series({ color: '4472C4', seriesType: 'bar', values: [100, 120] }),
+        series({ color: 'EEEEEE', seriesType: 'bar', values: [0.2, 0.4], useSecondaryAxis: true }),
+        series({ color: 'ED7D31', seriesType: 'line', values: [0.3, 0.5], useSecondaryAxis: true }),
+      ],
+      plotGroups: [
+        plotGroup('bar', 0, 1, { grouping: 'clustered', barDirection: 'col' }),
+        plotGroup('bar', 1, 1, {
+          grouping: 'clustered', barDirection: 'col', valueAxis: 'secondary',
+        }),
+        plotGroup('line', 2, 1, { grouping: 'standard', valueAxis: 'secondary' }),
+      ],
+    }), RECT, 1);
+    expect(rec.texts.map(text => text.text)).not.toContain('Unsupported chart');
+    expect(rec.rects.some(rect => rect.fs === '#4472C4')).toBe(true);
+    expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#ED7D31')).toBe(true);
   });
 
   it('renders a secondary bar group against its right value axis and top category axis', () => {

@@ -559,6 +559,43 @@ export type ChartType =
   | 'boxWhisker' | 'sunburst' | 'treemap'
   | string;
 
+/** Exact classic chart-group element retained from `<c:plotArea>` source
+ * order. These names deliberately do not fold 3-D or bubble groups into a
+ * canonical 2-D family. */
+export type ChartPlotGroupKind =
+  | 'area' | 'area3D' | 'line' | 'line3D' | 'stock' | 'radar'
+  | 'scatter' | 'pie' | 'pie3D' | 'doughnut' | 'bar' | 'bar3D'
+  | 'ofPie' | 'surface' | 'surface3D' | 'bubble';
+
+/** Resolved ownership of one axis role for a classic plot group. */
+export type ChartPlotGroupAxisSlot = 'primary' | 'secondary' | 'none' | 'unresolved';
+
+/**
+ * Bounded source-order metadata for one direct classic chart-group child of
+ * `<c:plotArea>`. Series are stored once in `ChartModel.series`; this record
+ * owns a contiguous slice and therefore avoids a second scene graph or
+ * group-by-series copying.
+ */
+export interface ChartPlotGroup {
+  kind: ChartPlotGroupKind;
+  seriesStart: number;
+  seriesCount: number;
+  categoryAxis: ChartPlotGroupAxisSlot;
+  valueAxis: ChartPlotGroupAxisSlot;
+  seriesAxis: ChartPlotGroupAxisSlot;
+  /** Authored `axId` values in group-child order, retained as provenance. */
+  axisIds?: string[] | null;
+  grouping?: string | null;
+  barDirection?: string | null;
+  scatterStyle?: string | null;
+  radarStyle?: string | null;
+  gapWidth?: number | null;
+  overlap?: number | null;
+  bubbleScale?: number | null;
+  bubbleSizeRepresents?: 'area' | 'w' | null;
+  showNegativeBubbles?: boolean | null;
+}
+
 /** Backward-compatible chart name for the shared DrawingML dash atom. */
 export type ChartLineDashSegment = DrawingMLCustomDashSegment;
 
@@ -690,6 +727,9 @@ export interface ChartModel {
    */
   categoryLevels?: string[][] | null;
   series: ChartSeries[];
+  /** Ordered classic chart groups. Absent keeps legacy public models on the
+   * existing single-family compatibility path. */
+  plotGroups?: ChartPlotGroup[] | null;
   /** Text boxes in the Chart Drawing part referenced by `<c:userShapes>`.
    *  Coordinates are chart-space fractions from `<cdr:relSizeAnchor>`. */
   chartTextBoxes?: ChartTextBox[] | null;

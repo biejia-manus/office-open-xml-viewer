@@ -439,6 +439,7 @@ export interface ChartModel {
     categorySourceHidden?: boolean[] | null;
     categoryLevels?: string[][] | null;
     series: ChartSeries[];
+    plotGroups?: ChartPlotGroup[] | null;
     chartTextBoxes?: ChartTextBox[] | null;
     varyColors?: boolean | null;
     showDataLabels: boolean;
@@ -942,6 +943,26 @@ export interface ChartTrendline {
     lineHidden?: boolean | null;
 }
 export type ChartType = 'line' | 'stackedLine' | 'stackedLinePct' | 'clusteredBar' | 'clusteredBarH' | 'stackedBar' | 'stackedBarH' | 'stackedBarPct' | 'stackedBarHPct' | 'area' | 'stackedArea' | 'stackedAreaPct' | 'pie' | 'doughnut' | 'scatter' | 'bubble' | 'radar' | 'waterfall' | 'stock' | 'surface' | 'surface3D' | 'boxWhisker' | 'sunburst' | 'treemap' | string;
+export type ChartPlotGroupKind = 'area' | 'area3D' | 'line' | 'line3D' | 'stock' | 'radar' | 'scatter' | 'pie' | 'pie3D' | 'doughnut' | 'bar' | 'bar3D' | 'ofPie' | 'surface' | 'surface3D' | 'bubble';
+export type ChartPlotGroupAxisSlot = 'primary' | 'secondary' | 'none' | 'unresolved';
+export interface ChartPlotGroup {
+    kind: ChartPlotGroupKind;
+    seriesStart: number;
+    seriesCount: number;
+    categoryAxis: ChartPlotGroupAxisSlot;
+    valueAxis: ChartPlotGroupAxisSlot;
+    seriesAxis: ChartPlotGroupAxisSlot;
+    axisIds?: string[] | null;
+    grouping?: string | null;
+    barDirection?: string | null;
+    scatterStyle?: string | null;
+    radarStyle?: string | null;
+    gapWidth?: number | null;
+    overlap?: number | null;
+    bubbleScale?: number | null;
+    bubbleSizeRepresents?: 'area' | 'w' | null;
+    showNegativeBubbles?: boolean | null;
+}
 export interface ConditionalFormat {
     sqref: WorksheetCellRange[];
     rules: CfRule[];
