@@ -2146,6 +2146,133 @@ describe('classic 3-D compatibility projection', () => {
       && color === sequence[index + 1])).toBe(true);
   });
 
+  it('applies a direct 3-D line point style to the segment ending at that point', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A', 'B', 'C'],
+      valMin: 0,
+      valMax: 10,
+      threeD: { rotationX: 0, rotationY: 0, perspective: 0 },
+      series: [series({
+        values: [2, 8, 4],
+        lineColor: '0000FF',
+        showMarker: false,
+        dataPointOverrides: [{ idx: 1, lineColor: 'FF0000' }],
+      })],
+    }), RECT, 1);
+    const red = rec.filledPaths.filter(path => path.fillStyle === '#FF0000');
+    const blue = rec.filledPaths.filter(path => path.fillStyle === '#0000FF');
+    expect(red.length).toBeGreaterThan(0);
+    expect(blue.length).toBeGreaterThan(0);
+    const centerX = (paths: typeof red) => {
+      const points = paths.flatMap(path => path.points);
+      return points.reduce((sum, point) => sum + point.x, 0) / points.length;
+    };
+    // Office assigns dPt idx=1 to the incoming A→B segment. The following
+    // B→C segment remains owned by the series style.
+    expect(centerX(red)).toBeLessThan(centerX(blue));
+  });
+
+  it('suppresses only the incoming 3-D line segment for direct point noFill', () => {
+    const render = (lineHidden: boolean | undefined) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'line', categories: ['A', 'B', 'C'], valMin: 0, valMax: 10,
+        threeD: { rotationX: 0, rotationY: 0, perspective: 0 },
+        series: [series({
+          values: [2, 8, 4], lineColor: '0000FF', showMarker: false,
+          dataPointOverrides: lineHidden == null ? undefined : [{ idx: 1, lineHidden }],
+        })],
+      }), RECT, 1);
+      return rec.filledPaths.filter(path => path.fillStyle === '#0000FF');
+    };
+    const baseline = render(undefined);
+    const hidden = render(true);
+    expect(hidden.length).toBeGreaterThan(0);
+    expect(hidden.length).toBeLessThan(baseline.length);
+    const centerX = (paths: typeof hidden) => paths
+      .flatMap(path => path.points)
+      .reduce((sum, point) => sum + point.x, 0)
+      / paths.flatMap(path => path.points).length;
+    // idx=1 hides A→B. The later B→C segment remains visible.
+    expect(centerX(hidden)).toBeGreaterThan(centerX(baseline));
+  });
+
+  it('resolves one structured point paint for its incoming 3-D line segment', () => {
+    const gradient = {
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 0,
+      stops: [
+        { position: 0, color: 'FF0000' },
+        { position: 1, color: 'FFFFFF' },
+      ],
+    };
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A', 'B', 'C'],
+      threeD: { rotationX: 15, rotationY: 20 },
+      series: [series({
+        values: [2, 8, 4], lineColor: '0000FF', showMarker: false,
+        dataPointOverrides: [{
+          idx: 1,
+          chartexStyle: { linePaints: [gradient], linePaintAuthored: true },
+        }],
+      })],
+    }), RECT, 1);
+    expect(rec.gradients).toHaveLength(1);
+    expect(rec.texts.map(text => text.text)).not.toContain('(too many data points)');
+  });
+
+  it('rejects an oversized direct point line paint before any 3-D geometry', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line', categories: ['A', 'B'],
+      threeD: { rotationX: 15, rotationY: 20 },
+      series: [series({
+        values: [2, 8], lineColor: '0000FF', showMarker: false,
+        dataPointOverrides: [{
+          idx: 1,
+          chartexStyle: {
+            linePaints: [{
+              fillType: 'gradient', gradType: 'linear', angle: 0,
+              stops: Array.from({ length: 4_097 }, (_, index) => ({
+                position: index / 4_096, color: 'FF0000',
+              })),
+            }],
+            linePaintAuthored: true,
+          },
+        }],
+      })],
+    }), RECT, 1);
+    expect(rec.gradients).toHaveLength(0);
+    expect(rec.texts.map(text => text.text)).toEqual(['(too many data points)']);
+  });
+
+  it('does not apply direct point paint to a 3-D area body', () => {
+    const gradient = {
+      fillType: 'gradient' as const, gradType: 'linear' as const, angle: 0,
+      stops: [{ position: 0, color: 'FF0000' }, { position: 1, color: 'FFFFFF' }],
+    };
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'area', categories: ['A', 'B', 'C'],
+      threeD: { rotationX: 15, rotationY: 20 },
+      series: [series({
+        values: [2, 8, 4], color: '4472C4', showMarker: false,
+        dataPointOverrides: [{
+          idx: 1,
+          chartexStyle: {
+            fillPaints: [gradient], fillPaintAuthored: true,
+            linePaints: [gradient], linePaintAuthored: true,
+          },
+        }],
+      })],
+    }), RECT, 1);
+    expect(rec.gradients).toHaveLength(0);
+  });
+
   it('builds stacked 3-D area layers from cumulative boundaries', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({

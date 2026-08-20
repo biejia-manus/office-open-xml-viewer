@@ -442,10 +442,14 @@ function threeDChartPaintsWithinBudget(chart: ChartModel): boolean {
       }
       for (let seriesIndex = 0; seriesIndex < chart.series.length; seriesIndex++) {
         const series = chart.series[seriesIndex];
+        const overrides = new Map(
+          series.dataPointOverrides?.map(point => [point.idx, point]) ?? [],
+        );
         const pointCount = categoryCount;
         let runLength = 0;
         let previousValue: number | null = null;
         let hasGeometry = false;
+        let defaultLinePaintUsed = false;
         for (let index = 0; index < pointCount; index++) {
           const value = series.values[index];
           const visible = value != null && Number.isFinite(value)
@@ -463,7 +467,14 @@ function threeDChartPaintsWithinBudget(chart: ChartModel): boolean {
               || chart.valMax != null && Number.isFinite(chart.valMax) && lower >= chart.valMax;
             if (runLength >= 2 && (area || series.smooth === true || !outsideAuthoredAxis)) {
               hasGeometry = true;
-              break;
+              if (area) break;
+              const point = overrides.get(index);
+              if (threeDPointOwnsLineSegment(point)) {
+                const paint = threeDDatumPaint(chart, series, point, index, seriesIndex);
+                paints.push({ fill: undefined, line: paint.lineFill });
+              } else {
+                defaultLinePaintUsed = true;
+              }
             }
             previousValue = currentValue;
           } else if ((chart.dispBlanksAs ?? 'gap') === 'gap') {
@@ -473,7 +484,8 @@ function threeDChartPaintsWithinBudget(chart: ChartModel): boolean {
         }
         if (!hasGeometry) continue;
         const paint = threeDDatumPaint(chart, series, undefined, seriesIndex, seriesIndex);
-        paints.push({ fill: area ? paint.fill : undefined, line: paint.lineFill });
+        if (area) paints.push({ fill: paint.fill, line: paint.lineFill });
+        else if (defaultLinePaintUsed) paints.push({ fill: undefined, line: paint.lineFill });
       }
     }
   }
@@ -588,6 +600,31 @@ function threeDDatumPaint(
     lineJoin: lineJoinValue === 'round' || lineJoinValue === 'bevel'
       ? lineJoinValue : 'miter',
   };
+}
+
+/** A 3-D line dPt owns only the incoming segment's line component. Shape fill
+ * remains irrelevant to Excel's line ribbon, and area dPt paint is not applied
+ * to the series body. Keep this predicate narrow so color-only fill overrides
+ * do not split or recolor line geometry. */
+function threeDPointOwnsLineSegment(
+  point: ChartDataPointOverride | undefined,
+): boolean {
+  if (!point) return false;
+  const style = point.chartexStyle;
+  return point.lineHidden != null
+    || point.lineColor != null
+    || point.lineWidthEmu != null
+    || point.lineDash != null
+    || style?.linePaintAuthored === true
+    || style?.lineHidden != null
+    || style?.lineNoStyle === true
+    || style?.lineColors?.some(color => color != null) === true
+    || style?.linePaints?.some(paint => paint != null) === true
+    || style?.lineWidthEmu != null
+    || style?.lineDash != null
+    || style?.lineCustomDash != null
+    || style?.lineCap != null
+    || style?.lineJoin != null;
 }
 
 /** Automatic 3-D chart material evaluated from a real camera-space face
@@ -3261,12 +3298,13 @@ function renderCartesian(
       }
       const lineStrokeRuns: Array<{
         path: ProjectedStrokePoint[];
+        ownerIndex: number;
         startClipped: boolean;
         endClipped: boolean;
         dashOffset: number;
       }> = [];
       if (!chart.chartType.toLowerCase().includes('area')) {
-        type ModelLinePoint = { x: number; fraction: number };
+        type ModelLinePoint = { x: number; fraction: number; ownerIndex: number };
         const modelRuns: ModelLinePoint[][] = [];
         let modelRun: ModelLinePoint[] | null = null;
         for (let categoryIndex = 0; categoryIndex < categoryCount; categoryIndex++) {
@@ -3285,6 +3323,7 @@ function renderCartesian(
               categoryIndex, categoryCount, categoryBetween, categoryReversed,
             ) * front.w,
             fraction,
+            ownerIndex: categoryIndex,
           });
         }
         if (modelRun) modelRuns.push(modelRun);
@@ -3329,6 +3368,7 @@ function renderCartesian(
                 fraction: u * u * u * p1.fraction
                   + 3 * u * u * t * c1.fraction
                   + 3 * u * t * t * c2.fraction + t * t * t * p2.fraction,
+                ownerIndex: p2.ownerIndex,
               });
             }
           }
@@ -3367,6 +3407,7 @@ function renderCartesian(
               x: startModel.x + (endModel.x - startModel.x) * t,
               fraction: startModel.fraction
                 + (endModel.fraction - startModel.fraction) * t,
+              ownerIndex: endModel.ownerIndex,
             });
             const projectedClipStart = projectUnclipped(at(clipped.startT));
             const clippedPrefixLength = Math.hypot(
@@ -3378,11 +3419,12 @@ function renderCartesian(
             const continues = visible != null && Math.hypot(
               visible.path.at(-1)!.x - start.x,
               visible.path.at(-1)!.y - start.y,
-            ) <= 1e-8;
+            ) <= 1e-8 && visible.ownerIndex === endModel.ownerIndex;
             if (!continues) {
               finishVisibleRun(visible);
               visible = {
                 path: [start, end],
+                ownerIndex: endModel.ownerIndex,
                 startClipped: index > 0 || clipped.startT > 0,
                 endClipped: index + 1 < sampled.length - 1 || clipped.endT < 1,
                 dashOffset: traversedLength + (Number.isFinite(clippedPrefixLength)
@@ -3409,36 +3451,47 @@ function renderCartesian(
         || series.chartexStyle?.lineJoin != null
         || seriesPaint.lineColor != null
         || seriesPaint.lineFill !== undefined;
-      if (seriesPaint.lineFill !== null && (!areaFamily || authoredAreaLine)) {
-        // Automatic 3-D line/area edges use the darker Chart Style line role.
-        // Existing Office vectors across both families resolve near 70% of the
-        // corresponding accent luminance; direct series color stays exact.
-        const strokeStyle = seriesPaint.lineColor ?? scaleHexColor(color, 0.70);
-        const lineWidth = seriesPaint.lineWidthEmu
-          ? Math.max(0.5, seriesPaint.lineWidthEmu / EMU_PER_PT) * ptToPx
-          : areaFamily
-            ? 0.75 * ptToPx
-            : Math.max(1, 2 * ptToPx);
-        const lineDash = drawingmlLineDashArray(
-          seriesPaint.lineCustomDash, seriesPaint.lineDash, lineWidth,
-        );
-        const lineCap = seriesPaint.lineCap;
-        const lineJoin = seriesPaint.lineJoin;
-        const strokeFaces: SceneFace[] = [];
+      if (areaFamily ? seriesPaint.lineFill !== null && authoredAreaLine : true) {
+        const pointLinePaints = new Map<number, ThreeDDatumPaint>();
+        const paintForLineRun = (ownerIndex: number): ThreeDDatumPaint => {
+          const point = pointOverrides[seriesIndex].get(ownerIndex);
+          if (!threeDPointOwnsLineSegment(point)) return seriesPaint;
+          let paint = pointLinePaints.get(ownerIndex);
+          if (!paint) {
+            paint = threeDDatumPaint(chart, series, point, ownerIndex, seriesIndex);
+            pointLinePaints.set(ownerIndex, paint);
+          }
+          return paint;
+        };
+        const strokeFaceGroups = new Map<ThreeDDatumPaint, SceneFace[]>();
         const pushStrokeGeometry = (
           path: readonly ProjectedStrokePoint[],
+          paint: ThreeDDatumPaint,
           startCap: CanvasLineCap,
           endCap: CanvasLineCap = startCap,
           dashOffset = 0,
         ) => {
+          if (paint.lineFill === null) return;
+          // Automatic 3-D line/area edges use the darker Chart Style line
+          // role. Direct point line paint owns only its incoming segment.
+          const automaticStrokeBase = paint === seriesPaint ? color : paint.color;
+          const strokeStyle = paint.lineColor ?? scaleHexColor(automaticStrokeBase, 0.70);
+          const lineWidth = paint.lineWidthEmu
+            ? Math.max(0.5, paint.lineWidthEmu / EMU_PER_PT) * ptToPx
+            : areaFamily
+              ? 0.75 * ptToPx
+              : Math.max(1, 2 * ptToPx);
+          const lineDash = drawingmlLineDashArray(
+            paint.lineCustomDash, paint.lineDash, lineWidth,
+          );
           const strokes = buildProjectedStrokePrimitives(path, {
             width: lineWidth,
             dash: lineDash,
             dashOffset,
-            lineCap,
+            lineCap: paint.lineCap,
             startCap,
             endCap,
-            lineJoin,
+            lineJoin: paint.lineJoin,
           });
           if (strokes == null) {
             strokeBudgetExceeded = true;
@@ -3459,7 +3512,9 @@ function renderCartesian(
               cameraWeights: stroke.cameraWeights,
               outline: false,
             };
-            strokeFaces.push(strokeFace);
+            const group = strokeFaceGroups.get(paint) ?? [];
+            group.push(strokeFace);
+            strokeFaceGroups.set(paint, group);
             sceneCommands.push({
               points: stroke.points,
               cameraDepth: stroke.cameraDepth,
@@ -3471,16 +3526,24 @@ function renderCartesian(
           }
         };
         if (areaFamily) {
-          for (const path of areaStrokeRuns) pushStrokeGeometry(path, lineCap);
+          for (const path of areaStrokeRuns) {
+            pushStrokeGeometry(path, seriesPaint, seriesPaint.lineCap);
+          }
         } else {
-          for (const item of lineStrokeRuns) pushStrokeGeometry(
-            item.path,
-            item.startClipped ? 'butt' : lineCap,
-            item.endClipped ? 'butt' : lineCap,
-            item.dashOffset,
-          );
+          for (const item of lineStrokeRuns) {
+            const paint = paintForLineRun(item.ownerIndex);
+            pushStrokeGeometry(
+              item.path,
+              paint,
+              item.startClipped ? 'butt' : paint.lineCap,
+              item.endClipped ? 'butt' : paint.lineCap,
+              item.dashOffset,
+            );
+          }
         }
-        applyScenePaint(ctx, strokeFaces, 'outline', seriesPaint.lineFill, shapeRotationDeg);
+        for (const [paint, faces] of strokeFaceGroups) {
+          applyScenePaint(ctx, faces, 'outline', paint.lineFill, shapeRotationDeg);
+        }
       }
       const seriesMarkersVisible = (areaFamily
         ? series.showMarker === true || seriesHasMarkerDetail(series)
