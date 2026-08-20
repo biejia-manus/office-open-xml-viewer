@@ -1410,6 +1410,39 @@ describe('classic 3-D compatibility projection', () => {
     expect(authored.filledPaths.some(path => path.fillStyle === '#F2F2F2')).toBe(true);
   });
 
+  it('paints authored CT_Surface thickness as projected slabs without leaving the chart bounds', () => {
+    const render = (thicknessPercent: number | undefined) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'line',
+        categories: ['A', 'B', 'C'],
+        valAxisMajorGridlines: false,
+        threeD: {
+          rotationX: 20, rotationY: 20, depthPercent: 100, perspective: 30,
+          floor: { fillColor: 'FF0000', thicknessPercent },
+          sideWall: { fillColor: '00B050', thicknessPercent },
+          backWall: { fillColor: 'AA00FF', thicknessPercent },
+        },
+        series: [series({ values: [2, 8, 4], showMarker: false })],
+      }), RECT, 1);
+      return rec;
+    };
+    const omitted = render(undefined);
+    const planar = render(0);
+    const thick = render(25);
+    expect(planar.filledPaths).toEqual(omitted.filledPaths);
+    expect(planar.strokedPaths).toEqual(omitted.strokedPaths);
+    for (const color of ['#FF0000', '#00B050', '#AA00FF']) {
+      expect(planar.filledPaths.filter(path => path.fillStyle === color)).toHaveLength(1);
+      expect(thick.filledPaths.filter(path => path.fillStyle === color).length).toBeGreaterThan(1);
+    }
+    const points = thick.filledPaths.flatMap(path => path.points);
+    expect(Math.min(...points.map(point => point.x))).toBeGreaterThanOrEqual(RECT.x - 1e-9);
+    expect(Math.max(...points.map(point => point.x))).toBeLessThanOrEqual(RECT.x + RECT.w + 1e-9);
+    expect(Math.min(...points.map(point => point.y))).toBeGreaterThanOrEqual(RECT.y - 1e-9);
+    expect(Math.max(...points.map(point => point.y))).toBeLessThanOrEqual(RECT.y + RECT.h + 1e-9);
+  });
+
   it('uses structured direct and linked floor/wall paint with direct noFill precedence', () => {
     const gradient = {
       fillType: 'gradient' as const,
@@ -15894,6 +15927,33 @@ describe('surface contour charts', () => {
     // floor=noFill and authored-but-unresolved backWall both suppress linked
     // paint. Only sideWall consumes the linked wall gradient.
     expect(rec.gradients).toHaveLength(1);
+  });
+
+  it('uses the same authored wall-thickness slabs for Surface3D', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'surface3D',
+      categories: ['X1', 'X2'],
+      valMin: 0,
+      valMax: 10,
+      valAxisMajorUnit: 10,
+      surfaceWireframe: false,
+      threeD: {
+        rotationX: 20,
+        rotationY: 20,
+        perspective: 30,
+        floor: { fillColor: 'FF0000', thicknessPercent: 25 },
+        sideWall: { fillColor: '00B050', thicknessPercent: 25 },
+        backWall: { fillColor: 'AA00FF', thicknessPercent: 25 },
+      },
+      series: [
+        series({ name: 'Y1', values: [2, 4] }),
+        series({ name: 'Y2', values: [6, 8] }),
+      ],
+    }), RECT, 1);
+    for (const color of ['#FF0000', '#00B050', '#AA00FF']) {
+      expect(rec.filledPaths.filter(path => path.fillStyle === color).length).toBeGreaterThan(1);
+    }
   });
 
   it('rejects an oversized linked Surface recipe before resolving any paint', () => {

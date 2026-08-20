@@ -59,7 +59,9 @@ import {
 } from './data-label-style.js';
 import {
   fitChartThreeDProjectionToPoints,
+  fitChartThreeDProjectionToWallThickness,
   pieThreeDThicknessMultiplier,
+  planChartThreeDSurfaceGeometry,
   planChartThreeDProjection,
   planThreeDBarClusterSlot,
   threeDToMaxScale,
@@ -2213,8 +2215,30 @@ function walls(
   const {
     sideX: farX, floorY, oppositeFloorY, nearDepth, farDepth,
   } = geometry;
+  const projectedSurfaceFaces = (
+    kind: 'floor' | 'sideWall' | 'backWall',
+    surface: NonNullable<ChartModel['threeD']>['floor'],
+  ) => {
+    const slab = planChartThreeDSurfaceGeometry(projection, kind, surface?.thicknessPercent);
+    return slab.faces
+      .filter(face => slab.thickness === 0 || projection.cameraFacing(face))
+      .map(scenePoints => ({
+        scenePoints,
+        points: scenePoints.map(point =>
+          projection.projectUnbounded(point.x, point.y, point.depth)
+        ),
+        depth: scenePoints.reduce(
+          (sum, point) => sum + projection.cameraDepth(point.x, point.y, point.depth),
+          0,
+        ) / scenePoints.length,
+      }))
+      .sort((left, right) => left.depth - right.depth);
+  };
+  const floorFaces = projectedSurfaceFaces('floor', chart.threeD?.floor);
+  const sideWallFaces = projectedSurfaceFaces('sideWall', chart.threeD?.sideWall);
+  const backWallFaces = projectedSurfaceFaces('backWall', chart.threeD?.backWall);
   const drawSurfaceFill = (
-    points: readonly Point[],
+    faces: readonly { points: readonly Point[] }[],
     surface: NonNullable<ChartModel['threeD']>['floor'],
     role: 'floor' | 'wall',
   ) => {
@@ -2222,8 +2246,8 @@ function walls(
     // classic 3-D default leaves these faces unfilled; only an authored fill
     // creates an opaque wall. The wall/grid rules are painted independently.
     const effective = chartThreeDSurfacePaint(chart, surface, role);
-    if (!effective.fill || points.length < 3) return;
-    polygon(ctx, points);
+    if (!effective.fill || !faces.length) return;
+    const points = faces.flatMap(face => face.points);
     const minX = Math.min(...points.map(point => point.x));
     const maxX = Math.max(...points.map(point => point.x));
     const minY = Math.min(...points.map(point => point.y));
@@ -2232,12 +2256,16 @@ function walls(
       ? `#${effective.fill.color}`
       : resolveFill(effective.fill, ctx, minX, minY, maxX - minX, maxY - minY);
     if (!fill) return;
-    ctx.fillStyle = fill;
-    ctx.fill();
+    for (const face of faces) {
+      if (face.points.length < 3) continue;
+      polygon(ctx, face.points);
+      ctx.fillStyle = fill;
+      ctx.fill();
+    }
   };
-  drawSurfaceFill(geometry.floor, chart.threeD?.floor, 'floor');
-  drawSurfaceFill(geometry.sideWall, chart.threeD?.sideWall, 'wall');
-  drawSurfaceFill(geometry.backWall, chart.threeD?.backWall, 'wall');
+  drawSurfaceFill(floorFaces, chart.threeD?.floor, 'floor');
+  drawSurfaceFill(sideWallFaces, chart.threeD?.sideWall, 'wall');
+  drawSurfaceFill(backWallFaces, chart.threeD?.backWall, 'wall');
   const drawValueGrid = (values: readonly number[], stroke: ThreeDStroke) => {
     applyThreeDStroke(ctx, stroke);
     for (const value of values) {
@@ -2301,14 +2329,15 @@ function walls(
     }
   }
   const strokeSurface = (
-    points: readonly Point[],
+    faces: readonly { points: readonly Point[] }[],
     surface: NonNullable<ChartModel['threeD']>['floor'],
     role: 'floor' | 'wall',
   ) => {
-    if (points.length < 2) return;
+    if (!faces.length) return;
     const effective = chartThreeDSurfacePaint(chart, surface, role);
     if (effective.line === null) return;
     const linePaint = effective.line ?? { fillType: 'solid' as const, color: '898989' };
+    const points = faces.flatMap(face => face.points);
     const minX = Math.min(...points.map(point => point.x));
     const maxX = Math.max(...points.map(point => point.x));
     const minY = Math.min(...points.map(point => point.y));
@@ -2331,21 +2360,24 @@ function walls(
       ? 'round' : effective.lineCap === 'sq' ? 'square' : 'butt';
     ctx.lineJoin = effective.lineJoin === 'round' || effective.lineJoin === 'bevel'
       ? effective.lineJoin : 'miter';
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let index = 1; index < points.length; index++) {
-      ctx.lineTo(points[index].x, points[index].y);
+    for (const face of faces) {
+      if (face.points.length < 2) continue;
+      ctx.beginPath();
+      ctx.moveTo(face.points[0].x, face.points[0].y);
+      for (let index = 1; index < face.points.length; index++) {
+        ctx.lineTo(face.points[index].x, face.points[index].y);
+      }
+      ctx.lineTo(face.points[0].x, face.points[0].y);
+      ctx.closePath();
+      ctx.stroke();
     }
-    ctx.lineTo(points[0].x, points[0].y);
-    ctx.closePath();
-    ctx.stroke();
   };
   // Paint each CT_Surface perimeter in chart order. The back wall is last, so
   // its authored rule owns the shared floor/back separator without drawing an
   // extra synthetic line. This also restores the complete side-wall outline.
-  strokeSurface(geometry.floor, chart.threeD?.floor, 'floor');
-  strokeSurface(geometry.sideWall, chart.threeD?.sideWall, 'wall');
-  strokeSurface(geometry.backWall, chart.threeD?.backWall, 'wall');
+  strokeSurface(floorFaces, chart.threeD?.floor, 'floor');
+  strokeSurface(sideWallFaces, chart.threeD?.sideWall, 'wall');
+  strokeSurface(backWallFaces, chart.threeD?.backWall, 'wall');
   ctx.setLineDash([]);
 }
 
@@ -2666,7 +2698,7 @@ function renderCartesian(
   const { plot, legend, legendMeasure } = titleAndPlot(
     ctx, chart, rect, ptToPx, horizontal ? 'horizontal' : 'vertical', shapeRotationDeg,
   );
-  const projection = planChartThreeDProjection(chart.threeD, plot, {
+  let projection = planChartThreeDProjection(chart.threeD, plot, {
     // Office places bar/column prisms in a compact depth box, while line and
     // area series planes span a substantially deeper Z scene. Projection and
     // view angles remain identical; only the authored family geometry differs.
@@ -2683,6 +2715,7 @@ function renderCartesian(
     perspectiveTangentGain: depthArranged ? 1 : 2,
   });
   if (!projection) return true;
+  projection = fitChartThreeDProjectionToWallThickness(projection, chart.threeD, plot);
   const percent = chart.chartType.endsWith('Pct');
   const categories = chart.series.find(series => (series.categories?.length ?? 0) > 0)?.categories
     ?? chart.categories;
