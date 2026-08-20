@@ -1644,6 +1644,7 @@ export interface ShapeElement {
     fill: Fill | null;
     stroke: Stroke | null;
     textBody: TextBody | null;
+    isTextBox?: boolean;
     defaultTextColor: string | null;
     custGeom: PathCmd[][] | null;
     adj: number | null;
