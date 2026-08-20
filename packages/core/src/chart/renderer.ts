@@ -8326,22 +8326,20 @@ function renderSurfaceChart(
     const effective = surfaceFacePaints[index];
     const imageFill = effective.fill?.fillType === 'image' ? effective.fill : null;
     if (imageFill) {
-      if (!valAxisReversed(chart)) {
-        const image = chartImageFillSource(imageFill);
-        const surface = chart.threeD?.[surfaceKinds[index]];
-        if (image) {
-          const project = (point: ThreeDScenePoint) =>
-            projection.projectUnbounded(point.x, point.y, point.depth);
-          paintChartThreeDSurfacePicture(
-            ctx, imageFill, image, surface, surfaceKinds[index],
-            surfaceSlabs[index], surfaceSlabs[index].faces
-              .map((face, faceIndex) => ({ face, faceIndex }))
-              .filter(({ face }) => surfaceSlabs[index].thickness === 0
-                || projection.cameraFacing(face))
-              .map(({ faceIndex }) => faceIndex),
-            project, surfaceSpan,
-          );
-        }
+      const image = chartImageFillSource(imageFill);
+      const surface = chart.threeD?.[surfaceKinds[index]];
+      if (image) {
+        const project = (point: ThreeDScenePoint) =>
+          projection.projectUnbounded(point.x, point.y, point.depth);
+        paintChartThreeDSurfacePicture(
+          ctx, imageFill, image, surface, surfaceKinds[index],
+          surfaceSlabs[index], surfaceSlabs[index].faces
+            .map((face, faceIndex) => ({ face, faceIndex }))
+            .filter(({ face }) => surfaceSlabs[index].thickness === 0
+              || projection.cameraFacing(face))
+            .map(({ faceIndex }) => faceIndex),
+          project, surfaceSpan,
+        );
       }
     }
     const minX = Math.min(...points.map(point => point.x));
