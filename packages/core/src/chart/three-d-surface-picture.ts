@@ -1,7 +1,7 @@
 import type { ImageFill } from '../types/common.js';
 import type { ChartThreeDSurface } from '../types/chart.js';
 import { cropSourceRect, imageNaturalSize } from '../image/crop.js';
-import { drawProjected } from '../shape/scene3d-draw.js';
+import { drawProjected, projectQuadPoint } from '../shape/scene3d-draw.js';
 import {
   planChartThreeDSurfacePicture,
   surfacePictureFaceIsEnabled,
@@ -12,6 +12,28 @@ import {
   type SurfacePictureQuad,
 } from './three-d-surface-picture-plan.js';
 import type { ChartThreeDSurfaceGeometry, ThreeDScenePoint } from './three-d.js';
+
+function fillRectQuad(
+  quad: SurfacePictureQuad,
+  fillRect: ImageFill['fillRect'],
+): SurfacePictureQuad | null {
+  if (!fillRect || ![fillRect.l, fillRect.t, fillRect.r, fillRect.b].some(value => (value ?? 0) !== 0)) {
+    return quad;
+  }
+  const left = fillRect.l ?? 0;
+  const top = fillRect.t ?? 0;
+  const right = 1 - (fillRect.r ?? 0);
+  const bottom = 1 - (fillRect.b ?? 0);
+  const points = [
+    projectQuadPoint(quad, left, top),
+    projectQuadPoint(quad, right, top),
+    projectQuadPoint(quad, right, bottom),
+    projectQuadPoint(quad, left, bottom),
+  ];
+  return points.every((point): point is SurfacePicturePoint => point != null)
+    ? points as SurfacePictureQuad
+    : null;
+}
 
 function screenAlignedFace(
   face: readonly ThreeDScenePoint[],
@@ -86,13 +108,15 @@ export function paintChartThreeDSurfacePicture(
         ? fullQuad
         : aligned?.map(project) as SurfacePictureQuad | undefined;
       if (!quad) continue;
+      const destination = fillRectQuad(quad, fill.fillRect);
+      if (!destination) continue;
       ctx.save();
       ctx.beginPath();
       ctx.moveTo(quad[0].x, quad[0].y);
       for (let index = 1; index < quad.length; index++) ctx.lineTo(quad[index].x, quad[index].y);
       ctx.closePath();
       ctx.clip();
-      drawProjected(image, ctx, natural.w, natural.h, quad, 0.5, sourceRect);
+      drawProjected(image, ctx, natural.w, natural.h, destination, 0.5, sourceRect);
       ctx.restore();
     }
   } else if (plan.stackUnit != null) {
