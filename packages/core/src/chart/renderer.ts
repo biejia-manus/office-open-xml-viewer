@@ -15868,7 +15868,11 @@ function renderChartImpl(
         ctx.font = '11px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(`Chart: ${chart.chartType}`, x + w / 2, y + h / 2);
+        // The public model can carry a future layout identifier of arbitrary
+        // length. Preserve that identifier in the model, but keep the
+        // fail-closed paint path constant-work instead of shaping attacker-
+        // controlled text that is not part of the rendered document.
+        ctx.fillText('Unsupported chart', x + w / 2, y + h / 2);
     }
     drawChartDisplayUnitLabels(ctx, chart, rect, ptToPx);
     drawChartTextBoxes(ctx, chart, rect, ptToPx);

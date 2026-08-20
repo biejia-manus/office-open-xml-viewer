@@ -5188,6 +5188,28 @@ describe('CH3 — labels are locale-independent (§18.8.30)', () => {
 });
 
 describe('ChartEx flat layouts dispatch to semantic renderers', () => {
+  it('fails closed for an unknown future ChartEx layout without guessing from its data', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'futureLayout',
+      categories: ['A', 'B'],
+      series: [series({ values: [2, -1] })],
+    }), RECT, 1);
+
+    expect(rec.texts.map(text => text.text)).toEqual(['Unsupported chart']);
+    expect(rec.rects).toHaveLength(0);
+    expect(rec.strokeRects).toHaveLength(0);
+    expect(rec.gradients).toHaveLength(0);
+  });
+
+  it('keeps unsupported-layout placeholder work constant for an unbounded public identifier', () => {
+    const rec = recordingCtx();
+    const chartType = 'x'.repeat(1_000_000);
+    renderChart(rec.ctx, baseModel({ chartType, series: [series({ values: [1] })] }), RECT, 1);
+
+    expect(rec.texts.map(text => text.text)).toEqual(['Unsupported chart']);
+  });
+
   it('measures the same semantic ChartEx column legend that it paints', () => {
     const renderPlot = (extraSeries: ChartSeries[]): RectCall => {
       const rec = recordingCtx();
