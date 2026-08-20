@@ -104,6 +104,8 @@ import {
   classicCanvasPointCount,
   classicCanvasPointFamilyIsPainted,
   MAX_CANVAS_CHART_POINTS,
+  MAX_CHART_PAINT_COMPONENTS,
+  MAX_CHART_PAINT_RECIPE_COMPONENTS,
   sourceChartStructureCount,
 } from './resource-limits.js';
 import {
@@ -121,6 +123,14 @@ import { effectiveDataLabelText } from './data-label-content.js';
 import { placeTrendlineLabel } from './trendline-label.js';
 import { paintLegendFrame } from './legend-frame.js';
 import { paintPlotAreaFrame } from './plot-area-frame.js';
+import {
+  chartThreeDSurfacePaint,
+  chartStyleColor,
+  chartStyleFillDecision,
+  chartStyleFillPaint,
+  chartStyleLineDecision,
+  chartStyleLinePaint,
+} from './style-paint.js';
 import { applyPlotVisibleOnly } from './source-visibility.js';
 import {
   boundDataLabelText,
@@ -5778,7 +5788,12 @@ function chartStyleRoleLegend(chart: ChartModel): ChartModel {
 }
 
 function chartStyleRolePlotArea(chart: ChartModel): ChartModel {
-  const linked = chart.chartStyleRoles?.plotArea;
+  // MS-ODRAWXML defines plotArea and plotArea3D as separate required style
+  // entries. Do not infer one from the other in a malformed/partial sidecar;
+  // direct chart formatting stays authoritative below.
+  const linked = chart.threeD
+    ? chart.chartStyleRoles?.plotArea3D
+    : chart.chartStyleRoles?.plotArea;
   if (!linked) return chart;
   let plotAreaFill = chart.plotAreaFill;
   let plotAreaBg = chart.plotAreaBg;
@@ -5926,6 +5941,7 @@ function applyLinkedChartStyleRoles(chart: ChartModel): ChartModel {
     && !chart.chartStyleRoles?.dataPointMarker
     && !chart.chartStyleRoles?.legend
     && !chart.chartStyleRoles?.plotArea
+    && !chart.chartStyleRoles?.plotArea3D
     && !chart.chartStyleRoles?.chartArea
     && chart.chartStyleMarkerSizePt == null
     && chart.chartStyleMarkerSymbol == null) {
@@ -7722,6 +7738,45 @@ function renderSurfaceChart(
     ) ?? (rows[index]?.color ? `#${rows[index].color}` : chartColor(index, rows[index])),
   );
   const bandFormats = new Map((chart.surfaceBandFormats ?? []).map(format => [format.idx, format]));
+  const linkedBandStyle = chart.chartStyleRoles?.dataPoint3D;
+  const bandFillRecipes = Array.from({ length: bandCount }, (_, index) => {
+    const format = bandFormats.get(index);
+    let decision: Fill | null | undefined;
+    if (format?.fillHidden === true) decision = null;
+    else if (format?.fill) decision = format.fill;
+    else decision = chartStyleFillDecision(format?.style, index);
+    return decision === undefined
+      ? chartStyleFillDecision(linkedBandStyle, index)
+      : decision;
+  });
+  const bandLineRecipes = Array.from({ length: bandCount }, (_, index) => {
+    const format = bandFormats.get(index);
+    let decision: ChartModel['plotAreaLineFill'] | null | undefined;
+    if (format?.lineHidden === true) decision = null;
+    else if (format?.lineColor) decision = { fillType: 'solid', color: format.lineColor };
+    else decision = chartStyleLineDecision(format?.style, index);
+    return decision === undefined
+      ? chartStyleLineDecision(linkedBandStyle, index)
+      : decision;
+  });
+  const surfaceFacePaints = [
+    { surface: chart.threeD?.floor, role: 'floor' as const },
+    { surface: chart.threeD?.sideWall, role: 'wall' as const },
+    { surface: chart.threeD?.backWall, role: 'wall' as const },
+  ].map(({ surface, role }) => chartThreeDSurfacePaint(chart, surface, role));
+  let surfacePaintComponents = 0;
+  for (const recipe of [
+    ...bandFillRecipes,
+    ...bandLineRecipes,
+    ...surfaceFacePaints.flatMap(paint => [paint.fill, paint.line]),
+  ]) {
+    if (recipe == null) continue;
+    const components = markerPaintComponents(recipe);
+    if ((recipe.fillType === 'gradient'
+        && components > MAX_CANVAS_MARKER_GRADIENT_STOPS)
+      || components > MAX_CANVAS_MARKER_PAINT_COMPONENTS - surfacePaintComponents) return;
+    surfacePaintComponents += components;
+  }
   const bandLabels = Array.from({ length: bandCount }, (_, index) => {
     const lower = surfaceMin + index * step;
     const upper = Math.min(surfaceMax, lower + step);
@@ -7860,7 +7915,72 @@ function renderSurfaceChart(
   const farDepth = projection.topology.farDepth;
   const nearDepth = projection.topology.nearDepth;
   const floorY = front.y + front.h;
+  const wallTopY = front.y;
   const farX = projection.topology.farX === 'min' ? front.x : front.x + front.w;
+  const surfaceFacePoints = [
+    [
+      projection.project(front.x, floorY, nearDepth),
+      projection.project(front.x + front.w, floorY, nearDepth),
+      projection.project(front.x + front.w, floorY, farDepth),
+      projection.project(front.x, floorY, farDepth),
+    ],
+    [
+      projection.project(farX, floorY, nearDepth),
+      projection.project(farX, floorY, farDepth),
+      projection.project(farX, wallTopY, farDepth),
+      projection.project(farX, wallTopY, nearDepth),
+    ],
+    [
+      projection.project(front.x, floorY, farDepth),
+      projection.project(front.x + front.w, floorY, farDepth),
+      projection.project(front.x + front.w, wallTopY, farDepth),
+      projection.project(front.x, wallTopY, farDepth),
+    ],
+  ];
+  for (let index = 0; index < surfaceFacePoints.length; index++) {
+    const points = surfaceFacePoints[index];
+    const effective = surfaceFacePaints[index];
+    const minX = Math.min(...points.map(point => point.x));
+    const maxX = Math.max(...points.map(point => point.x));
+    const minY = Math.min(...points.map(point => point.y));
+    const maxY = Math.max(...points.map(point => point.y));
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let pointIndex = 1; pointIndex < points.length; pointIndex++) {
+      ctx.lineTo(points[pointIndex].x, points[pointIndex].y);
+    }
+    ctx.closePath();
+    if (effective.fill) {
+      const fill = effective.fill.fillType === 'solid'
+        ? `#${effective.fill.color}`
+        : resolveFill(effective.fill, ctx, minX, minY, maxX - minX, maxY - minY);
+      if (fill) {
+        ctx.fillStyle = fill;
+        ctx.fill();
+      }
+    }
+    if (effective.line) {
+      const line = effective.line.fillType === 'solid'
+        ? `#${effective.line.color}`
+        : resolveFill(effective.line, ctx, minX, minY, maxX - minX, maxY - minY);
+      if (line) {
+        const width = effective.lineWidthEmu != null
+          ? axisLineWidthPx(effective.lineWidthEmu, ptToPx) : 1;
+        ctx.strokeStyle = line;
+        ctx.lineWidth = width;
+        ctx.setLineDash(drawingmlLineDashArray(
+          effective.lineCustomDash,
+          effective.lineDash,
+          width,
+        ));
+        ctx.lineCap = effective.lineCap === 'rnd'
+          ? 'round' : effective.lineCap === 'sq' ? 'square' : 'butt';
+        ctx.lineJoin = effective.lineJoin === 'round' || effective.lineJoin === 'bevel'
+          ? effective.lineJoin : 'miter';
+        ctx.stroke();
+      }
+    }
+  }
   if (drawValMajorGridlines(chart)) {
     const line = resolveGridline(
       chart.valAxisGridlineColor,
@@ -7939,6 +8059,45 @@ function renderSurfaceChart(
     }
   }
   paints.sort((left, right) => left.depth - right.depth);
+  const bandBounds = Array.from({ length: bandCount }, () => ({
+    minX: Number.POSITIVE_INFINITY,
+    minY: Number.POSITIVE_INFINITY,
+    maxX: Number.NEGATIVE_INFINITY,
+    maxY: Number.NEGATIVE_INFINITY,
+  }));
+  for (const paint of paints) {
+    const bounds = bandBounds[paint.band];
+    for (const point of paint.points) {
+      bounds.minX = Math.min(bounds.minX, point.x);
+      bounds.minY = Math.min(bounds.minY, point.y);
+      bounds.maxX = Math.max(bounds.maxX, point.x);
+      bounds.maxY = Math.max(bounds.maxY, point.y);
+    }
+  }
+  type SurfaceCanvasPaint = string | CanvasGradient | CanvasPattern | null | undefined;
+  const resolveBandPaint = (
+    recipe: Fill | null | undefined,
+    band: number,
+  ): SurfaceCanvasPaint => {
+    if (recipe == null) return recipe;
+    if (recipe.fillType === 'solid') return `#${recipe.color}`;
+    const bounds = bandBounds[band];
+    if (!Number.isFinite(bounds.minX) || !Number.isFinite(bounds.minY)
+      || !Number.isFinite(bounds.maxX) || !Number.isFinite(bounds.maxY)) return null;
+    return resolveFill(
+      recipe,
+      ctx,
+      bounds.minX,
+      bounds.minY,
+      bounds.maxX - bounds.minX,
+      bounds.maxY - bounds.minY,
+    );
+  };
+  // A c:bandFmt styles one logical band. Resolve its DrawingML recipes once
+  // against the complete projected band bounds, then reuse the Canvas paint
+  // for every clipped polygon instead of replaying gradient stops per face.
+  const resolvedBandFills = bandFillRecipes.map(resolveBandPaint);
+  const resolvedBandLines = bandLineRecipes.map(resolveBandPaint);
   for (const paint of paints) {
     const format = bandFormats.get(paint.band);
     ctx.beginPath();
@@ -7947,15 +8106,9 @@ function renderSurfaceChart(
       ctx.lineTo(paint.points[index].x, paint.points[index].y);
     }
     ctx.closePath();
-    if (format?.fillHidden !== true) {
-      const minX = Math.min(...paint.points.map(point => point.x));
-      const maxX = Math.max(...paint.points.map(point => point.x));
-      const minY = Math.min(...paint.points.map(point => point.y));
-      const maxY = Math.max(...paint.points.map(point => point.y));
-      const authored = format?.fill
-        ? resolveFill(format.fill, ctx, minX, minY, maxX - minX, maxY - minY)
-        : null;
-      ctx.fillStyle = authored ?? scaleHexColor(
+    const bandFill = resolvedBandFills[paint.band];
+    if (bandFill !== null) {
+      ctx.fillStyle = bandFill ?? scaleHexColor(
         bandColors[paint.band],
         useObservedAutomaticMaterial
           ? surfaceMaterialFactor(projection.cameraNormal(paint.scenePoints))
@@ -7963,12 +8116,26 @@ function renderSurfaceChart(
       );
       ctx.fill();
     }
-    if (format && format.lineHidden !== true && format.lineColor) {
-      ctx.strokeStyle = `#${format.lineColor}`;
-      ctx.lineWidth = format.lineWidthEmu != null
-        ? axisLineWidthPx(format.lineWidthEmu, ptToPx)
+    const bandLine = resolvedBandLines[paint.band];
+    if (bandLine != null) {
+      const directGeometry = format?.style;
+      const linkedGeometry = linkedBandStyle?.lineNoStyle === true
+        ? undefined : linkedBandStyle;
+      ctx.strokeStyle = bandLine;
+      const widthEmu = format?.lineWidthEmu
+        ?? directGeometry?.lineWidthEmu ?? linkedGeometry?.lineWidthEmu;
+      ctx.lineWidth = widthEmu != null
+        ? axisLineWidthPx(widthEmu, ptToPx)
         : 1;
-      ctx.setLineDash([]);
+      ctx.setLineDash(drawingmlLineDashArray(
+        directGeometry?.lineCustomDash ?? linkedGeometry?.lineCustomDash,
+        directGeometry?.lineDash ?? linkedGeometry?.lineDash,
+        ctx.lineWidth,
+      ));
+      const cap = directGeometry?.lineCap ?? linkedGeometry?.lineCap;
+      const join = directGeometry?.lineJoin ?? linkedGeometry?.lineJoin;
+      ctx.lineCap = cap === 'rnd' ? 'round' : cap === 'sq' ? 'square' : 'butt';
+      ctx.lineJoin = join === 'round' || join === 'bevel' ? join : 'miter';
       ctx.stroke();
     }
   }
@@ -12733,12 +12900,7 @@ function chartExStyleColor(
   index: number,
   _count: number,
 ): string | null {
-  const colors = kind === 'fill' ? style?.fillColors : style?.lineColors;
-  if (!colors?.length) return null;
-  const fixedIndex = kind === 'fill' ? style?.fillColorIndex : style?.lineColorIndex;
-  // Style-role colors are already effective: ooxml-common applies the Chart
-  // Colors base mapping before CT_StyleColor and style-matrix transforms.
-  return colors[(fixedIndex ?? index) % colors.length] ?? null;
+  return chartStyleColor(style, kind, index);
 }
 
 function chartExPaletteColor(
@@ -12787,18 +12949,14 @@ function chartExStyleFillPaint(
   style: ChartExStyle | null | undefined,
   index: number,
 ): Fill | null {
-  const paints = style?.fillPaints;
-  if (!paints?.length) return null;
-  return paints[(style?.fillColorIndex ?? index) % paints.length] ?? null;
+  return chartStyleFillPaint(style, index);
 }
 
 function chartExStyleLinePaint(
   style: ChartExStyle | null | undefined,
   index: number,
 ): ChartModel['plotAreaLineFill'] {
-  const paints = style?.linePaints;
-  if (!paints?.length) return null;
-  return paints[(style?.lineColorIndex ?? index) % paints.length] ?? null;
+  return chartStyleLinePaint(style, index);
 }
 
 /** Line-paint counterpart of chartExStylePaintDecision. `undefined` means the
@@ -12810,13 +12968,9 @@ function chartExStyleLinePaintDecision(
   index: number,
   count: number,
 ): ChartModel['plotAreaLineFill'] | null | undefined {
-  if (!style) return undefined;
-  if (style.lineHidden) return style.lineNoStyle ? undefined : null;
-  const paint = chartExStyleLinePaint(style, index);
-  if (paint) return paint;
-  const color = chartExStyleColor(chart, style, 'line', index, count);
-  if (color) return { fillType: 'solid', color };
-  return style.linePaintAuthored === true ? null : undefined;
+  void chart;
+  void count;
+  return chartStyleLineDecision(style, index);
 }
 
 /** Resolve one ChartEx style paint layer. `undefined` means this layer supplied
@@ -12828,13 +12982,9 @@ function chartExStylePaintDecision(
   index: number,
   count: number,
 ): Fill | null | undefined {
-  if (!style) return undefined;
-  if (style.fillHidden) return style.fillNoStyle ? undefined : null;
-  const paint = chartExStyleFillPaint(style, index);
-  if (paint) return paint;
-  const color = chartExStyleColor(chart, style, 'fill', index, count);
-  if (color) return { fillType: 'solid', color };
-  return style.fillPaintAuthored === true ? null : undefined;
+  void chart;
+  void count;
+  return chartStyleFillDecision(style, index);
 }
 
 function chartExMarkerPaint(
@@ -13055,8 +13205,8 @@ function chartExLegendSeries(
 // Marker gradients are resolved for each painted marker. Bound both one
 // recipe and the chart-wide stop registrations so a valid public model cannot
 // turn a bounded point count into unbounded synchronous Canvas work.
-const MAX_CANVAS_MARKER_GRADIENT_STOPS = 4_096;
-const MAX_CANVAS_MARKER_PAINT_COMPONENTS = 1_048_576;
+const MAX_CANVAS_MARKER_GRADIENT_STOPS = MAX_CHART_PAINT_RECIPE_COMPONENTS;
+const MAX_CANVAS_MARKER_PAINT_COMPONENTS = MAX_CHART_PAINT_COMPONENTS;
 const MAX_CANVAS_LABEL_GRADIENT_STOPS = MAX_CANVAS_MARKER_GRADIENT_STOPS;
 const MAX_CANVAS_LABEL_PAINT_COMPONENTS = MAX_CANVAS_MARKER_PAINT_COMPONENTS;
 // The package parser already applies its XML-depth ceiling. Keep the same kind
@@ -16025,6 +16175,7 @@ function renderChartImpl(
       case 'stock':
         renderStockChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'surface':
+      case 'surface3D':
         renderSurfaceChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;
       case 'boxWhisker':
         renderBoxWhiskerChart(ctx, chart, rect, ptToPx, shapeRotationDeg); break;

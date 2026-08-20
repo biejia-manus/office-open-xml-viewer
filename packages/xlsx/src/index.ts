@@ -53,6 +53,7 @@ export type {
   ChartStockUpDownBarStyle,
   ChartSurfaceBandFormat,
   ChartThreeD,
+  ChartThreeDPictureOptions,
   ChartThreeDSurface,
   ChartThreeDSeriesAxis,
   ChartThreeDRenderer,

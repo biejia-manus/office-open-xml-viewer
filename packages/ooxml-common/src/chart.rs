@@ -47,17 +47,18 @@ const MAX_CHART_LEGEND_ENTRIES: usize = 4096;
 /// one component per stop; solid and pattern fills contribute one. This bounds
 /// the otherwise multiplicative `palette entries × gradient stops` wire model.
 const MAX_CHART_STYLE_PAINT_COMPONENTS: usize = 1_048_576;
-/// A single marker gradient is replayed once per visible data point. Keep one
-/// authored recipe bounded before `parse_grad_fill` allocates/sorts its stop
-/// list; the aggregate chart budget below then bounds all retained recipes.
-const MAX_CHART_MARKER_GRADIENT_STOPS: usize = 4096;
+/// A single structured paint recipe can be replayed for every visible chart
+/// datum. Keep it bounded before `parse_grad_fill` allocates/sorts its stop
+/// list; the aggregate budgets below then bound all retained recipes.
+const MAX_CHART_PAINT_RECIPE_COMPONENTS: usize = 4096;
+const MAX_CHART_MARKER_GRADIENT_STOPS: usize = MAX_CHART_PAINT_RECIPE_COMPONENTS;
 /// Aggregate direct marker-paint components retained by one chart. This is an
 /// availability boundary, not a visual compatibility rule.
 const MAX_CHART_MARKER_PAINT_COMPONENTS: usize = MAX_CHART_STYLE_PAINT_COMPONENTS;
 /// Direct data/trendline label shapes can replay one gradient for every label.
 /// Bound both a single recipe and the aggregate retained wire components before
 /// parsing stop lists. These are availability ceilings, not visual rules.
-const MAX_CHART_LABEL_GRADIENT_STOPS: usize = 4096;
+const MAX_CHART_LABEL_GRADIENT_STOPS: usize = MAX_CHART_PAINT_RECIPE_COMPONENTS;
 const MAX_CHART_LABEL_PAINT_COMPONENTS: usize = MAX_CHART_STYLE_PAINT_COMPONENTS;
 /// Aggregate role×palette slots retained from one linked Chart Style. Typical
 /// Office parts use 30 paint roles × 6–54 colors. Reject the entire fallback
@@ -294,6 +295,11 @@ pub enum ChartStyleFill {
 #[serde(rename_all = "camelCase")]
 pub struct ChartSurfaceBandFormat {
     pub idx: u32,
+    /// Direct outline geometry/paint and fill-authorship provenance. The
+    /// sibling `fill` field is the one authoritative direct fill recipe, so a
+    /// bounded gradient is neither expanded nor serialized twice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<ChartExElementStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<ChartStyleFill>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1128,6 +1134,8 @@ pub struct ChartThreeDSeriesAxis {
 #[serde(rename_all = "camelCase")]
 pub struct ChartThreeDSurface {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<ChartExElementStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_hidden: Option<bool>,
@@ -1139,25 +1147,62 @@ pub struct ChartThreeDSurface {
     pub line_dash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_hidden: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thickness_percent: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture_options: Option<ChartThreeDPictureOptions>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartThreeDPictureOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apply_to_front: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apply_to_sides: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apply_to_end: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture_stack_unit: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartThreeD {
+    /// Whether `<c:view3D>` itself is present. Child values retain their schema
+    /// defaults separately so compatibility rules can distinguish omission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_3d_present: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_x: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_x_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_y: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_y_authored: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height_percent: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_percent_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depth_percent: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_percent_authored: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perspective: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perspective_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub right_angle_axes: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right_angle_axes_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gap_depth_percent: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_depth_percent_authored: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shape: Option<String>,
     /// `<c:bar3DChart><c:grouping val>` (§21.2.2.77). `standard` places
@@ -4921,6 +4966,41 @@ fn chart_style_paint_component_count(container: Node) -> Option<usize> {
     })
 }
 
+/// Parse one classic 3-D series shape only after its direct fill and outline
+/// recipes fit the same per-recipe and aggregate availability ceilings as dPt
+/// paints. This runs before gradient stop expansion; an oversized recipe makes
+/// the enclosing chart fail atomically rather than retaining a paint prefix.
+fn parse_three_d_series_style_with_budget(
+    series: Node,
+    resolver: &dyn ColorResolver,
+    image_resolver: &dyn ChartImageResolver,
+    component_budget: &mut usize,
+    budget_exceeded: &mut bool,
+) -> Option<ChartExElementStyle> {
+    let sp_pr = child(series, "spPr")?;
+    let fill_components = chart_style_paint_component_count(sp_pr).unwrap_or(0);
+    let line_components = child(sp_pr, "ln")
+        .and_then(chart_style_paint_component_count)
+        .unwrap_or(0);
+    let components = fill_components.saturating_add(line_components);
+    if fill_components > MAX_CHART_PAINT_RECIPE_COMPONENTS
+        || line_components > MAX_CHART_PAINT_RECIPE_COMPONENTS
+        || components > *component_budget
+    {
+        *budget_exceeded = true;
+        return None;
+    }
+    *component_budget -= components;
+    Some(parse_chartex_element_style(
+        series,
+        resolver,
+        None,
+        None,
+        image_resolver,
+        ChartImageSource::Chart,
+    ))
+}
+
 fn chart_style_paint_entry_limit(
     component_count: Option<usize>,
     palette_entries: usize,
@@ -5538,6 +5618,14 @@ fn parse_chart_style_role_table(
     let fill_components = role_nodes.iter().try_fold(0usize, |total, role| {
         let fill_components = chart_style_role_fill_component_count(*role, resolver)?;
         let line_components = chart_style_role_line_component_count(*role, resolver)?;
+        // Palette expansion happens after this point. Refuse an oversized
+        // source recipe before parsing it even when the aggregate expanded
+        // table would still fit its larger chart-wide ceiling.
+        if fill_components > MAX_CHART_PAINT_RECIPE_COMPONENTS
+            || line_components > MAX_CHART_PAINT_RECIPE_COMPONENTS
+        {
+            return None;
+        }
         let components = fill_components.checked_add(line_components)?;
         total.checked_add(components.checked_mul(palette_entries)?)
     })?;
@@ -5934,6 +6022,27 @@ fn parse_chart_text_percentage(value: &str) -> Option<f64> {
         .parse::<i32>()
         .ok()
         .map(|raw| f64::from(raw) / 100_000.0)
+}
+
+/// Parse the chart-specific percentage unions used by `CT_HPercent`,
+/// `CT_DepthPercent`, `CT_GapAmount`, and `CT_Thickness`. Unlike DrawingML
+/// `ST_Percentage`, the Transitional integer branch is already expressed in
+/// whole percent, while the Strict branch accepts only an integer followed by
+/// `%`. Keep that lexical distinction here so camera rotations and other
+/// scalar chart types are never accidentally interpreted as percentages.
+fn parse_chart_integer_percent(value: &str, strict: bool, min: u32, max: u32) -> Option<f64> {
+    let raw = if let Some(percent) = value.strip_suffix('%') {
+        if percent.is_empty() || !percent.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        percent.parse::<u32>().ok()?
+    } else {
+        if strict {
+            return None;
+        }
+        value.trim().parse::<u32>().ok()?
+    };
+    (min..=max).contains(&raw).then_some(f64::from(raw))
 }
 
 #[allow(clippy::type_complexity)]
@@ -10053,40 +10162,90 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     } else {
         None
     };
-    let surface_wireframe = find_chart("surfaceChart")
-        .or_else(|| find_chart("surface3DChart"))
-        .and_then(|surface| bool_child(surface, "wireframe"));
-    let surface_band_formats = find_chart("surfaceChart")
-        .or_else(|| find_chart("surface3DChart"))
+    let surface_group = find_chart("surfaceChart").or_else(|| find_chart("surface3DChart"));
+    let surface_wireframe = surface_group.and_then(|surface| bool_child(surface, "wireframe"));
+    let surface_band_format_nodes = surface_group
         .and_then(|surface| child(surface, "bandFmts"))
         .map(|formats| {
             formats
                 .children()
                 .filter(|node| node.is_element() && node.tag_name().name() == "bandFmt")
-                .take(MAX_CHART_COLOR_STYLE_ENTRIES)
+                .take(MAX_CHART_COLOR_STYLE_ENTRIES + 1)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if surface_band_format_nodes.len() > MAX_CHART_COLOR_STYLE_ENTRIES {
+        return None;
+    }
+    // A band is one logical formatted datum even though the renderer clips it
+    // into many polygons. Bound each direct fill/outline recipe and their
+    // chart-wide aggregate before parsing any gradient stop list.
+    let mut surface_paint_components = 0usize;
+    for format in &surface_band_format_nodes {
+        let Some(sp_pr) = child(*format, "spPr") else {
+            continue;
+        };
+        for components in [
+            chart_style_paint_component_count(sp_pr).unwrap_or(0),
+            child(sp_pr, "ln")
+                .and_then(chart_style_paint_component_count)
+                .unwrap_or(0),
+        ] {
+            if components > MAX_CHART_MARKER_GRADIENT_STOPS
+                || components > MAX_CHART_MARKER_PAINT_COMPONENTS - surface_paint_components
+            {
+                return None;
+            }
+            surface_paint_components += components;
+        }
+    }
+    let surface_band_formats = (!surface_band_format_nodes.is_empty())
+        .then(|| {
+            surface_band_format_nodes
+                .iter()
                 .filter_map(|format| {
-                    let idx = child(format, "idx")
+                    let idx = child(*format, "idx")
                         .and_then(|node| node.attribute("val"))
                         .and_then(|value| value.parse::<u32>().ok())?;
-                    let shape = child(format, "spPr");
-                    let (fill, fill_hidden) = match shape.and_then(|node| {
-                        parse_chart_style_paint(
-                            node,
+                    let shape = child(*format, "spPr");
+                    let mut style = shape.map(|_| {
+                        parse_chartex_element_style(
+                            *format,
                             color_resolver,
                             None,
-                            &EmptyChartImageResolver,
+                            None,
+                            image_resolver,
                             ChartImageSource::Chart,
                         )
-                    }) {
-                        Some(ChartStylePaint::NoFill) => (None, Some(true)),
-                        Some(ChartStylePaint::Fill(fill)) => (Some(*fill), None),
-                        Some(ChartStylePaint::Unresolved) => (None, None),
-                        None => (None, None),
-                    };
+                    });
+                    // The legacy `fill` field remains the single authoritative
+                    // carrier for direct band paint. Derive it from the one
+                    // parsed style entry, then retain only provenance in the
+                    // full style so a gradient is neither expanded nor sent
+                    // over the wire twice.
+                    let (fill, fill_hidden) = style
+                        .as_ref()
+                        .map(|style| {
+                            let fill = style
+                                .fill_paints
+                                .as_deref()
+                                .and_then(|paints| paints.first())
+                                .and_then(Option::as_ref)
+                                .cloned();
+                            (fill, (style.fill_hidden == Some(true)).then_some(true))
+                        })
+                        .unwrap_or((None, None));
+                    if let Some(style) = style.as_mut() {
+                        style.fill_paints = None;
+                        style.fill_colors = None;
+                        style.fill_hidden = None;
+                        style.fill_no_style = None;
+                    }
                     let (line_color, line_width_emu, line_hidden) =
-                        extract_sp_pr_ln_style(format, color_resolver);
+                        extract_sp_pr_ln_style(*format, color_resolver);
                     Some(ChartSurfaceBandFormat {
                         idx,
+                        style,
                         fill,
                         fill_hidden,
                         line_color,
@@ -10191,9 +10350,45 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     let chart_container = root
         .descendants()
         .find(|node| node.is_element() && node.tag_name().name() == "chart");
+    // CT_Surface has only three instances, but each DrawingML gradient can
+    // contain an unbounded gsLst. Preflight every direct floor/wall fill and
+    // outline before expanding any recipe, using the same per-recipe and
+    // chart-wide ceilings as other repeated chart paints.
+    for surface in chart_container.into_iter().flat_map(|chart| {
+        chart.children().filter(|node| {
+            node.is_element() && matches!(node.tag_name().name(), "floor" | "sideWall" | "backWall")
+        })
+    }) {
+        let Some(sp_pr) = child(surface, "spPr") else {
+            continue;
+        };
+        for components in [
+            chart_style_paint_component_count(sp_pr).unwrap_or(0),
+            child(sp_pr, "ln")
+                .and_then(chart_style_paint_component_count)
+                .unwrap_or(0),
+        ] {
+            if components > MAX_CHART_MARKER_GRADIENT_STOPS
+                || components > MAX_CHART_MARKER_PAINT_COMPONENTS - surface_paint_components
+            {
+                return None;
+            }
+            surface_paint_components += components;
+        }
+    }
     let parse_three_d_surface = |name: &str| -> Option<ChartThreeDSurface> {
         let surface = chart_container.and_then(|chart| child(chart, name))?;
         let sp_pr = child(surface, "spPr");
+        let style = sp_pr.map(|_| {
+            parse_chartex_element_style(
+                surface,
+                color_resolver,
+                None,
+                None,
+                image_resolver,
+                ChartImageSource::Chart,
+            )
+        });
         let fill_color = sp_pr.and_then(|shape| color_resolver.resolve_shape_fill(shape));
         let fill_hidden = sp_pr
             .and_then(|shape| child(shape, "noFill"))
@@ -10212,56 +10407,96 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         } else {
             None
         };
+        let thickness_percent = child(surface, "thickness")
+            .and_then(|node| node.attribute("val"))
+            .and_then(|value| {
+                parse_chart_integer_percent(
+                    value,
+                    surface.tag_name().namespace() == Some(crate::ns::chart::STRICT),
+                    0,
+                    u32::MAX,
+                )
+            });
+        let picture_options =
+            child(surface, "pictureOptions").map(|options| ChartThreeDPictureOptions {
+                apply_to_front: bool_child(options, "applyToFront"),
+                apply_to_sides: bool_child(options, "applyToSides"),
+                apply_to_end: bool_child(options, "applyToEnd"),
+                picture_format: child(options, "pictureFormat")
+                    .and_then(|node| node.attribute("val"))
+                    .filter(|value| matches!(*value, "stretch" | "stack" | "stackScale"))
+                    .map(str::to_string),
+                picture_stack_unit: child(options, "pictureStackUnit")
+                    .and_then(|node| node.attribute("val"))
+                    .and_then(|value| value.parse::<f64>().ok())
+                    .filter(|value| value.is_finite() && *value > 0.0),
+            });
         Some(ChartThreeDSurface {
+            style,
             fill_color,
             fill_hidden,
             line_color,
             line_width_emu,
             line_dash,
             line_hidden,
+            thickness_percent,
+            picture_options,
         })
     };
     let three_d = three_d_group.map(|group| {
         let view = root
             .descendants()
             .find(|node| node.is_element() && node.tag_name().name() == "view3D");
-        let number = |parent: Option<Node>, name: &str| {
-            parent
-                .and_then(|node| child(node, name))
-                .and_then(|node| node.attribute("val"))
-                .and_then(|value| value.trim_end_matches('%').parse::<f64>().ok())
-                .filter(|value| value.is_finite())
-        };
-        let number_with_schema_default = |parent: Option<Node>, name: &str, default: f64| {
-            let node = parent.and_then(|parent| child(parent, name))?;
-            match node.attribute("val") {
-                Some(value) => value
-                    .trim_end_matches('%')
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|value| value.is_finite()),
-                None => Some(default),
-            }
-        };
+        let strict_chart = root.tag_name().namespace() == Some(crate::ns::chart::STRICT);
+        let scalar_with_schema_default =
+            |parent: Option<Node>, name: &str, default: i32, min: i32, max: i32| {
+                let node = parent.and_then(|parent| child(parent, name))?;
+                match node.attribute("val") {
+                    Some(value) => value
+                        .trim()
+                        .parse::<i32>()
+                        .ok()
+                        .filter(|value| (min..=max).contains(value)),
+                    None => Some(default),
+                }
+            };
+        let percent_with_schema_default =
+            |parent: Option<Node>, name: &str, default: f64, min: u32, max: u32| {
+                let node = parent.and_then(|parent| child(parent, name))?;
+                match node.attribute("val") {
+                    Some(value) => parse_chart_integer_percent(value, strict_chart, min, max),
+                    None => Some(default),
+                }
+            };
         ChartThreeD {
+            view_3d_present: Some(view.is_some()),
             // CT_View3D child values have schema defaults even when their
             // element is present without @val. Preserve that authored/bare
             // distinction instead of replacing it with a renderer default.
-            rotation_x: number_with_schema_default(view, "rotX", 0.0)
-                .filter(|value| (-90.0..=90.0).contains(value))
-                .map(|value| value as i32),
-            rotation_y: number_with_schema_default(view, "rotY", 0.0)
-                .filter(|value| (0.0..=360.0).contains(value))
-                .map(|value| value as u32),
-            height_percent: number(view, "hPercent").filter(|value| (5.0..=500.0).contains(value)),
-            depth_percent: number(view, "depthPercent")
-                .filter(|value| (20.0..=2000.0).contains(value)),
-            perspective: number_with_schema_default(view, "perspective", 30.0)
-                .filter(|value| (0.0..=240.0).contains(value))
-                .map(|value| value as u32),
+            rotation_x: scalar_with_schema_default(view, "rotX", 0, -90, 90),
+            rotation_x_authored: Some(view.is_some_and(|node| child(node, "rotX").is_some())),
+            rotation_y: scalar_with_schema_default(view, "rotY", 0, 0, 360)
+                .and_then(|value| u32::try_from(value).ok()),
+            rotation_y_authored: Some(view.is_some_and(|node| child(node, "rotY").is_some())),
+            height_percent: percent_with_schema_default(view, "hPercent", 100.0, 5, 500),
+            height_percent_authored: Some(
+                view.is_some_and(|node| child(node, "hPercent").is_some()),
+            ),
+            depth_percent: percent_with_schema_default(view, "depthPercent", 100.0, 20, 2000),
+            depth_percent_authored: Some(
+                view.is_some_and(|node| child(node, "depthPercent").is_some()),
+            ),
+            perspective: scalar_with_schema_default(view, "perspective", 30, 0, 240)
+                .and_then(|value| u32::try_from(value).ok()),
+            perspective_authored: Some(
+                view.is_some_and(|node| child(node, "perspective").is_some()),
+            ),
             right_angle_axes: view.and_then(|node| bool_child(node, "rAngAx")),
-            gap_depth_percent: number(Some(group), "gapDepth")
-                .filter(|value| (0.0..=500.0).contains(value)),
+            right_angle_axes_authored: Some(
+                view.is_some_and(|node| child(node, "rAngAx").is_some()),
+            ),
+            gap_depth_percent: percent_with_schema_default(Some(group), "gapDepth", 150.0, 0, 500),
+            gap_depth_percent_authored: Some(child(group, "gapDepth").is_some()),
             shape: child(group, "shape")
                 .and_then(|node| node.attribute("val"))
                 .map(str::to_string),
@@ -10708,6 +10943,12 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
             // flag series whose group references the secondary value axis so they
             // plot against the right-hand scale.
             let group = ser.parent();
+            let is_classic_three_d_series = group.is_some_and(|owner| {
+                matches!(
+                    owner.tag_name().name(),
+                    "bar3DChart" | "line3DChart" | "area3DChart" | "pie3DChart"
+                )
+            });
             let series_type = group
                 .map(|p| p.tag_name().name())
                 .and_then(group_series_type);
@@ -11021,7 +11262,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                     *ser,
                     color_resolver,
                     image_resolver,
-                    bubble_group.is_some(),
+                    bubble_group.is_some() || is_classic_three_d_series,
                     &mut marker_paint_budget,
                     &mut marker_paint_budget_exceeded,
                 )
@@ -11284,6 +11525,27 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 inverted_line_width_emu = Some(9_525);
             }
 
+            let chartex_style = if is_classic_three_d_series {
+                parse_three_d_series_style_with_budget(
+                    *ser,
+                    color_resolver,
+                    image_resolver,
+                    &mut marker_paint_budget,
+                    &mut marker_paint_budget_exceeded,
+                )
+            } else {
+                child(*ser, "spPr").map(|_| {
+                    parse_chartex_element_style(
+                        *ser,
+                        color_resolver,
+                        None,
+                        None,
+                        image_resolver,
+                        ChartImageSource::Chart,
+                    )
+                })
+            };
+
             ChartSeries {
                 name,
                 chartex_format_idx: None,
@@ -11302,16 +11564,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 // grammar as ChartEx. Reuse the bounded element-style carrier
                 // so classic 3-D line/area rendering does not discard authored
                 // dash/cap/join while color/width keep their legacy fields.
-                chartex_style: child(*ser, "spPr").map(|_| {
-                    parse_chartex_element_style(
-                        *ser,
-                        color_resolver,
-                        None,
-                        None,
-                        image_resolver,
-                        ChartImageSource::Chart,
-                    )
-                }),
+                chartex_style,
                 line_color,
                 line_width_emu,
                 three_d_shape: child(*ser, "shape")
@@ -19092,6 +19345,53 @@ Subtitle</a:t></a:r></a:p>
                 && style.fill_paints.is_none()));
     }
 
+    #[test]
+    fn linked_chart_style_role_table_bounds_each_source_paint_recipe() {
+        let gradient = |count: usize| {
+            (0..count)
+                .map(|index| format!(r#"<a:gs pos="{index}"><a:srgbClr val="112233"/></a:gs>"#))
+                .collect::<String>()
+        };
+        let style = |count: usize, outline: bool| {
+            let paint = format!(
+                r#"<a:gradFill><a:gsLst>{}</a:gsLst><a:lin ang="0"/></a:gradFill>"#,
+                gradient(count),
+            );
+            let sp_pr = if outline {
+                format!(r#"<a:noFill/><a:ln>{paint}</a:ln>"#)
+            } else {
+                paint
+            };
+            format!(
+                r#"<cs:chartStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}"><cs:dataPoint3D><cs:spPr>{sp_pr}</cs:spPr></cs:dataPoint3D></cs:chartStyle>"#,
+            )
+        };
+
+        for outline in [false, true] {
+            let exact_xml = style(MAX_CHART_PAINT_RECIPE_COMPONENTS, outline);
+            let exact = root_of(&exact_xml);
+            assert!(parse_chart_style_role_table(
+                exact.root_element(),
+                &FixtureResolver,
+                None,
+                None,
+                &EmptyChartImageResolver,
+            )
+            .is_some());
+
+            let oversized_xml = style(MAX_CHART_PAINT_RECIPE_COMPONENTS + 1, outline);
+            let oversized = root_of(&oversized_xml);
+            assert!(parse_chart_style_role_table(
+                oversized.root_element(),
+                &FixtureResolver,
+                None,
+                None,
+                &EmptyChartImageResolver,
+            )
+            .is_none());
+        }
+    }
+
     // ── CH15: chartEx structured layout parsing ──────────────────────────────
 
     /// A box-and-whisker chart with two series, each referencing its own
@@ -19667,6 +19967,42 @@ Subtitle</a:t></a:r></a:p>
         assert!(m.three_d.is_some());
     }
 
+    #[test]
+    fn parse_chart_part_retains_structured_point_paint_for_classic_3d_series() {
+        let series = CH13_SER.replace(
+            "<c:idx val=\"0\"/>",
+            r#"<c:idx val="0"/><c:dPt><c:idx val="1"/><c:spPr><a:gradFill><a:gsLst>
+              <a:gs pos="0"><a:srgbClr val="112233"/></a:gs>
+              <a:gs pos="100000"><a:srgbClr val="DDEEFF"/></a:gs>
+            </a:gsLst><a:lin ang="0"/></a:gradFill><a:ln w="12700"><a:pattFill prst="pct10">
+              <a:fgClr><a:srgbClr val="FF0000"/></a:fgClr><a:bgClr><a:srgbClr val="FFFFFF"/></a:bgClr>
+            </a:pattFill></a:ln></c:spPr></c:dPt>"#,
+        );
+        let group = format!(r#"<c:pie3DChart><c:varyColors val="1"/>{series}</c:pie3DChart>"#);
+        let xml = chart_space_with_group(&group);
+        let document = chart_space_of(&xml);
+        let model = parse_chart_part(document.root_element(), &FixtureResolver).expect("pie3D");
+        let style = model.series[0]
+            .data_point_overrides
+            .as_ref()
+            .expect("point override")[0]
+            .chartex_style
+            .as_ref()
+            .expect("point style");
+        assert!(matches!(
+            style.fill_paints.as_deref().and_then(|paints| paints.first()).and_then(Option::as_ref),
+            Some(ChartStyleFill::Gradient { stops, .. }) if stops.len() == 2
+        ));
+        assert!(matches!(
+            style
+                .line_paints
+                .as_deref()
+                .and_then(|paints| paints.first())
+                .and_then(Option::as_ref),
+            Some(ChartStyleFill::Pattern { .. })
+        ));
+    }
+
     /// §21.2.2.15 bar3DChart uses the shared stacked-bar data model while its
     /// view/depth controls remain available to the simplified 3D painter.
     #[test]
@@ -19683,7 +20019,13 @@ Subtitle</a:t></a:r></a:p>
             r#"<c:chart><c:view3D><c:rotX val="25"/><c:hPercent val="120"/><c:rotY val="330"/><c:depthPercent val="250"/><c:rAngAx val="0"/><c:perspective val="45"/></c:view3D>
               <c:floor><c:spPr><a:noFill/><a:ln w="3175"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:prstDash val="solid"/></a:ln></c:spPr></c:floor>
               <c:sideWall><c:spPr><a:noFill/><a:ln w="12700"><a:solidFill><a:srgbClr val="808080"/></a:solidFill><a:prstDash val="dash"/></a:ln></c:spPr></c:sideWall>
-              <c:backWall><c:spPr><a:solidFill><a:srgbClr val="F2F2F2"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:backWall>
+              <c:backWall><c:thickness val="25%"/><c:spPr><a:gradFill><a:gsLst>
+                <a:gs pos="0"><a:srgbClr val="F2F2F2"/></a:gs>
+                <a:gs pos="100000"><a:srgbClr val="808080"/></a:gs>
+              </a:gsLst><a:lin ang="0"/></a:gradFill><a:ln><a:noFill/></a:ln></c:spPr>
+                <c:pictureOptions><c:applyToFront/><c:applyToSides val="0"/><c:applyToEnd val="1"/>
+                  <c:pictureFormat val="stackScale"/><c:pictureStackUnit val="2.5"/>
+                </c:pictureOptions></c:backWall>
               <c:plotArea>"#,
         );
         let d = chart_space_of(&xml);
@@ -19700,6 +20042,10 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(view.shape.as_deref(), Some("cylinder"));
         assert_eq!(view.bar_grouping.as_deref(), Some("stacked"));
         let floor = view.floor.as_ref().expect("floor surface");
+        assert_eq!(
+            floor.style.as_ref().and_then(|style| style.fill_hidden),
+            Some(true)
+        );
         assert_eq!(floor.fill_hidden, Some(true));
         assert_eq!(floor.line_color.as_deref(), Some("000000"));
         assert_eq!(floor.line_width_emu, Some(3175));
@@ -19711,9 +20057,20 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(side.line_width_emu, Some(12700));
         assert_eq!(side.line_dash.as_deref(), Some("dash"));
         let back = view.back_wall.as_ref().expect("back wall surface");
-        assert_eq!(back.fill_color.as_deref(), Some("F2F2F2"));
-        assert_eq!(back.fill_hidden, Some(false));
+        assert_eq!(back.fill_color, None);
+        let back_style = back.style.as_ref().expect("structured back-wall style");
+        assert!(matches!(
+            back_style.fill_paints.as_deref().and_then(|paints| paints.first()).and_then(Option::as_ref),
+            Some(ChartStyleFill::Gradient { stops, .. }) if stops.len() == 2
+        ));
         assert_eq!(back.line_hidden, Some(true));
+        assert_eq!(back.thickness_percent, Some(25.0));
+        let picture = back.picture_options.as_ref().expect("picture options");
+        assert_eq!(picture.apply_to_front, Some(true));
+        assert_eq!(picture.apply_to_sides, Some(false));
+        assert_eq!(picture.apply_to_end, Some(true));
+        assert_eq!(picture.picture_format.as_deref(), Some("stackScale"));
+        assert_eq!(picture.picture_stack_unit, Some(2.5));
         assert_eq!(m.series[0].three_d_shape.as_deref(), Some("pyramid"));
 
         // barDir=bar (horizontal) + clustered → clusteredBarH.
@@ -19798,6 +20155,98 @@ Subtitle</a:t></a:r></a:p>
                 .map(|layout| (layout.x, layout.y)),
             Some((0.7, 0.68))
         );
+    }
+
+    #[test]
+    fn parse_chart_part_rejects_oversized_three_d_surface_paint_before_expansion() {
+        let stops = (0..=MAX_CHART_MARKER_GRADIENT_STOPS)
+            .map(|index| format!(r#"<a:gs pos="{}"><a:srgbClr val="112233"/></a:gs>"#, index))
+            .collect::<String>();
+        let group = format!(r#"<c:bar3DChart><c:barDir val="col"/>{CH13_SER}</c:bar3DChart>"#);
+        let xml = chart_space_with_group(&group).replace(
+            "<c:chart><c:plotArea>",
+            &format!(
+                r#"<c:chart><c:floor><c:spPr><a:gradFill><a:gsLst>{stops}</a:gsLst><a:lin ang="0"/></a:gradFill></c:spPr></c:floor><c:plotArea>"#,
+            ),
+        );
+        let document = chart_space_of(&xml);
+        assert!(parse_chart_part(document.root_element(), &FixtureResolver).is_none());
+
+        let surface = format!(
+            r#"<c:surface3DChart>{CH13_SER}<c:bandFmts><c:bandFmt><c:idx val="0"/>
+              <c:spPr><a:gradFill><a:gsLst>{stops}</a:gsLst><a:lin ang="0"/></a:gradFill></c:spPr>
+            </c:bandFmt></c:bandFmts></c:surface3DChart>"#,
+        );
+        let surface_xml = chart_space_with_group(&surface);
+        let surface_document = chart_space_of(&surface_xml);
+        assert!(parse_chart_part(surface_document.root_element(), &FixtureResolver).is_none());
+    }
+
+    #[test]
+    fn parse_chart_part_bounds_direct_three_d_series_fill_and_line_recipes() {
+        let gradient = |count: usize| {
+            (0..count)
+                .map(|index| format!(r#"<a:gs pos="{index}"><a:srgbClr val="112233"/></a:gs>"#))
+                .collect::<String>()
+        };
+        let group = |count: usize, outline: bool| {
+            let paint = format!(
+                r#"<a:gradFill><a:gsLst>{}</a:gsLst><a:lin ang="0"/></a:gradFill>"#,
+                gradient(count),
+            );
+            let sp_pr = if outline {
+                format!(r#"<c:spPr><a:noFill/><a:ln>{paint}</a:ln></c:spPr>"#)
+            } else {
+                format!(r#"<c:spPr>{paint}</c:spPr>"#)
+            };
+            let series = CH13_SER.replace(
+                r#"<c:idx val="0"/>"#,
+                &format!(r#"<c:idx val="0"/>{sp_pr}"#),
+            );
+            format!(r#"<c:bar3DChart><c:barDir val="col"/>{series}</c:bar3DChart>"#)
+        };
+
+        for outline in [false, true] {
+            let exact_xml =
+                chart_space_with_group(&group(MAX_CHART_PAINT_RECIPE_COMPONENTS, outline));
+            let exact_document = chart_space_of(&exact_xml);
+            assert!(parse_chart_part(exact_document.root_element(), &FixtureResolver).is_some());
+
+            let oversized_xml =
+                chart_space_with_group(&group(MAX_CHART_PAINT_RECIPE_COMPONENTS + 1, outline));
+            let oversized_document = chart_space_of(&oversized_xml);
+            assert!(
+                parse_chart_part(oversized_document.root_element(), &FixtureResolver).is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn parse_chart_part_bounds_surface_band_format_count_atomically() {
+        let bands = |count: usize| {
+            (0..count)
+                .map(|index| format!(r#"<c:bandFmt><c:idx val="{index}"/></c:bandFmt>"#))
+                .collect::<String>()
+        };
+        let surface = |count: usize| {
+            format!(
+                r#"<c:surface3DChart>{CH13_SER}<c:bandFmts>{}</c:bandFmts></c:surface3DChart>"#,
+                bands(count),
+            )
+        };
+
+        let exact_xml = chart_space_with_group(&surface(MAX_CHART_COLOR_STYLE_ENTRIES));
+        let exact_document = chart_space_of(&exact_xml);
+        let exact = parse_chart_part(exact_document.root_element(), &FixtureResolver)
+            .expect("exact band-format boundary");
+        assert_eq!(
+            exact.surface_band_formats.as_ref().map(Vec::len),
+            Some(MAX_CHART_COLOR_STYLE_ENTRIES),
+        );
+
+        let oversized_xml = chart_space_with_group(&surface(MAX_CHART_COLOR_STYLE_ENTRIES + 1));
+        let oversized_document = chart_space_of(&oversized_xml);
+        assert!(parse_chart_part(oversized_document.root_element(), &FixtureResolver).is_none());
     }
 
     /// §21.2.2.96 line3DChart → `line`; §21.2.2.4 area3DChart(stacked) →
@@ -20220,6 +20669,8 @@ Subtitle</a:t></a:r></a:p>
                 <c:bandFmts><c:bandFmt><c:idx val="0"/><c:spPr>
                   <a:pattFill prst="pct20"><a:fgClr><a:srgbClr val="112233"/></a:fgClr><a:bgClr><a:srgbClr val="FFFFFF"/></a:bgClr></a:pattFill>
                   <a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:ln>
+                </c:spPr></c:bandFmt><c:bandFmt><c:idx val="1"/><c:spPr>
+                  <a:grpFill/>
                 </c:spPr></c:bandFmt></c:bandFmts>
               </c:surfaceChart><c:serAx><c:axId val="3"/></c:serAx></c:plotArea>
             </c:chart></c:chartSpace>"#
@@ -20233,11 +20684,33 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(model.categories, vec!["X1", "X2"]);
         assert_eq!(model.series.len(), 2);
         assert_eq!(model.series[0].series_type.as_deref(), Some("surface"));
-        let band = &model.surface_band_formats.as_ref().expect("band formats")[0];
+        let bands = model.surface_band_formats.as_ref().expect("band formats");
+        let band = &bands[0];
         assert_eq!(band.idx, 0);
         assert!(matches!(band.fill, Some(ChartStyleFill::Pattern { .. })));
+        let band_style = band.style.as_ref().expect("full band style");
+        assert!(band_style.fill_paints.is_none());
+        assert_eq!(band_style.fill_paint_authored, Some(true));
+        assert!(matches!(
+            band_style
+                .line_paints
+                .as_deref()
+                .and_then(|paints| paints.first())
+                .and_then(Option::as_ref),
+            Some(ChartStyleFill::Solid { color }) if color == "445566"
+        ));
         assert_eq!(band.line_color.as_deref(), Some("445566"));
         assert_eq!(band.line_width_emu, Some(12700));
+        let unresolved = &bands[1];
+        assert!(unresolved.fill.is_none());
+        assert_eq!(unresolved.fill_hidden, None);
+        assert_eq!(
+            unresolved
+                .style
+                .as_ref()
+                .and_then(|style| style.fill_paint_authored),
+            Some(true),
+        );
         assert!(model
             .three_d
             .as_ref()
@@ -20249,19 +20722,129 @@ Subtitle</a:t></a:r></a:p>
     fn parse_chart_part_preserves_bare_view3d_schema_defaults() {
         let xml = format!(
             r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart>
-              <c:view3D><c:rotX/><c:rotY/><c:perspective/></c:view3D><c:plotArea>
-                <c:surfaceChart><c:ser><c:idx val="0"/><c:order val="0"/>
+              <c:view3D><c:rotX/><c:hPercent/><c:rotY/><c:depthPercent/><c:rAngAx/><c:perspective/></c:view3D><c:plotArea>
+                <c:line3DChart><c:grouping val="standard"/><c:ser><c:idx val="0"/><c:order val="0"/>
                   <c:cat><c:strLit><c:pt idx="0"><c:v>X1</c:v></c:pt><c:pt idx="1"><c:v>X2</c:v></c:pt></c:strLit></c:cat>
                   <c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val>
-                </c:ser></c:surfaceChart>
+                </c:ser><c:gapDepth/></c:line3DChart>
               </c:plotArea></c:chart></c:chartSpace>"#,
         );
         let document = chart_space_of(&xml);
-        let model = parse_chart_part(document.root_element(), &FixtureResolver).expect("surface");
+        let model = parse_chart_part(document.root_element(), &FixtureResolver).expect("line3D");
         let view = model.three_d.expect("3-D view");
+        assert_eq!(view.view_3d_present, Some(true));
         assert_eq!(view.rotation_x, Some(0));
+        assert_eq!(view.rotation_x_authored, Some(true));
         assert_eq!(view.rotation_y, Some(0));
+        assert_eq!(view.rotation_y_authored, Some(true));
+        assert_eq!(view.height_percent, Some(100.0));
+        assert_eq!(view.height_percent_authored, Some(true));
+        assert_eq!(view.depth_percent, Some(100.0));
+        assert_eq!(view.depth_percent_authored, Some(true));
         assert_eq!(view.perspective, Some(30));
+        assert_eq!(view.perspective_authored, Some(true));
+        assert_eq!(view.right_angle_axes, Some(true));
+        assert_eq!(view.right_angle_axes_authored, Some(true));
+        assert_eq!(view.gap_depth_percent, Some(150.0));
+        assert_eq!(view.gap_depth_percent_authored, Some(true));
+    }
+
+    #[test]
+    fn parse_chart_part_parses_view3d_scalars_and_chart_percentages_by_schema_type() {
+        for (namespace, height, depth, gap) in [
+            (C_NS, " 125 ", " 250 ", " 175 "),
+            (
+                "http://purl.oclc.org/ooxml/drawingml/chart",
+                "125%",
+                "250%",
+                "175%",
+            ),
+        ] {
+            let xml = format!(
+                r#"<c:chartSpace xmlns:c="{namespace}"><c:chart>
+                  <c:view3D><c:rotX val=" -30 "/><c:hPercent val="{height}"/>
+                    <c:rotY val=" 270 "/><c:depthPercent val="{depth}"/>
+                    <c:perspective val=" 40 "/></c:view3D><c:plotArea>
+                    <c:line3DChart><c:grouping val="standard"/><c:ser>
+                      <c:idx val="0"/><c:order val="0"/>
+                      <c:cat><c:strLit><c:pt idx="0"><c:v>X</c:v></c:pt></c:strLit></c:cat>
+                      <c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val>
+                    </c:ser><c:gapDepth val="{gap}"/></c:line3DChart>
+                  </c:plotArea></c:chart></c:chartSpace>"#,
+            );
+            let document = chart_space_of(&xml);
+            let view = parse_chart_part(document.root_element(), &FixtureResolver)
+                .expect("line3D")
+                .three_d
+                .expect("3-D view");
+            assert_eq!(view.rotation_x, Some(-30));
+            assert_eq!(view.height_percent, Some(125.0));
+            assert_eq!(view.rotation_y, Some(270));
+            assert_eq!(view.depth_percent, Some(250.0));
+            assert_eq!(view.perspective, Some(40));
+            assert_eq!(view.gap_depth_percent, Some(175.0));
+        }
+    }
+
+    #[test]
+    fn parse_chart_part_rejects_cross_type_and_non_lexical_strict_view3d_values() {
+        let namespace = "http://purl.oclc.org/ooxml/drawingml/chart";
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{namespace}"><c:chart>
+              <c:view3D><c:rotX val="-30%"/><c:hPercent val="125"/>
+                <c:rotY val="270%"/><c:depthPercent val="250.5%"/>
+                <c:perspective val="40%"/></c:view3D><c:plotArea>
+                <c:line3DChart><c:grouping val="standard"/><c:ser>
+                  <c:idx val="0"/><c:order val="0"/>
+                  <c:cat><c:strLit><c:pt idx="0"><c:v>X</c:v></c:pt></c:strLit></c:cat>
+                  <c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val>
+                </c:ser><c:gapDepth val="175"/></c:line3DChart>
+              </c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let document = chart_space_of(&xml);
+        let view = parse_chart_part(document.root_element(), &FixtureResolver)
+            .expect("line3D")
+            .three_d
+            .expect("3-D view");
+        assert_eq!(view.rotation_x, None);
+        assert_eq!(view.height_percent, None);
+        assert_eq!(view.rotation_y, None);
+        assert_eq!(view.depth_percent, None);
+        assert_eq!(view.perspective, None);
+        assert_eq!(view.gap_depth_percent, None);
+        assert_eq!(view.rotation_x_authored, Some(true));
+        assert_eq!(view.gap_depth_percent_authored, Some(true));
+    }
+
+    #[test]
+    fn parse_chart_part_distinguishes_omitted_view3d_children_from_bare_defaults() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea>
+              <c:line3DChart><c:grouping val="standard"/><c:ser>
+                <c:idx val="0"/><c:order val="0"/>
+                <c:cat><c:strLit><c:pt idx="0"><c:v>X1</c:v></c:pt></c:strLit></c:cat>
+                <c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val>
+              </c:ser></c:line3DChart>
+            </c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let document = chart_space_of(&xml);
+        let model = parse_chart_part(document.root_element(), &FixtureResolver).expect("line3D");
+        let view = model.three_d.expect("3-D model");
+        assert_eq!(view.view_3d_present, Some(false));
+        assert_eq!(view.rotation_x, None);
+        assert_eq!(view.rotation_x_authored, Some(false));
+        assert_eq!(view.rotation_y, None);
+        assert_eq!(view.rotation_y_authored, Some(false));
+        assert_eq!(view.height_percent, None);
+        assert_eq!(view.height_percent_authored, Some(false));
+        assert_eq!(view.depth_percent, None);
+        assert_eq!(view.depth_percent_authored, Some(false));
+        assert_eq!(view.perspective, None);
+        assert_eq!(view.perspective_authored, Some(false));
+        assert_eq!(view.right_angle_axes, None);
+        assert_eq!(view.right_angle_axes_authored, Some(false));
+        assert_eq!(view.gap_depth_percent, None);
+        assert_eq!(view.gap_depth_percent_authored, Some(false));
     }
 
     #[test]

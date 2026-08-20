@@ -794,6 +794,7 @@ export interface ChartStockUpDownBarStyle {
 type ChartStyleRole = 'axisTitle' | 'categoryAxis' | 'chartArea' | 'dataLabel' | 'dataLabelCallout' | 'dataPoint' | 'dataPoint3D' | 'dataPointLine' | 'dataPointMarker' | 'dataPointWireframe' | 'dataTable' | 'downBar' | 'dropLine' | 'errorBar' | 'floor' | 'gridlineMajor' | 'gridlineMinor' | 'hiLoLine' | 'leaderLine' | 'legend' | 'plotArea' | 'plotArea3D' | 'seriesAxis' | 'seriesLine' | 'title' | 'trendline' | 'trendlineLabel' | 'upBar' | 'valueAxis' | 'wall';
 export interface ChartSurfaceBandFormat {
     idx: number;
+    style?: ChartExElementStyle | null;
     fill?: SolidFill | GradientFill | PatternFill | null;
     fillHidden?: boolean | null;
     lineColor?: string | null;
@@ -831,19 +832,34 @@ export interface ChartTextRun {
     paragraphAlign?: 'l' | 'ctr' | 'r' | 'just' | 'dist' | string | null;
 }
 export interface ChartThreeD {
+    view3DPresent?: boolean | null;
     rotationX?: number | null;
+    rotationXAuthored?: boolean | null;
     rotationY?: number | null;
+    rotationYAuthored?: boolean | null;
     heightPercent?: number | null;
+    heightPercentAuthored?: boolean | null;
     depthPercent?: number | null;
+    depthPercentAuthored?: boolean | null;
     perspective?: number | null;
+    perspectiveAuthored?: boolean | null;
     rightAngleAxes?: boolean | null;
+    rightAngleAxesAuthored?: boolean | null;
     gapDepthPercent?: number | null;
+    gapDepthPercentAuthored?: boolean | null;
     shape?: string | null;
     barGrouping?: 'standard' | 'clustered' | 'stacked' | 'percentStacked' | string | null;
     seriesAxis?: ChartThreeDSeriesAxis | null;
     floor?: ChartThreeDSurface | null;
     sideWall?: ChartThreeDSurface | null;
     backWall?: ChartThreeDSurface | null;
+}
+export interface ChartThreeDPictureOptions {
+    applyToFront?: boolean | null;
+    applyToSides?: boolean | null;
+    applyToEnd?: boolean | null;
+    pictureFormat?: 'stretch' | 'stack' | 'stackScale' | string | null;
+    pictureStackUnit?: number | null;
 }
 export interface ChartThreeDRenderer {
     render(ctx: CanvasRenderingContext2D, chart: ChartModel, rect: ChartRect, ptToPx: number, shapeRotationDeg?: number): boolean;
@@ -875,12 +891,15 @@ export interface ChartThreeDSeriesAxis {
     titleManualLayout?: ChartManualLayout | null;
 }
 export interface ChartThreeDSurface {
+    style?: ChartExElementStyle | null;
     fillColor?: string | null;
     fillHidden?: boolean | null;
     lineColor?: string | null;
     lineWidthEmu?: number | null;
     lineDash?: string | null;
     lineHidden?: boolean | null;
+    thicknessPercent?: number | null;
+    pictureOptions?: ChartThreeDPictureOptions | null;
 }
 export interface ChartTrendline {
     name?: string | null;

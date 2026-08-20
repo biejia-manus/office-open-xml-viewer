@@ -79,6 +79,18 @@ export function threeDToMaxScale(
   );
 }
 
+/** Resolve pie3D `<c:view3D><c:hPercent>` as the Office-defined multiplier
+ * of the radial family's default wall thickness (MS-OE376 §2.1.1501(b)).
+ * Omission keeps automatic/default thickness. Public models created before
+ * authored-provenance was exposed continue to treat a supplied value as
+ * authored. */
+export function pieThreeDThicknessMultiplier(view: ChartThreeD): number {
+  const authored = view.heightPercentAuthored ?? view.heightPercent != null;
+  if (!authored || view.heightPercent == null || !Number.isFinite(view.heightPercent)) return 1;
+  if (view.heightPercent < 5 || view.heightPercent > 500) return 1;
+  return view.heightPercent / 100;
+}
+
 export interface ChartThreeDSceneTopology {
   farX: 'min' | 'max';
   farY: 'min' | 'max';

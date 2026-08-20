@@ -643,6 +643,9 @@ export type ChartStyleRole =
 /** Authored low-to-high formatting for one classic surface-chart band. */
 export interface ChartSurfaceBandFormat {
   idx: number;
+  /** Direct outline geometry/paint and fill-authorship provenance. The one
+   * authoritative direct fill recipe is carried by `fill`. */
+  style?: ChartExElementStyle | null;
   fill?: SolidFill | GradientFill | PatternFill | null;
   fillHidden?: boolean | null;
   lineColor?: string | null;
@@ -1441,22 +1444,44 @@ export interface ChartOfPie {
  * surface is a real face of the shared projected scene, not a renderer
  * decoration. */
 export interface ChartThreeDSurface {
+  /** Full direct `<c:spPr>` paint/line recipe. */
+  style?: ChartExElementStyle | null;
   fillColor?: string | null;
   fillHidden?: boolean | null;
   lineColor?: string | null;
   lineWidthEmu?: number | null;
   lineDash?: string | null;
   lineHidden?: boolean | null;
+  /** `<c:thickness val>`, normalized to percent when authored. */
+  thicknessPercent?: number | null;
+  pictureOptions?: ChartThreeDPictureOptions | null;
+}
+
+export interface ChartThreeDPictureOptions {
+  applyToFront?: boolean | null;
+  applyToSides?: boolean | null;
+  applyToEnd?: boolean | null;
+  pictureFormat?: 'stretch' | 'stack' | 'stackScale' | string | null;
+  pictureStackUnit?: number | null;
 }
 
 export interface ChartThreeD {
+  /** Whether `<c:view3D>` itself was authored. */
+  view3DPresent?: boolean | null;
   rotationX?: number | null;
+  rotationXAuthored?: boolean | null;
   rotationY?: number | null;
+  rotationYAuthored?: boolean | null;
   heightPercent?: number | null;
+  heightPercentAuthored?: boolean | null;
   depthPercent?: number | null;
+  depthPercentAuthored?: boolean | null;
   perspective?: number | null;
+  perspectiveAuthored?: boolean | null;
   rightAngleAxes?: boolean | null;
+  rightAngleAxesAuthored?: boolean | null;
   gapDepthPercent?: number | null;
+  gapDepthPercentAuthored?: boolean | null;
   shape?: string | null;
   /** `<c:bar3DChart><c:grouping val>` (§21.2.2.77). `standard` uses the
    *  series/depth axis; `clustered` uses adjacent category-axis slots. */

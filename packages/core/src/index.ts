@@ -54,6 +54,7 @@ export type {
   ChartType,
   ChartOfPie,
   ChartThreeD,
+  ChartThreeDPictureOptions,
   ChartThreeDSurface,
   ChartThreeDSeriesAxis,
   ChartDisplayUnits,
