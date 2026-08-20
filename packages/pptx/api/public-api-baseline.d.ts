@@ -562,7 +562,9 @@ export interface ChartModel {
 export interface ChartOfPie {
     type: 'pie' | 'bar';
     splitType: 'auto' | 'cust' | 'percent' | 'pos' | 'val';
+    splitTypeAuthored?: boolean | null;
     splitPos?: number | null;
+    splitPosAuthored?: boolean | null;
     customSplitIndices?: number[] | null;
     secondPieSizePercent: number;
     gapWidthPercent: number;

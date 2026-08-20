@@ -65,7 +65,7 @@ observed input boundary is recorded in
 | C-PIE-001 | Pie/doughnut point explosion | Yes | Yes | Yes | Supported | Per-point explosion is retained. |
 | C-PIE-002 | Pie/doughnut series-level explosion | Yes | Yes | Yes | Supported | `CT_PieSer/explosion` supplies the default; a point-level `dPt/explosion` overrides it. |
 | C-PIE-003 | First-slice angle and doughnut hole size | Yes | Yes | Yes | Supported | Authored schema bounds are preserved. |
-| C-OFPIE-001 | Pie-of-pie/bar-of-pie split, sizing, and connector geometry | Yes | Yes | Yes | Partial | Position, value, percent, and custom splits render. Automatic split selection remains application-defined. |
+| C-OFPIE-001 | Pie-of-pie/bar-of-pie split, sizing, and connector geometry | Yes | Yes | Yes | Partial | Position, value, percent, and custom splits follow ECMA-376. An omitted `splitType` uses the bounded Office rule in MS-OE376 §2.1.1596(b); the Office-prohibited explicit `auto` value fails closed. Exact connector and gap geometry remains under compatibility audit. |
 | C-BUBBLE-001 | Bubble size, scale, negative bubbles, and size representation | Yes | Yes | Yes | Supported | Resource-bounded and shared across hosts. |
 | C-BUBBLE-002 | `bubble3D` | No | No | No | Missing | The current local corpus only exercises `false`; `true` remains unsupported. |
 | C-SURFACE-001 | Surface/surface3D mesh, bands, camera, and authored band formatting | Yes | Yes | Yes | Partial | Supported camera/material boundaries are recorded in the compatibility evidence document. |

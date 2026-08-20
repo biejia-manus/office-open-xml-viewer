@@ -1064,8 +1064,10 @@ pub struct ChartBarGroupDecorations {
 pub struct ChartOfPie {
     pub r#type: String,
     pub split_type: String,
+    pub split_type_authored: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub split_pos: Option<f64>,
+    pub split_pos_authored: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_split_indices: Option<Vec<usize>>,
     pub second_pie_size_percent: f64,
@@ -2218,6 +2220,34 @@ fn child<'a, 'i>(parent: Node<'a, 'i>, name: &str) -> Option<Node<'a, 'i>> {
     parent
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == name)
+}
+
+/// Retain one custom of-pie split atomically. The limit bounds the owned wire
+/// vector before allocation/serialization; an oversized list is unresolved,
+/// never a retained prefix with different split semantics.
+fn parse_of_pie_custom_split_with_limit(
+    chart: Node<'_, '_>,
+    max_points: usize,
+) -> Option<Vec<usize>> {
+    let split = child(chart, "custSplit")?;
+    let mut indices = Vec::new();
+    let mut point_count = 0usize;
+    for point in split
+        .children()
+        .filter(|node| node.is_element() && node.tag_name().name() == "secondPiePt")
+    {
+        point_count = point_count.checked_add(1)?;
+        if point_count > max_points {
+            return None;
+        }
+        if let Some(index) = point
+            .attribute("val")
+            .and_then(|value| value.parse::<usize>().ok())
+        {
+            indices.push(index);
+        }
+    }
+    Some(indices)
 }
 
 /// Read a no-namespace attribute `local` off `node` as an owned `String`.
@@ -10000,11 +10030,13 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 .filter(|value| value.is_finite())
                 .unwrap_or(default)
         };
-        let split_type = child(node, "splitType")
+        let split_type_node = child(node, "splitType");
+        let split_type = split_type_node
             .and_then(|value| value.attribute("val"))
             .filter(|value| matches!(*value, "auto" | "cust" | "percent" | "pos" | "val"))
             .unwrap_or("auto")
             .to_string();
+        let split_pos_node = child(node, "splitPos");
         ChartOfPie {
             r#type: child(node, "ofPieType")
                 .and_then(|value| value.attribute("val"))
@@ -10012,18 +10044,16 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 .unwrap_or("pie")
                 .to_string(),
             split_type,
-            split_pos: child(node, "splitPos")
+            split_type_authored: split_type_node.is_some(),
+            split_pos: split_pos_node
                 .and_then(|value| value.attribute("val"))
                 .and_then(|value| value.parse::<f64>().ok())
                 .filter(|value| value.is_finite()),
-            custom_split_indices: child(node, "custSplit").map(|split| {
-                split
-                    .children()
-                    .filter(|value| value.is_element() && value.tag_name().name() == "secondPiePt")
-                    .filter_map(|value| value.attribute("val"))
-                    .filter_map(|value| value.parse::<usize>().ok())
-                    .collect()
-            }),
+            split_pos_authored: split_pos_node.is_some(),
+            custom_split_indices: parse_of_pie_custom_split_with_limit(
+                node,
+                MAX_CHART_CACHE_POINTS,
+            ),
             second_pie_size_percent: percent("secondPieSize", 75.0).clamp(5.0, 200.0),
             gap_width_percent: percent("gapWidth", 150.0).max(0.0),
             series_lines: child(node, "serLines").is_some(),
@@ -20178,7 +20208,68 @@ Subtitle</a:t></a:r></a:p>
         let of_pie = m.of_pie.expect("ofPie contract");
         assert_eq!(of_pie.r#type, "pie");
         assert_eq!(of_pie.split_type, "auto");
+        assert!(!of_pie.split_type_authored);
+        assert!(!of_pie.split_pos_authored);
         assert_eq!(of_pie.second_pie_size_percent, 75.0);
+    }
+
+    #[test]
+    fn parse_chart_part_ofpie_retains_invalid_split_pos_pair_for_fail_closed_rendering() {
+        let group = format!(
+            r#"<c:ofPieChart><c:ofPieType val="pie"/><c:varyColors val="1"/>{CH13_SER}<c:splitPos val="2"/></c:ofPieChart>"#
+        );
+        let xml = chart_space_with_group(&group);
+        let document = chart_space_of(&xml);
+        let model =
+            parse_chart_part(document.root_element(), &FixtureResolver).expect("ofPie parses");
+        let of_pie = model.of_pie.expect("ofPie contract");
+        assert_eq!(of_pie.split_type, "auto");
+        assert!(!of_pie.split_type_authored);
+        assert_eq!(of_pie.split_pos, Some(2.0));
+        assert!(of_pie.split_pos_authored);
+    }
+
+    #[test]
+    fn parse_chart_part_ofpie_retains_invalid_split_pos_presence() {
+        for (split_type, split_pos) in [
+            ("", r#"<c:splitPos/>"#),
+            (
+                r#"<c:splitType val="cust"/>"#,
+                r#"<c:splitPos val="NaN"/><c:custSplit><c:secondPiePt val="1"/></c:custSplit>"#,
+            ),
+        ] {
+            let group = format!(
+                r#"<c:ofPieChart><c:ofPieType val="pie"/><c:varyColors val="1"/>{CH13_SER}{split_type}{split_pos}</c:ofPieChart>"#
+            );
+            let xml = chart_space_with_group(&group);
+            let document = chart_space_of(&xml);
+            let model =
+                parse_chart_part(document.root_element(), &FixtureResolver).expect("ofPie parses");
+            let of_pie = model.of_pie.expect("ofPie contract");
+            assert_eq!(of_pie.split_pos, None);
+            assert!(of_pie.split_pos_authored);
+        }
+    }
+
+    #[test]
+    fn ofpie_custom_split_is_atomic_at_the_parser_resource_boundary() {
+        let exact = roxmltree::Document::parse(
+            r#"<ofPieChart><custSplit><secondPiePt val="0"/><secondPiePt val="1"/></custSplit></ofPieChart>"#,
+        )
+        .expect("valid XML");
+        assert_eq!(
+            parse_of_pie_custom_split_with_limit(exact.root_element(), 2),
+            Some(vec![0, 1])
+        );
+
+        let plus_one = roxmltree::Document::parse(
+            r#"<ofPieChart><custSplit><secondPiePt val="0"/><secondPiePt val="1"/><secondPiePt val="2"/></custSplit></ofPieChart>"#,
+        )
+        .expect("valid XML");
+        assert_eq!(
+            parse_of_pie_custom_split_with_limit(plus_one.root_element(), 2),
+            None
+        );
     }
 
     /// Full ofPieChart contract retains secondary-plot controls without
@@ -20228,7 +20319,9 @@ Subtitle</a:t></a:r></a:p>
         let of_pie = m.of_pie.expect("ofPie contract");
         assert_eq!(of_pie.r#type, "bar");
         assert_eq!(of_pie.split_type, "pos");
+        assert!(of_pie.split_type_authored);
         assert_eq!(of_pie.split_pos, Some(2.0));
+        assert!(of_pie.split_pos_authored);
         assert_eq!(of_pie.second_pie_size_percent, 75.0);
         assert_eq!(of_pie.gap_width_percent, 100.0);
         assert!(of_pie.series_lines);

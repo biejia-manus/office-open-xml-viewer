@@ -1412,7 +1412,11 @@ export interface ChartBarGroupDecorations {
 export interface ChartOfPie {
   type: 'pie' | 'bar';
   splitType: 'auto' | 'cust' | 'percent' | 'pos' | 'val';
+  /** Whether `<c:splitType>` was authored rather than omitted. */
+  splitTypeAuthored?: boolean | null;
   splitPos?: number | null;
+  /** Whether `<c:splitPos>` was authored, including an invalid/missing value. */
+  splitPosAuthored?: boolean | null;
   customSplitIndices?: number[] | null;
   /** Secondary pie diameter relative to the primary pie, 5–200%. */
   secondPieSizePercent: number;
