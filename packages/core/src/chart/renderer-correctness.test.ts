@@ -34,6 +34,76 @@ it('uses collision-free tuple keys for decoded chart image sources', () => {
     mimeType: 'image/png',
   }));
 });
+
+it('collects only the effective direct bubble point picture', () => {
+  const seriesPicture = {
+    fillType: 'image' as const,
+    imagePath: 'xl/media/series.png',
+    mimeType: 'image/png',
+    stretch: true,
+  };
+  const pointPicture = {
+    fillType: 'image' as const,
+    imagePath: 'xl/media/point.png',
+    mimeType: 'image/png',
+    stretch: true,
+  };
+  const fills = collectChartMarkerImageFills(baseModel({
+    chartType: 'bubble',
+    categories: ['0', '1'],
+    series: [series({
+      values: [0.25, 0.75],
+      bubbleSizes: [100, 100],
+      chartexStyle: { fillPaints: [seriesPicture], fillPaintAuthored: true },
+      dataPointOverrides: [
+        { idx: 0, chartexStyle: { fillPaints: [pointPicture], fillPaintAuthored: true } },
+        { idx: 1, chartexStyle: { fillHidden: true, fillPaintAuthored: true } },
+      ],
+    })],
+  }));
+  expect(fills.map(fill => fill.imagePath)).toEqual(['xl/media/point.png']);
+});
+
+it('collects the linked bubble picture selected by point index after direct colors', () => {
+  const linkedPictures = [0, 1].map(index => ({
+    fillType: 'image' as const,
+    imagePath: `xl/media/linked-${index}.png`,
+    mimeType: 'image/png',
+    stretch: true,
+  }));
+  const fills = collectChartMarkerImageFills(baseModel({
+    chartType: 'bubble',
+    categories: ['0', '1'],
+    chartStyleRoles: {
+      dataPoint: { fillPaints: linkedPictures, fillPaintAuthored: true },
+    },
+    series: [series({
+      values: [0.25, 0.75],
+      bubbleSizes: [100, 100],
+      dataPointColors: ['FF0000', null],
+    })],
+  }));
+  expect(fills.map(fill => fill.imagePath)).toEqual(['xl/media/linked-1.png']);
+});
+
+it('does not prefetch bubble pictures for points whose sizes cannot paint', () => {
+  const picture = {
+    fillType: 'image' as const,
+    imagePath: 'xl/media/invisible.png',
+    mimeType: 'image/png',
+    stretch: true,
+  };
+  const model = baseModel({
+    chartType: 'bubble',
+    categories: ['0', '1', '2'],
+    chartStyleRoles: {
+      dataPoint: { fillPaints: [picture], fillPaintAuthored: true },
+    },
+    series: [series({ values: [1, 2, 3], bubbleSizes: [0, null, -1] })],
+  });
+  expect(collectChartMarkerImageFills(model)).toEqual([]);
+  expect(collectChartMarkerImageFills({ ...model, bubbleScale: 0 })).toEqual([]);
+});
 const renderChart: typeof renderChartCore = (
   ctx, chart, rect, ptToPx, shapeRotationDeg, threeD = testThreeD,
 ) => renderChartCore(ctx, chart, rect, ptToPx, shapeRotationDeg, threeD);
@@ -69,6 +139,9 @@ interface Recorded {
   translations: Array<{ x: number; y: number }>;
   drawImages: unknown[][];
   filledPaths: Array<{ points: Array<{ x: number; y: number }>; fillStyle: string }>;
+  strokeDetails: Array<{
+    strokeStyle: string; lineWidth: number; dash: number[]; cap: string; join: string;
+  }>;
   paintEvents: Array<
     | { kind: 'stroke'; strokeStyle: string }
     | { kind: 'fill'; fillStyle: string }
@@ -139,6 +212,7 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
   const translations: Recorded['translations'] = [];
   const drawImages: unknown[][] = [];
   const filledPaths: Recorded['filledPaths'] = [];
+  const strokeDetails: Recorded['strokeDetails'] = [];
   const paintEvents: Recorded['paintEvents'] = [];
   let dash: number[] = [];
   let pathRect: { x: number; y: number; w: number; h: number } | null = null;
@@ -221,8 +295,21 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
             ellipses.push({ x, y, rx, ry });
           };
         case 'save': case 'restore': case 'closePath':
+          return () => paintEvents.push({
+            kind: 'stroke', strokeStyle: String(state.strokeStyle),
+          });
         case 'stroke':
-          return () => paintEvents.push({ kind: 'stroke', strokeStyle: String(state.strokeStyle) });
+          return () => {
+            const strokeStyle = String(state.strokeStyle);
+            paintEvents.push({ kind: 'stroke', strokeStyle });
+            strokeDetails.push({
+              strokeStyle,
+              lineWidth: Number(state.lineWidth),
+              dash: [...dash],
+              cap: String(state.lineCap),
+              join: String(state.lineJoin),
+            });
+          };
         case 'fill':
           return () => {
             paintEvents.push({ kind: 'fill', fillStyle: String(state.fillStyle) });
@@ -274,6 +361,7 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
     translations,
     drawImages,
     filledPaths,
+    strokeDetails,
     paintEvents,
   };
 }
@@ -1635,6 +1723,58 @@ describe('classic 3-D compatibility projection', () => {
       })],
     });
     expect(classicMarkerPaintWorkCount(model)).toBe(1_048_576);
+  });
+
+  it('charges direct bubble shape fill and outline recipes once per visible point', () => {
+    const model = baseModel({
+      chartType: 'bubble', categories: ['0'],
+      series: [series({
+        values: [0.5], bubbleSizes: [100],
+        chartexStyle: {
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: [
+              { position: 0, color: '112233' },
+              { position: 0.5, color: '778899' },
+              { position: 1, color: 'DDEEFF' },
+            ],
+          }],
+          fillPaintAuthored: true,
+          linePaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: [
+              { position: 0, color: '000000' },
+              { position: 1, color: 'FFFFFF' },
+            ],
+          }],
+          linePaintAuthored: true,
+        },
+      })],
+      catAxisMin: 0, catAxisMax: 1, valMin: 0, valMax: 1,
+    });
+    expect(classicMarkerPaintWorkCount(model, undefined, 1, RECT)).toBe(5);
+  });
+
+  it('does not charge structured bubble paint for invisible bubble sizes', () => {
+    const count = 257;
+    const stops = Array.from({ length: 4_096 }, (_, index) => ({
+      position: index / 4_095,
+      color: '112233',
+    }));
+    const model = baseModel({
+      chartType: 'bubble',
+      categories: Array.from({ length: count }, (_, index) => String(index)),
+      series: [series({
+        values: Array<number | null>(count).fill(1),
+        bubbleSizes: Array<number | null>(count).fill(0),
+        chartexStyle: {
+          fillPaints: [{ fillType: 'gradient', gradType: 'linear', angle: 0, stops }],
+          fillPaintAuthored: true,
+        },
+      })],
+      catAxisMin: 0, catAxisMax: count, valMin: 0, valMax: 2,
+    });
+    expect(classicMarkerPaintWorkCount(model, undefined, 1, RECT)).toBe(0);
   });
 
   it('charges the normal legend marker after plot marker work', () => {
@@ -7915,6 +8055,220 @@ describe('CH9 — bubble scale and numeric-X trendlines', () => {
     // The one-series legend key uses the same authored transparent series fill;
     // varyColors does not silently revive it with a theme accent.
     expect(rec.arcs.at(-1)?.fillStyle).toBe('#00000000');
+  });
+
+  it('keeps direct bubble shape paint above the linked marker role', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble',
+      categories: ['0', '1'],
+      chartStyleRoles: {
+        dataPointMarker: { fillColors: ['FF0000'], fillPaintAuthored: true },
+      },
+      series: [series({
+        values: [0.25, 0.75],
+        bubbleSizes: [100, 100],
+        chartexStyle: {
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: [
+              { position: 0, color: '112233' },
+              { position: 1, color: 'DDEEFF' },
+            ],
+          }],
+          fillPaintAuthored: true,
+        },
+      })],
+      catAxisMin: 0,
+      catAxisMax: 1,
+      valMin: 0,
+      valMax: 1,
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(2);
+    expect(rec.gradients.every(gradient => gradient.stops.length === 2)).toBe(true);
+  });
+
+  it('uses the linked dataPoint shape role for unauthored bubbles', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble',
+      categories: ['0', '1'],
+      chartStyleRoles: {
+        dataPoint: {
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: [
+              { position: 0, color: '112233' },
+              { position: 1, color: 'DDEEFF' },
+            ],
+          }],
+          fillPaintAuthored: true,
+        },
+      },
+      series: [series({ values: [0.25, 0.75], bubbleSizes: [100, 100] })],
+      catAxisMin: 0,
+      catAxisMax: 1,
+      valMin: 0,
+      valMax: 1,
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(2);
+  });
+
+  it('keeps legacy direct bubble series paint above the linked dataPoint role', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble',
+      categories: ['0'],
+      chartStyleRoles: {
+        dataPoint: {
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: [
+              { position: 0, color: '112233' },
+              { position: 1, color: 'DDEEFF' },
+            ],
+          }],
+          fillPaintAuthored: true,
+          lineColors: ['00FF00'],
+          linePaintAuthored: true,
+        },
+      },
+      series: [series({
+        color: 'FF0000',
+        lineColor: '0000FF',
+        values: [0.5],
+        bubbleSizes: [100],
+      })],
+      catAxisMin: 0,
+      catAxisMax: 1,
+      valMin: 0,
+      valMax: 1,
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(0);
+    expect(rec.paintEvents.some(event => event.kind === 'fill' && event.fillStyle === '#FF0000'))
+      .toBe(true);
+    expect(rec.paintEvents.some(event => event.kind === 'stroke' && event.strokeStyle === '#0000FF'))
+      .toBe(true);
+  });
+
+  it('keeps point bubble noFill above direct series structured paint', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble',
+      categories: ['0', '1'],
+      series: [series({
+        values: [0.25, 0.75],
+        bubbleSizes: [100, 100],
+        chartexStyle: {
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: [
+              { position: 0, color: '112233' },
+              { position: 1, color: 'DDEEFF' },
+            ],
+          }],
+          fillPaintAuthored: true,
+        },
+        dataPointOverrides: [{
+          idx: 0,
+          chartexStyle: { fillHidden: true, fillPaintAuthored: true },
+        }],
+      })],
+      catAxisMin: 0,
+      catAxisMax: 1,
+      valMin: 0,
+      valMax: 1,
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(1);
+    expect(rec.paintEvents.filter(event => event.kind === 'fill')).toHaveLength(1);
+  });
+
+  it('keeps direct bubble outline paint above the linked marker line', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble',
+      categories: ['0', '1'],
+      chartStyleRoles: {
+        dataPointMarker: { lineColors: ['FF0000'], linePaintAuthored: true },
+      },
+      series: [series({
+        values: [0.25, 0.75],
+        bubbleSizes: [100, 100],
+        chartexStyle: {
+          linePaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: [
+              { position: 0, color: '112233' },
+              { position: 1, color: 'DDEEFF' },
+            ],
+          }],
+          linePaintAuthored: true,
+          lineWidthEmu: 12700,
+        },
+        dataPointOverrides: [{
+          idx: 0,
+          chartexStyle: { lineHidden: true, linePaintAuthored: true },
+        }],
+      })],
+      catAxisMin: 0,
+      catAxisMax: 1,
+      valMin: 0,
+      valMax: 1,
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(1);
+  });
+
+  it('merges point outline geometry over the series bubble paint property by property', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble',
+      categories: ['0'],
+      chartStyleRoles: {
+        dataPoint: { lineColors: ['FF0000'], linePaintAuthored: true },
+      },
+      series: [series({
+        values: [0.5],
+        bubbleSizes: [100],
+        chartexStyle: {
+          linePaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: [
+              { position: 0, color: '112233' },
+              { position: 1, color: 'DDEEFF' },
+            ],
+          }],
+          linePaintAuthored: true,
+        },
+        dataPointOverrides: [{
+          idx: 0,
+          chartexStyle: {
+            lineWidthEmu: 25_400,
+            lineDash: 'dash',
+            lineDashAuthored: true,
+            lineCap: 'rnd',
+            lineJoin: 'bevel',
+          },
+        }],
+      })],
+      catAxisMin: 0,
+      catAxisMax: 1,
+      valMin: 0,
+      valMax: 1,
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(1);
+    const bubbleStroke = rec.strokeDetails.find(event =>
+      event.strokeStyle === '[object Object]'
+    );
+    expect(bubbleStroke).toMatchObject({
+      lineWidth: 2, cap: 'round', join: 'bevel',
+    });
+    expect(bubbleStroke?.dash.length).toBeGreaterThan(0);
   });
 
   it('uses one automatic numeric-axis density for equal X and Y bubble ranges', () => {
