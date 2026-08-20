@@ -1637,6 +1637,20 @@ describe('classic 3-D compatibility projection', () => {
       pictureStackUnitAuthored: true,
     };
     expect(collectChartMarkerImageFills(invalidProvenance)).toEqual([]);
+    const croppedPicture = {
+      ...picture,
+      srcRect: { l: 0.25, t: 0, r: 0, b: 0 },
+    };
+    const cropped = model('backWall', 'stretch');
+    cropped.threeD!.backWall!.style!.fillPaints = [croppedPicture];
+    expect(collectChartMarkerImageFills(cropped)).toEqual([croppedPicture]);
+    const croppedRec = recordingCtx();
+    renderChartCore(croppedRec.ctx, cropped, RECT, 1, 0, testThreeD, undefined, () => bitmap);
+    const croppedSourceXs = croppedRec.drawImages
+      .filter(call => call[0] === bitmap)
+      .map(call => Number(call[1]));
+    expect(croppedSourceXs.length).toBeGreaterThan(0);
+    expect(Math.min(...croppedSourceXs)).toBeGreaterThan(15);
     expect(collectChartMarkerImageFills({
       ...model('backWall', 'stackScale'),
       valMax: 8_192,

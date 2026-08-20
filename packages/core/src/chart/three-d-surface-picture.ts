@@ -1,6 +1,6 @@
 import type { ImageFill } from '../types/common.js';
 import type { ChartThreeDSurface } from '../types/chart.js';
-import { imageNaturalSize } from '../image/crop.js';
+import { cropSourceRect, imageNaturalSize } from '../image/crop.js';
 import { drawProjected } from '../shape/scene3d-draw.js';
 import {
   planChartThreeDSurfacePicture,
@@ -45,6 +45,10 @@ export function paintChartThreeDSurfacePicture(
   if (!plan || geometry.inner.length !== 4) return false;
   const natural = imageNaturalSize(image);
   if (!(natural.w > 0) || !(natural.h > 0)) return false;
+  const crop = cropSourceRect(image, fill.srcRect);
+  const sourceRect = crop
+    ? { x0: crop.sx, y0: crop.sy, x1: crop.sx + crop.sw, y1: crop.sy + crop.sh }
+    : undefined;
   // Preserve the established planar mapping exactly. Positive-thickness
   // joining faces need their own screen-upright ordering because each face has
   // a different scene-space axis pair.
@@ -88,7 +92,7 @@ export function paintChartThreeDSurfacePicture(
       for (let index = 1; index < quad.length; index++) ctx.lineTo(quad[index].x, quad[index].y);
       ctx.closePath();
       ctx.clip();
-      drawProjected(image, ctx, natural.w, natural.h, quad);
+      drawProjected(image, ctx, natural.w, natural.h, quad, 0.5, sourceRect);
       ctx.restore();
     }
   } else if (plan.stackUnit != null) {
@@ -113,10 +117,10 @@ export function paintChartThreeDSurfacePicture(
         for (let index = 0; index < repetitions; index++) {
           const lower = index * plan.stackUnit / valueSpan;
           const upper = (index + 1) * plan.stackUnit / valueSpan;
-          drawProjected(image, ctx, natural.w, natural.h, stackQuad(face, lower, upper));
+          drawProjected(image, ctx, natural.w, natural.h, stackQuad(face, lower, upper), 0.5, sourceRect);
         }
       } else {
-        drawProjected(image, ctx, natural.w, natural.h, quad);
+        drawProjected(image, ctx, natural.w, natural.h, quad, 0.5, sourceRect);
       }
       ctx.restore();
     }
