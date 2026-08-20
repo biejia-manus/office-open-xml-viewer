@@ -14,6 +14,29 @@ const fill = {
 };
 
 describe('positive-thickness CT_Surface picture faces', () => {
+  it('accepts a bounded positive source crop but keeps unmeasured crop modes closed', () => {
+    expect(planChartThreeDSurfacePicture({
+      ...fill,
+      srcRect: { l: 0.25, t: 0, r: 0, b: 0 },
+    }, {
+      thicknessPercent: 0,
+      pictureOptions: { applyToFront: true, pictureFormat: 'stretch' },
+    }, 'backWall', 10)).toEqual({ mode: 'stretch', repetitions: 1, slabFaces: undefined });
+    expect(planChartThreeDSurfacePicture({
+      ...fill,
+      srcRect: { l: -0.25, t: 0, r: 0, b: 0 },
+    }, undefined, 'backWall', 10)).toBeNull();
+    expect(planChartThreeDSurfacePicture({
+      ...fill,
+      srcRect: { l: 0.6, t: 0, r: 0.4, b: 0 },
+    }, undefined, 'backWall', 10)).toBeNull();
+    expect(planChartThreeDSurfacePicture({
+      ...fill,
+      srcRect: { l: 0.25, t: 0, r: 0, b: 0 },
+      fillRect: { l: 0.1, t: 0, r: 0, b: 0 },
+    }, undefined, 'backWall', 10)).toBeNull();
+  });
+
   it.each([
     ['front', { applyToFront: true, applyToSides: false, applyToEnd: false }, [0]],
     ['sides', { applyToFront: false, applyToSides: true, applyToEnd: false }, [3, 5]],
