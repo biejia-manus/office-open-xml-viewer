@@ -7739,26 +7739,77 @@ function renderSurfaceChart(
   );
   const bandFormats = new Map((chart.surfaceBandFormats ?? []).map(format => [format.idx, format]));
   const linkedBandStyle = chart.chartStyleRoles?.dataPoint3D;
-  const bandFillRecipes = Array.from({ length: bandCount }, (_, index) => {
-    const format = bandFormats.get(index);
-    let decision: Fill | null | undefined;
-    if (format?.fillHidden === true) decision = null;
-    else if (format?.fill) decision = format.fill;
-    else decision = chartStyleFillDecision(format?.style, index);
-    return decision === undefined
-      ? chartStyleFillDecision(linkedBandStyle, index)
-      : decision;
-  });
-  const bandLineRecipes = Array.from({ length: bandCount }, (_, index) => {
-    const format = bandFormats.get(index);
-    let decision: ChartModel['plotAreaLineFill'] | null | undefined;
-    if (format?.lineHidden === true) decision = null;
-    else if (format?.lineColor) decision = { fillType: 'solid', color: format.lineColor };
-    else decision = chartStyleLineDecision(format?.style, index);
-    return decision === undefined
-      ? chartStyleLineDecision(linkedBandStyle, index)
-      : decision;
-  });
+  const linkedWireframeStyle = chart.chartStyleRoles?.dataPointWireframe;
+  const styleHasLinePaint = (style: ChartSeries['chartexStyle']): boolean =>
+    style?.lineNoStyle !== true && (
+      style?.linePaintAuthored === true
+      || style?.lineHidden === true
+      || (style?.lineColors?.length ?? 0) > 0
+      || (style?.linePaints?.length ?? 0) > 0
+    );
+  const styleHasLineFormatting = (style: ChartSeries['chartexStyle']): boolean =>
+    styleHasLinePaint(style)
+    || style?.lineWidthEmu != null
+    || style?.lineDashAuthored === true
+    || style?.lineDash != null
+    || style?.lineCustomDash != null
+    || style?.lineCap != null
+    || style?.lineJoin != null
+    || style?.lineCompound != null;
+  const directWireframeLineAuthored = chart.surfaceWireframe === true && (
+    rows.some(row =>
+      row.lineColor != null
+      || row.lineWidthEmu != null
+      || row.lineHidden === true
+      || styleHasLineFormatting(row.chartexStyle)
+    )
+    || [...bandFormats.values()].some(format =>
+      format.lineColor != null
+      || format.lineWidthEmu != null
+      || format.lineHidden === true
+      || styleHasLineFormatting(format.style)
+    )
+  );
+  const bandFillRecipes = chart.surfaceWireframe === true ? [] : Array.from(
+    { length: bandCount }, (_, index) => {
+      const format = bandFormats.get(index);
+      let decision: Fill | null | undefined;
+      if (format?.fillHidden === true) decision = null;
+      else if (format?.fill) decision = format.fill;
+      else decision = chartStyleFillDecision(format?.style, index);
+      return decision === undefined
+        ? chartStyleFillDecision(linkedBandStyle, index)
+        : decision;
+    },
+  );
+  const bandLineRecipes = chart.surfaceWireframe === true ? [] : Array.from(
+    { length: bandCount }, (_, index) => {
+      const format = bandFormats.get(index);
+      let decision: ChartModel['plotAreaLineFill'] | null | undefined;
+      if (format?.lineHidden === true) decision = null;
+      else if (format?.lineColor) decision = { fillType: 'solid', color: format.lineColor };
+      else decision = chartStyleLineDecision(format?.style, index);
+      return decision === undefined
+        ? chartStyleLineDecision(linkedBandStyle, index)
+        : decision;
+    },
+  );
+  // MS-ODRAWXML scopes dataPointWireframe to Surface wireframes, but does not
+  // define how a relative Chart Colors palette or direct band/series outline
+  // is segmented across the connected mesh. Consume only a fixed linked line
+  // reference when no direct line layer needs that missing segmentation;
+  // otherwise fail closed instead of selecting palette entry zero by guess.
+  const fixedWireframeLineIndex = linkedWireframeStyle?.lineColorIndex;
+  const unsupportedWireframeCompound = linkedWireframeStyle?.lineCompound != null;
+  const wireframeLineRecipe = chart.surfaceWireframe !== true
+    ? undefined
+    : directWireframeLineAuthored || unsupportedWireframeCompound
+      ? null
+      : !styleHasLinePaint(linkedWireframeStyle)
+        ? undefined
+        : fixedWireframeLineIndex != null
+          ? chartStyleLineDecision(linkedWireframeStyle, fixedWireframeLineIndex)
+          : null;
   const surfaceFacePaints = [
     { surface: chart.threeD?.floor, role: 'floor' as const },
     { surface: chart.threeD?.sideWall, role: 'wall' as const },
@@ -7768,6 +7819,7 @@ function renderSurfaceChart(
   for (const recipe of [
     ...bandFillRecipes,
     ...bandLineRecipes,
+    wireframeLineRecipe,
     ...surfaceFacePaints.flatMap(paint => [paint.fill, paint.line]),
   ]) {
     if (recipe == null) continue;
@@ -8140,30 +8192,50 @@ function renderSurfaceChart(
     }
   }
   if (chart.surfaceWireframe === true) {
-    ctx.strokeStyle = '#595959';
-    ctx.lineWidth = Math.max(1, 0.75 * ptToPx);
-    ctx.setLineDash([]);
-    for (let row = 0; row < rowCount; row++) {
-      ctx.beginPath();
-      for (let column = 0; column < columnCount; column++) {
-        const value = rows[row].values[column];
-        if (value == null || !Number.isFinite(value)) continue;
-        const point = projection.project(toX(column), toValueY(value), toDepth(row));
-        if (column === 0) ctx.moveTo(point.x, point.y);
-        else ctx.lineTo(point.x, point.y);
-      }
-      ctx.stroke();
-    }
-    for (let column = 0; column < columnCount; column++) {
-      ctx.beginPath();
+    const wireframeLine = wireframeLineRecipe?.fillType === 'solid'
+      ? `#${wireframeLineRecipe.color}`
+      : wireframeLineRecipe
+        ? resolveFill(wireframeLineRecipe, ctx, px0, py0, pw, ph)
+        : wireframeLineRecipe;
+    if (wireframeLine !== null) {
+      const geometry = directWireframeLineAuthored
+        || linkedWireframeStyle?.lineNoStyle === true
+        ? undefined : linkedWireframeStyle;
+      ctx.strokeStyle = wireframeLine ?? '#595959';
+      ctx.lineWidth = geometry?.lineWidthEmu != null
+        ? axisLineWidthPx(geometry.lineWidthEmu, ptToPx)
+        : Math.max(1, 0.75 * ptToPx);
+      ctx.setLineDash(drawingmlLineDashArray(
+        geometry?.lineCustomDash,
+        geometry?.lineDash,
+        ctx.lineWidth,
+      ));
+      const cap = geometry?.lineCap;
+      const join = geometry?.lineJoin;
+      ctx.lineCap = cap === 'rnd' ? 'round' : cap === 'sq' ? 'square' : 'butt';
+      ctx.lineJoin = join === 'round' || join === 'bevel' ? join : 'miter';
       for (let row = 0; row < rowCount; row++) {
-        const value = rows[row].values[column];
-        if (value == null || !Number.isFinite(value)) continue;
-        const point = projection.project(toX(column), toValueY(value), toDepth(row));
-        if (row === 0) ctx.moveTo(point.x, point.y);
-        else ctx.lineTo(point.x, point.y);
+        ctx.beginPath();
+        for (let column = 0; column < columnCount; column++) {
+          const value = rows[row].values[column];
+          if (value == null || !Number.isFinite(value)) continue;
+          const point = projection.project(toX(column), toValueY(value), toDepth(row));
+          if (column === 0) ctx.moveTo(point.x, point.y);
+          else ctx.lineTo(point.x, point.y);
+        }
+        ctx.stroke();
       }
-      ctx.stroke();
+      for (let column = 0; column < columnCount; column++) {
+        ctx.beginPath();
+        for (let row = 0; row < rowCount; row++) {
+          const value = rows[row].values[column];
+          if (value == null || !Number.isFinite(value)) continue;
+          const point = projection.project(toX(column), toValueY(value), toDepth(row));
+          if (row === 0) ctx.moveTo(point.x, point.y);
+          else ctx.lineTo(point.x, point.y);
+        }
+        ctx.stroke();
+      }
     }
   }
   ctx.restore();
