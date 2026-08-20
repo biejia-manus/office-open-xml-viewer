@@ -153,7 +153,12 @@ import {
   surfaceMaterialFactor,
   surfacePerspectiveTangentGain,
 } from './material-color.js';
-import { planChartThreeDProjection, type ThreeDScenePoint } from './three-d.js';
+import {
+  fitChartThreeDProjectionToWallThickness,
+  planChartThreeDSurfaceGeometry,
+  planChartThreeDProjection,
+  type ThreeDScenePoint,
+} from './three-d.js';
 import {
   DEFAULT_TEXT_INSET_LR_EMU,
   DEFAULT_TEXT_INSET_TB_EMU,
@@ -8179,7 +8184,7 @@ function renderSurfaceChart(
   );
   paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
 
-  const projection = planChartThreeDProjection(surfaceView, { x: px0, y: py0, w: pw, h: ph }, {
+  let projection = planChartThreeDProjection(surfaceView, { x: px0, y: py0, w: pw, h: ph }, {
     // Surface rows occupy a real series axis rather than the compact prism
     // slab used by 3-D columns. The boundary corpus fits that grid with the
     // same depth occupancy as standard (depth-arranged) cartesian series.
@@ -8187,6 +8192,11 @@ function renderSurfaceChart(
     perspectiveTangentGain,
   });
   if (!projection) return;
+  projection = fitChartThreeDProjectionToWallThickness(
+    projection,
+    chart.threeD ?? {},
+    { x: px0, y: py0, w: pw, h: ph },
+  );
   const useObservedAutomaticMaterial = observedAutomaticSurfaceCamera || (
     Math.abs(surfaceView.rotationX) === 90
     && surfaceView.rotationY === 0
@@ -8271,55 +8281,74 @@ function renderSurfaceChart(
   const floorY = front.y + front.h;
   const wallTopY = front.y;
   const farX = projection.topology.farX === 'min' ? front.x : front.x + front.w;
-  const surfaceFacePoints = [
-    [
-      projection.project(front.x, floorY, nearDepth),
-      projection.project(front.x + front.w, floorY, nearDepth),
-      projection.project(front.x + front.w, floorY, farDepth),
-      projection.project(front.x, floorY, farDepth),
-    ],
-    [
-      projection.project(farX, floorY, nearDepth),
-      projection.project(farX, floorY, farDepth),
-      projection.project(farX, wallTopY, farDepth),
-      projection.project(farX, wallTopY, nearDepth),
-    ],
-    [
-      projection.project(front.x, floorY, farDepth),
-      projection.project(front.x + front.w, floorY, farDepth),
-      projection.project(front.x + front.w, wallTopY, farDepth),
-      projection.project(front.x, wallTopY, farDepth),
-    ],
-  ];
-  for (let index = 0; index < surfaceFacePoints.length; index++) {
-    const points = surfaceFacePoints[index];
+  const surfaceSlabs = (
+    ['floor', 'sideWall', 'backWall'] as const
+  ).map(kind => {
+    const surface = chart.threeD?.[kind];
+    return planChartThreeDSurfaceGeometry(projection, kind, surface?.thicknessPercent);
+  });
+  // Keep the pre-thickness Surface3D path byte-stable when all three values
+  // are omitted/zero. Its existing floor plane is family-owned; positive
+  // thickness opts into the shared camera-aware CT_Surface slabs.
+  const surfaceFaceGroups = surfaceSlabs.some(slab => slab.thickness > 0)
+    ? surfaceSlabs.map(slab => slab.faces
+      .filter(face => slab.thickness === 0 || projection.cameraFacing(face))
+      .map(face => face.map(point =>
+        projection.projectUnbounded(point.x, point.y, point.depth)
+      )))
+    : [
+      [
+        projection.project(front.x, floorY, nearDepth),
+        projection.project(front.x + front.w, floorY, nearDepth),
+        projection.project(front.x + front.w, floorY, farDepth),
+        projection.project(front.x, floorY, farDepth),
+      ],
+      [
+        projection.project(farX, floorY, nearDepth),
+        projection.project(farX, floorY, farDepth),
+        projection.project(farX, wallTopY, farDepth),
+        projection.project(farX, wallTopY, nearDepth),
+      ],
+      [
+        projection.project(front.x, floorY, farDepth),
+        projection.project(front.x + front.w, floorY, farDepth),
+        projection.project(front.x + front.w, wallTopY, farDepth),
+        projection.project(front.x, wallTopY, farDepth),
+      ],
+    ].map(face => [face]);
+  for (let index = 0; index < surfaceFaceGroups.length; index++) {
+    const faces = surfaceFaceGroups[index];
+    if (!faces.length) continue;
+    const points = faces.flat();
     const effective = surfaceFacePaints[index];
     const minX = Math.min(...points.map(point => point.x));
     const maxX = Math.max(...points.map(point => point.x));
     const minY = Math.min(...points.map(point => point.y));
     const maxY = Math.max(...points.map(point => point.y));
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let pointIndex = 1; pointIndex < points.length; pointIndex++) {
-      ctx.lineTo(points[pointIndex].x, points[pointIndex].y);
-    }
-    ctx.closePath();
-    if (effective.fill) {
-      const fill = effective.fill.fillType === 'solid'
-        ? `#${effective.fill.color}`
-        : resolveFill(effective.fill, ctx, minX, minY, maxX - minX, maxY - minY);
+    const fill = effective.fill?.fillType === 'solid'
+      ? `#${effective.fill.color}`
+      : effective.fill
+        ? resolveFill(effective.fill, ctx, minX, minY, maxX - minX, maxY - minY)
+        : null;
+    const line = effective.line?.fillType === 'solid'
+      ? `#${effective.line.color}`
+      : effective.line
+        ? resolveFill(effective.line, ctx, minX, minY, maxX - minX, maxY - minY)
+        : null;
+    const width = effective.lineWidthEmu != null
+      ? axisLineWidthPx(effective.lineWidthEmu, ptToPx) : 1;
+    for (const face of faces) {
+      ctx.beginPath();
+      ctx.moveTo(face[0].x, face[0].y);
+      for (let pointIndex = 1; pointIndex < face.length; pointIndex++) {
+        ctx.lineTo(face[pointIndex].x, face[pointIndex].y);
+      }
+      ctx.closePath();
       if (fill) {
         ctx.fillStyle = fill;
         ctx.fill();
       }
-    }
-    if (effective.line) {
-      const line = effective.line.fillType === 'solid'
-        ? `#${effective.line.color}`
-        : resolveFill(effective.line, ctx, minX, minY, maxX - minX, maxY - minY);
       if (line) {
-        const width = effective.lineWidthEmu != null
-          ? axisLineWidthPx(effective.lineWidthEmu, ptToPx) : 1;
         ctx.strokeStyle = line;
         ctx.lineWidth = width;
         ctx.setLineDash(drawingmlLineDashArray(
