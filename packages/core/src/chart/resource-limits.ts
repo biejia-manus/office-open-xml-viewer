@@ -13,6 +13,8 @@ export const MAX_CHART_MARKER_IMAGE_SOURCES = 256;
  * labels, Surface bands, and the optional 3-D renderer. */
 export const MAX_CHART_PAINT_RECIPE_COMPONENTS = 4_096;
 export const MAX_CHART_PAINT_COMPONENTS = 1_048_576;
+/** Maximum drawImage repetitions for one tiled/stacked chart picture fill. */
+export const MAX_CHART_IMAGE_FILL_TILES = 4_096;
 
 const CLASSIC_CANVAS_POINT_FAMILIES = new Set([
   'clusteredBar', 'clusteredBarH', 'stackedBar', 'stackedBarH',

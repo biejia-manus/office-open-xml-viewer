@@ -8,7 +8,8 @@ import type {
   ChartSeries,
 } from '../types/chart.js';
 import type { Fill } from '../types/common.js';
-import { paintChartImageFill } from './image-fill.js';
+import { chartImageFillSource, paintChartImageFill } from './image-fill.js';
+import { paintChartThreeDSurfacePicture } from './three-d-surface-picture.js';
 import {
   effectiveMarkerSymbol,
   hasVisiblePointMarkerOverride,
@@ -2220,7 +2221,7 @@ function walls(
     surface: NonNullable<ChartModel['threeD']>['floor'],
   ) => {
     const slab = planChartThreeDSurfaceGeometry(projection, kind, surface?.thicknessPercent);
-    return slab.faces
+    return { slab, faces: slab.faces
       .filter(face => slab.thickness === 0 || projection.cameraFacing(face))
       .map(scenePoints => ({
         scenePoints,
@@ -2232,21 +2233,39 @@ function walls(
           0,
         ) / scenePoints.length,
       }))
-      .sort((left, right) => left.depth - right.depth);
+      .sort((left, right) => left.depth - right.depth) };
   };
-  const floorFaces = projectedSurfaceFaces('floor', chart.threeD?.floor);
-  const sideWallFaces = projectedSurfaceFaces('sideWall', chart.threeD?.sideWall);
-  const backWallFaces = projectedSurfaceFaces('backWall', chart.threeD?.backWall);
+  const floorSurface = projectedSurfaceFaces('floor', chart.threeD?.floor);
+  const sideWallSurface = projectedSurfaceFaces('sideWall', chart.threeD?.sideWall);
+  const backWallSurface = projectedSurfaceFaces('backWall', chart.threeD?.backWall);
+  const floorFaces = floorSurface.faces;
+  const sideWallFaces = sideWallSurface.faces;
+  const backWallFaces = backWallSurface.faces;
   const drawSurfaceFill = (
-    faces: readonly { points: readonly Point[] }[],
+    group: ReturnType<typeof projectedSurfaceFaces>,
     surface: NonNullable<ChartModel['threeD']>['floor'],
     role: 'floor' | 'wall',
+    kind: 'floor' | 'sideWall' | 'backWall',
   ) => {
     // CT_Surface does not imply a paint when c:spPr/fill is omitted. Excel's
     // classic 3-D default leaves these faces unfilled; only an authored fill
     // creates an opaque wall. The wall/grid rules are painted independently.
     const effective = chartThreeDSurfacePaint(chart, surface, role);
+    const faces = group.faces;
     if (!effective.fill || !faces.length) return;
+    if (effective.fill.fillType === 'image') {
+      if (chart.valAxisOrientation === 'maxMin') return;
+      const image = chartImageFillSource(effective.fill);
+      if (!image) return;
+      const inner = group.slab.inner;
+      const project = (point: ThreeDScenePoint): Point =>
+        projection.projectUnbounded(point.x, point.y, point.depth);
+      paintChartThreeDSurfacePicture(
+        ctx, effective.fill, image, surface, kind,
+        inner, project, axis.max - axis.min,
+      );
+      return;
+    }
     const points = faces.flatMap(face => face.points);
     const minX = Math.min(...points.map(point => point.x));
     const maxX = Math.max(...points.map(point => point.x));
@@ -2263,9 +2282,9 @@ function walls(
       ctx.fill();
     }
   };
-  drawSurfaceFill(floorFaces, chart.threeD?.floor, 'floor');
-  drawSurfaceFill(sideWallFaces, chart.threeD?.sideWall, 'wall');
-  drawSurfaceFill(backWallFaces, chart.threeD?.backWall, 'wall');
+  drawSurfaceFill(floorSurface, chart.threeD?.floor, 'floor', 'floor');
+  drawSurfaceFill(sideWallSurface, chart.threeD?.sideWall, 'wall', 'sideWall');
+  drawSurfaceFill(backWallSurface, chart.threeD?.backWall, 'wall', 'backWall');
   const drawValueGrid = (values: readonly number[], stroke: ThreeDStroke) => {
     applyThreeDStroke(ctx, stroke);
     for (const value of values) {

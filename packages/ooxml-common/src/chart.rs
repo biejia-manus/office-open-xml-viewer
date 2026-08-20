@@ -1230,7 +1230,11 @@ pub struct ChartThreeDPictureOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture_format: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture_format_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture_stack_unit: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture_stack_unit_authored: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -10547,17 +10551,19 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
             });
         let picture_options =
             child(surface, "pictureOptions").map(|options| ChartThreeDPictureOptions {
-                apply_to_front: bool_child(options, "applyToFront"),
-                apply_to_sides: bool_child(options, "applyToSides"),
-                apply_to_end: bool_child(options, "applyToEnd"),
+                apply_to_front: strict_boolean_child(options, "applyToFront"),
+                apply_to_sides: strict_boolean_child(options, "applyToSides"),
+                apply_to_end: strict_boolean_child(options, "applyToEnd"),
                 picture_format: child(options, "pictureFormat")
                     .and_then(|node| node.attribute("val"))
                     .filter(|value| matches!(*value, "stretch" | "stack" | "stackScale"))
                     .map(str::to_string),
+                picture_format_authored: child(options, "pictureFormat").map(|_| true),
                 picture_stack_unit: child(options, "pictureStackUnit")
                     .and_then(|node| node.attribute("val"))
-                    .and_then(|value| value.parse::<f64>().ok())
+                    .and_then(|value| value.trim().parse::<f64>().ok())
                     .filter(|value| value.is_finite() && *value > 0.0),
+                picture_stack_unit_authored: child(options, "pictureStackUnit").map(|_| true),
             });
         Some(ChartThreeDSurface {
             style,
@@ -20458,7 +20464,9 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(picture.apply_to_sides, Some(false));
         assert_eq!(picture.apply_to_end, Some(true));
         assert_eq!(picture.picture_format.as_deref(), Some("stackScale"));
+        assert_eq!(picture.picture_format_authored, Some(true));
         assert_eq!(picture.picture_stack_unit, Some(2.5));
+        assert_eq!(picture.picture_stack_unit_authored, Some(true));
         assert_eq!(m.series[0].three_d_shape.as_deref(), Some("pyramid"));
 
         // barDir=bar (horizontal) + clustered → clusteredBarH.
@@ -20543,6 +20551,32 @@ Subtitle</a:t></a:r></a:p>
                 .map(|layout| (layout.x, layout.y)),
             Some((0.7, 0.68))
         );
+    }
+
+    #[test]
+    fn parse_chart_part_keeps_invalid_picture_option_presence_fail_closed() {
+        let group = format!(r#"<c:bar3DChart><c:barDir val="col"/>{CH13_SER}</c:bar3DChart>"#);
+        let xml = chart_space_with_group(&group).replace(
+            "<c:chart><c:plotArea>",
+            r#"<c:chart><c:backWall><c:pictureOptions>
+              <c:applyToFront val="TRUE"/><c:pictureFormat val="future"/>
+              <c:pictureStackUnit val="NaN"/>
+            </c:pictureOptions></c:backWall><c:plotArea>"#,
+        );
+        let document = chart_space_of(&xml);
+        let model = parse_chart_part(document.root_element(), &FixtureResolver)
+            .expect("3-D picture option provenance parses");
+        let options = model
+            .three_d
+            .as_ref()
+            .and_then(|view| view.back_wall.as_ref())
+            .and_then(|surface| surface.picture_options.as_ref())
+            .expect("picture options");
+        assert_eq!(options.apply_to_front, Some(false));
+        assert_eq!(options.picture_format, None);
+        assert_eq!(options.picture_format_authored, Some(true));
+        assert_eq!(options.picture_stack_unit, None);
+        assert_eq!(options.picture_stack_unit_authored, Some(true));
     }
 
     #[test]
