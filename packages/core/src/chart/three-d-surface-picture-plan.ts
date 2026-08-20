@@ -12,7 +12,7 @@ export type SurfacePictureQuad = [
 ];
 
 export interface SurfacePicturePlan {
-  mode: 'stretch' | 'stackScale';
+  mode: 'stretch' | 'stack' | 'stackScale';
   repetitions: number;
   stackUnit?: number;
   slabFaces?: {
@@ -93,7 +93,8 @@ function relativeRectIsSupported(rect: ImageFill['srcRect'] | ImageFill['fillRec
  * ECMA-376 defines the flags and formats but not wall texture projection.
  * Excel/PDF observations establish full-face stretch and value-axis
  * stackScale on planar and positive-thickness back/side walls; floor ignores
- * pictureStackUnit. Positive-thickness front/sides/end targets are
+ * pictureStackUnit. Planar plain stack uses one projected plot-face reference
+ * aspect across floor and walls. Positive-thickness front/sides/end targets are
  * independently authored and map to the bounded six-face slab. Signed source
  * and destination rectangles retain DrawingML's mapping, including observed
  * outsets, on each face. */
@@ -134,6 +135,12 @@ export function planChartThreeDSurfacePicture(
     && format !== 'stackScale') return null;
   if (format === 'stretch') {
     return boundedSurfacePicturePlan({ mode: 'stretch', repetitions: 1, slabFaces });
+  }
+  if (format === 'stack') {
+    if (thickness !== 0) return null;
+    // The final repetition count depends on the decoded image aspect and the
+    // face geometry. The painter calculates and bounds that count atomically.
+    return boundedSurfacePicturePlan({ mode: 'stack', repetitions: 1, slabFaces });
   }
   if (format !== 'stackScale') return null;
   const stackUnit = options?.pictureStackUnit;

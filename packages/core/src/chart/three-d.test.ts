@@ -115,6 +115,9 @@ describe('threeDWallGeometry', () => {
     expect(floor.faces).toHaveLength(6);
     expect(side.faces).toHaveLength(6);
     expect(back.faces).toHaveLength(6);
+    expect(floor.pictureStackAspect).toBeGreaterThan(0);
+    expect(side.pictureStackAspect).toBeCloseTo(floor.pictureStackAspect as number, 12);
+    expect(back.pictureStackAspect).toBeCloseTo(floor.pictureStackAspect as number, 12);
     expect(Math.abs(floor.outer[0].y - floor.inner[0].y)).toBeCloseTo(90, 12);
     expect(Math.abs(side.outer[0].x - side.inner[0].x)).toBeCloseTo(90, 12);
     expect(
