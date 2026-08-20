@@ -130,6 +130,10 @@ export interface ChartSeries {
    * `ChartModel.categories` as X.
    */
   categories?: string[] | null;
+  /** Bubble-only provenance for a string-backed `<c:xVal>` source. Excel
+   * exposes such a lone bubble series as one legend entry per point while a
+   * numeric X source keeps the ordinary one-entry-per-series legend. */
+  bubbleXSourceIsString?: boolean | null;
   /**
    * Resolved marker visibility for line/scatter series. ECMA-376 §21.2.2.32
    * `<c:marker><c:symbol>` defaults to "none" for line charts unless the

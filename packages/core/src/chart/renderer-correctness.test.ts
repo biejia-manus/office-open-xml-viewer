@@ -9712,6 +9712,38 @@ describe('CH9 — bubble scale and numeric-X trendlines', () => {
     expect(rec.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(2);
   });
 
+  it('lists textual bubble x values as point legend entries', () => {
+    const rec = markerRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble',
+      showLegend: true,
+      legendPos: 'r',
+      varyColors: false,
+      categories: ['Project A', 'Project B', 'Project C', 'Project D'],
+      series: [series({
+        name: 'Investment vs Profit',
+        bubbleXSourceIsString: true,
+        values: [15, 35, 10, 60],
+        bubbleSizes: [5, 20, 15, 10],
+        dataPointColors: ['4472C4', 'ED7D31', 'A5A5A5', 'FFC000'],
+      })],
+      valMin: 0,
+      valMax: 70,
+    }), RECT, 1);
+
+    const labels = rec.texts.map(text => text.text);
+    expect(labels).toEqual(expect.arrayContaining([
+      'Project A', 'Project B', 'Project C', 'Project D',
+    ]));
+    expect(labels).not.toContain('Investment vs Profit');
+    expect(rec.arcs.slice(-4).map(arc => arc.fillStyle)).toEqual([
+      '#4472C4', '#ED7D31', '#A5A5A5', '#FFC000',
+    ]);
+    // Office maps a string-backed bubble X source to one-based ordinal
+    // positions, yielding the automatic 0..5 axis for four points.
+    expect(labels).toContain('5');
+  });
+
   it('composes showBubbleSize labels with point-level visibility overrides', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
