@@ -73,12 +73,16 @@ function rectIsIdentity(rect: ImageFill['srcRect'] | ImageFill['fillRect']): boo
   return rect == null || [rect.l, rect.t, rect.r, rect.b].every(value => (value ?? 0) === 0);
 }
 
-function sourceCropIsSupported(rect: ImageFill['srcRect']): boolean {
+function relativeRectIsSupported(rect: ImageFill['srcRect'] | ImageFill['fillRect']): boolean {
   if (!rect) return true;
-  const values = [rect.l, rect.t, rect.r, rect.b];
+  const l = rect.l ?? 0;
+  const t = rect.t ?? 0;
+  const r = rect.r ?? 0;
+  const b = rect.b ?? 0;
+  const values = [l, t, r, b];
   return values.every(value => Number.isFinite(value) && value >= 0)
-    && rect.l + rect.r < 1
-    && rect.t + rect.b < 1;
+    && l + r < 1
+    && t + b < 1;
 }
 
 /** The Office-observed, bounded subset of CT_Surface pictureOptions.
@@ -87,7 +91,9 @@ function sourceCropIsSupported(rect: ImageFill['srcRect']): boolean {
  * Excel/PDF observations establish full-face stretch and value-axis
  * stackScale on planar and positive-thickness back/side walls; floor ignores
  * pictureStackUnit. Positive-thickness front/sides/end targets are
- * independently authored and map to the bounded six-face slab. */
+ * independently authored and map to the bounded six-face slab. Non-negative
+ * source crops and destination insets retain DrawingML's source/destination
+ * rectangle mapping on each observed face. */
 export function planChartThreeDSurfacePicture(
   fill: ImageFill,
   surface: ChartThreeDSurface | null | undefined,
@@ -95,7 +101,7 @@ export function planChartThreeDSurfacePicture(
   valueSpan?: number,
 ): SurfacePicturePlan | null {
   if (fill.tile || fill.stretch !== true
-    || !sourceCropIsSupported(fill.srcRect) || !rectIsIdentity(fill.fillRect)
+    || !relativeRectIsSupported(fill.srcRect) || !relativeRectIsSupported(fill.fillRect)
     || fill.rotWithShape === false
     || (fill.alpha != null && (!Number.isFinite(fill.alpha) || fill.alpha < 0 || fill.alpha > 1))) {
     return null;
@@ -104,7 +110,9 @@ export function planChartThreeDSurfacePicture(
   if (options?.pictureFormatAuthored === true && options.pictureFormat == null) return null;
   if (options?.pictureStackUnitAuthored === true && options.pictureStackUnit == null) return null;
   const format = options?.pictureFormat ?? 'stretch';
-  if (!rectIsIdentity(fill.srcRect) && format !== 'stretch') return null;
+  if ((!rectIsIdentity(fill.srcRect) || !rectIsIdentity(fill.fillRect)) && format !== 'stretch') {
+    return null;
+  }
   const thickness = surface?.thicknessPercent ?? 0;
   if (!Number.isFinite(thickness) || thickness < 0) return null;
   const slabFaces = thickness === 0
