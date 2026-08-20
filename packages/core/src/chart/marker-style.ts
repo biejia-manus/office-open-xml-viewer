@@ -46,6 +46,19 @@ export function visibleBubbleSize(
   return Math.abs(value);
 }
 
+/** Effective ECMA-376 `bubble3D` provenance for one bubble. A point override
+ * wins over its series, then the owning bubble-chart group copied onto the
+ * series. Complete omission means the ordinary flat bubble. */
+export function bubblePointIsThreeD(
+  series: ChartSeries,
+  point: ChartDataPointOverride | undefined,
+): boolean {
+  return point?.bubble3D
+    ?? series.bubble3D
+    ?? series.bubble3DGroupDefault
+    ?? false;
+}
+
 /** Open stroke-only symbols do not consume a fill recipe. */
 export function markerSymbolConsumesFill(symbol: string | null | undefined): boolean {
   return symbol !== 'none' && symbol !== 'x' && symbol !== 'plus';
@@ -160,7 +173,7 @@ export function seriesLegendMarkerIsVisible(
   const family = series.seriesType ?? chartType;
   const lineFamily = family === 'line' || family === 'stackedLine'
     || family === 'stackedLinePct' || family === 'stock' || family === 'radar';
-  if (!lineFamily && family !== 'scatter') return false;
+  if (!lineFamily && family !== 'scatter' && family !== 'bubble') return false;
   if (family === 'radar' && radarStyle === 'filled') return false;
   if (family === 'scatter'
     && (scatterStyle === 'lineNoMarker' || scatterStyle === 'smoothNoMarker')) return false;

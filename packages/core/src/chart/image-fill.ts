@@ -280,7 +280,14 @@ function collectChartMarkerImageFillResult(chart: ChartModel): ChartMarkerImageF
       || labelKeyVisible);
     const seriesKeySymbol = series.markerSymbol ?? (family === 'stock' ? 'none' : 'circle');
     if (seriesKeyVisible && markerSymbolConsumesFill(seriesKeySymbol)) {
-      if (!isBubble) add(series.markerFillPaint);
+      if (isBubble) {
+        const seriesShape = styleImageDecision(series.chartexStyle, seriesIndex);
+        if (seriesShape) add(seriesShape);
+        if (seriesShape === undefined && series.color == null) {
+          const linkedShape = styleImageDecision(chart.chartStyleRoles?.dataPoint, seriesIndex);
+          if (linkedShape) add(linkedShape);
+        }
+      } else add(series.markerFillPaint);
       if (!isBubble
         && series.markerFillPaint === undefined && series.markerFill == null
         && series.markerFillPaintAuthored !== true) {
@@ -302,6 +309,11 @@ function collectChartMarkerImageFillResult(chart: ChartModel): ChartMarkerImageF
         };
         if ((group?.bubbleScale ?? chart.bubbleScale ?? 100) <= 0
           || visibleBubbleSize(effectiveBubbleSettings, series.bubbleSizes?.[index]) == null) continue;
+        // MS-OE376 §2.1.1504(b): a visible negative bubble uses the
+        // application's inverted fill, not its positive direct/linked image.
+        // The current wire model's alternate bubble default is solid/noFill,
+        // so none of these positive image sources is reachable.
+        if ((series.bubbleSizes?.[index] ?? 0) < 0) continue;
         const pointShape = styleImageDecision(point?.chartexStyle, index);
         if (pointShape) add(pointShape);
         if (pointShape !== undefined || point?.fillHidden === true || point?.color != null) continue;
