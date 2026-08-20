@@ -2222,8 +2222,10 @@ function walls(
   ) => {
     const slab = planChartThreeDSurfaceGeometry(projection, kind, surface?.thicknessPercent);
     return { slab, faces: slab.faces
-      .filter(face => slab.thickness === 0 || projection.cameraFacing(face))
-      .map(scenePoints => ({
+      .map((scenePoints, faceIndex) => ({ scenePoints, faceIndex }))
+      .filter(({ scenePoints }) => slab.thickness === 0 || projection.cameraFacing(scenePoints))
+      .map(({ scenePoints, faceIndex }) => ({
+        faceIndex,
         scenePoints,
         points: scenePoints.map(point =>
           projection.projectUnbounded(point.x, point.y, point.depth)
@@ -2257,12 +2259,12 @@ function walls(
       if (chart.valAxisOrientation === 'maxMin') return;
       const image = chartImageFillSource(effective.fill);
       if (!image) return;
-      const inner = group.slab.inner;
       const project = (point: ThreeDScenePoint): Point =>
         projection.projectUnbounded(point.x, point.y, point.depth);
       paintChartThreeDSurfacePicture(
         ctx, effective.fill, image, surface, kind,
-        inner, project, axis.max - axis.min,
+        group.slab, group.faces.map(face => face.faceIndex),
+        project, axis.max - axis.min,
       );
       return;
     }
