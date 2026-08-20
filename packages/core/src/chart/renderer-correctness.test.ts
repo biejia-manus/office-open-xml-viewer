@@ -1537,8 +1537,12 @@ describe('classic 3-D compatibility projection', () => {
       const draws = (
         kind: 'floor' | 'sideWall' | 'backWall',
         pictureOptions: ChartThreeDPictureOptions,
+        reversed = false,
       ) => {
-        const chart = model(kind, pictureOptions);
+        const chart = {
+          ...model(kind, pictureOptions),
+          valAxisOrientation: reversed ? 'maxMin' as const : undefined,
+        };
         expect(collectChartMarkerImageFills(chart)).toEqual([picture]);
         const rec = recordingCtx();
         renderChartCore(rec.ctx, chart, RECT, 1, 0, testThreeD, undefined, () => bitmap);
@@ -1549,7 +1553,11 @@ describe('classic 3-D compatibility projection', () => {
         ['backWall', { applyToFront: true, applyToSides: false, applyToEnd: false }],
         ['sideWall', { applyToFront: false, applyToSides: true, applyToEnd: false }],
         ['floor', { applyToFront: false, applyToSides: false, applyToEnd: true }],
-      ] as const) expect(draws(kind, pictureOptions), kind).toBeGreaterThan(0);
+      ] as const) {
+        const normal = draws(kind, pictureOptions);
+        expect(normal, kind).toBeGreaterThan(0);
+        expect(draws(kind, pictureOptions, true), `${kind} reversed`).toBe(normal);
+      }
       expect(collectChartMarkerImageFills(model('backWall', {
         applyToFront: false, applyToSides: false, applyToEnd: false,
       }))).toEqual([]);
@@ -1601,10 +1609,18 @@ describe('classic 3-D compatibility projection', () => {
     expect(collectChartMarkerImageFills(model('backWall', 'stack'))).toEqual([]);
     expect(collectChartMarkerImageFills(model('backWall', 'stretch', 25))).toEqual([picture]);
     expect(collectChartMarkerImageFills(model('backWall', 'stackScale', 25))).toEqual([]);
-    expect(collectChartMarkerImageFills({
+    const reversedStretch = {
       ...model('backWall', 'stretch'),
       valAxisOrientation: 'maxMin',
-    })).toEqual([]);
+    } satisfies ChartModel;
+    const reversedStackScale = {
+      ...model('backWall', 'stackScale'),
+      valAxisOrientation: 'maxMin',
+    } satisfies ChartModel;
+    expect(collectChartMarkerImageFills(reversedStretch)).toEqual([picture]);
+    expect(collectChartMarkerImageFills(reversedStackScale)).toEqual([picture]);
+    expect(draws(reversedStretch)).toBe(backStretch);
+    expect(draws(reversedStackScale)).toBe(backStackScale);
     const invalidProvenance = model('backWall', 'stretch');
     invalidProvenance.threeD!.backWall!.pictureOptions = {
       applyToFront: true,
@@ -1657,6 +1673,12 @@ describe('classic 3-D compatibility projection', () => {
     renderChartCore(rec.ctx, model, RECT, 1, 0, testThreeD, undefined, () => bitmap);
     expect(rec.drawImages.length).toBeGreaterThan(1);
     expect(rec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#FF0000' });
+    const reversed = { ...model, valAxisOrientation: 'maxMin' as const };
+    expect(collectChartMarkerImageFills(reversed)).toEqual([picture]);
+    const reversedRec = recordingCtx();
+    renderChartCore(reversedRec.ctx, reversed, RECT, 1, 0, testThreeD, undefined, () => bitmap);
+    expect(reversedRec.drawImages.length).toBe(rec.drawImages.length);
+    expect(reversedRec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#FF0000' });
   });
 
   it('uses structured direct and linked floor/wall paint with direct noFill precedence', () => {

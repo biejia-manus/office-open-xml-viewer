@@ -246,8 +246,7 @@ function collectChartMarkerImageFillResult(chart: ChartModel): ChartMarkerImageF
   const surfaceGeometryCanPaint = chart.chartType === 'surface' || chart.chartType === 'surface3D'
     ? chart.series.length >= 2 && surfaceColumnCount >= 2 && finiteSurfaceValue
     : finiteSurfaceValue;
-  if (chart.threeD && chart.valAxisOrientation !== 'maxMin'
-    && SURFACE_PICTURE_FAMILIES.has(chart.chartType) && surfaceGeometryCanPaint) {
+  if (chart.threeD && SURFACE_PICTURE_FAMILIES.has(chart.chartType) && surfaceGeometryCanPaint) {
     const explicitSpan = chart.valMin != null && Number.isFinite(chart.valMin)
       && chart.valMax != null && Number.isFinite(chart.valMax)
       ? chart.valMax - chart.valMin

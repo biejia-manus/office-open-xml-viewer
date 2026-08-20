@@ -2256,7 +2256,6 @@ function walls(
     const faces = group.faces;
     if (!effective.fill || !faces.length) return;
     if (effective.fill.fillType === 'image') {
-      if (chart.valAxisOrientation === 'maxMin') return;
       const image = chartImageFillSource(effective.fill);
       if (!image) return;
       const project = (point: ThreeDScenePoint): Point =>
