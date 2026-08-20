@@ -19,10 +19,21 @@ import {
 } from './marker-style.js';
 import {
   MAX_CANVAS_CHART_POINTS,
+  MAX_CHART_IMAGE_FILL_TILES,
   MAX_CHART_MARKER_IMAGE_SOURCES,
   sourceChartStructureCount,
 } from './resource-limits.js';
 import { indexChartPlotGroups, markerChartTypeForPlotGroup } from './plot-groups.js';
+import { chartThreeDSurfacePaint } from './style-paint.js';
+import { planChartThreeDSurfacePicture } from './three-d-surface-picture-plan.js';
+
+const SURFACE_PICTURE_FAMILIES = new Set([
+  'line', 'stackedLine', 'stackedLinePct',
+  'area', 'stackedArea', 'stackedAreaPct',
+  'clusteredBar', 'clusteredBarH',
+  'stackedBar', 'stackedBarH', 'stackedBarPct', 'stackedBarHPct',
+  'surface', 'surface3D',
+]);
 
 export type ChartImageLookup = (fill: ImageFill) => CanvasImageSource | null | undefined;
 
@@ -76,7 +87,6 @@ function alignmentOffset(
   return { x, y };
 }
 
-const MAX_CHART_IMAGE_FILL_TILES = 4_096;
 const TILE_ALIGNMENTS = new Set(['tl', 't', 'tr', 'l', 'ctr', 'r', 'bl', 'b', 'br']);
 const TILE_FLIPS = new Set(['none', 'x', 'y', 'xy']);
 
@@ -94,6 +104,13 @@ interface TileGeometry {
 function imageFillModeIsPaintable(fill: ImageFill): boolean {
   return (fill.tile != null) !== (fill.stretch === true)
     && srcRectHasVisibleArea(fill.srcRect);
+}
+
+/** Return the synchronously preloaded source for a validated chart image fill.
+ * Kept internal to chart modules; hosts still own all fetch/decode work. */
+export function chartImageFillSource(fill: ImageFill): CanvasImageSource | null {
+  if (!imageFillModeIsPaintable(fill)) return null;
+  return activeLookup?.(fill) ?? null;
 }
 
 function imageTileGeometry(
@@ -219,6 +236,31 @@ function collectChartMarkerImageFillResult(chart: ChartModel): ChartMarkerImageF
       ? null
       : undefined;
   };
+  const finiteSurfaceValue = chart.series.some(series =>
+    series.values.some(value => value != null && Number.isFinite(value))
+  );
+  const surfaceColumnCount = Math.max(
+    chart.categories.length,
+    ...chart.series.map(series => series.categories?.length ?? series.values.length),
+  );
+  const surfaceGeometryCanPaint = chart.chartType === 'surface' || chart.chartType === 'surface3D'
+    ? chart.series.length >= 2 && surfaceColumnCount >= 2 && finiteSurfaceValue
+    : finiteSurfaceValue;
+  if (chart.threeD && chart.valAxisOrientation !== 'maxMin'
+    && SURFACE_PICTURE_FAMILIES.has(chart.chartType) && surfaceGeometryCanPaint) {
+    const explicitSpan = chart.valMin != null && Number.isFinite(chart.valMin)
+      && chart.valMax != null && Number.isFinite(chart.valMax)
+      ? chart.valMax - chart.valMin
+      : undefined;
+    for (const [kind, role] of [
+      ['floor', 'floor'], ['sideWall', 'wall'], ['backWall', 'wall'],
+    ] as const) {
+      const surface = chart.threeD[kind];
+      const fill = chartThreeDSurfacePaint(chart, surface, role).fill;
+      if (fill?.fillType === 'image'
+        && planChartThreeDSurfacePicture(fill, surface, kind, explicitSpan)) add(fill);
+    }
+  }
   const plotGroupBySeries = indexChartPlotGroups(chart);
   const scatterHasNumericX = chart.series.some((series, seriesIndex) => {
     const group = plotGroupBySeries[seriesIndex];
@@ -369,7 +411,7 @@ export function collectChartMarkerImageFills(chart: ChartModel): ImageFill[] {
   return collectChartMarkerImageFillResult(chart).fills;
 }
 
-/** Collect marker images for one host render pass. Hosts retain the decoded
+/** Collect chart picture fills for one host render pass. Hosts retain the decoded
  * sources until that page/slide/viewport paint completes, so the count ceiling
  * applies to the aggregate rather than independently to each chart. */
 export function collectChartMarkerImageFillsForCharts(

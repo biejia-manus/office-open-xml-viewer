@@ -428,8 +428,10 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
           return (angle: number) => { rotations.push(angle); };
         case 'clearRect': case 'strokeText':
         case 'scale':
-        case 'setTransform': case 'resetTransform': case 'getTransform':
+        case 'setTransform': case 'resetTransform':
           return () => undefined;
+        case 'getTransform':
+          return () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
         default:
           return undefined;
       }
@@ -1441,6 +1443,160 @@ describe('classic 3-D compatibility projection', () => {
     expect(Math.max(...points.map(point => point.x))).toBeLessThanOrEqual(RECT.x + RECT.w + 1e-9);
     expect(Math.min(...points.map(point => point.y))).toBeGreaterThanOrEqual(RECT.y - 1e-9);
     expect(Math.max(...points.map(point => point.y))).toBeLessThanOrEqual(RECT.y + RECT.h + 1e-9);
+  });
+
+  it('prefetches and projects only applicable flat CT_Surface stretch pictures', () => {
+    const picture = {
+      fillType: 'image' as const,
+      imagePath: 'xl/media/wall.png',
+      mimeType: 'image/png',
+      stretch: true,
+    };
+    const model = (applyToFront: boolean) => baseModel({
+      chartType: 'line',
+      categories: ['A', 'B', 'C'],
+      valMin: 0,
+      valMax: 10,
+      valAxisMajorGridlines: false,
+      threeD: {
+        rotationX: 20, rotationY: 20, depthPercent: 100, perspective: 30,
+        backWall: {
+          thicknessPercent: 0,
+          style: { fillPaints: [picture], fillPaintAuthored: true },
+          pictureOptions: { applyToFront, pictureFormat: 'stretch' },
+        },
+      },
+      series: [series({ values: [2, 8, 4], showMarker: false })],
+    });
+    const bitmap = { width: 80, height: 40 } as unknown as CanvasImageSource;
+    expect(collectChartMarkerImageFills(model(true))).toEqual([picture]);
+    expect(collectChartMarkerImageFills(model(false))).toEqual([]);
+
+    const visible = recordingCtx();
+    renderChartCore(visible.ctx, model(true), RECT, 1, 0, testThreeD, undefined, () => bitmap);
+    expect(visible.drawImages.length).toBeGreaterThan(0);
+    const hidden = recordingCtx();
+    renderChartCore(hidden.ctx, model(false), RECT, 1, 0, testThreeD, undefined, () => bitmap);
+    expect(hidden.drawImages).toHaveLength(0);
+
+    const linked = baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      valMin: 0,
+      valMax: 10,
+      valAxisMajorGridlines: false,
+      threeD: { rotationX: 20, rotationY: 20, depthPercent: 100, perspective: 30 },
+      chartStyleRoles: {
+        wall: { fillPaints: [picture], fillPaintAuthored: true },
+      },
+      series: [series({ values: [2, 8], showMarker: false })],
+    });
+    expect(collectChartMarkerImageFills(linked)).toEqual([picture]);
+    const linkedRec = recordingCtx();
+    renderChartCore(linkedRec.ctx, linked, RECT, 1, 0, testThreeD, undefined, () => bitmap);
+    expect(linkedRec.drawImages.length).toBeGreaterThan(0);
+  });
+
+  it('repeats stackScale pictures by value units but keeps the Office floor exception', () => {
+    const picture = {
+      fillType: 'image' as const,
+      imagePath: 'xl/media/stack-scale.png',
+      mimeType: 'image/png',
+      stretch: true,
+    };
+    const model = (
+      kind: 'backWall' | 'floor',
+      pictureFormat: 'stretch' | 'stackScale' | 'stack',
+      thicknessPercent = 0,
+    ) => baseModel({
+      chartType: 'line',
+      categories: ['A', 'B', 'C'],
+      valMin: 0,
+      valMax: 10,
+      valAxisMajorGridlines: false,
+      threeD: {
+        rotationX: 20, rotationY: 20, depthPercent: 100, perspective: 30,
+        [kind]: {
+          thicknessPercent,
+          style: { fillPaints: [picture], fillPaintAuthored: true },
+          pictureOptions: {
+            ...(kind === 'backWall' ? { applyToFront: true } : { applyToSides: true }),
+            pictureFormat,
+            pictureStackUnit: pictureFormat === 'stackScale' ? 2 : undefined,
+          },
+        },
+      },
+      series: [series({ values: [2, 8, 4], showMarker: false })],
+    });
+    const bitmap = { width: 80, height: 40 } as unknown as CanvasImageSource;
+    const draws = (chart: ChartModel) => {
+      const rec = recordingCtx();
+      renderChartCore(rec.ctx, chart, RECT, 1, 0, testThreeD, undefined, () => bitmap);
+      return rec.drawImages.length;
+    };
+    const backStretch = draws(model('backWall', 'stretch'));
+    const backStackScale = draws(model('backWall', 'stackScale'));
+    expect(backStretch).toBeGreaterThan(0);
+    expect(backStackScale).toBeGreaterThan(backStretch);
+    expect(draws(model('floor', 'stackScale'))).toBe(draws(model('floor', 'stretch')));
+    expect(collectChartMarkerImageFills(model('backWall', 'stack'))).toEqual([]);
+    expect(collectChartMarkerImageFills(model('backWall', 'stretch', 25))).toEqual([]);
+    expect(collectChartMarkerImageFills({
+      ...model('backWall', 'stretch'),
+      valAxisOrientation: 'maxMin',
+    })).toEqual([]);
+    const invalidProvenance = model('backWall', 'stretch');
+    invalidProvenance.threeD!.backWall!.pictureOptions = {
+      applyToFront: true,
+      pictureFormatAuthored: true,
+      pictureStackUnitAuthored: true,
+    };
+    expect(collectChartMarkerImageFills(invalidProvenance)).toEqual([]);
+    expect(collectChartMarkerImageFills({
+      ...model('backWall', 'stackScale'),
+      valMax: 8_192,
+    })).toEqual([picture]);
+    expect(collectChartMarkerImageFills({
+      ...model('backWall', 'stackScale'),
+      valMax: 8_194,
+    })).toEqual([]);
+  });
+
+  it('uses the same planar CT_Surface picture path for Surface3D', () => {
+    const picture = {
+      fillType: 'image' as const,
+      imagePath: 'xl/media/surface-wall.png',
+      mimeType: 'image/png',
+      stretch: true,
+    };
+    const model = baseModel({
+      chartType: 'surface3D',
+      categories: ['A', 'B'],
+      valMin: 0,
+      valMax: 10,
+      valAxisMajorUnit: 2,
+      threeD: {
+        rotationX: 20, rotationY: 20, depthPercent: 100, perspective: 30,
+        sideWall: {
+          thicknessPercent: 0,
+          lineColor: 'FF0000',
+          style: { fillPaints: [picture], fillPaintAuthored: true },
+          pictureOptions: {
+            applyToSides: true, pictureFormat: 'stackScale', pictureStackUnit: 2,
+          },
+        },
+      },
+      series: [
+        series({ values: [2, 8] }),
+        series({ values: [4, 6] }),
+      ],
+    });
+    const bitmap = { width: 80, height: 40 } as unknown as CanvasImageSource;
+    expect(collectChartMarkerImageFills(model)).toEqual([picture]);
+    const rec = recordingCtx();
+    renderChartCore(rec.ctx, model, RECT, 1, 0, testThreeD, undefined, () => bitmap);
+    expect(rec.drawImages.length).toBeGreaterThan(1);
+    expect(rec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#FF0000' });
   });
 
   it('uses structured direct and linked floor/wall paint with direct noFill precedence', () => {

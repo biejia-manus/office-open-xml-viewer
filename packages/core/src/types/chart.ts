@@ -1502,7 +1502,11 @@ export interface ChartThreeDPictureOptions {
   applyToSides?: boolean | null;
   applyToEnd?: boolean | null;
   pictureFormat?: 'stretch' | 'stack' | 'stackScale' | string | null;
+  /** Whether `<c:pictureFormat>` was authored, including an unsupported value. */
+  pictureFormatAuthored?: boolean | null;
   pictureStackUnit?: number | null;
+  /** Whether `<c:pictureStackUnit>` was authored, including an invalid value. */
+  pictureStackUnitAuthored?: boolean | null;
 }
 
 export interface ChartThreeD {

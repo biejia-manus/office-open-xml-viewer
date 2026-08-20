@@ -6,11 +6,13 @@
 import type { ChartDataLabelOverride, ChartDecorationLineStyle, ChartDisplayUnits, ChartLabelBox, ChartLegendEntryOverride, ChartManualLayout, ChartModel, ChartRect, ChartSeries, ChartSeriesDataLabels, ChartStockUpDownBarStyle, ChartStyleRole, ChartTextBox, ChartTextRun, ChartTrendline, SecondaryValueAxis } from '../types/chart';
 import type { Fill } from '../types/common';
 import {
+  chartImageFillSource,
   chartImageFillPaintWorkUpperBound,
   paintChartImageFill,
   type ChartImageLookup,
   withChartImageLookup,
 } from './image-fill.js';
+import { paintChartThreeDSurfacePicture } from './three-d-surface-picture.js';
 import { mergeChartLabelBoxes, paintChartLabelBox } from './label-box.js';
 import { strokeChartFrameRect } from './compound-frame.js';
 import {
@@ -8287,6 +8289,7 @@ function renderSurfaceChart(
     const surface = chart.threeD?.[kind];
     return planChartThreeDSurfaceGeometry(projection, kind, surface?.thicknessPercent);
   });
+  const surfaceKinds = ['floor', 'sideWall', 'backWall'] as const;
   // Keep the pre-thickness Surface3D path byte-stable when all three values
   // are omitted/zero. Its existing floor plane is family-owned; positive
   // thickness opts into the shared camera-aware CT_Surface slabs.
@@ -8321,11 +8324,29 @@ function renderSurfaceChart(
     if (!faces.length) continue;
     const points = faces.flat();
     const effective = surfaceFacePaints[index];
+    const imageFill = effective.fill?.fillType === 'image' ? effective.fill : null;
+    if (imageFill) {
+      if (!valAxisReversed(chart)) {
+        const image = chartImageFillSource(imageFill);
+        const surface = chart.threeD?.[surfaceKinds[index]];
+        const inner = surfaceSlabs[index].inner;
+        if (image) {
+          const project = (point: ThreeDScenePoint) =>
+            projection.projectUnbounded(point.x, point.y, point.depth);
+          paintChartThreeDSurfacePicture(
+            ctx, imageFill, image, surface, surfaceKinds[index],
+            inner, project, surfaceSpan,
+          );
+        }
+      }
+    }
     const minX = Math.min(...points.map(point => point.x));
     const maxX = Math.max(...points.map(point => point.x));
     const minY = Math.min(...points.map(point => point.y));
     const maxY = Math.max(...points.map(point => point.y));
-    const fill = effective.fill?.fillType === 'solid'
+    const fill = imageFill
+      ? null
+      : effective.fill?.fillType === 'solid'
       ? `#${effective.fill.color}`
       : effective.fill
         ? resolveFill(effective.fill, ctx, minX, minY, maxX - minX, maxY - minY)
