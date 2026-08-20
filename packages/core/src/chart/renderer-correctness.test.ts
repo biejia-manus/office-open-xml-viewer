@@ -104,6 +104,7 @@ it('does not prefetch bubble pictures for points whose sizes cannot paint', () =
   });
   expect(collectChartMarkerImageFills(model)).toEqual([]);
   expect(collectChartMarkerImageFills({ ...model, bubbleScale: 0 })).toEqual([]);
+  expect(collectChartMarkerImageFills({ ...model, showNegativeBubbles: true })).toEqual([]);
 });
 
 it('uses the owning bubble group settings for prefetch and paint work', () => {
@@ -121,7 +122,7 @@ it('uses the owning bubble group settings for prefetch and paint work', () => {
     },
     series: [
       series({ values: [1], seriesType: 'scatter', markerSymbol: 'none' }),
-      series({ values: [2], seriesType: 'scatter', bubbleSizes: [-25] }),
+      series({ values: [2], seriesType: 'scatter', bubbleSizes: [25] }),
     ],
     plotGroups: [
       plotGroup('scatter', 0, 1, { scatterStyle: 'line' }),
@@ -144,6 +145,32 @@ it('uses the owning bubble group settings for prefetch and paint work', () => {
   const rec = recordingCtx();
   renderChartCore(rec.ctx, visible, RECT, 1, 0, testThreeD, undefined, () => bitmap);
   expect(rec.drawImages).toHaveLength(1);
+});
+
+it('prefetches and paints one bubble picture for both plot and 3-D legend key', () => {
+  const picture = {
+    fillType: 'image' as const,
+    imagePath: 'xl/media/bubble-key.png',
+    mimeType: 'image/png',
+    stretch: true,
+  };
+  const model = baseModel({
+    chartType: 'bubble', showLegend: true, categories: ['0'],
+    series: [series({
+      values: [1], bubbleSizes: [100], bubble3D: true,
+      chartexStyle: {
+        fillPaints: [picture], fillPaintAuthored: true,
+      },
+    })],
+    catAxisMin: 0, catAxisMax: 1, valMin: 0, valMax: 2,
+  });
+  const bitmap = { width: 8, height: 8 } as unknown as CanvasImageSource;
+  expect(collectChartMarkerImageFills(model)).toEqual([picture]);
+  expect(classicMarkerPaintWorkCount(model, () => bitmap, 1, RECT)).toBe(12);
+  const rec = recordingCtx();
+  renderChartCore(rec.ctx, model, RECT, 1, 0, testThreeD, undefined, () => bitmap);
+  expect(rec.drawImages).toHaveLength(2);
+  expect(rec.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(2);
 });
 const renderChart: typeof renderChartCore = (
   ctx, chart, rect, ptToPx, shapeRotationDeg, threeD = testThreeD,
@@ -173,7 +200,12 @@ interface Recorded {
   clips: Array<{ x: number; y: number; w: number; h: number }>;
   clipCalls: number;
   quadratics: Array<{ cpx: number; cpy: number; x: number; y: number }>;
-  gradients: Array<{ args: number[]; stops: Array<{ position: number; color: string }> }>;
+  gradients: Array<{
+    kind: 'linear' | 'radial';
+    args: number[];
+    stops: Array<{ position: number; color: string }>;
+  }>;
+  compositeModes: string[];
   arcs: Array<{ x: number; y: number; r: number }>;
   ellipses: Array<{ x: number; y: number; rx: number; ry: number }>;
   rotations: number[];
@@ -249,6 +281,7 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
   let clipCalls = 0;
   const quadratics: Recorded['quadratics'] = [];
   const gradients: Recorded['gradients'] = [];
+  const compositeModes: string[] = [];
   const arcs: Recorded['arcs'] = [];
   const ellipses: Recorded['ellipses'] = [];
   const rotations: number[] = [];
@@ -271,6 +304,7 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
     lineCap: 'butt',
     lineJoin: 'miter',
     globalAlpha: 1,
+    globalCompositeOperation: 'source-over',
   };
   const fontPx = (font: string): number => {
     const m = /(\d+(?:\.\d+)?)px/.exec(font);
@@ -320,7 +354,11 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
         case 'createLinearGradient':
         case 'createRadialGradient':
           return (...args: number[]) => {
-            const gradient = { args, stops: [] as Array<{ position: number; color: string }> };
+            const gradient = {
+              kind: prop === 'createRadialGradient' ? 'radial' as const : 'linear' as const,
+              args,
+              stops: [] as Array<{ position: number; color: string }>,
+            };
             gradients.push(gradient);
             return {
               addColorStop(position: number, color: string) {
@@ -396,7 +434,11 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
           return undefined;
       }
     },
-    set(_t, prop: string, value) { state[prop] = value; return true; },
+    set(_t, prop: string, value) {
+      state[prop] = value;
+      if (prop === 'globalCompositeOperation') compositeModes.push(String(value));
+      return true;
+    },
   };
   return {
     ctx: new Proxy(state, handler) as unknown as CanvasRenderingContext2D,
@@ -407,6 +449,7 @@ function recordingCtx(measureOverride?: (text: string, fontPx: number) => number
     get clipCalls() { return clipCalls; },
     quadratics,
     gradients,
+    compositeModes,
     arcs,
     ellipses,
     rotations,
@@ -2749,6 +2792,26 @@ describe('classic 3-D compatibility projection', () => {
       catAxisMin: 0, catAxisMax: 1, valMin: 0, valMax: 1,
     });
     expect(classicMarkerPaintWorkCount(model, undefined, 1, RECT)).toBe(5);
+  });
+
+  it('charges the fixed bubble3D material for plot, legend, and label keys', () => {
+    const model = baseModel({
+      chartType: 'bubble', showLegend: true, categories: ['0'],
+      series: [series({
+        values: [0.5], bubbleSizes: [100], bubble3D: true,
+        seriesDataLabels: {
+          showVal: true, showCatName: false, showSerName: false,
+          showPercent: false, showLegendKey: true,
+        },
+      })],
+      catAxisMin: 0, catAxisMax: 1, valMin: 0, valMax: 1,
+    });
+    expect(classicMarkerPaintWorkCount(model, undefined, 1, RECT)).toBe(15);
+
+    model.series[0].chartexStyle = {
+      fillHidden: true, fillPaintAuthored: true,
+    };
+    expect(classicMarkerPaintWorkCount(model, undefined, 1, RECT)).toBe(0);
   });
 
   it('does not charge structured bubble paint for invisible bubble sizes', () => {
@@ -9123,6 +9186,132 @@ describe('CH9 — bubble scale and numeric-X trendlines', () => {
     }), RECT, 1);
 
     expect(rec.arcs.map(arc => arc.fillStyle)).toEqual(['#4472C4', '#ED7D31', '#A5A5A5']);
+  });
+
+  it('resolves bubble3D as point over series over owning-group provenance', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble',
+      categories: ['1', '2', '3'],
+      series: [
+        series({
+          values: [1, 2, 3], bubbleSizes: [100, 100, 100],
+          bubble3DGroupDefault: false,
+          bubble3D: true,
+          dataPointOverrides: [{ idx: 0, bubble3D: false }],
+        }),
+        series({
+          values: [1, 2, 3], bubbleSizes: [100, 100, 100],
+          bubble3DGroupDefault: true,
+          bubble3D: false,
+          dataPointOverrides: [{ idx: 2, bubble3D: true }],
+        }),
+        series({
+          values: [1, 2, 3], bubbleSizes: [100, 100, 100],
+          bubble3DGroupDefault: true,
+        }),
+      ],
+      catAxisMin: 0,
+      catAxisMax: 4,
+      valMin: 0,
+      valMax: 4,
+    }), RECT, 1);
+
+    const materials = rec.gradients.filter(gradient => gradient.kind === 'radial');
+    expect(materials).toHaveLength(6);
+    expect(materials.every(gradient => gradient.stops.length === 5)).toBe(true);
+  });
+
+  it('paints one bounded Office-observed material in local bubble coordinates', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble', categories: ['1'],
+      series: [series({
+        values: [1], bubbleSizes: [100], bubble3D: true,
+        chartexStyle: {
+          fillColors: ['4472C4'], fillPaintAuthored: true,
+        },
+      })],
+      catAxisMin: 0, catAxisMax: 2, valMin: 0, valMax: 2,
+    }), RECT, 1);
+
+    const material = rec.gradients.find(gradient => gradient.kind === 'radial');
+    expect(material).toBeDefined();
+    expect(material!.stops).toHaveLength(5);
+    const bubble = rec.arcs.at(-1)!;
+    const size = bubble.r * 2;
+    const [highlightX, highlightY, innerRadius, , , outerRadius] = material!.args;
+    expect((highlightX - (bubble.x - bubble.r)) / size).toBeCloseTo(0.42, 2);
+    expect((highlightY - (bubble.y - bubble.r)) / size).toBeCloseTo(0.33, 2);
+    expect(innerRadius).toBe(0);
+    expect(outerRadius / size).toBeCloseTo(0.72, 2);
+    expect(rec.compositeModes).toContain('source-atop');
+  });
+
+  it('keeps noFill and outline independent from the bubble3D material', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble', categories: ['1'],
+      series: [series({
+        values: [1], bubbleSizes: [100], bubble3D: true,
+        chartexStyle: {
+          fillHidden: true, fillPaintAuthored: true,
+          lineColors: ['FF0000'], lineWidthEmu: 25_400,
+          linePaintAuthored: true,
+        },
+      })],
+      catAxisMin: 0, catAxisMax: 2, valMin: 0, valMax: 2,
+    }), RECT, 1);
+
+    expect(rec.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(0);
+    expect(rec.strokeDetails.some(stroke =>
+      stroke.strokeStyle === 'rgba(255,0,0,1)' && stroke.lineWidth === 2
+    )).toBe(true);
+  });
+
+  it('always inverts visible negative bubble fill while retaining point outline', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble', showNegativeBubbles: true, categories: ['1'],
+      series: [
+        series({
+          values: [1], bubbleSizes: [-100], bubble3D: false, invertIfNegative: false,
+          dataPointOverrides: [{
+            idx: 0, color: 'FF0000', lineColor: '7F6000', lineWidthEmu: 25_400,
+          }],
+        }),
+        series({
+          values: [1], bubbleSizes: [-100], bubble3D: true, invertIfNegative: true,
+          dataPointOverrides: [{
+            idx: 0, color: 'FF0000', lineColor: '7F6000', lineWidthEmu: 25_400,
+          }],
+        }),
+      ],
+      catAxisMin: 0, catAxisMax: 2, valMin: 0, valMax: 2,
+    }), RECT, 1);
+
+    expect(rec.paintEvents.some(event =>
+      event.kind === 'fill' && event.fillStyle === '#FF0000'
+    )).toBe(false);
+    expect(rec.paintEvents.some(event =>
+      event.kind === 'fill' && event.fillStyle === '#FFFFFF'
+    )).toBe(true);
+    expect(rec.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(1);
+    expect(rec.strokeDetails.filter(stroke => stroke.strokeStyle === '#7F6000')).toHaveLength(2);
+  });
+
+  it('applies bubble3D to the series legend key as well as the plotted bubble', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble', showLegend: true, legendPos: 'r', categories: ['1'],
+      series: [series({
+        name: '3-D bubbles', values: [1], bubbleSizes: [100], bubble3D: true,
+        chartexStyle: { fillColors: ['70AD47'], fillPaintAuthored: true },
+      })],
+      catAxisMin: 0, catAxisMax: 2, valMin: 0, valMax: 2,
+    }), RECT, 1);
+
+    expect(rec.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(2);
   });
 
   it('composes showBubbleSize labels with point-level visibility overrides', () => {

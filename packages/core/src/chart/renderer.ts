@@ -25,6 +25,7 @@ import {
   type DataLabelTextStyle,
 } from './data-label-style.js';
 import {
+  bubblePointIsThreeD,
   classicMarkerPointIsPainted,
   chartDataTableFamilyIsPainted,
   dataLabelLegendKeyCount,
@@ -590,6 +591,7 @@ function drawChartDataTable(
     true,
     [],
     chart.radarStyle,
+    chart,
   );
   ctx.beginPath();
   ctx.rect(tableX, tableY, tableWidth, layout.totalHeight);
@@ -714,6 +716,12 @@ interface LegendMarker {
   fillPaint?: Fill | null;
   line: string | null;
   lineWidthEmu: number | null;
+  linePaint?: ChartModel['plotAreaLineFill'] | null;
+  lineDash?: string | null;
+  lineCustomDash?: ChartModel['plotAreaLineCustomDash'];
+  lineCap?: string | null;
+  lineJoin?: string | null;
+  bubble3D?: boolean;
   /** True when the plotted series draws both a connecting line and markers. */
   withLine: boolean;
 }
@@ -749,6 +757,7 @@ function legendMarkerFor(
   radarStyle: string | null | undefined,
   series: ChartSeries[],
   entryIndex: number,
+  chart?: ChartModel,
 ): LegendMarker | null {
   const s = series[entryIndex];
   if (!s) return null;
@@ -756,15 +765,34 @@ function legendMarkerFor(
   const isStock = family === 'stock';
   const isLineFamily = family === 'line' || family === 'stackedLine' ||
     family === 'stackedLinePct' || family === 'radar' || isStock;
-  const isScatter = family === 'scatter';
+  const isBubble = family === 'bubble';
+  const isScatter = family === 'scatter' || isBubble;
   if (!isLineFamily && !isScatter) return null;
   if (!seriesLegendMarkerIsVisible(chartType, scatterStyle, s, radarStyle)) return null;
   const symbol = s.markerSymbol ?? (isStock ? 'none' : 'circle');
   const base = chartColor(entryIndex, s); // '#RRGGBB'
   const fill = seriesMarkerFillColor(s, base.replace(/^#/, ''));
-  const withLine = isScatter
+  const withLine = isBubble ? false : isScatter
     ? scatterSeriesDrawsLine('scatter', scatterStyle, s)
     : s.lineHidden !== true;
+  if (isBubble && chart) {
+    const bubbleFill = bubblePointFill(chart, s, undefined, entryIndex, base);
+    const bubbleLine = bubblePointLine(chart, s, undefined, entryIndex);
+    return {
+      symbol: 'circle',
+      fill: bubbleFill.color,
+      fillPaint: bubbleFill.paint,
+      line: bubbleLine.color,
+      lineWidthEmu: bubbleLine.widthEmu ?? null,
+      linePaint: bubbleLine.paint,
+      lineDash: bubbleLine.dash,
+      lineCustomDash: bubbleLine.customDash,
+      lineCap: bubbleLine.cap,
+      lineJoin: bubbleLine.join,
+      bubble3D: bubblePointIsThreeD(s, undefined),
+      withLine: false,
+    };
+  }
   return {
     symbol,
     fill,
@@ -804,6 +832,8 @@ function drawLegendSwatch(
       marker.fill, marker.line, ptToPx,
       marker.lineWidthEmu != null ? axisLineWidthPx(marker.lineWidthEmu, ptToPx) : undefined,
       marker.fillPaint, shapeRotationDeg,
+      marker.linePaint, marker.lineDash, marker.lineCustomDash,
+      marker.lineCap, marker.lineJoin, marker.bubble3D,
     );
     return;
   }
@@ -832,6 +862,8 @@ function drawLegendSwatch(
           marker.fill, marker.line, ptToPx,
           marker.lineWidthEmu != null ? axisLineWidthPx(marker.lineWidthEmu, ptToPx) : undefined,
           marker.fillPaint, shapeRotationDeg,
+          marker.linePaint, marker.lineDash, marker.lineCustomDash,
+          marker.lineCap, marker.lineJoin, marker.bubble3D,
         );
       }
       return;
@@ -857,6 +889,8 @@ function drawLegendSwatch(
         marker.fill, marker.line, ptToPx,
         marker.lineWidthEmu != null ? axisLineWidthPx(marker.lineWidthEmu, ptToPx) : undefined,
         marker.fillPaint, shapeRotationDeg,
+        marker.linePaint, marker.lineDash, marker.lineCustomDash,
+        marker.lineCap, marker.lineJoin, marker.bubble3D,
       );
     }
     ctx.restore();
@@ -946,6 +980,7 @@ function buildLegendEntries(
   pieVaryColors = true,
   entryOverrides: readonly ChartLegendEntryOverride[] = [],
   radarStyle?: string | null,
+  chart?: ChartModel,
 ): LegendEntry[] {
   if (varyByPoint || legendIsCategoryDriven(chartType)) {
     // Category-driven: one entry per data point of the first series, labeled by
@@ -990,7 +1025,7 @@ function buildLegendEntries(
     const family = s.seriesType ?? chartType;
     const lineVisible = s.lineHidden !== true;
     const lineColor = lineVisible ? (s.lineColor ?? null) : null;
-    const marker = legendMarkerFor(chartType, scatterStyle, radarStyle, series, i);
+    const marker = legendMarkerFor(chartType, scatterStyle, radarStyle, series, i, chart);
     const swatchStyle: LegendSwatchStyle = family === 'stock' && !lineVisible && !marker
       ? 'none'
       : legendSwatchStyle(family);
@@ -1037,6 +1072,7 @@ function createDataLabelLegendKeyResolver(
     chart.varyColors !== false,
     [],
     chart.radarStyle,
+    chart,
   );
   return (seriesIndex, pointIndex) => {
     const entry = entries[categoryDriven ? pointIndex : seriesIndex];
@@ -1182,6 +1218,7 @@ function measuredLegendReserve(
     chart.varyColors !== false,
     chart.legendEntries ?? [],
     chart.radarStyle,
+    chart,
   );
   const entryStyles = entries.map(entry =>
     legendEntryTextStyle(chart, style, entry.textOverride, ptToPx)
@@ -1243,6 +1280,7 @@ function drawLegend(
     pieVaryColors,
     chartForEntryStyles?.legendEntries ?? [],
     chartForEntryStyles?.radarStyle,
+    chartForEntryStyles,
   );
   const canReuseMeasure = measured != null
     && measured.measuredLabels.length === entries.length
@@ -11321,7 +11359,26 @@ function bubblePointFill(
   point: NonNullable<ChartSeries['dataPointOverrides']>[number] | undefined,
   index: number,
   fallbackColor: string,
+  bubble3D = bubblePointIsThreeD(series, point),
 ): { color: string; paint: Fill | null | undefined } {
+  const bubbleSize = series.bubbleSizes?.[index];
+  if (bubbleSize != null && Number.isFinite(bubbleSize) && bubbleSize < 0) {
+    // MS-OE376 §2.1.1504(b): Office always inverts a negative bubble,
+    // regardless of `<c:invertIfNegative>`. The application-generated default
+    // is outline-only for a flat bubble and white material for a 3-D bubble;
+    // an authored c14 alternate fill remains authoritative.
+    if (series.invertedFillHidden === true) return { color: '00000000', paint: null };
+    if (series.invertedFill) {
+      return {
+        color: series.invertedFill.fillType === 'solid'
+          ? series.invertedFill.color : fallbackColor,
+        paint: series.invertedFill,
+      };
+    }
+    return bubble3D
+      ? { color: 'FFFFFF', paint: undefined }
+      : { color: '00000000', paint: null };
+  }
   const directPoint = chartExStylePaintDecision(
     chart, point?.chartexStyle, index, series.values.length,
   );
@@ -11640,6 +11697,7 @@ function drawScatterSeriesLayer(
           isBubble ? bubbleLine!.customDash : undefined,
           isBubble ? bubbleLine!.cap : undefined,
           isBubble ? bubbleLine!.join : undefined,
+          isBubble ? bubblePointIsThreeD(s, dpt) : false,
         );
       }
     }
@@ -12251,6 +12309,43 @@ function renderScatterChart(
   drawAxisTitles(ctx, chart, x, y, w, h, px0, py0, pw, ph, legLeftW, legBottomH, catTitlePx, valTitlePx);
 }
 
+const BUBBLE_3D_MATERIAL_COMPONENTS = 5;
+
+/** Paint the bounded application-defined material observed in current Excel
+ * vector output for `bubble3D`. The highlight remains in shape-local
+ * coordinates, so a PPTX host transform rotates the complete bubble without a
+ * second lighting model. `source-atop` preserves the authored fill alpha. */
+function paintBubble3DMaterial(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  sizePx: number,
+): void {
+  const highlightX = cx - sizePx * 0.08;
+  const highlightY = cy - sizePx * 0.17;
+  const material = ctx.createRadialGradient(
+    highlightX, highlightY, 0,
+    highlightX, highlightY, sizePx * 0.72,
+  );
+  material.addColorStop(0, 'rgba(255,255,255,0.78)');
+  material.addColorStop(0.2, 'rgba(255,255,255,0.48)');
+  material.addColorStop(0.48, 'rgba(255,255,255,0)');
+  material.addColorStop(0.78, 'rgba(0,0,0,0.18)');
+  material.addColorStop(1, 'rgba(0,0,0,0.5)');
+  const previousComposite = ctx.globalCompositeOperation;
+  const previousFill = ctx.fillStyle;
+  ctx.save();
+  ctx.clip();
+  ctx.globalCompositeOperation = 'source-atop';
+  ctx.fillStyle = material;
+  ctx.fillRect(cx - sizePx / 2, cy - sizePx / 2, sizePx, sizePx);
+  // Recording contexts used by hosts/tests do not necessarily model a full
+  // Canvas state stack, so restore the property explicitly as well.
+  ctx.globalCompositeOperation = previousComposite;
+  ctx.fillStyle = previousFill;
+  ctx.restore();
+}
+
 /** Draw a single ECMA-376 §21.2.2.32 marker shape centered at `(cx, cy)`.
  *  `sizePt` is the spec's marker side length in points (Excel's default
  *  is 5). `fill` and `line` are hex strings; a leading `#` is tolerated so
@@ -12276,6 +12371,7 @@ function drawMarker(
   lineCustomDash: ChartModel['plotAreaLineCustomDash'] = undefined,
   lineCap: string | null | undefined = undefined,
   lineJoin: string | null | undefined = undefined,
+  bubble3D = false,
 ): void {
   const sizePx = Math.max(2, sizePt * ptToPx);
   const half = sizePx / 2;
@@ -12317,12 +12413,16 @@ function drawMarker(
     );
     ctx.restore();
   };
+  const paintMaterial = () => {
+    if (bubble3D && fillPaint !== null) paintBubble3DMaterial(ctx, cx, cy, sizePx);
+  };
   switch (symbol) {
     case 'square': {
-      if (imageFill) {
+      if (imageFill || bubble3D) {
         ctx.beginPath();
         ctx.rect(cx - half, cy - half, sizePx, sizePx);
         fillCurrentPath();
+        paintMaterial();
       } else if (fillPaint !== null) {
         ctx.fillRect(cx - half, cy - half, sizePx, sizePx);
       }
@@ -12337,6 +12437,7 @@ function drawMarker(
       ctx.lineTo(cx - half, cy);
       ctx.closePath();
       fillCurrentPath();
+      paintMaterial();
       if (hasLine) ctx.stroke();
       break;
     }
@@ -12347,6 +12448,7 @@ function drawMarker(
       ctx.lineTo(cx - half, cy + half);
       ctx.closePath();
       fillCurrentPath();
+      paintMaterial();
       if (hasLine) ctx.stroke();
       break;
     }
@@ -12380,6 +12482,7 @@ function drawMarker(
       }
       ctx.closePath();
       fillCurrentPath();
+      paintMaterial();
       if (hasLine) ctx.stroke();
       break;
     }
@@ -12388,14 +12491,16 @@ function drawMarker(
       ctx.beginPath();
       ctx.ellipse(cx, cy, sizePx * 0.25, sizePx * 0.1, 0, 0, Math.PI * 2);
       fillCurrentPath();
+      paintMaterial();
       if (hasLine) ctx.stroke();
       break;
     }
     case 'dash': {
       // ECMA-376 §21.2.3.27: height=1/5 of marker size.
       const dh = sizePx * 0.2;
-      if (imageFill) {
+      if (imageFill || bubble3D) {
         ctx.beginPath(); ctx.rect(cx - half, cy - dh / 2, sizePx, dh); fillCurrentPath();
+        paintMaterial();
       } else if (fillPaint !== null) {
         ctx.fillRect(cx - half, cy - dh / 2, sizePx, dh);
       }
@@ -12403,11 +12508,14 @@ function drawMarker(
       break;
     }
     case 'picture': {
+      ctx.beginPath();
+      ctx.rect(cx - half, cy - half, sizePx, sizePx);
       if (imageFill) {
         paintChartImageFill(
           ctx, imageFill, cx - half, cy - half, sizePx, sizePx, ptToPx, shapeRotationDeg,
         );
       }
+      paintMaterial();
       // Fill and line are independent CT_ShapeProperties components. An
       // authored noFill/unresolved blip must not suppress the picture outline.
       if (hasLine) ctx.strokeRect(cx - half, cy - half, sizePx, sizePx);
@@ -12419,6 +12527,7 @@ function drawMarker(
       ctx.beginPath();
       ctx.arc(cx, cy, half, 0, Math.PI * 2);
       fillCurrentPath();
+      paintMaterial();
       if (hasLine) ctx.stroke();
       break;
     }
@@ -13776,6 +13885,15 @@ export function classicMarkerPaintWorkCount(
     }, layers, !scatterHasNumericX, chartRect.w, chartRect.h));
   }
   let total = 0;
+  const chargeComponents = (components: number, repetitions = 1): boolean => {
+    if (repetitions <= 0 || components <= 0) return true;
+    if (!Number.isSafeInteger(repetitions)
+      || components > Math.floor((MAX_CANVAS_MARKER_PAINT_COMPONENTS - total) / repetitions)) {
+      return false;
+    }
+    total += components * repetitions;
+    return true;
+  };
   const chargePaint = (
     paint: Fill | null | undefined,
     repetitions = 1,
@@ -13788,12 +13906,7 @@ export function classicMarkerPaintWorkCount(
     if (paint.fillType === 'gradient' && components > MAX_CANVAS_MARKER_GRADIENT_STOPS) {
       return false;
     }
-    if (!Number.isSafeInteger(repetitions)
-      || components > Math.floor((MAX_CANVAS_MARKER_PAINT_COMPONENTS - total) / repetitions)) {
-      return false;
-    }
-    total += components * repetitions;
-    return true;
+    return chargeComponents(components, repetitions);
   };
   if (hasClassicMarkers) for (let seriesIndex = 0; seriesIndex < chart.series.length; seriesIndex++) {
     const series = chart.series[seriesIndex];
@@ -13877,11 +13990,15 @@ export function classicMarkerPaintWorkCount(
         if (!chargePaint(linePaint, 1, sizePx)) {
           return MAX_CANVAS_MARKER_PAINT_COMPONENTS + 1;
         }
+        if (bubblePointIsThreeD(series, point) && bubblePaint!.paint !== null
+          && !chargeComponents(BUBBLE_3D_MATERIAL_COMPONENTS)) {
+          return MAX_CANVAS_MARKER_PAINT_COMPONENTS + 1;
+        }
       }
     }
 
     const seriesKeySymbol = series.markerSymbol ?? (family === 'stock' ? 'none' : 'circle');
-    if (!isBubble && markerSymbolConsumesFill(seriesKeySymbol) && seriesLegendMarkerIsVisible(
+    if (markerSymbolConsumesFill(seriesKeySymbol) && seriesLegendMarkerIsVisible(
       effectiveChartType, effectiveScatterStyle, series, effectiveRadarStyle,
     )) {
       const legendEntryDeleted = deletedLegendEntries.has(seriesIndex);
@@ -13889,11 +14006,21 @@ export function classicMarkerPaintWorkCount(
         chart, series, family, pointCount, scatterHasNumericX, markerContext,
       );
       const keySizes = markerKeyPaintSizesPx(chart, series, ptToPx);
-      const keyPaint = seriesMarkerFillPaint(series);
+      const bubbleKeyFill = isBubble
+        ? bubblePointFill(chart, series, undefined, seriesIndex, chartColor(seriesIndex, series))
+        : null;
+      const keyPaint = isBubble ? bubbleKeyFill!.paint : seriesMarkerFillPaint(series);
+      const bubbleKeyLine = isBubble ? bubblePointLine(chart, series, undefined, seriesIndex) : null;
+      const chargeKey = (repetitions: number, sizePx: number): boolean =>
+        chargePaint(keyPaint, repetitions, sizePx)
+        && (!isBubble || chargePaint(bubbleKeyLine!.paint, repetitions, sizePx))
+        && (!isBubble || !bubblePointIsThreeD(series, undefined)
+          || bubbleKeyFill!.paint === null
+          || chargeComponents(BUBBLE_3D_MATERIAL_COMPONENTS, repetitions));
       if ((chart.showLegend && !legendEntryDeleted
-          && !chargePaint(keyPaint, 1, keySizes.legend))
-        || (dataTableMarkerKeysVisible && !chargePaint(keyPaint, 1, keySizes.table))
-        || !chargePaint(keyPaint, labelKeys, keySizes.labels)) {
+          && !chargeKey(1, keySizes.legend))
+        || (dataTableMarkerKeysVisible && !chargeKey(1, keySizes.table))
+        || !chargeKey(labelKeys, keySizes.labels)) {
         return MAX_CANVAS_MARKER_PAINT_COMPONENTS + 1;
       }
     }
