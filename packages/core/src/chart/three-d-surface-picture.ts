@@ -5,24 +5,29 @@ import { drawProjected } from '../shape/scene3d-draw.js';
 import {
   planChartThreeDSurfacePicture,
   surfacePictureFaceIsEnabled,
+  surfacePictureFaceRepetitions,
+  surfacePictureFaceUsesValueAxis,
   type ChartThreeDSurfaceKind,
   type SurfacePicturePoint,
   type SurfacePictureQuad,
 } from './three-d-surface-picture-plan.js';
 import type { ChartThreeDSurfaceGeometry, ThreeDScenePoint } from './three-d.js';
 
-function screenAlignedQuad(
+function screenAlignedFace(
   face: readonly ThreeDScenePoint[],
   project: (point: ThreeDScenePoint) => SurfacePicturePoint,
-): SurfacePictureQuad | null {
+): [ThreeDScenePoint, ThreeDScenePoint, ThreeDScenePoint, ThreeDScenePoint] | null {
   if (face.length !== 4) return null;
-  const points = face.map(project);
-  const byY = points.map((point, index) => ({ point, index }))
-    .sort((left, right) => left.point.y - right.point.y || left.point.x - right.point.x);
-  const top = byY.slice(0, 2).sort((left, right) => left.point.x - right.point.x);
-  const bottom = byY.slice(2).sort((left, right) => left.point.x - right.point.x);
+  const byY = face.map((scenePoint, index) => ({
+    scenePoint,
+    projected: project(scenePoint),
+    index,
+  })).sort((left, right) => left.projected.y - right.projected.y
+    || left.projected.x - right.projected.x);
+  const top = byY.slice(0, 2).sort((left, right) => left.projected.x - right.projected.x);
+  const bottom = byY.slice(2).sort((left, right) => left.projected.x - right.projected.x);
   if (new Set([...top, ...bottom].map(item => item.index)).size !== 4) return null;
-  return [top[0].point, top[1].point, bottom[1].point, bottom[0].point];
+  return [top[0].scenePoint, top[1].scenePoint, bottom[1].scenePoint, bottom[0].scenePoint];
 }
 
 export function paintChartThreeDSurfacePicture(
@@ -56,11 +61,15 @@ export function paintChartThreeDSurfacePicture(
     y: lower.y + (upper.y - lower.y) * fraction,
     depth: lower.depth + (upper.depth - lower.depth) * fraction,
   });
-  const stackQuad = (lower: number, upper: number): SurfacePictureQuad => [
-    project(interpolate(geometry.inner[0], geometry.inner[3], upper)),
-    project(interpolate(geometry.inner[1], geometry.inner[2], upper)),
-    project(interpolate(geometry.inner[1], geometry.inner[2], lower)),
-    project(interpolate(geometry.inner[0], geometry.inner[3], lower)),
+  const stackQuad = (
+    face: readonly ThreeDScenePoint[],
+    lower: number,
+    upper: number,
+  ): SurfacePictureQuad => [
+    project(interpolate(face[3], face[0], upper)),
+    project(interpolate(face[2], face[1], upper)),
+    project(interpolate(face[2], face[1], lower)),
+    project(interpolate(face[3], face[0], lower)),
   ];
 
   ctx.save();
@@ -68,9 +77,10 @@ export function paintChartThreeDSurfacePicture(
   if (plan.mode === 'stretch') {
     for (const faceIndex of visibleFaceIndices) {
       if (!surfacePictureFaceIsEnabled(plan, faceIndex)) continue;
+      const aligned = screenAlignedFace(geometry.faces[faceIndex] ?? [], project);
       const quad = geometry.thickness === 0 && faceIndex === 0
         ? fullQuad
-        : screenAlignedQuad(geometry.faces[faceIndex] ?? [], project);
+        : aligned?.map(project) as SurfacePictureQuad | undefined;
       if (!quad) continue;
       ctx.save();
       ctx.beginPath();
@@ -81,16 +91,34 @@ export function paintChartThreeDSurfacePicture(
       drawProjected(image, ctx, natural.w, natural.h, quad);
       ctx.restore();
     }
-  } else if (kind !== 'floor' && plan.stackUnit != null) {
-    ctx.beginPath();
-    ctx.moveTo(fullQuad[0].x, fullQuad[0].y);
-    for (let index = 1; index < fullQuad.length; index++) ctx.lineTo(fullQuad[index].x, fullQuad[index].y);
-    ctx.closePath();
-    ctx.clip();
-    for (let index = 0; index < plan.repetitions; index++) {
-      const lower = index * plan.stackUnit / valueSpan;
-      const upper = (index + 1) * plan.stackUnit / valueSpan;
-      drawProjected(image, ctx, natural.w, natural.h, stackQuad(lower, upper));
+  } else if (plan.stackUnit != null) {
+    for (const faceIndex of visibleFaceIndices) {
+      if (!surfacePictureFaceIsEnabled(plan, faceIndex)) continue;
+      const face = geometry.thickness === 0 && faceIndex === 0
+        ? [geometry.inner[3], geometry.inner[2], geometry.inner[1], geometry.inner[0]]
+        : screenAlignedFace(geometry.faces[faceIndex] ?? [], project);
+      if (!face) continue;
+      const quad = face.map(project) as SurfacePictureQuad;
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(quad[0].x, quad[0].y);
+      for (let index = 1; index < quad.length; index++) ctx.lineTo(quad[index].x, quad[index].y);
+      ctx.closePath();
+      ctx.clip();
+      // Repetition follows the value axis across the slab's front and side
+      // faces. End faces have no value-axis extent, so Office maps one whole
+      // source there instead of compressing every repetition into thickness.
+      const repetitions = surfacePictureFaceRepetitions(plan, faceIndex);
+      if (surfacePictureFaceUsesValueAxis(plan, faceIndex)) {
+        for (let index = 0; index < repetitions; index++) {
+          const lower = index * plan.stackUnit / valueSpan;
+          const upper = (index + 1) * plan.stackUnit / valueSpan;
+          drawProjected(image, ctx, natural.w, natural.h, stackQuad(face, lower, upper));
+        }
+      } else {
+        drawProjected(image, ctx, natural.w, natural.h, quad);
+      }
+      ctx.restore();
     }
   }
   ctx.restore();
