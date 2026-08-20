@@ -22,6 +22,7 @@ import {
   MAX_CHART_MARKER_IMAGE_SOURCES,
   sourceChartStructureCount,
 } from './resource-limits.js';
+import { indexChartPlotGroups, markerChartTypeForPlotGroup } from './plot-groups.js';
 
 export type ChartImageLookup = (fill: ImageFill) => CanvasImageSource | null | undefined;
 
@@ -218,8 +219,12 @@ function collectChartMarkerImageFillResult(chart: ChartModel): ChartMarkerImageF
       ? null
       : undefined;
   };
-  const scatterHasNumericX = chart.series.some(series => {
-    const family = series.seriesType ?? (chart.chartType === 'bubble' ? 'scatter' : chart.chartType);
+  const plotGroupBySeries = indexChartPlotGroups(chart);
+  const scatterHasNumericX = chart.series.some((series, seriesIndex) => {
+    const group = plotGroupBySeries[seriesIndex];
+    const family = group?.kind === 'bubble' || group?.kind === 'scatter'
+      ? 'scatter'
+      : series.seriesType ?? (chart.chartType === 'bubble' ? 'scatter' : chart.chartType);
     return family === 'scatter' && (series.categories ?? chart.categories).some(category =>
       Number.isFinite(Number.parseFloat(category))
     );
@@ -231,13 +236,26 @@ function collectChartMarkerImageFillResult(chart: ChartModel): ChartMarkerImageF
     || chart.series.some(series => series.values.length > 0);
   for (let seriesIndex = 0; seriesIndex < chart.series.length; seriesIndex++) {
     const series = chart.series[seriesIndex];
-    const family = series.seriesType ?? (chart.chartType === 'bubble' ? 'scatter' : chart.chartType);
+    const group = plotGroupBySeries[seriesIndex];
+    const isBubble = group?.kind === 'bubble'
+      || (group == null && chart.chartType === 'bubble');
+    const family = group?.kind === 'bubble' || group?.kind === 'scatter'
+      ? 'scatter'
+      : series.seriesType ?? (chart.chartType === 'bubble' ? 'scatter' : chart.chartType);
+    const effectiveChartType = markerChartTypeForPlotGroup(chart.chartType, group);
+    const effectiveScatterStyle = group?.scatterStyle ?? chart.scatterStyle;
+    const effectiveRadarStyle = group?.radarStyle ?? chart.radarStyle;
+    const markerContext = {
+      chartType: effectiveChartType,
+      bubbleScale: group?.bubbleScale ?? chart.bubbleScale,
+      showNegativeBubbles: group?.showNegativeBubbles ?? chart.showNegativeBubbles,
+    };
     const markerFamily = family === 'line' || family === 'stackedLine'
       || family === 'stackedLinePct' || family === 'area'
       || family === 'stackedArea' || family === 'stackedAreaPct'
       || family === 'scatter' || family === 'radar' || family === 'stock';
     if (!markerFamily || markersSuppressedByChartStyle(
-      family, chart.chartType, chart.scatterStyle, chart.radarStyle,
+      family, effectiveChartType, effectiveScatterStyle, effectiveRadarStyle,
     )) continue;
     const areaFamily = family === 'area' || family === 'stackedArea'
       || family === 'stackedAreaPct';
@@ -252,18 +270,18 @@ function collectChartMarkerImageFillResult(chart: ChartModel): ChartMarkerImageF
       series.values.length, series.categories?.length ?? 0, chart.categories.length,
     );
     const labelKeyVisible = dataLabelLegendKeyCount(
-      chart, series, family, pointCount, scatterHasNumericX,
+      chart, series, family, pointCount, scatterHasNumericX, markerContext,
     ) > 0;
     const seriesKeyVisible = seriesLegendMarkerIsVisible(
-      chart.chartType, chart.scatterStyle, series, chart.radarStyle,
+      effectiveChartType, effectiveScatterStyle, series, effectiveRadarStyle,
     ) && ((chart.showLegend && !legendDeleted)
       || (chart.dataTable?.showKeys === true && chartDataTableFamilyIsPainted(chart.chartType)
         && chartHasCategories)
       || labelKeyVisible);
     const seriesKeySymbol = series.markerSymbol ?? (family === 'stock' ? 'none' : 'circle');
     if (seriesKeyVisible && markerSymbolConsumesFill(seriesKeySymbol)) {
-      if (chart.chartType !== 'bubble') add(series.markerFillPaint);
-      if (chart.chartType !== 'bubble'
+      if (!isBubble) add(series.markerFillPaint);
+      if (!isBubble
         && series.markerFillPaint === undefined && series.markerFill == null
         && series.markerFillPaintAuthored !== true) {
         add(selectedStylePaint(linkedMarkerStyle, seriesIndex));
@@ -273,14 +291,17 @@ function collectChartMarkerImageFillResult(chart: ChartModel): ChartMarkerImageF
     const overrides = new Map((series.dataPointOverrides ?? []).map(point => [point.idx, point]));
     for (let index = 0; index < pointCount; index++) {
       if (!classicMarkerPointIsPainted(
-        chart, series, family, index, scatterHasNumericX,
+        chart, series, family, index, scatterHasNumericX, markerContext,
       )) continue;
       const point = overrides.get(index);
       const symbol = effectiveMarkerSymbol(series, point, 'circle', seriesVisible);
       if (!markerSymbolConsumesFill(symbol)) continue;
-      if (chart.chartType === 'bubble') {
-        if ((chart.bubbleScale ?? 100) <= 0
-          || visibleBubbleSize(chart, series.bubbleSizes?.[index]) == null) continue;
+      if (isBubble) {
+        const effectiveBubbleSettings = {
+          showNegativeBubbles: group?.showNegativeBubbles ?? chart.showNegativeBubbles,
+        };
+        if ((group?.bubbleScale ?? chart.bubbleScale ?? 100) <= 0
+          || visibleBubbleSize(effectiveBubbleSettings, series.bubbleSizes?.[index]) == null) continue;
         const pointShape = styleImageDecision(point?.chartexStyle, index);
         if (pointShape) add(pointShape);
         if (pointShape !== undefined || point?.fillHidden === true || point?.color != null) continue;

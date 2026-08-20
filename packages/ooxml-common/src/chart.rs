@@ -30,7 +30,7 @@
 
 use roxmltree::Node;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::text::{parse_body_pr, BodyPrDefaults};
 use crate::units::coordinate32_to_emu;
@@ -70,6 +70,36 @@ const MAX_CHART_STYLE_ROLE_SLOTS: usize = 8_192;
 /// is 1,048,576 rows. Rejecting wider sparse caches prevents an XML attribute
 /// or point index from requesting an unbounded WASM allocation.
 const MAX_CHART_CACHE_POINTS: usize = 1_048_576;
+/// Classic plot groups are renderer work items even when they contain no
+/// series. Keep public/wire planning aligned with the synchronous Canvas
+/// availability ceiling before allocating the ordered group vector.
+const MAX_CHART_PLOT_GROUPS: usize = 10_000;
+const MAX_CHART_PLOT_SERIES: usize = 10_000;
+const MAX_CHART_PLOT_AXES: usize = 4;
+const MAX_CHART_GROUP_AXIS_IDS: usize = 3;
+
+fn claim_plot_group_axis_slot(
+    axis_id: Option<&String>,
+    known_axis_ids: &BTreeMap<String, String>,
+    primary: &mut Option<String>,
+    secondary: &mut Option<String>,
+) -> String {
+    let Some(axis_id) = axis_id else {
+        return "unresolved".to_string();
+    };
+    if !known_axis_ids.contains_key(axis_id) {
+        return "unresolved".to_string();
+    }
+    if primary.as_ref().is_none_or(|current| current == axis_id) {
+        primary.get_or_insert_with(|| axis_id.clone());
+        return "primary".to_string();
+    }
+    if secondary.as_ref().is_none_or(|current| current == axis_id) {
+        secondary.get_or_insert_with(|| axis_id.clone());
+        return "secondary".to_string();
+    }
+    "unresolved".to_string()
+}
 
 // ============================================================================
 // Shared chart data model
@@ -341,6 +371,39 @@ pub struct ChartDataTable {
     pub line_hidden: Option<bool>,
 }
 
+/// Source-order metadata for one direct classic chart-group child of
+/// `<c:plotArea>`. The range indexes the single flattened `series` vector.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartPlotGroup {
+    pub kind: String,
+    pub series_start: usize,
+    pub series_count: usize,
+    pub category_axis: String,
+    pub value_axis: String,
+    pub series_axis: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grouping: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar_direction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scatter_style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radar_style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_width: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlap: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bubble_scale: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bubble_size_represents: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_negative_bubbles: Option<bool>,
+}
+
 /// Mirror of TS `ChartModel`. Built by each parser and emitted as the single
 /// `chart` object consumed by the core chart renderer.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -366,6 +429,8 @@ pub struct ChartModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category_levels: Option<Vec<Vec<String>>>,
     pub series: Vec<ChartSeries>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_groups: Option<Vec<ChartPlotGroup>>,
     pub show_data_labels: bool,
     pub val_min: Option<f64>,
     pub val_max: Option<f64>,
@@ -2320,6 +2385,22 @@ fn attr(node: &Node, local: &str) -> Option<String> {
     node.attributes()
         .find(|a| a.name() == local && a.namespace().is_none())
         .map(|a| a.value().to_owned())
+}
+
+fn parse_chart_axis_id_value(value: &str) -> Option<String> {
+    let lexical = value.trim();
+    lexical
+        .parse::<u32>()
+        .map(|id| id.to_string())
+        .or_else(|_| {
+            // CT_UnsignedInt is the normative type, but Office-compatible
+            // producers also serialize the same opaque 32-bit cross-reference
+            // IDs through a signed decimal view. Preserve that bounded lexical
+            // identity rather than dropping the complete chart; it is never
+            // interpreted as a coordinate or allocation size.
+            lexical.parse::<i32>().map(|id| id.to_string())
+        })
+        .ok()
 }
 
 /// Theme-aware color resolution for chart text-color helpers.
@@ -7294,6 +7375,7 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
         category_source_hidden: None,
         category_levels: None,
         series,
+        plot_groups: None,
         // chartEx layouts color by branch/series index, not §21.2.2.227
         // varyColors (a `<c:>` chart-group element that chartEx has no analog
         // of), so the flag never applies here.
@@ -10021,6 +10103,48 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         root.descendants()
             .find(|n| n.is_element() && n.tag_name().name() == name)
     };
+    let is_classic_group_name = |name: &str| {
+        matches!(
+            name,
+            "areaChart"
+                | "area3DChart"
+                | "lineChart"
+                | "line3DChart"
+                | "stockChart"
+                | "radarChart"
+                | "scatterChart"
+                | "pieChart"
+                | "pie3DChart"
+                | "doughnutChart"
+                | "barChart"
+                | "bar3DChart"
+                | "ofPieChart"
+                | "surfaceChart"
+                | "surface3DChart"
+                | "bubbleChart"
+        )
+    };
+    let has_nonempty_classic_group = root.descendants().any(|node| {
+        node.is_element()
+            && is_classic_group_name(node.tag_name().name())
+            && child(node, "ser").is_some()
+    });
+    // Empty CT_PlotArea groups are schema-valid and remain in `plot_groups`,
+    // but they do not own the flattened compatibility series. Prefer a group
+    // that actually has a `ser` when selecting the legacy chart-family
+    // projection so an empty earlier family cannot reinterpret the sole
+    // visible group. All-empty charts retain the historical first-match
+    // projection and render as no data.
+    let find_render_chart = |name: &str| {
+        root.descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == name)
+            .find(|group| child(*group, "ser").is_some())
+            .or_else(|| {
+                (!has_nonempty_classic_group)
+                    .then(|| find_chart(name))
+                    .flatten()
+            })
+    };
 
     // ECMA-376 3D chart types (§21.2.2.15 bar3DChart, §21.2.2.96 line3DChart,
     // §21.2.2.4 area3DChart, §21.2.2.140 pie3DChart) share the ordinary 2D
@@ -10039,7 +10163,9 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
             .and_then(|n| attr(&n, "val"))
             .unwrap_or_else(|| default.into())
     };
-    let chart_type = if let Some(bc) = find_chart("barChart").or_else(|| find_chart("bar3DChart")) {
+    let chart_type = if let Some(bc) =
+        find_render_chart("barChart").or_else(|| find_render_chart("bar3DChart"))
+    {
         // §21.2.2.17 barDir + §21.2.2.77 grouping (Bar Grouping). bar3DChart shares both
         // and retains its extra `<c:gapDepth>` in the shared 3-D scene model.
         // `clustered` is the 2D default;
@@ -10052,37 +10178,41 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
             .and_then(|n| attr(&n, "val"))
             .unwrap_or_else(|| "col".into());
         canonical_chart_type("bar", &bar_dir, &grouping)
-    } else if let Some(ac) = find_chart("areaChart").or_else(|| find_chart("area3DChart")) {
+    } else if let Some(ac) =
+        find_render_chart("areaChart").or_else(|| find_render_chart("area3DChart"))
+    {
         // An area+line combination must dispatch through the area renderer so
         // the fill-bearing group is stacked before the line overlay. Selecting
         // line merely because a `<c:lineChart>` is also present discards every
         // authored area fill. Per-series `series_type` keeps both groups.
         let grouping = read_grouping(&ac, "standard");
         canonical_chart_type("area", "col", &grouping)
-    } else if let Some(lc) = find_chart("lineChart").or_else(|| find_chart("line3DChart")) {
+    } else if let Some(lc) =
+        find_render_chart("lineChart").or_else(|| find_render_chart("line3DChart"))
+    {
         let grouping = read_grouping(&lc, "standard");
         canonical_chart_type("line", "col", &grouping)
-    } else if find_chart("pieChart").is_some() || find_chart("pie3DChart").is_some() {
+    } else if find_render_chart("pieChart").is_some() || find_render_chart("pie3DChart").is_some() {
         "pie".to_string()
-    } else if find_chart("ofPieChart").is_some() {
+    } else if find_render_chart("ofPieChart").is_some() {
         // Keep the family distinct: §21.2.2.126 assigns a secondary pie/bar and
         // connector geometry that cannot be represented by a plain pie.
         "ofPie".to_string()
-    } else if find_chart("doughnutChart").is_some() {
+    } else if find_render_chart("doughnutChart").is_some() {
         "doughnut".to_string()
-    } else if find_chart("scatterChart").is_some() {
+    } else if find_render_chart("scatterChart").is_some() {
         "scatter".to_string()
-    } else if find_chart("bubbleChart").is_some() {
+    } else if find_render_chart("bubbleChart").is_some() {
         "bubble".to_string()
-    } else if find_chart("radarChart").is_some() {
+    } else if find_render_chart("radarChart").is_some() {
         "radar".to_string()
-    } else if find_chart("stockChart").is_some() {
+    } else if find_render_chart("stockChart").is_some() {
         // §21.2.2.198 stockChart — high/low/close[/open] series drawn as
         // per-category hi-lo lines + close ticks by the core stock renderer.
         "stock".to_string()
-    } else if find_chart("surfaceChart").is_some() {
+    } else if find_render_chart("surfaceChart").is_some() {
         "surface".to_string()
-    } else if find_chart("surface3DChart").is_some() {
+    } else if find_render_chart("surface3DChart").is_some() {
         // A 3-D surface is not a top-down contour chart. Keep it distinct so
         // the 2-D renderer cannot silently flatten its camera/depth geometry.
         "surface3D".to_string()
@@ -10104,16 +10234,14 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         stock_hi_low_line_color,
         stock_up_down_bars,
         stock_up_down_bar_style,
-    ) = if chart_type == "stock" {
-        let stock = find_chart("stockChart");
-        let drop_lines = stock
-            .and_then(|s| child(s, "dropLines"))
+    ) = if let Some(stock) = find_chart("stockChart") {
+        let drop_lines = child(stock, "dropLines")
             .map(|node| parse_chart_decoration_line_style(node, color_resolver));
-        let hi_low = stock.and_then(|s| child(s, "hiLowLines"));
+        let hi_low = child(stock, "hiLowLines");
         let hi_low_style =
             hi_low.map(|node| parse_chart_decoration_line_style(node, color_resolver));
         let hi_low_color = hi_low_style.as_ref().and_then(|style| style.color.clone());
-        let up_down_node = stock.and_then(|s| child(s, "upDownBars"));
+        let up_down_node = child(stock, "upDownBars");
         let up_down = up_down_node.is_some();
         let up_down_style =
             up_down_node.map(|node| parse_chart_up_down_bar_style(node, color_resolver));
@@ -10136,7 +10264,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     let stock_has_decoration = stock_drop_lines.is_some()
         || stock_hi_low_lines == Some(true)
         || stock_up_down_bars == Some(true);
-    let stock_automatic_style = if chart_type == "stock" && stock_has_decoration {
+    let stock_automatic_style = if find_chart("stockChart").is_some() && stock_has_decoration {
         let tint_amounts = match legacy_chart_style.unwrap_or(2) {
             1 => Some((0.75, 0.15)),
             2 | 10 => Some((0.95, 0.05)),
@@ -10567,7 +10695,11 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     let val_ax_nodes: Vec<roxmltree::Node> = root
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "valAx")
+        .take(MAX_CHART_PLOT_AXES + 1)
         .collect();
+    if val_ax_nodes.len() > MAX_CHART_PLOT_AXES {
+        return None;
+    }
     let ax_pos = |n: &roxmltree::Node| -> Option<String> {
         n.children()
             .find(|c| c.is_element() && c.tag_name().name() == "axPos")
@@ -10577,6 +10709,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         n.children()
             .find(|c| c.is_element() && c.tag_name().name() == "axId")
             .and_then(|c| attr(&c, "val"))
+            .and_then(|value| parse_chart_axis_id_value(&value))
     };
     // The category axis is normally `<c:catAx>` or, for a date/time-series X
     // axis, `<c:dateAx>` (§21.2.2.39) — same child grammar, so every cat-axis
@@ -10589,7 +10722,11 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     let real_cat_ax_nodes: Vec<_> = root
         .descendants()
         .filter(|n| n.is_element() && matches!(n.tag_name().name(), "catAx" | "dateAx"))
+        .take(MAX_CHART_PLOT_AXES + 1)
         .collect();
+    if real_cat_ax_nodes.len() + val_ax_nodes.len() > MAX_CHART_PLOT_AXES {
+        return None;
+    }
     let real_cat_ax = real_cat_ax_nodes
         .iter()
         .find(|axis| !matches!(ax_pos(axis).as_deref(), Some("t") | Some("r")))
@@ -10637,9 +10774,19 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 .children()
                 .filter(|node| node.is_element() && node.tag_name().name() == "axId")
                 .filter_map(|node| attr(&node, "val"))
+                .filter_map(|value| parse_chart_axis_id_value(&value))
+                .take(MAX_CHART_GROUP_AXIS_IDS + 1)
                 .collect()
         })
+        .take(MAX_CHART_PLOT_GROUPS + 1)
         .collect();
+    if scatter_axis_groups.len() > MAX_CHART_PLOT_GROUPS
+        || scatter_axis_groups
+            .iter()
+            .any(|ids| ids.len() > MAX_CHART_GROUP_AXIS_IDS)
+    {
+        return None;
+    }
     let combo_scatter_axis_ids = if !is_scatter_axes {
         find_chart("scatterChart")
             .or_else(|| find_chart("bubbleChart"))
@@ -10648,6 +10795,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                     .children()
                     .filter(|node| node.is_element() && node.tag_name().name() == "axId")
                     .filter_map(|node| attr(&node, "val"))
+                    .filter_map(|value| parse_chart_axis_id_value(&value))
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default()
@@ -10711,10 +10859,245 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     let plot_area_line_style = extract_direct_shape_line(plot_area, color_resolver);
     let data_table = extract_chart_data_table(plot_area, color_resolver);
 
-    let ser_nodes: Vec<_> = plot_area
-        .descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "ser")
+    let classic_group_kind = |name: &str| -> Option<&'static str> {
+        match name {
+            "areaChart" => Some("area"),
+            "area3DChart" => Some("area3D"),
+            "lineChart" => Some("line"),
+            "line3DChart" => Some("line3D"),
+            "stockChart" => Some("stock"),
+            "radarChart" => Some("radar"),
+            "scatterChart" => Some("scatter"),
+            "pieChart" => Some("pie"),
+            "pie3DChart" => Some("pie3D"),
+            "doughnutChart" => Some("doughnut"),
+            "barChart" => Some("bar"),
+            "bar3DChart" => Some("bar3D"),
+            "ofPieChart" => Some("ofPie"),
+            "surfaceChart" => Some("surface"),
+            "surface3DChart" => Some("surface3D"),
+            "bubbleChart" => Some("bubble"),
+            _ => None,
+        }
+    };
+    // CT_PlotArea's chart-group choice is ordered and unbounded. Preserve
+    // every recognized direct child, including an empty group, before any
+    // compatibility projection chooses the legacy top-level `chartType`.
+    let chart_group_nodes: Vec<_> = plot_area
+        .children()
+        .filter(|node| node.is_element() && classic_group_kind(node.tag_name().name()).is_some())
+        .take(MAX_CHART_PLOT_GROUPS + 1)
         .collect();
+    if chart_group_nodes.len() > MAX_CHART_PLOT_GROUPS {
+        return None;
+    }
+    let ser_nodes: Vec<_> = chart_group_nodes
+        .iter()
+        .flat_map(|group| {
+            group
+                .children()
+                .filter(|node| node.is_element() && node.tag_name().name() == "ser")
+        })
+        .take(MAX_CHART_PLOT_SERIES + 1)
+        .collect();
+    if ser_nodes.len() > MAX_CHART_PLOT_SERIES {
+        return None;
+    }
+    let plot_axis_nodes = plot_area
+        .children()
+        .filter(|node| {
+            node.is_element()
+                && matches!(
+                    node.tag_name().name(),
+                    "catAx" | "dateAx" | "valAx" | "serAx"
+                )
+        })
+        .take(MAX_CHART_PLOT_AXES + 1)
+        .collect::<Vec<_>>();
+    if plot_axis_nodes.len() > MAX_CHART_PLOT_AXES {
+        return None;
+    }
+    let known_axis_ids: BTreeMap<String, String> = plot_axis_nodes
+        .iter()
+        .copied()
+        .filter_map(|axis| {
+            child(axis, "axId")
+                .and_then(|node| attr(&node, "val"))
+                .and_then(|id| parse_chart_axis_id_value(&id))
+                .map(|id| (id, axis.tag_name().name().to_string()))
+        })
+        .collect();
+    if chart_group_nodes.iter().any(|group| {
+        group
+            .children()
+            .filter(|node| node.is_element() && node.tag_name().name() == "axId")
+            .take(MAX_CHART_GROUP_AXIS_IDS + 1)
+            .count()
+            > MAX_CHART_GROUP_AXIS_IDS
+    }) {
+        return None;
+    }
+    // Axis position is not a normative primary/secondary tie-breaker. If two
+    // axes of the same schema kind occupy the same side, preserve their IDs
+    // but leave group ownership unresolved until an Office-observed rule is
+    // available. Assigning them by XML/group encounter order silently routes
+    // otherwise valid data through an arbitrary scale.
+    let mut axes_by_kind_and_position: BTreeMap<(String, Option<String>), Vec<String>> =
+        BTreeMap::new();
+    for axis in &plot_axis_nodes {
+        let Some(id) = ax_id_of(axis) else {
+            continue;
+        };
+        axes_by_kind_and_position
+            .entry((axis.tag_name().name().to_string(), ax_pos(axis)))
+            .or_default()
+            .push(id);
+    }
+    let mut ambiguous_axis_ids: BTreeSet<String> = axes_by_kind_and_position
+        .into_values()
+        .filter(|ids| ids.len() > 1)
+        .flatten()
+        .collect();
+    let mut axis_id_counts = BTreeMap::<String, usize>::new();
+    for axis in &plot_axis_nodes {
+        if let Some(id) = ax_id_of(axis) {
+            *axis_id_counts.entry(id).or_default() += 1;
+        }
+    }
+    ambiguous_axis_ids.extend(
+        axis_id_counts
+            .into_iter()
+            .filter_map(|(id, count)| (count > 1).then_some(id)),
+    );
+    // Seed group ownership from the axes already selected for the public
+    // primary/secondary slots. This keeps an explicitly right-positioned
+    // value axis secondary even when no group references the left axis (for
+    // example a stock group bound only to the right axis). Same-kind axes that
+    // share a position were marked ambiguous above and never reach the claim
+    // helper; no source-order tie-breaker is invented for them.
+    let mut primary_category_axis_id = cat_ax.as_ref().and_then(ax_id_of);
+    let mut secondary_category_axis_id = secondary_cat_ax
+        .as_ref()
+        .and_then(ax_id_of)
+        .filter(|id| Some(id) != primary_category_axis_id.as_ref());
+    let mut primary_value_axis_id = val_ax.as_ref().and_then(ax_id_of);
+    let mut secondary_value_axis_id = secondary_val_ax
+        .as_ref()
+        .and_then(ax_id_of)
+        .filter(|id| Some(id) != primary_value_axis_id.as_ref());
+    let mut primary_series_axis_id = None;
+    let mut secondary_series_axis_id = None;
+    let mut next_series_start = 0usize;
+    let plot_groups = chart_group_nodes
+        .iter()
+        .map(|group| {
+            let kind = classic_group_kind(group.tag_name().name()).expect("filtered group");
+            let series_count = group
+                .children()
+                .filter(|node| node.is_element() && node.tag_name().name() == "ser")
+                .count();
+            let series_start = next_series_start;
+            next_series_start = next_series_start.saturating_add(series_count);
+            let axis_ids: Vec<String> = group
+                .children()
+                .filter(|node| node.is_element() && node.tag_name().name() == "axId")
+                .map(|node| attr(&node, "val").and_then(|value| parse_chart_axis_id_value(&value)))
+                .collect::<Option<Vec<_>>>()?;
+            if axis_ids
+                .iter()
+                .enumerate()
+                .any(|(index, id)| axis_ids[..index].contains(id))
+            {
+                return None;
+            }
+            let axis_id_with_kind = |axis_kind: &str| {
+                axis_ids.iter().find(|id| {
+                    known_axis_ids
+                        .get(*id)
+                        .is_some_and(|kind| kind == axis_kind)
+                })
+            };
+            let no_axes = matches!(kind, "pie" | "pie3D" | "doughnut" | "ofPie");
+            let numeric_axes = matches!(kind, "scatter" | "bubble");
+            let category_axis_id = if numeric_axes {
+                axis_ids.first()
+            } else {
+                axis_id_with_kind("catAx").or_else(|| axis_id_with_kind("dateAx"))
+            };
+            let value_axis_id = if numeric_axes {
+                axis_ids.get(1)
+            } else {
+                axis_id_with_kind("valAx")
+            };
+            let series_axis_id = axis_id_with_kind("serAx");
+            let category_axis_id = category_axis_id.filter(|id| !ambiguous_axis_ids.contains(*id));
+            let value_axis_id = value_axis_id.filter(|id| !ambiguous_axis_ids.contains(*id));
+            let series_axis_id = series_axis_id.filter(|id| !ambiguous_axis_ids.contains(*id));
+            let (category_axis, value_axis, series_axis) = if no_axes {
+                ("none".to_string(), "none".to_string(), "none".to_string())
+            } else {
+                (
+                    claim_plot_group_axis_slot(
+                        category_axis_id,
+                        &known_axis_ids,
+                        &mut primary_category_axis_id,
+                        &mut secondary_category_axis_id,
+                    ),
+                    claim_plot_group_axis_slot(
+                        value_axis_id,
+                        &known_axis_ids,
+                        &mut primary_value_axis_id,
+                        &mut secondary_value_axis_id,
+                    ),
+                    if series_axis_id.is_some() {
+                        claim_plot_group_axis_slot(
+                            series_axis_id,
+                            &known_axis_ids,
+                            &mut primary_series_axis_id,
+                            &mut secondary_series_axis_id,
+                        )
+                    } else {
+                        "none".to_string()
+                    },
+                )
+            };
+            let (gap_width, overlap) = if matches!(kind, "bar" | "bar3D") {
+                extract_bar_gap_overlap(*group)
+            } else {
+                (None, None)
+            };
+            Some(ChartPlotGroup {
+                kind: kind.to_string(),
+                series_start,
+                series_count,
+                category_axis,
+                value_axis,
+                series_axis,
+                axis_ids: (!axis_ids.is_empty()).then_some(axis_ids),
+                grouping: child(*group, "grouping").and_then(|node| attr(&node, "val")),
+                bar_direction: child(*group, "barDir").and_then(|node| attr(&node, "val")),
+                scatter_style: child(*group, "scatterStyle").and_then(|node| attr(&node, "val")),
+                radar_style: child(*group, "radarStyle").and_then(|node| attr(&node, "val")),
+                gap_width,
+                overlap,
+                bubble_scale: child(*group, "bubbleScale")
+                    .and_then(|node| attr(&node, "val"))
+                    .as_deref()
+                    .and_then(parse_unsigned_percent)
+                    .filter(|value| *value <= 300)
+                    .map(f64::from),
+                bubble_size_represents: child(*group, "sizeRepresents")
+                    .and_then(|node| attr(&node, "val"))
+                    .filter(|value| value == "area" || value == "w"),
+                show_negative_bubbles: bool_child(*group, "showNegBubbles"),
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let plot_group_uses_secondary_axis = chart_group_nodes
+        .iter()
+        .zip(plot_groups.iter())
+        .map(|(node, group)| (node.id(), group.value_axis == "secondary"))
+        .collect::<std::collections::HashMap<_, _>>();
     let mut direct_label_shapes = Vec::new();
     for series in &ser_nodes {
         if let Some(labels) = child(*series, "dLbls") {
@@ -10728,15 +11111,6 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 .filter_map(|label| child(label, "spPr")),
         );
     }
-    let chart_group_nodes: Vec<_> = plot_area
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && node
-                    .children()
-                    .any(|child| child.is_element() && child.tag_name().name() == "ser")
-        })
-        .collect();
     let allow_direct_label_paints =
         label_paint_recipes_within_budget(direct_label_shapes.iter().copied());
     let mut parsed_group_data_labels = chart_group_nodes
@@ -10867,10 +11241,6 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     let bar_group_decorations =
         (!parsed_bar_group_decorations.is_empty()).then_some(parsed_bar_group_decorations);
 
-    if ser_nodes.is_empty() {
-        return None;
-    }
-
     // Chart-level category labels from the first series, using the POSITIONAL
     // collector so a sparse cache (labels that start at `idx=1`, or a hole in
     // the middle) keeps its true length and per-index alignment. The old
@@ -10881,8 +11251,11 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     // X data, matching how Excel drives the horizontal-axis labels.
     let chart_uses_xval = chart_type == "scatter" || chart_type == "bubble";
     let category_tag = if chart_uses_xval { "xVal" } else { "cat" };
-    let shared_category_formula = external_reference_formula(ser_nodes[0], category_tag);
-    let resolved_category_levels = collect_multi_level_str_cache(ser_nodes[0], category_tag)
+    let first_series = ser_nodes.first().copied();
+    let shared_category_formula =
+        first_series.and_then(|series| external_reference_formula(series, category_tag));
+    let resolved_category_levels = first_series
+        .and_then(|series| collect_multi_level_str_cache(series, category_tag))
         .or_else(|| {
             shared_category_formula
                 .as_deref()
@@ -10891,10 +11264,13 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     let categories: Vec<String> = resolved_category_levels
         .as_ref()
         .and_then(|levels| levels.first().cloned())
-        .or_else(|| collect_string_source(ser_nodes[0], category_tag, references))
+        .or_else(|| {
+            first_series.and_then(|series| collect_string_source(series, category_tag, references))
+        })
         .unwrap_or_default();
     let category_levels = resolved_category_levels.filter(|levels| levels.len() > 1);
-    let category_source_hidden = collect_source_hidden(ser_nodes[0], category_tag, references);
+    let category_source_hidden =
+        first_series.and_then(|series| collect_source_hidden(series, category_tag, references));
 
     // Map a chart-group element name to the per-series `seriesType` string the
     // renderer dispatches on (mixed bar+line charts key line vs. non-line off
@@ -10981,13 +11357,16 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
             } else {
                 "cat"
             };
-            let use_secondary_axis = match (group, secondary_ax_id.as_deref()) {
-                (Some(g), Some(sec)) => g
-                    .children()
-                    .filter(|c| c.is_element() && c.tag_name().name() == "axId")
-                    .any(|c| attr(&c, "val").as_deref() == Some(sec)),
-                _ => false,
-            };
+            let use_secondary_axis = group
+                .and_then(|owner| plot_group_uses_secondary_axis.get(&owner.id()))
+                .copied()
+                .unwrap_or_else(|| match (group, secondary_ax_id.as_deref()) {
+                    (Some(g), Some(sec)) => g
+                        .children()
+                        .filter(|c| c.is_element() && c.tag_name().name() == "axId")
+                        .any(|c| attr(&c, "val").as_deref() == Some(sec)),
+                    _ => false,
+                });
 
             // Series name from <c:tx>  (can be strRef/strCache, strLit, or a bare <c:v>)
             let name = collect_string_source(*ser, "tx", references)
@@ -12281,16 +12660,16 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     let vary_colors = {
         let is_pie_family = matches!(chart_type.as_str(), "pie" | "doughnut" | "ofPie");
         let is_bar_family = chart_type.contains("Bar");
-        if is_pie_family {
+        if is_pie_family && first_series.is_some() {
             Some(
-                ser_nodes[0]
-                    .parent()
-                    .and_then(|g| bool_child(g, "varyColors"))
+                first_series
+                    .and_then(|series| series.parent())
+                    .and_then(|group| bool_child(group, "varyColors"))
                     .unwrap_or(true),
             )
         } else if is_bar_family && series_count == 1 {
-            let vary = ser_nodes[0]
-                .parent()
+            let vary = first_series
+                .and_then(|series| series.parent())
                 .and_then(|g| bool_child(g, "varyColors"))
                 .unwrap_or(true);
             if vary {
@@ -12313,6 +12692,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         category_source_hidden,
         category_levels,
         series,
+        plot_groups: Some(plot_groups),
         vary_colors,
         chart_text_boxes: None,
         val_max,
@@ -12675,6 +13055,7 @@ mod tests {
                 trend_lines: None,
                 line_hidden: None,
             }],
+            plot_groups: None,
             vary_colors: None,
             chart_text_boxes: None,
             show_data_labels: false,
@@ -16190,11 +16571,11 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(line_chart_type("percentStacked"), "stackedLinePct");
     }
 
-    /// (f) Two structural "not a chart" shapes: no `<c:plotArea>` at all, and
-    /// a `<c:plotArea>` present but declaring zero `<c:ser>` series. Both must
-    /// return `None` rather than an empty/degenerate `ChartModel`.
+    /// A missing plot area is not a chart. An authored empty chart group is
+    /// schema-valid and remains represented so its source-order slot is not
+    /// lost when a later group gains data.
     #[test]
-    fn parse_chart_part_returns_none_for_missing_plot_area_or_empty_series() {
+    fn parse_chart_part_rejects_missing_plot_area_but_retains_empty_group() {
         let no_plot_area = format!(
             r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:title/></c:chart></c:chartSpace>"#
         );
@@ -16209,11 +16590,18 @@ Subtitle</a:t></a:r></a:p>
                 <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/></c:barChart>
               </c:plotArea></c:chart></c:chartSpace>"#
         );
-        assert!(parse_chart_part(
+        let model = parse_chart_part(
             chart_space_of(&empty_series).root_element(),
-            &FixtureResolver
+            &FixtureResolver,
         )
-        .is_none());
+        .expect("empty group remains represented");
+        assert!(model.series.is_empty());
+        let groups = model.plot_groups.expect("ordered group");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            (groups[0].kind.as_str(), groups[0].series_count),
+            ("bar", 0)
+        );
     }
 
     /// §21.2.2.198: a scatter series whose `<c:spPr><a:ln>` is `<a:noFill/>`
@@ -21768,5 +22156,260 @@ Subtitle</a:t></a:r></a:p>
             collect_multi_level_str_cache(document.root_element(), "cat"),
             None,
         );
+    }
+
+    #[test]
+    fn classic_plot_groups_retain_exact_kind_source_order_and_empty_ranges() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea>
+              <c:areaChart><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:areaChart>
+              <c:area3DChart/><c:lineChart/><c:line3DChart/><c:stockChart/>
+              <c:radarChart/><c:scatterChart/><c:pieChart/><c:pie3DChart/>
+              <c:doughnutChart/><c:barChart/><c:bar3DChart/><c:ofPieChart/>
+              <c:surfaceChart/><c:surface3DChart/><c:bubbleChart/>
+            </c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let document = root_of(&xml);
+        let model = parse_chart_part(document.root_element(), &FixtureResolver)
+            .expect("classic chart groups");
+        let groups = model.plot_groups.expect("ordered groups");
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| group.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "area",
+                "area3D",
+                "line",
+                "line3D",
+                "stock",
+                "radar",
+                "scatter",
+                "pie",
+                "pie3D",
+                "doughnut",
+                "bar",
+                "bar3D",
+                "ofPie",
+                "surface",
+                "surface3D",
+                "bubble",
+            ],
+        );
+        assert_eq!((groups[0].series_start, groups[0].series_count), (0, 1));
+        assert!(groups[1..]
+            .iter()
+            .all(|group| (group.series_start, group.series_count) == (1, 0)));
+    }
+
+    #[test]
+    fn classic_plot_groups_keep_scatter_bubble_distinct_and_fail_closed_on_ambiguous_axes() {
+        let series = |idx: usize, bubble: bool| {
+            format!(
+                r#"<c:ser><c:idx val="{idx}"/><c:order val="{idx}"/><c:xVal><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>2</c:v></c:pt></c:numLit></c:yVal>{}</c:ser>"#,
+                if bubble {
+                    r#"<c:bubbleSize><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>3</c:v></c:pt></c:numLit></c:bubbleSize>"#
+                } else {
+                    ""
+                },
+            )
+        };
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea>
+              <c:bubbleChart>{}<c:axId val="30"/><c:axId val="40"/></c:bubbleChart>
+              <c:scatterChart><c:scatterStyle val="lineMarker"/>{}<c:axId val="10"/><c:axId val="20"/></c:scatterChart>
+              <c:valAx><c:axId val="10"/><c:axPos val="b"/><c:crossAx val="20"/></c:valAx>
+              <c:valAx><c:axId val="20"/><c:axPos val="l"/><c:crossAx val="10"/></c:valAx>
+              <c:valAx><c:axId val="30"/><c:axPos val="b"/><c:crossAx val="40"/></c:valAx>
+              <c:valAx><c:axId val="40"/><c:axPos val="l"/><c:crossAx val="30"/></c:valAx>
+            </c:plotArea></c:chart></c:chartSpace>"#,
+            series(0, true),
+            series(1, false),
+        );
+        let document = root_of(&xml);
+        let model = parse_chart_part(document.root_element(), &FixtureResolver)
+            .expect("numeric mixed groups");
+        let groups = model.plot_groups.expect("ordered groups");
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| group.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["bubble", "scatter"]
+        );
+        assert_eq!(
+            (
+                groups[0].category_axis.as_str(),
+                groups[0].value_axis.as_str()
+            ),
+            ("unresolved", "unresolved")
+        );
+        assert_eq!(
+            (
+                groups[1].category_axis.as_str(),
+                groups[1].value_axis.as_str()
+            ),
+            ("unresolved", "unresolved")
+        );
+        assert_eq!(groups[1].scatter_style.as_deref(), Some("lineMarker"));
+    }
+
+    #[test]
+    fn stock_group_decorations_survive_a_later_line_group() {
+        let series = |index: usize, value: usize| {
+            format!(
+                r#"<c:ser><c:idx val="{index}"/><c:order val="{index}"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>{value}</c:v></c:pt></c:numLit></c:val></c:ser>"#,
+            )
+        };
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart><c:plotArea>
+              <c:stockChart>{}{}{}<c:hiLowLines><c:spPr><a:ln><a:solidFill><a:srgbClr val="123456"/></a:solidFill></a:ln></c:spPr></c:hiLowLines></c:stockChart>
+              <c:lineChart>{}</c:lineChart>
+            </c:plotArea></c:chart></c:chartSpace>"#,
+            series(0, 5),
+            series(1, 1),
+            series(2, 3),
+            series(3, 4),
+        );
+        let document = root_of(&xml);
+        let model = parse_chart_part(document.root_element(), &FixtureResolver)
+            .expect("stock and line combo");
+
+        assert_eq!(model.chart_type, "line");
+        assert_eq!(
+            model
+                .plot_groups
+                .as_ref()
+                .expect("groups")
+                .iter()
+                .map(|group| group.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["stock", "line"],
+        );
+        assert_eq!(model.stock_hi_low_lines, Some(true));
+        assert_eq!(model.stock_hi_low_line_color.as_deref(), Some("123456"));
+    }
+
+    #[test]
+    fn classic_plot_group_count_is_bounded_atomically() {
+        let parse_group_count = |count: usize| {
+            let groups = "<c:lineChart/>".repeat(count);
+            let xml = format!(
+                r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea>{groups}</c:plotArea></c:chart></c:chartSpace>"#,
+            );
+            let document = root_of(&xml);
+            parse_chart_part(document.root_element(), &FixtureResolver)
+        };
+
+        let exact = parse_group_count(MAX_CHART_PLOT_GROUPS).expect("exact group limit");
+        assert_eq!(
+            exact.plot_groups.expect("groups").len(),
+            MAX_CHART_PLOT_GROUPS
+        );
+        assert!(parse_group_count(MAX_CHART_PLOT_GROUPS + 1).is_none());
+    }
+
+    #[test]
+    fn empty_group_does_not_select_the_visible_legacy_family() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea>
+              <c:barChart><c:barDir val="col"/></c:barChart>
+              <c:pieChart><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:pieChart>
+            </c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let document = root_of(&xml);
+        let model = parse_chart_part(document.root_element(), &FixtureResolver)
+            .expect("empty plus visible group");
+        assert_eq!(model.chart_type, "pie");
+        assert_eq!(model.series.len(), 1);
+    }
+
+    #[test]
+    fn classic_plot_series_and_axes_are_bounded_before_projection() {
+        let parse_series_count = |count: usize| {
+            let series = "<c:ser/>".repeat(count);
+            let xml = format!(
+                r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea><c:lineChart><c:grouping val="standard"/>{series}</c:lineChart></c:plotArea></c:chart></c:chartSpace>"#,
+            );
+            let document = root_of(&xml);
+            parse_chart_part(document.root_element(), &FixtureResolver)
+        };
+        assert_eq!(
+            parse_series_count(MAX_CHART_PLOT_SERIES)
+                .expect("exact series limit")
+                .series
+                .len(),
+            MAX_CHART_PLOT_SERIES,
+        );
+        assert!(parse_series_count(MAX_CHART_PLOT_SERIES + 1).is_none());
+
+        let parse_axis_count = |count: usize| {
+            let axes = [
+                r#"<c:catAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx>"#,
+                r#"<c:valAx><c:axId val="2"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>"#,
+                r#"<c:catAx><c:axId val="3"/><c:axPos val="t"/><c:crossAx val="4"/></c:catAx>"#,
+                r#"<c:valAx><c:axId val="4"/><c:axPos val="r"/><c:crossAx val="3"/></c:valAx>"#,
+                r#"<c:serAx><c:axId val="5"/><c:axPos val="r"/></c:serAx>"#,
+            ][..count]
+                .join("");
+            let xml = format!(
+                r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea><c:lineChart/>{axes}</c:plotArea></c:chart></c:chartSpace>"#,
+            );
+            let document = root_of(&xml);
+            parse_chart_part(document.root_element(), &FixtureResolver)
+        };
+        assert!(parse_axis_count(MAX_CHART_PLOT_AXES).is_some());
+        assert!(parse_axis_count(MAX_CHART_PLOT_AXES + 1).is_none());
+    }
+
+    #[test]
+    fn classic_group_axis_id_count_and_duplicates_fail_closed() {
+        let parse_ids = |ids: &[&str]| {
+            let axis_ids = ids
+                .iter()
+                .map(|id| format!(r#"<c:axId val="{id}"/>"#))
+                .collect::<String>();
+            let xml = format!(
+                r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea><c:surfaceChart>{axis_ids}</c:surfaceChart></c:plotArea></c:chart></c:chartSpace>"#,
+            );
+            let document = root_of(&xml);
+            parse_chart_part(document.root_element(), &FixtureResolver)
+        };
+        assert!(parse_ids(&["1", "2", "3"]).is_some());
+        assert!(parse_ids(&["1", "2", "3", "4"]).is_none());
+        assert!(parse_ids(&["1", "1"]).is_none());
+        assert!(parse_ids(&["-2147483648"]).is_some());
+        assert!(parse_ids(&["-2147483649"]).is_none());
+        assert!(parse_ids(&["4294967296"]).is_none());
+        assert!(parse_ids(&["not-an-axis-id"]).is_none());
+    }
+
+    #[test]
+    fn signed_32_bit_axis_ids_remain_opaque_cross_reference_keys() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}"><c:chart><c:plotArea>
+              <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+                <c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit>
+                  <c:ptCount val="1"/><c:pt idx="0"><c:v>2</c:v></c:pt>
+                </c:numLit></c:val></c:ser>
+                <c:axId val=" -2068027336 "/><c:axId val=" -2113994440 "/>
+              </c:barChart>
+              <c:catAx><c:axId val=" -2068027336 "/><c:axPos val="b"/>
+                <c:crossAx val="-2113994440"/></c:catAx>
+              <c:valAx><c:axId val=" -2113994440 "/><c:axPos val="l"/>
+                <c:crossAx val="-2068027336"/></c:valAx>
+            </c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let document = root_of(&xml);
+        let model = parse_chart_part(document.root_element(), &FixtureResolver)
+            .expect("signed axis identifiers");
+        let group = model.plot_groups.expect("group").remove(0);
+        assert_eq!(
+            group.axis_ids,
+            Some(vec!["-2068027336".to_string(), "-2113994440".to_string()]),
+        );
+        assert_eq!(group.category_axis, "primary");
+        assert_eq!(group.value_axis, "primary");
     }
 }

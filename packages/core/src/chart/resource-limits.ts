@@ -45,6 +45,20 @@ export function sourceChartStructureCount(chart: ChartModel): number {
     return true;
   };
   if (!add(chart.legendEntries?.length ?? 0)) return MAX_CANVAS_CHART_POINTS + 1;
+  if (!add(chart.plotGroups?.length ?? 0)) return MAX_CANVAS_CHART_POINTS + 1;
+  if (chart.plotGroups != null) {
+    let expectedSeriesStart = 0;
+    for (const group of chart.plotGroups) {
+      if (!Number.isSafeInteger(group.seriesStart) || group.seriesStart < 0
+        || !Number.isSafeInteger(group.seriesCount) || group.seriesCount < 0
+        || group.seriesStart !== expectedSeriesStart
+        || group.seriesCount > chart.series.length - expectedSeriesStart) {
+        return MAX_CANVAS_CHART_POINTS + 1;
+      }
+      expectedSeriesStart += group.seriesCount;
+    }
+    if (expectedSeriesStart !== chart.series.length) return MAX_CANVAS_CHART_POINTS + 1;
+  }
   for (const series of chart.series) {
     const pointSlots = Math.max(
       1,
