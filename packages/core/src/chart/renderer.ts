@@ -8329,13 +8329,17 @@ function renderSurfaceChart(
       if (!valAxisReversed(chart)) {
         const image = chartImageFillSource(imageFill);
         const surface = chart.threeD?.[surfaceKinds[index]];
-        const inner = surfaceSlabs[index].inner;
         if (image) {
           const project = (point: ThreeDScenePoint) =>
             projection.projectUnbounded(point.x, point.y, point.depth);
           paintChartThreeDSurfacePicture(
             ctx, imageFill, image, surface, surfaceKinds[index],
-            inner, project, surfaceSpan,
+            surfaceSlabs[index], surfaceSlabs[index].faces
+              .map((face, faceIndex) => ({ face, faceIndex }))
+              .filter(({ face }) => surfaceSlabs[index].thickness === 0
+                || projection.cameraFacing(face))
+              .map(({ faceIndex }) => faceIndex),
+            project, surfaceSpan,
           );
         }
       }

@@ -8,7 +8,12 @@
 // draw-call-signature characterization test.
 
 import { describe, it, expect } from 'vitest';
-import type { ChartModel, ChartSeries, ChartRect } from '../types/chart';
+import type {
+  ChartModel,
+  ChartRect,
+  ChartSeries,
+  ChartThreeDPictureOptions,
+} from '../types/chart';
 import {
   chartLabelPaintWorkCount,
   classicMarkerPaintWorkCount,
@@ -1497,6 +1502,60 @@ describe('classic 3-D compatibility projection', () => {
     expect(linkedRec.drawImages.length).toBeGreaterThan(0);
   });
 
+  it.each(['line', 'surface3D'] as const)(
+    'projects independently selected positive-thickness CT_Surface stretch faces for %s',
+    chartType => {
+      const picture = {
+        fillType: 'image' as const,
+        imagePath: 'xl/media/thick-surface.png',
+        mimeType: 'image/png',
+        stretch: true,
+      };
+      const model = (
+        kind: 'floor' | 'sideWall' | 'backWall',
+        pictureOptions: ChartThreeDPictureOptions,
+      ) => baseModel({
+        chartType,
+        categories: ['A', 'B', 'C'],
+        valMin: 0,
+        valMax: 10,
+        valAxisMajorGridlines: false,
+        threeD: {
+          rotationX: 20, rotationY: 20, depthPercent: 100, perspective: 30,
+          [kind]: {
+            thicknessPercent: 25,
+            lineColor: 'FF0000',
+            style: { fillPaints: [picture], fillPaintAuthored: true },
+            pictureOptions: { ...pictureOptions, pictureFormat: 'stretch' },
+          },
+        },
+        series: chartType === 'surface3D'
+          ? [series({ values: [2, 8, 4] }), series({ values: [4, 6, 7] })]
+          : [series({ values: [2, 8, 4], showMarker: false })],
+      });
+      const bitmap = { width: 80, height: 40 } as unknown as CanvasImageSource;
+      const draws = (
+        kind: 'floor' | 'sideWall' | 'backWall',
+        pictureOptions: ChartThreeDPictureOptions,
+      ) => {
+        const chart = model(kind, pictureOptions);
+        expect(collectChartMarkerImageFills(chart)).toEqual([picture]);
+        const rec = recordingCtx();
+        renderChartCore(rec.ctx, chart, RECT, 1, 0, testThreeD, undefined, () => bitmap);
+        expect(rec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#FF0000' });
+        return rec.drawImages.length;
+      };
+      for (const [kind, pictureOptions] of [
+        ['backWall', { applyToFront: true, applyToSides: false, applyToEnd: false }],
+        ['sideWall', { applyToFront: false, applyToSides: true, applyToEnd: false }],
+        ['floor', { applyToFront: false, applyToSides: false, applyToEnd: true }],
+      ] as const) expect(draws(kind, pictureOptions), kind).toBeGreaterThan(0);
+      expect(collectChartMarkerImageFills(model('backWall', {
+        applyToFront: false, applyToSides: false, applyToEnd: false,
+      }))).toEqual([]);
+    },
+  );
+
   it('repeats stackScale pictures by value units but keeps the Office floor exception', () => {
     const picture = {
       fillType: 'image' as const,
@@ -1540,7 +1599,8 @@ describe('classic 3-D compatibility projection', () => {
     expect(backStackScale).toBeGreaterThan(backStretch);
     expect(draws(model('floor', 'stackScale'))).toBe(draws(model('floor', 'stretch')));
     expect(collectChartMarkerImageFills(model('backWall', 'stack'))).toEqual([]);
-    expect(collectChartMarkerImageFills(model('backWall', 'stretch', 25))).toEqual([]);
+    expect(collectChartMarkerImageFills(model('backWall', 'stretch', 25))).toEqual([picture]);
+    expect(collectChartMarkerImageFills(model('backWall', 'stackScale', 25))).toEqual([]);
     expect(collectChartMarkerImageFills({
       ...model('backWall', 'stretch'),
       valAxisOrientation: 'maxMin',
