@@ -38,6 +38,37 @@ export function surfacePictureFaceIsEnabled(
   return faceIndex % 2 === 0 ? plan.slabFaces.end : plan.slabFaces.sides;
 }
 
+/** Number of source images mapped along one visible face. The two slab end
+ * faces have no value-axis extent, so stackScale maps one complete source;
+ * front/side faces retain the value-unit repetition count. */
+export function surfacePictureFaceRepetitions(
+  plan: SurfacePicturePlan,
+  faceIndex: number,
+): number {
+  if (!surfacePictureFaceIsEnabled(plan, faceIndex)) return 0;
+  return surfacePictureFaceUsesValueAxis(plan, faceIndex) ? plan.repetitions : 1;
+}
+
+/** Whether stackScale maps value units along this face. A repetition count of
+ * one is not enough to answer this: when stackUnit exceeds the visible range,
+ * a value-axis face still maps the larger unit and clips it at the face edge. */
+export function surfacePictureFaceUsesValueAxis(
+  plan: SurfacePicturePlan,
+  faceIndex: number,
+): boolean {
+  if (plan.mode !== 'stackScale' || !surfacePictureFaceIsEnabled(plan, faceIndex)) return false;
+  return !plan.slabFaces || faceIndex === 0 || faceIndex % 2 === 1;
+}
+
+function boundedSurfacePicturePlan(plan: SurfacePicturePlan): SurfacePicturePlan | null {
+  let work = 0;
+  for (let faceIndex = 0; faceIndex < 6; faceIndex++) {
+    work += surfacePictureFaceRepetitions(plan, faceIndex);
+    if (work > MAX_CHART_IMAGE_FILL_TILES) return null;
+  }
+  return plan;
+}
+
 function rectIsIdentity(rect: ImageFill['srcRect'] | ImageFill['fillRect']): boolean {
   return rect == null || [rect.l, rect.t, rect.r, rect.b].every(value => (value ?? 0) === 0);
 }
@@ -46,9 +77,9 @@ function rectIsIdentity(rect: ImageFill['srcRect'] | ImageFill['fillRect']): boo
  *
  * ECMA-376 defines the flags and formats but not wall texture projection.
  * Excel/PDF observations establish full-face stretch and value-axis
- * stackScale on planar back/side walls; floor ignores pictureStackUnit. The
- * positive-thickness boundary is limited to stretch, whose front/sides/end
- * targets are independently authored and map to the bounded six-face slab. */
+ * stackScale on planar and positive-thickness back/side walls; floor ignores
+ * pictureStackUnit. Positive-thickness front/sides/end targets are
+ * independently authored and map to the bounded six-face slab. */
 export function planChartThreeDSurfacePicture(
   fill: ImageFill,
   surface: ChartThreeDSurface | null | undefined,
@@ -66,34 +97,37 @@ export function planChartThreeDSurfacePicture(
   if (options?.pictureStackUnitAuthored === true && options.pictureStackUnit == null) return null;
   const format = options?.pictureFormat ?? 'stretch';
   const thickness = surface?.thicknessPercent ?? 0;
-  if (thickness !== 0) {
-    if (!Number.isFinite(thickness) || thickness < 0 || format !== 'stretch'
-      || options?.pictureStackUnitAuthored === true || options?.pictureStackUnit != null) {
-      return null;
-    }
-    const slabFaces = {
+  if (!Number.isFinite(thickness) || thickness < 0) return null;
+  const slabFaces = thickness === 0
+    ? undefined
+    : {
       front: options?.applyToFront !== false,
       sides: options?.applyToSides !== false,
       end: options?.applyToEnd !== false,
     };
-    return Object.values(slabFaces).some(Boolean)
-      ? { mode: 'stretch', repetitions: 1, slabFaces }
-      : null;
+  if (slabFaces && !Object.values(slabFaces).some(Boolean)) return null;
+  if (!slabFaces) {
+    if (kind === 'backWall' && options?.applyToFront === false) return null;
+    if ((kind === 'floor' || kind === 'sideWall') && options?.applyToSides === false) return null;
   }
-  if (kind === 'backWall' && options?.applyToFront === false) return null;
-  if ((kind === 'floor' || kind === 'sideWall') && options?.applyToSides === false) return null;
   if ((options?.pictureStackUnitAuthored === true || options?.pictureStackUnit != null)
     && format !== 'stackScale') return null;
-  if (format === 'stretch') return { mode: 'stretch', repetitions: 1 };
+  if (format === 'stretch') {
+    return boundedSurfacePicturePlan({ mode: 'stretch', repetitions: 1, slabFaces });
+  }
   if (format !== 'stackScale') return null;
   const stackUnit = options?.pictureStackUnit;
   if (!(stackUnit != null && Number.isFinite(stackUnit) && stackUnit > 0)) return null;
   // MS-OE376 §2.1.1543(c): Excel ignores pictureStackUnit on floor.
-  if (kind === 'floor') return { mode: 'stretch', repetitions: 1 };
-  if (valueSpan == null) return { mode: 'stackScale', repetitions: 1, stackUnit };
+  if (kind === 'floor') {
+    return boundedSurfacePicturePlan({ mode: 'stretch', repetitions: 1, slabFaces });
+  }
+  if (valueSpan == null) {
+    return boundedSurfacePicturePlan({ mode: 'stackScale', repetitions: 1, stackUnit, slabFaces });
+  }
   if (!(Number.isFinite(valueSpan) && valueSpan > 0)) return null;
   const repetitions = Math.ceil(valueSpan / stackUnit);
   if (!Number.isSafeInteger(repetitions)
     || repetitions < 1 || repetitions > MAX_CHART_IMAGE_FILL_TILES) return null;
-  return { mode: 'stackScale', repetitions, stackUnit };
+  return boundedSurfacePicturePlan({ mode: 'stackScale', repetitions, stackUnit, slabFaces });
 }

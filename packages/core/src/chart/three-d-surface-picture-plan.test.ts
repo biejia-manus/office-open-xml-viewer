@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   planChartThreeDSurfacePicture,
   surfacePictureFaceIsEnabled,
+  surfacePictureFaceRepetitions,
+  surfacePictureFaceUsesValueAxis,
 } from './three-d-surface-picture-plan.js';
 
 const fill = {
@@ -27,7 +29,7 @@ describe('positive-thickness CT_Surface picture faces', () => {
       .toEqual(Array.from({ length: 6 }, (_, index) => faces.some(face => face === index)));
   });
 
-  it('treats omitted face flags as enabled and keeps unmeasured slab formats fail-closed', () => {
+  it('treats omitted face flags as enabled and repeats the observed thick stackScale faces', () => {
     const stretch = planChartThreeDSurfacePicture(fill, {
       thicknessPercent: 25,
       pictureOptions: { pictureFormat: 'stretch' },
@@ -36,9 +38,60 @@ describe('positive-thickness CT_Surface picture faces', () => {
     if (!stretch) throw new Error('picture plan not built');
     expect(Array.from({ length: 6 }, (_, index) => surfacePictureFaceIsEnabled(stretch, index)))
       .toEqual([true, false, true, true, true, true]);
+    const stackScale = planChartThreeDSurfacePicture(fill, {
+      thicknessPercent: 25,
+      pictureOptions: { pictureFormat: 'stackScale', pictureStackUnit: 2 },
+    }, 'sideWall', 10);
+    expect(stackScale).toEqual({
+      mode: 'stackScale',
+      repetitions: 5,
+      stackUnit: 2,
+      slabFaces: { front: true, sides: true, end: true },
+    });
+    if (!stackScale) throw new Error('stackScale picture plan not built');
+    expect(Array.from({ length: 6 }, (_, index) =>
+      surfacePictureFaceRepetitions(stackScale, index))).toEqual([5, 0, 1, 5, 1, 5]);
+    expect(Array.from({ length: 6 }, (_, index) =>
+      surfacePictureFaceUsesValueAxis(stackScale, index)))
+      .toEqual([true, false, false, true, false, true]);
+    const oneRepetition = planChartThreeDSurfacePicture(fill, {
+      thicknessPercent: 25,
+      pictureOptions: { pictureFormat: 'stackScale', pictureStackUnit: 20 },
+    }, 'sideWall', 10);
+    if (!oneRepetition) throw new Error('one-repetition picture plan not built');
+    expect(surfacePictureFaceRepetitions(oneRepetition, 0)).toBe(1);
+    expect(surfacePictureFaceUsesValueAxis(oneRepetition, 0)).toBe(true);
+    expect(surfacePictureFaceRepetitions(oneRepetition, 2)).toBe(1);
+    expect(surfacePictureFaceUsesValueAxis(oneRepetition, 2)).toBe(false);
     expect(planChartThreeDSurfacePicture(fill, {
       thicknessPercent: 25,
       pictureOptions: { pictureFormat: 'stackScale', pictureStackUnit: 2 },
-    }, 'sideWall', 10)).toBeNull();
+    }, 'floor', 10)).toEqual({
+      mode: 'stretch',
+      repetitions: 1,
+      slabFaces: { front: true, sides: true, end: true },
+    });
+  });
+
+  it('bounds thick stackScale work across every enabled slab face', () => {
+    const frontOnly = {
+      thicknessPercent: 25,
+      pictureOptions: {
+        applyToFront: true,
+        applyToSides: false,
+        applyToEnd: false,
+        pictureFormat: 'stackScale' as const,
+        pictureStackUnit: 2,
+      },
+    };
+    expect(planChartThreeDSurfacePicture(fill, frontOnly, 'backWall', 8_192)).not.toBeNull();
+    expect(planChartThreeDSurfacePicture(fill, frontOnly, 'backWall', 8_194)).toBeNull();
+
+    const allFaces = {
+      thicknessPercent: 25,
+      pictureOptions: { pictureFormat: 'stackScale' as const, pictureStackUnit: 2 },
+    };
+    expect(planChartThreeDSurfacePicture(fill, allFaces, 'backWall', 2_728)).not.toBeNull();
+    expect(planChartThreeDSurfacePicture(fill, allFaces, 'backWall', 2_730)).toBeNull();
   });
 });

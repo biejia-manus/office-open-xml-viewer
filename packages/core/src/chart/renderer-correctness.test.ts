@@ -1572,7 +1572,7 @@ describe('classic 3-D compatibility projection', () => {
       stretch: true,
     };
     const model = (
-      kind: 'backWall' | 'floor',
+      kind: 'backWall' | 'sideWall' | 'floor',
       pictureFormat: 'stretch' | 'stackScale' | 'stack',
       thicknessPercent = 0,
     ) => baseModel({
@@ -1608,7 +1608,16 @@ describe('classic 3-D compatibility projection', () => {
     expect(draws(model('floor', 'stackScale'))).toBe(draws(model('floor', 'stretch')));
     expect(collectChartMarkerImageFills(model('backWall', 'stack'))).toEqual([]);
     expect(collectChartMarkerImageFills(model('backWall', 'stretch', 25))).toEqual([picture]);
-    expect(collectChartMarkerImageFills(model('backWall', 'stackScale', 25))).toEqual([]);
+    for (const kind of ['backWall', 'sideWall'] as const) {
+      const thickStretch = model(kind, 'stretch', 25);
+      const thickStackScale = model(kind, 'stackScale', 25);
+      expect(collectChartMarkerImageFills(thickStackScale)).toEqual([picture]);
+      expect(draws(thickStackScale)).toBeGreaterThan(draws(thickStretch));
+    }
+    const thickFloorStretch = model('floor', 'stretch', 25);
+    const thickFloorStackScale = model('floor', 'stackScale', 25);
+    expect(collectChartMarkerImageFills(thickFloorStackScale)).toEqual([picture]);
+    expect(draws(thickFloorStackScale)).toBe(draws(thickFloorStretch));
     const reversedStretch = {
       ...model('backWall', 'stretch'),
       valAxisOrientation: 'maxMin',
