@@ -8,6 +8,12 @@ export const MAX_CANVAS_CHART_POINTS = 10_000;
  * This matches the shared decoded-image cache count boundary. */
 export const MAX_CHART_MARKER_IMAGE_SOURCES = 256;
 
+/** Shared structured-paint availability ceilings. A single gradient recipe
+ * and the aggregate chart work use the same bounds across classic markers,
+ * labels, Surface bands, and the optional 3-D renderer. */
+export const MAX_CHART_PAINT_RECIPE_COMPONENTS = 4_096;
+export const MAX_CHART_PAINT_COMPONENTS = 1_048_576;
+
 const CLASSIC_CANVAS_POINT_FAMILIES = new Set([
   'clusteredBar', 'clusteredBarH', 'stackedBar', 'stackedBarH',
   'stackedBarPct', 'stackedBarHPct', 'clusteredColumn',

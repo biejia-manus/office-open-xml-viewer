@@ -870,6 +870,505 @@ describe('classic 3-D compatibility projection', () => {
     expect(authored.filledPaths.some(path => path.fillStyle === '#F2F2F2')).toBe(true);
   });
 
+  it('uses structured direct and linked floor/wall paint with direct noFill precedence', () => {
+    const gradient = {
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 0,
+      stops: [
+        { position: 0, color: '112233' },
+        { position: 1, color: 'DDEEFF' },
+      ],
+    };
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B'],
+      valAxisMajorGridlines: false,
+      chartStyleRoles: {
+        floor: { fillPaints: [gradient], fillPaintAuthored: true },
+        wall: { fillPaints: [gradient], fillPaintAuthored: true },
+      },
+      threeD: {
+        rotationX: 15,
+        rotationY: 20,
+        floor: { fillHidden: true },
+        sideWall: { style: { fillPaints: [gradient], fillPaintAuthored: true } },
+      },
+      series: [series({ values: [5, 15] })],
+    }), RECT, 1);
+    // Direct floor noFill suppresses the linked floor role. The direct side
+    // wall and linked back wall each resolve one bounded gradient recipe.
+    expect(rec.gradients).toHaveLength(2);
+  });
+
+  it('uses plotArea3D for a 3-D plot unless direct plot-area paint wins', () => {
+    const gradient = {
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 0,
+      stops: [
+        { position: 0, color: '112233' },
+        { position: 1, color: 'DDEEFF' },
+      ],
+    };
+    const render = (direct: boolean) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'line',
+        categories: ['A', 'B'],
+        chartStyleRoles: {
+          plotArea3D: { fillPaints: [gradient], fillPaintAuthored: true },
+        },
+        plotAreaBg: direct ? 'FF0000' : null,
+        plotAreaFillPaintAuthored: direct,
+        threeD: { rotationX: 15, rotationY: 20 },
+        series: [series({ values: [5, 15] })],
+      }), RECT, 1);
+      return rec;
+    };
+    expect(render(false).gradients).toHaveLength(1);
+    expect(render(true).gradients).toHaveLength(0);
+  });
+
+  it.each(['clusteredBar', 'pie'] as const)(
+    'applies linked dataPoint3D paint to %s and keeps direct point noFill authoritative',
+    chartType => {
+      const gradient = {
+        fillType: 'gradient' as const,
+        gradType: 'linear' as const,
+        angle: 0,
+        stops: [
+          { position: 0, color: '112233' },
+          { position: 1, color: 'DDEEFF' },
+        ],
+      };
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType,
+        categories: ['A', 'B'],
+        valAxisMajorGridlines: false,
+        chartStyleRoles: {
+          dataPoint3D: {
+            fillPaints: [gradient],
+            fillPaintAuthored: true,
+            linePaints: [gradient],
+            linePaintAuthored: true,
+            lineWidthEmu: 12_700,
+          },
+        },
+        threeD: { rotationX: 15, rotationY: 20, perspective: 30 },
+        series: [series({
+          values: [5, 15],
+          dataPointOverrides: [{
+            idx: 0,
+            fillHidden: true,
+            lineHidden: true,
+            chartexStyle: { fillHidden: true, lineHidden: true },
+          }],
+        })],
+      }), RECT, 1);
+      // Only point 1 consumes the linked fill and outline recipes. Each is
+      // resolved once for the complete datum, not once for every mesh face.
+      expect(rec.gradients).toHaveLength(2);
+    },
+  );
+
+  it('preflights percent-stack paint without overflowing finite magnitudes', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'stackedBarPct',
+      categories: ['A'],
+      chartStyleRoles: {
+        dataPoint3D: {
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: Array.from({ length: 4_097 }, (_, index) => ({
+              position: index / 4_096, color: '112233',
+            })),
+          }],
+          fillPaintAuthored: true,
+        },
+      },
+      threeD: { rotationX: 15, rotationY: 20 },
+      series: [
+        series({ values: [Number.MAX_VALUE] }),
+        series({ values: [Number.MAX_VALUE] }),
+      ],
+    }), RECT, 1);
+    expect(rec.gradients).toHaveLength(0);
+    expect(rec.texts.map(text => text.text)).toContain('(too many data points)');
+  });
+
+  it('does not charge saturated stacked-bar segments that paint no mesh', () => {
+    const gradient = {
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 0,
+      stops: Array.from({ length: 4_096 }, (_, index) => ({
+        position: index / 4_095, color: '112233',
+      })),
+    };
+    const values = new Array(129).fill(Number.MAX_VALUE) as number[];
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'stackedBar',
+      categories: values.map((_, index) => `C${index}`),
+      chartStyleRoles: {
+        dataPoint3D: { fillPaints: [gradient], fillPaintAuthored: true },
+      },
+      threeD: { rotationX: 15, rotationY: 20 },
+      series: [series({ values }), series({ values: [...values] })],
+    }), RECT, 1);
+    expect(rec.texts.map(text => text.text)).not.toContain('(too many data points)');
+    expect(rec.gradients).toHaveLength(values.length);
+  });
+
+  it('plans percent-stack denominators once per category', () => {
+    let valueReads = 0;
+    const measuredSeries = Array.from({ length: 200 }, (_, index) => {
+      const values = [index + 1];
+      Object.defineProperty(values, 0, {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          valueReads++;
+          return index + 1;
+        },
+      });
+      return series({ values });
+    });
+    renderChart(recordingCtx().ctx, baseModel({
+      chartType: 'stackedBarPct',
+      categories: ['A'],
+      threeD: { rotationX: 15, rotationY: 20 },
+      series: measuredSeries,
+    }), RECT, 1);
+    // A per-datum denominator scan is quadratic (well over 80,000 reads for
+    // this boundary). The shared category plan keeps all consumers linear.
+    expect(valueReads).toBeLessThan(10_000);
+  });
+
+  it('preflights stacked-line paint from the cumulative plotted value', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'stackedLine',
+      categories: ['A', 'B'],
+      valMin: 10,
+      valMax: 20,
+      chartStyleRoles: {
+        dataPoint3D: {
+          linePaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: Array.from({ length: 4_097 }, (_, index) => ({
+              position: index / 4_096, color: '112233',
+            })),
+          }],
+          linePaintAuthored: true,
+        },
+      },
+      threeD: { rotationX: 15, rotationY: 20 },
+      series: [
+        series({ values: [6, 6], showMarker: false }),
+        series({ values: [6, 6], showMarker: false }),
+      ],
+    }), RECT, 1);
+    expect(rec.gradients).toHaveLength(0);
+    expect(rec.texts.map(text => text.text)).toContain('(too many data points)');
+  });
+
+  it('indexes linked 3-D bar paint by series instead of category', () => {
+    const palette = ['AA0000', '00AA00', '0000AA'].map(color => ({
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 0,
+      stops: [
+        { position: 0, color },
+        { position: 1, color: 'FFFFFF' },
+      ],
+    }));
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B', 'C'],
+      valAxisMajorGridlines: false,
+      chartStyleRoles: {
+        dataPoint3D: { fillPaints: palette, fillPaintAuthored: true },
+      },
+      threeD: { rotationX: 15, rotationY: 20, perspective: 30 },
+      series: [
+        series({ values: [1] }),
+        series({ values: [1, 1, 1] }),
+      ],
+    }), RECT, 1);
+    const firstStops = rec.gradients.map(gradient => gradient.stops[0]?.color);
+    expect(firstStops.filter(color => color === 'rgba(170,0,0,1)')).toHaveLength(1);
+    expect(firstStops.filter(color => color === 'rgba(0,170,0,1)')).toHaveLength(3);
+    expect(firstStops).not.toContain('rgba(0,0,170,1)');
+  });
+
+  it('indexes linked 3-D paint by point for a single varyColors bar series', () => {
+    const palette = ['AA0000', '00AA00', '0000AA'].map(color => ({
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 0,
+      stops: [
+        { position: 0, color },
+        { position: 1, color: 'FFFFFF' },
+      ],
+    }));
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B', 'C'],
+      varyColors: true,
+      valAxisMajorGridlines: false,
+      chartStyleRoles: {
+        dataPoint3D: { fillPaints: palette, fillPaintAuthored: true },
+      },
+      threeD: { rotationX: 15, rotationY: 20, perspective: 30 },
+      series: [series({ values: [1, 1, 1] })],
+    }), RECT, 1);
+    expect(new Set(rec.gradients.map(gradient => gradient.stops[0]?.color))).toEqual(new Set([
+      'rgba(170,0,0,1)',
+      'rgba(0,170,0,1)',
+      'rgba(0,0,170,1)',
+    ]));
+  });
+
+  it.each([
+    ['line', 1],
+    ['area', 2],
+  ] as const)('resolves linked dataPoint3D paint once for a 3-D %s series', (chartType, count) => {
+    const gradient = {
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 0,
+      stops: [
+        { position: 0, color: '112233' },
+        { position: 1, color: 'DDEEFF' },
+      ],
+    };
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType,
+      categories: ['A', 'B', 'C'],
+      valAxisMajorGridlines: false,
+      chartStyleRoles: {
+        dataPoint3D: {
+          fillPaints: [gradient],
+          fillPaintAuthored: true,
+          linePaints: [gradient],
+          linePaintAuthored: true,
+        },
+      },
+      threeD: { rotationX: 15, rotationY: 20, perspective: 30 },
+      series: [series({ values: [5, 15, 10], showMarker: false })],
+    }), RECT, 1);
+    expect(rec.gradients).toHaveLength(count);
+  });
+
+  it.each(['clusteredBar', 'pie'] as const)(
+    'keeps direct point structured/unresolved paint above linked dataPoint3D for %s',
+    chartType => {
+      const linked = {
+        fillType: 'gradient' as const, gradType: 'linear' as const, angle: 0,
+        stops: [{ position: 0, color: '112233' }, { position: 1, color: 'DDEEFF' }],
+      };
+      const direct = {
+        fillType: 'gradient' as const, gradType: 'linear' as const, angle: 90,
+        stops: [{ position: 0, color: 'AA0000' }, { position: 1, color: 'FFCCCC' }],
+      };
+      const render = (chartexStyle: NonNullable<ChartSeries['dataPointOverrides']>[number]['chartexStyle']) => {
+        const rec = recordingCtx();
+        renderChart(rec.ctx, baseModel({
+          chartType,
+          categories: ['A'],
+          valAxisMajorGridlines: false,
+          chartStyleRoles: {
+            dataPoint3D: {
+              fillPaints: [linked], fillPaintAuthored: true,
+              linePaints: [linked], linePaintAuthored: true,
+            },
+          },
+          threeD: { rotationX: 15, rotationY: 20, perspective: 30 },
+          series: [series({
+            values: [10],
+            dataPointOverrides: [{ idx: 0, chartexStyle }],
+          })],
+        }), RECT, 1);
+        return rec;
+      };
+
+      const authored = render({
+        fillPaints: [direct], fillPaintAuthored: true,
+        linePaints: [direct], linePaintAuthored: true,
+      });
+      expect(authored.gradients).toHaveLength(2);
+      expect(authored.gradients.every(gradient =>
+        gradient.stops[0]?.color === 'rgba(170,0,0,1)'
+      )).toBe(true);
+      const unresolved = render({ fillPaintAuthored: true, linePaintAuthored: true });
+      expect(unresolved.gradients).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    ['line', 1],
+    ['area', 2],
+  ] as const)(
+    'keeps direct series structured/unresolved paint above linked dataPoint3D for %s',
+    (chartType, expectedGradients) => {
+      const linked = {
+        fillType: 'gradient' as const, gradType: 'linear' as const, angle: 0,
+        stops: [{ position: 0, color: '112233' }, { position: 1, color: 'DDEEFF' }],
+      };
+      const direct = {
+        fillType: 'gradient' as const, gradType: 'linear' as const, angle: 90,
+        stops: [{ position: 0, color: 'AA0000' }, { position: 1, color: 'FFCCCC' }],
+      };
+      const render = (chartexStyle: ChartSeries['chartexStyle']) => {
+        const rec = recordingCtx();
+        renderChart(rec.ctx, baseModel({
+          chartType,
+          categories: ['A', 'B'],
+          valAxisMajorGridlines: false,
+          chartStyleRoles: {
+            dataPoint3D: {
+              fillPaints: [linked], fillPaintAuthored: true,
+              linePaints: [linked], linePaintAuthored: true,
+            },
+          },
+          threeD: { rotationX: 15, rotationY: 20, perspective: 30 },
+          series: [series({ values: [5, 10], showMarker: false, chartexStyle })],
+        }), RECT, 1);
+        return rec;
+      };
+
+      const authored = render({
+        fillPaints: [direct], fillPaintAuthored: true,
+        linePaints: [direct], linePaintAuthored: true,
+      });
+      expect(authored.gradients).toHaveLength(expectedGradients);
+      expect(authored.gradients.every(gradient =>
+        gradient.stops[0]?.color === 'rgba(170,0,0,1)'
+      )).toBe(true);
+      expect(render({ fillPaintAuthored: true, linePaintAuthored: true }).gradients)
+        .toHaveLength(0);
+    },
+  );
+
+  it('rejects oversized 3-D datum paint work before resolving any point recipe', () => {
+    const gradient = {
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 0,
+      stops: Array.from({ length: 4_096 }, (_, index) => ({
+        position: index / 4_095,
+        color: index % 2 ? '112233' : 'DDEEFF',
+      })),
+    };
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: Array.from({ length: 257 }, (_, index) => `C${index}`),
+      valAxisMajorGridlines: false,
+      chartStyleRoles: {
+        dataPoint3D: { fillPaints: [gradient], fillPaintAuthored: true },
+      },
+      threeD: { rotationX: 15, rotationY: 20, perspective: 30 },
+      series: [series({ values: new Array(257).fill(1) })],
+    }), RECT, 1);
+    expect(rec.gradients).toHaveLength(0);
+    expect(rec.texts.map(text => text.text)).toContain('(too many data points)');
+  });
+
+  it('rejects an oversized linked 3-D wall recipe before painting the chart', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A'],
+      chartStyleRoles: {
+        wall: {
+          fillPaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: Array.from({ length: 4_097 }, (_, index) => ({
+              position: index / 4_096, color: '112233',
+            })),
+          }],
+          fillPaintAuthored: true,
+        },
+      },
+      threeD: { rotationX: 15, rotationY: 20 },
+      series: [series({ values: [1] })],
+    }), RECT, 1);
+    expect(rec.gradients).toHaveLength(0);
+    expect(rec.texts.map(text => text.text)).toEqual(['(too many data points)']);
+  });
+
+  it('does not charge an oversized 3-D line recipe when the series has no geometry', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      chartStyleRoles: {
+        dataPoint3D: {
+          linePaints: [{
+            fillType: 'gradient', gradType: 'linear', angle: 0,
+            stops: Array.from({ length: 4_097 }, (_, index) => ({
+              position: index / 4_096, color: '112233',
+            })),
+          }],
+          linePaintAuthored: true,
+        },
+      },
+      threeD: { rotationX: 15, rotationY: 20 },
+      series: [series({ values: [null, Number.NaN], showMarker: false })],
+    }), RECT, 1);
+    expect(rec.gradients).toHaveLength(0);
+    expect(rec.texts.map(text => text.text)).not.toContain('(too many data points)');
+  });
+
+  it.each([
+    ['zero bar', 'clusteredBar', [0], null, null],
+    ['fully clipped bar', 'clusteredBar', [1], 2, 3],
+    ['fully clipped line', 'line', [1, 2], 3, 4],
+    ['line collapsed at the lower boundary', 'line', [1, 2], 2, 3],
+  ] as const)(
+    'does not charge unused structured paint for a %s',
+    (_name, chartType, values, valMin, valMax) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType,
+        categories: values.map((_, index) => `C${index}`),
+        valMin,
+        valMax,
+        chartStyleRoles: {
+          dataPoint3D: {
+            fillPaints: [{
+              fillType: 'gradient', gradType: 'linear', angle: 0,
+              stops: Array.from({ length: 4_097 }, (_, index) => ({
+                position: index / 4_096, color: '112233',
+              })),
+            }],
+            fillPaintAuthored: true,
+            linePaints: [{
+              fillType: 'gradient', gradType: 'linear', angle: 0,
+              stops: Array.from({ length: 4_097 }, (_, index) => ({
+                position: index / 4_096, color: '445566',
+              })),
+            }],
+            linePaintAuthored: true,
+          },
+        },
+        threeD: { rotationX: 15, rotationY: 20 },
+        series: [series({ values: [...values], showMarker: false })],
+      }), RECT, 1);
+      expect(rec.gradients).toHaveLength(0);
+      expect(rec.texts.map(text => text.text)).not.toContain('(too many data points)');
+    },
+  );
+
   it('paints authored floor/side/back CT_Surface rules and keeps standard depth substantial', () => {
     const rec = strokedPolylineCtx();
     renderChart(rec.ctx, baseModel({
@@ -2340,6 +2839,37 @@ describe('classic 3-D compatibility projection', () => {
     expect(materialFills(rec, '123456').length).toBeGreaterThan(0);
     expect(materialFills(rec, 'ABCDEF').length).toBeGreaterThan(0);
     expect(rec.paintEvents.some(event => event.kind === 'stroke' && event.strokeStyle === '#FFFFFF')).toBe(false);
+  });
+
+  it('uses authored pie3D hPercent as a thickness multiplier, not a scene aspect ratio', () => {
+    const render = (heightPercent: number, authored: boolean) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'pie',
+        threeD: {
+          rotationX: 0,
+          rotationY: 0,
+          perspective: 0,
+          heightPercent,
+          heightPercentAuthored: authored,
+        },
+        series: [series({ values: [1], color: '4472C4' })],
+      }), RECT, 1);
+      const paths = rec.filledPaths
+        .filter(path => isMaterialColor(path.fillStyle, '4472C4'))
+        .map(path => path.points.map(point => ({ x: point.x, y: point.y })));
+      const points = paths.flat();
+      return {
+        paths,
+        spanY: Math.max(...points.map(point => point.y)) - Math.min(...points.map(point => point.y)),
+      };
+    };
+
+    const omitted = render(50, false);
+    const half = render(50, true);
+    const full = render(100, true);
+    expect(omitted.spanY).toBeCloseTo(full.spanY, 6);
+    expect(half.spanY).toBeLessThan(full.spanY);
   });
 
   it('uses the radial-family zero-yaw default when 3-D pie rotY is omitted', () => {
@@ -14153,6 +14683,157 @@ describe('CH13 — stock chart (high/low/close)', () => {
 });
 
 describe('surface contour charts', () => {
+  it('renders surface3D as the same bounded source-grid mesh without flattening it to another family', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'surface3D',
+      categories: ['X1', 'X2'],
+      valMin: 0,
+      valMax: 4,
+      valAxisMajorUnit: 1,
+      surfaceWireframe: false,
+      threeD: { rotationX: 30, rotationY: 20, perspective: 30 },
+      series: [
+        series({ name: 'Y1', values: [1, 2] }),
+        series({ name: 'Y2', values: [3, 4] }),
+      ],
+    }), RECT, 1);
+    expect(rec.texts.map(text => text.text)).not.toContain('Unsupported chart');
+    expect(rec.filledPaths.length).toBeGreaterThan(0);
+  });
+
+  it('resolves Surface band paint once with direct structured/unresolved/no-fill precedence', () => {
+    const rec = recordingCtx();
+    const gradient = {
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 0,
+      stops: [
+        { position: 0, color: '112233' },
+        { position: 1, color: 'DDEEFF' },
+      ],
+    };
+    const directGradient = {
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 90,
+      stops: [
+        { position: 0, color: 'AA0000' },
+        { position: 1, color: 'FFCCCC' },
+      ],
+    };
+    renderChart(rec.ctx, baseModel({
+      chartType: 'surface',
+      categories: ['X1', 'X2'],
+      valMin: 0,
+      valMax: 40,
+      valAxisMajorUnit: 10,
+      surfaceWireframe: false,
+      chartStyleRoles: {
+        dataPoint3D: { fillPaints: [gradient], fillPaintAuthored: true, lineHidden: true },
+      },
+      surfaceBandFormats: [
+        {
+          idx: 0,
+          style: { fillHidden: true, fillPaintAuthored: true },
+          fillHidden: true,
+        },
+        { idx: 1, style: { fillPaintAuthored: true } },
+        {
+          idx: 2,
+          style: { fillPaints: [directGradient], fillPaintAuthored: true },
+        },
+      ],
+      series: [
+        series({ name: 'Y1', values: [5, 35] }),
+        series({ name: 'Y2', values: [35, 5] }),
+      ],
+    }), RECT, 1);
+
+    // Band 0 is direct noFill, band 1 is authored-but-unresolved, band 2 uses
+    // its direct recipe, and band 3 uses the linked role. Each visible recipe
+    // is registered once despite spanning several clipped polygons.
+    expect(rec.gradients).toHaveLength(2);
+    expect(rec.gradients.map(item => item.stops[0]?.color)).toEqual([
+      'rgba(170,0,0,1)',
+      'rgba(17,34,51,1)',
+    ]);
+    expect(rec.filledPaths.length).toBeGreaterThan(1);
+  });
+
+  it('paints Surface3D wall roles and keeps direct unresolved/no-fill authoritative', () => {
+    const rec = recordingCtx();
+    const gradient = {
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 90,
+      stops: [
+        { position: 0, color: '334455' },
+        { position: 1, color: 'CCDDEE' },
+      ],
+    };
+    renderChart(rec.ctx, baseModel({
+      chartType: 'surface3D',
+      categories: ['X1', 'X2'],
+      valMin: 0,
+      valMax: 10,
+      valAxisMajorUnit: 10,
+      surfaceWireframe: false,
+      chartStyleRoles: {
+        floor: { fillPaints: [gradient], fillPaintAuthored: true },
+        wall: { fillPaints: [gradient], fillPaintAuthored: true },
+      },
+      threeD: {
+        rotationX: 30,
+        rotationY: 20,
+        perspective: 30,
+        floor: { fillHidden: true },
+        backWall: { style: { fillPaintAuthored: true } },
+      },
+      series: [
+        series({ name: 'Y1', values: [2, 4] }),
+        series({ name: 'Y2', values: [6, 8] }),
+      ],
+    }), RECT, 1);
+
+    // floor=noFill and authored-but-unresolved backWall both suppress linked
+    // paint. Only sideWall consumes the linked wall gradient.
+    expect(rec.gradients).toHaveLength(1);
+  });
+
+  it('rejects an oversized linked Surface recipe before resolving any paint', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'surface',
+      categories: ['X1', 'X2'],
+      valMin: 0,
+      valMax: 10,
+      valAxisMajorUnit: 10,
+      surfaceWireframe: false,
+      chartStyleRoles: {
+        dataPoint3D: {
+          fillPaints: [{
+            fillType: 'gradient',
+            gradType: 'linear',
+            angle: 0,
+            stops: Array.from({ length: 4_097 }, (_, index) => ({
+              position: index / 4_096,
+              color: '112233',
+            })),
+          }],
+          fillPaintAuthored: true,
+        },
+      },
+      series: [
+        series({ name: 'Y1', values: [2, 4] }),
+        series({ name: 'Y2', values: [6, 8] }),
+      ],
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(0);
+    expect(rec.filledPaths).toHaveLength(0);
+  });
+
   it('centres category points but places Surface series on axis endpoints', () => {
     const rec = strokedPolylineCtx();
     renderChart(rec.ctx, baseModel({

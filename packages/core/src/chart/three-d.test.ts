@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   fitChartThreeDProjectionToPoints,
+  pieThreeDThicknessMultiplier,
   planChartThreeDProjection,
   planThreeDBarClusterSlot,
   threeDToMaxScale,
@@ -18,6 +19,22 @@ import {
 } from './three-d-renderer.js';
 
 const PLOT = { x: 20, y: 10, w: 360, h: 180 };
+
+describe('pieThreeDThicknessMultiplier', () => {
+  it('distinguishes omitted hPercent from an authored value and its bare 100% default', () => {
+    expect(pieThreeDThicknessMultiplier({ heightPercent: 50, heightPercentAuthored: false }))
+      .toBe(1);
+    expect(pieThreeDThicknessMultiplier({ heightPercent: 50, heightPercentAuthored: true }))
+      .toBe(0.5);
+    expect(pieThreeDThicknessMultiplier({ heightPercent: 100, heightPercentAuthored: true }))
+      .toBe(1);
+    expect(pieThreeDThicknessMultiplier({ heightPercent: 200 })).toBe(2);
+    expect(pieThreeDThicknessMultiplier({ heightPercent: 0, heightPercentAuthored: true }))
+      .toBe(1);
+    expect(pieThreeDThicknessMultiplier({ heightPercent: 501, heightPercentAuthored: true }))
+      .toBe(1);
+  });
+});
 
 describe('threeDMeshOutlineWidthPx', () => {
   it('matches the observed one-pixel 1pt Excel mesh edge at 100% zoom', () => {
