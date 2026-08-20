@@ -41,6 +41,7 @@ import {
   seriesMarkerFillPaint,
   seriesLegendMarkerIsVisible,
   seriesHasMarkerDetail,
+  visibleBubbleSize,
 } from './marker-style.js';
 import {
   AXIS_OUTER_TEXT_MARGIN_PT,
@@ -5391,6 +5392,7 @@ function chartStyleRoleSeriesAxis(chart: ChartModel): ChartModel {
 }
 
 function isClassicMarkerSeries(chart: ChartModel, series: ChartSeries): boolean {
+  if (chart.chartType === 'bubble') return false;
   const family = series.seriesType ?? chart.chartType;
   return family === 'line'
     || family === 'stackedLine'
@@ -10734,13 +10736,6 @@ function bubbleSizeMagnitude(chart: ChartModel, value: number): number {
   return chart.bubbleSizeRepresents === 'w' ? value : Math.sqrt(value);
 }
 
-/** Apply CT_BubbleChart.showNegBubbles before chart-wide normalization. */
-function visibleBubbleSize(chart: ChartModel, value: number | null | undefined): number | null {
-  if (value == null || !Number.isFinite(value) || value === 0) return null;
-  if (value < 0 && chart.showNegativeBubbles !== true) return null;
-  return Math.abs(value);
-}
-
 type ScatterSeriesLayer = {
   series: ChartSeries;
   seriesIndex: number;
@@ -10756,6 +10751,149 @@ function scatterPointFill(
   fallbackColor: string,
 ): string {
   return markerFillColorFor(series, point, index, fallbackColor);
+}
+
+/** Resolve the classic bubble shape fill without collapsing DrawingML
+ * provenance into the marker fallback. CT_DPt shape paint wins over CT_Ser
+ * shape paint, which wins over the linked dataPoint role. */
+function bubblePointFill(
+  chart: ChartModel,
+  series: ChartSeries,
+  point: NonNullable<ChartSeries['dataPointOverrides']>[number] | undefined,
+  index: number,
+  fallbackColor: string,
+): { color: string; paint: Fill | null | undefined } {
+  const directPoint = chartExStylePaintDecision(
+    chart, point?.chartexStyle, index, series.values.length,
+  );
+  if (directPoint !== undefined) {
+    return {
+      color: directPoint?.fillType === 'solid' ? directPoint.color : fallbackColor,
+      paint: directPoint,
+    };
+  }
+  if (point?.fillHidden === true) return { color: '00000000', paint: null };
+  if (point?.color != null) return { color: point.color, paint: undefined };
+  const pointColor = series.dataPointColors?.[index];
+  if (pointColor != null) return { color: pointColor, paint: undefined };
+
+  const directSeries = chartExStylePaintDecision(
+    chart, series.chartexStyle, index, series.values.length,
+  );
+  if (directSeries !== undefined) {
+    return {
+      color: directSeries?.fillType === 'solid' ? directSeries.color : fallbackColor,
+      paint: directSeries,
+    };
+  }
+  if (series.color != null) return { color: series.color, paint: undefined };
+  const linkedPoint = chartExStylePaintDecision(
+    chart, chart.chartStyleRoles?.dataPoint, index, series.values.length,
+  );
+  if (linkedPoint !== undefined) {
+    return {
+      color: linkedPoint?.fillType === 'solid' ? linkedPoint.color : fallbackColor,
+      paint: linkedPoint,
+    };
+  }
+  return {
+    color: scatterPointFill(series, point, index, fallbackColor),
+    paint: markerFillPaintFor(series, point, index),
+  };
+}
+
+function bubblePointLine(
+  chart: ChartModel,
+  series: ChartSeries,
+  point: NonNullable<ChartSeries['dataPointOverrides']>[number] | undefined,
+  index: number,
+): {
+  color: string | null;
+  paint: ChartModel['plotAreaLineFill'] | null | undefined;
+  widthEmu: number | null | undefined;
+  dash: string | null | undefined;
+  customDash: ChartModel['plotAreaLineCustomDash'];
+  cap: string | null | undefined;
+  join: string | null | undefined;
+} {
+  const pointStyle = point?.chartexStyle;
+  const seriesStyle = series.chartexStyle;
+  const linkedStyle = chart.chartStyleRoles?.dataPoint;
+  const linkedGeometry = linkedStyle?.lineNoStyle === true ? undefined : linkedStyle;
+  const dashLayers = [pointStyle, seriesStyle, linkedGeometry];
+  let dash: string | null | undefined = point?.lineDash;
+  let customDash: ChartModel['plotAreaLineCustomDash'];
+  if (dash == null) {
+    for (const layer of dashLayers) {
+      if (layer?.lineDash != null || layer?.lineCustomDash != null
+        || layer?.lineDashAuthored === true) {
+        dash = layer.lineDash;
+        customDash = layer.lineCustomDash ?? undefined;
+        break;
+      }
+    }
+  }
+  const geometry = {
+    widthEmu: point?.lineWidthEmu
+      ?? pointStyle?.lineWidthEmu
+      ?? series.lineWidthEmu
+      ?? seriesStyle?.lineWidthEmu
+      ?? linkedGeometry?.lineWidthEmu
+      ?? point?.markerLineWidthEmu
+      ?? series.markerLineWidthEmu,
+    dash,
+    customDash,
+    cap: pointStyle?.lineCap ?? seriesStyle?.lineCap ?? linkedGeometry?.lineCap,
+    join: pointStyle?.lineJoin ?? seriesStyle?.lineJoin ?? linkedGeometry?.lineJoin,
+  };
+  const pointPaint = chartExStyleLinePaintDecision(
+    chart, pointStyle, index, series.values.length,
+  );
+  if (pointPaint !== undefined) {
+    return {
+      color: pointPaint?.fillType === 'solid' ? pointPaint.color : point?.lineColor ?? null,
+      paint: pointPaint,
+      ...geometry,
+    };
+  }
+  if (point?.lineHidden === true) {
+    return { color: null, paint: null, ...geometry };
+  }
+  if (point?.lineColor != null) {
+    return { color: point.lineColor, paint: undefined, ...geometry };
+  }
+
+  const seriesPaint = chartExStyleLinePaintDecision(
+    chart, seriesStyle, index, series.values.length,
+  );
+  if (seriesPaint !== undefined) {
+    return {
+      color: seriesPaint?.fillType === 'solid' ? seriesPaint.color : series.lineColor ?? null,
+      paint: seriesPaint,
+      ...geometry,
+    };
+  }
+  if (series.lineHidden === true) {
+    return { color: null, paint: null, ...geometry };
+  }
+  if (series.lineColor != null) {
+    return { color: series.lineColor, paint: undefined, ...geometry };
+  }
+  const linkedPoint = chartExStyleLinePaintDecision(
+    chart, linkedStyle, index, series.values.length,
+  );
+  if (linkedPoint !== undefined) {
+    return {
+      color: linkedPoint?.fillType === 'solid' ? linkedPoint.color : null,
+      paint: linkedPoint,
+      ...geometry,
+    };
+  }
+  return {
+    color: point?.markerLine ?? series.markerLine ?? series.lineColor ?? null,
+    paint: undefined,
+    ...geometry,
+  };
 }
 
 function makeScatterSeriesLayer(
@@ -10916,20 +11054,31 @@ function drawScatterSeriesLayer(
           if (bubbleSize == null) continue;
           sizePt = (bubbleSizeMagnitude(chart, bubbleSize) * bubbleScale) / ptToPx;
         }
-        const fill = scatterPointFill(s, dpt, ci, fallbackColor);
+        const bubbleFill = isBubble
+          ? bubblePointFill(chart, s, dpt, ci, fallbackColor)
+          : null;
+        const fill = bubbleFill?.color ?? scatterPointFill(s, dpt, ci, fallbackColor);
         // Bubble geometry is the series shape itself, so its outline comes from
         // `<c:ser><c:spPr><a:ln>` rather than a `<c:marker>` block. Ordinary
         // scatter markers continue to use markerLine only.
-        const line = dpt?.markerLine ?? s.markerLine ?? (isBubble ? s.lineColor : null) ?? null;
+        const bubbleLine = isBubble ? bubblePointLine(chart, s, dpt, ci) : null;
+        const line = isBubble
+          ? bubbleLine!.color
+          : dpt?.markerLine ?? s.markerLine ?? null;
         const markerLineWidthEmu = dpt?.markerLineWidthEmu ?? s.markerLineWidthEmu;
-        const bubbleLineWidthEmu = dpt?.lineWidthEmu ?? s.lineWidthEmu;
+        const bubbleLineWidthEmu = bubbleLine?.widthEmu;
         const lineWidthEmu = isBubble ? bubbleLineWidthEmu : markerLineWidthEmu;
         const lineWidthPx = lineWidthEmu != null
           ? axisLineWidthPx(lineWidthEmu, ptToPx)
           : undefined;
         drawMarker(
           ctx, toX(xv), toY(yv), symbol, sizePt, fill, line, ptToPx, lineWidthPx,
-          markerFillPaintFor(s, dpt, ci), shapeRotationDeg,
+          isBubble ? bubbleFill!.paint : markerFillPaintFor(s, dpt, ci), shapeRotationDeg,
+          isBubble ? bubbleLine!.paint : undefined,
+          isBubble ? bubbleLine!.dash : undefined,
+          isBubble ? bubbleLine!.customDash : undefined,
+          isBubble ? bubbleLine!.cap : undefined,
+          isBubble ? bubbleLine!.join : undefined,
         );
       }
     }
@@ -11507,6 +11656,12 @@ function drawMarker(
   /** undefined uses `fill`; null is authored noFill. */
   fillPaint: Fill | null | undefined = undefined,
   shapeRotationDeg = 0,
+  /** undefined uses `line`; null is authored line noFill. */
+  linePaint: ChartModel['plotAreaLineFill'] | null | undefined = undefined,
+  lineDash: string | null | undefined = undefined,
+  lineCustomDash: ChartModel['plotAreaLineCustomDash'] = undefined,
+  lineCap: string | null | undefined = undefined,
+  lineJoin: string | null | undefined = undefined,
 ): void {
   const sizePx = Math.max(2, sizePt * ptToPx);
   const half = sizePx / 2;
@@ -11520,9 +11675,20 @@ function drawMarker(
         : resolveFill(
             fillPaint, ctx, cx - half, cy - half, sizePx, sizePx, shapeRotationDeg,
           ) ?? 'rgba(0,0,0,0)');
-  if (lineCss) {
-    ctx.strokeStyle = lineCss;
+  const resolvedLineStyle = linePaint === undefined
+    ? lineCss
+    : linePaint == null
+      ? null
+      : resolveFill(
+          linePaint, ctx, cx - half, cy - half, sizePx, sizePx, shapeRotationDeg,
+        );
+  const hasLine = resolvedLineStyle != null;
+  if (resolvedLineStyle) {
+    ctx.strokeStyle = resolvedLineStyle;
     ctx.lineWidth = lineWidthPx;
+    ctx.setLineDash(dashPatternForLine(lineCustomDash, lineDash, lineWidthPx));
+    ctx.lineCap = lineCap === 'rnd' ? 'round' : lineCap === 'sq' ? 'square' : 'butt';
+    ctx.lineJoin = lineJoin === 'round' || lineJoin === 'bevel' ? lineJoin : 'miter';
   }
   const imageFill = fillPaint?.fillType === 'image' ? fillPaint : undefined;
   const fillCurrentPath = () => {
@@ -11546,7 +11712,7 @@ function drawMarker(
       } else if (fillPaint !== null) {
         ctx.fillRect(cx - half, cy - half, sizePx, sizePx);
       }
-      if (line) ctx.strokeRect(cx - half, cy - half, sizePx, sizePx);
+      if (hasLine) ctx.strokeRect(cx - half, cy - half, sizePx, sizePx);
       break;
     }
     case 'diamond': {
@@ -11557,7 +11723,7 @@ function drawMarker(
       ctx.lineTo(cx - half, cy);
       ctx.closePath();
       fillCurrentPath();
-      if (line) ctx.stroke();
+      if (hasLine) ctx.stroke();
       break;
     }
     case 'triangle': {
@@ -11567,11 +11733,11 @@ function drawMarker(
       ctx.lineTo(cx - half, cy + half);
       ctx.closePath();
       fillCurrentPath();
-      if (line) ctx.stroke();
+      if (hasLine) ctx.stroke();
       break;
     }
     case 'x': {
-      ctx.strokeStyle = lineCss ?? ctx.fillStyle;
+      ctx.strokeStyle = resolvedLineStyle ?? ctx.fillStyle;
       ctx.lineWidth = Math.max(1, sizePx * 0.18);
       ctx.beginPath();
       ctx.moveTo(cx - half, cy - half); ctx.lineTo(cx + half, cy + half);
@@ -11580,7 +11746,7 @@ function drawMarker(
       break;
     }
     case 'plus': {
-      ctx.strokeStyle = lineCss ?? ctx.fillStyle;
+      ctx.strokeStyle = resolvedLineStyle ?? ctx.fillStyle;
       ctx.lineWidth = Math.max(1, sizePx * 0.18);
       ctx.beginPath();
       ctx.moveTo(cx - half, cy); ctx.lineTo(cx + half, cy);
@@ -11600,7 +11766,7 @@ function drawMarker(
       }
       ctx.closePath();
       fillCurrentPath();
-      if (line) ctx.stroke();
+      if (hasLine) ctx.stroke();
       break;
     }
     case 'dot': {
@@ -11608,7 +11774,7 @@ function drawMarker(
       ctx.beginPath();
       ctx.ellipse(cx, cy, sizePx * 0.25, sizePx * 0.1, 0, 0, Math.PI * 2);
       fillCurrentPath();
-      if (line) ctx.stroke();
+      if (hasLine) ctx.stroke();
       break;
     }
     case 'dash': {
@@ -11619,7 +11785,7 @@ function drawMarker(
       } else if (fillPaint !== null) {
         ctx.fillRect(cx - half, cy - dh / 2, sizePx, dh);
       }
-      if (line) ctx.strokeRect(cx - half, cy - dh / 2, sizePx, dh);
+      if (hasLine) ctx.strokeRect(cx - half, cy - dh / 2, sizePx, dh);
       break;
     }
     case 'picture': {
@@ -11630,7 +11796,7 @@ function drawMarker(
       }
       // Fill and line are independent CT_ShapeProperties components. An
       // authored noFill/unresolved blip must not suppress the picture outline.
-      if (line) ctx.strokeRect(cx - half, cy - half, sizePx, sizePx);
+      if (hasLine) ctx.strokeRect(cx - half, cy - half, sizePx, sizePx);
       ctx.restore();
       return;
     }
@@ -11639,7 +11805,7 @@ function drawMarker(
       ctx.beginPath();
       ctx.arc(cx, cy, half, 0, Math.PI * 2);
       fillCurrentPath();
-      if (line) ctx.stroke();
+      if (hasLine) ctx.stroke();
       break;
     }
   }
@@ -12635,6 +12801,24 @@ function chartExStyleLinePaint(
   return paints[(style?.lineColorIndex ?? index) % paints.length] ?? null;
 }
 
+/** Line-paint counterpart of chartExStylePaintDecision. `undefined` means the
+ * layer did not author a line paint, while `null` is an authored noFill or an
+ * authored-but-unresolved paint that must suppress lower-precedence color. */
+function chartExStyleLinePaintDecision(
+  chart: ChartModel,
+  style: ChartExStyle | null | undefined,
+  index: number,
+  count: number,
+): ChartModel['plotAreaLineFill'] | null | undefined {
+  if (!style) return undefined;
+  if (style.lineHidden) return style.lineNoStyle ? undefined : null;
+  const paint = chartExStyleLinePaint(style, index);
+  if (paint) return paint;
+  const color = chartExStyleColor(chart, style, 'line', index, count);
+  if (color) return { fillType: 'solid', color };
+  return style.linePaintAuthored === true ? null : undefined;
+}
+
 /** Resolve one ChartEx style paint layer. `undefined` means this layer supplied
  * no paint, while `null` records an explicit no-fill for consumers whose own
  * shape is governed by that layer. */
@@ -12959,7 +13143,7 @@ export function classicMarkerPaintWorkCount(
   const hasBoxMarkers = chart.chartexBox != null;
   if (!hasClassicMarkers && !hasBoxMarkers) return null;
   const scatterHasNumericX = chart.series.some(series => {
-    const family = series.seriesType ?? chart.chartType;
+    const family = series.seriesType ?? (chart.chartType === 'bubble' ? 'scatter' : chart.chartType);
     if (family !== 'scatter') return false;
     return (series.categories ?? chart.categories).some(category =>
       Number.isFinite(Number.parseFloat(category))
@@ -13000,7 +13184,7 @@ export function classicMarkerPaintWorkCount(
   };
   if (hasClassicMarkers) for (let seriesIndex = 0; seriesIndex < chart.series.length; seriesIndex++) {
     const series = chart.series[seriesIndex];
-    const family = series.seriesType ?? chart.chartType;
+    const family = series.seriesType ?? (chart.chartType === 'bubble' ? 'scatter' : chart.chartType);
     const markerFamily = family === 'line' || family === 'stackedLine'
       || family === 'stackedLinePct' || family === 'area'
       || family === 'stackedArea' || family === 'stackedAreaPct'
@@ -13033,10 +13217,18 @@ export function classicMarkerPaintWorkCount(
       if (!classicMarkerPointIsPainted(
         chart, series, family, index, scatterHasNumericX,
       )) continue;
+      if (chart.chartType === 'bubble'
+        && (bubbleScale <= 0
+          || visibleBubbleSize(chart, series.bubbleSizes?.[index]) == null)) continue;
       const point = overrides.get(index);
       const symbol = effectiveMarkerSymbol(series, point, 'circle', seriesVisible);
       if (!markerSymbolConsumesFill(symbol)) continue;
-      const paint = markerFillPaintFor(series, point, index);
+      const bubblePaint = chart.chartType === 'bubble'
+        ? bubblePointFill(chart, series, point, index, chartColor(seriesIndex, series))
+        : null;
+      const paint = chart.chartType === 'bubble'
+        ? bubblePaint!.paint
+        : markerFillPaintFor(series, point, index);
       let sizePx = Math.max(2, (point?.markerSize ?? series.markerSize ?? 5) * ptToPx);
       if (family === 'scatter' && chart.chartType === 'bubble') {
         const size = visibleBubbleSize(chart, series.bubbleSizes?.[index]);
@@ -13046,6 +13238,12 @@ export function classicMarkerPaintWorkCount(
         sizePx = Math.max(4 * ptToPx, Math.min(chartRect.w, chartRect.h) * 0.025);
       }
       if (!chargePaint(paint, 1, sizePx)) return MAX_CANVAS_MARKER_PAINT_COMPONENTS + 1;
+      if (chart.chartType === 'bubble') {
+        const linePaint = bubblePointLine(chart, series, point, index).paint;
+        if (!chargePaint(linePaint, 1, sizePx)) {
+          return MAX_CANVAS_MARKER_PAINT_COMPONENTS + 1;
+        }
+      }
     }
 
     const seriesKeySymbol = series.markerSymbol ?? (family === 'stock' ? 'none' : 'circle');

@@ -36,6 +36,16 @@ export function pointHasMarkerDetail(point: ChartDataPointOverride | undefined):
   );
 }
 
+/** Apply CT_BubbleChart.showNegBubbles before bubble paint/prefetch/work. */
+export function visibleBubbleSize(
+  chart: Pick<ChartModel, 'showNegativeBubbles'>,
+  value: number | null | undefined,
+): number | null {
+  if (value == null || !Number.isFinite(value) || value === 0) return null;
+  if (value < 0 && chart.showNegativeBubbles !== true) return null;
+  return Math.abs(value);
+}
+
 /** Open stroke-only symbols do not consume a fill recipe. */
 export function markerSymbolConsumesFill(symbol: string | null | undefined): boolean {
   return symbol !== 'none' && symbol !== 'x' && symbol !== 'plus';

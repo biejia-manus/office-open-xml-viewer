@@ -212,6 +212,7 @@ export interface ChartDataPointOverride {
     idx: number;
     color?: string;
     fillHidden?: boolean;
+    chartexStyle?: ChartExElementStyle | null;
     lineColor?: string;
     lineWidthEmu?: number;
     lineDash?: string;
@@ -223,6 +224,7 @@ export interface ChartDataPointOverride {
     markerFillPaintAuthored?: boolean | null;
     markerLine?: string;
     markerLineWidthEmu?: number;
+    bubble3D?: boolean | null;
     explosion?: number;
 }
 export interface ChartDataTable {
@@ -728,6 +730,8 @@ export interface ChartSeries {
     seriesDataLabels?: ChartSeriesDataLabels | null;
     errBars?: ChartErrBars[] | null;
     bubbleSizes?: (number | null)[] | null;
+    bubble3DGroupDefault?: boolean | null;
+    bubble3D?: boolean | null;
     smooth?: boolean | null;
     trendLines?: ChartTrendline[] | null;
     lineHidden?: boolean | null;

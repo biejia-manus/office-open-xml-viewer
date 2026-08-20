@@ -15,6 +15,7 @@ import {
   markerSymbolConsumesFill,
   seriesHasMarkerDetail,
   seriesLegendMarkerIsVisible,
+  visibleBubbleSize,
 } from './marker-style.js';
 import {
   MAX_CANVAS_CHART_POINTS,
@@ -218,7 +219,7 @@ function collectChartMarkerImageFillResult(chart: ChartModel): ChartMarkerImageF
       : undefined;
   };
   const scatterHasNumericX = chart.series.some(series => {
-    const family = series.seriesType ?? chart.chartType;
+    const family = series.seriesType ?? (chart.chartType === 'bubble' ? 'scatter' : chart.chartType);
     return family === 'scatter' && (series.categories ?? chart.categories).some(category =>
       Number.isFinite(Number.parseFloat(category))
     );
@@ -230,7 +231,7 @@ function collectChartMarkerImageFillResult(chart: ChartModel): ChartMarkerImageF
     || chart.series.some(series => series.values.length > 0);
   for (let seriesIndex = 0; seriesIndex < chart.series.length; seriesIndex++) {
     const series = chart.series[seriesIndex];
-    const family = series.seriesType ?? chart.chartType;
+    const family = series.seriesType ?? (chart.chartType === 'bubble' ? 'scatter' : chart.chartType);
     const markerFamily = family === 'line' || family === 'stackedLine'
       || family === 'stackedLinePct' || family === 'area'
       || family === 'stackedArea' || family === 'stackedAreaPct'
@@ -261,8 +262,9 @@ function collectChartMarkerImageFillResult(chart: ChartModel): ChartMarkerImageF
       || labelKeyVisible);
     const seriesKeySymbol = series.markerSymbol ?? (family === 'stock' ? 'none' : 'circle');
     if (seriesKeyVisible && markerSymbolConsumesFill(seriesKeySymbol)) {
-      add(series.markerFillPaint);
-      if (series.markerFillPaint === undefined && series.markerFill == null
+      if (chart.chartType !== 'bubble') add(series.markerFillPaint);
+      if (chart.chartType !== 'bubble'
+        && series.markerFillPaint === undefined && series.markerFill == null
         && series.markerFillPaintAuthored !== true) {
         add(selectedStylePaint(linkedMarkerStyle, seriesIndex));
       }
@@ -276,6 +278,20 @@ function collectChartMarkerImageFillResult(chart: ChartModel): ChartMarkerImageF
       const point = overrides.get(index);
       const symbol = effectiveMarkerSymbol(series, point, 'circle', seriesVisible);
       if (!markerSymbolConsumesFill(symbol)) continue;
+      if (chart.chartType === 'bubble') {
+        if ((chart.bubbleScale ?? 100) <= 0
+          || visibleBubbleSize(chart, series.bubbleSizes?.[index]) == null) continue;
+        const pointShape = styleImageDecision(point?.chartexStyle, index);
+        if (pointShape) add(pointShape);
+        if (pointShape !== undefined || point?.fillHidden === true || point?.color != null) continue;
+        if (series.dataPointColors?.[index] != null) continue;
+        const seriesShape = styleImageDecision(series.chartexStyle, index);
+        if (seriesShape) add(seriesShape);
+        if (seriesShape !== undefined || series.color != null) continue;
+        const linkedShape = styleImageDecision(chart.chartStyleRoles?.dataPoint, index);
+        if (linkedShape) add(linkedShape);
+        continue;
+      }
       const paint = markerFillPaintFor(series, point, index);
       add(paint);
       if (paint === undefined && point?.markerFill == null && point?.color == null

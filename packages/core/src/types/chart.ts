@@ -209,6 +209,11 @@ export interface ChartSeries {
    * series.
    */
   bubbleSizes?: (number | null)[] | null;
+  /** `<c:bubbleChart><c:bubble3D>` copied from this series' owning group.
+   * Kept per series so multiple bubble groups cannot leak defaults. */
+  bubble3DGroupDefault?: boolean | null;
+  /** Direct `<c:bubbleChart><c:ser><c:bubble3D>` override. */
+  bubble3D?: boolean | null;
   /**
    * `<c:ser><c:smooth val>` (ECMA-376 §21.2.2.194) — line/area series flag
    * requesting a smoothed (spline) curve through the points instead of straight
@@ -317,6 +322,10 @@ export interface ChartDataPointOverride {
   color?: string;
   /** Direct point `<a:noFill/>`; suppresses series/style fill fallback. */
   fillHidden?: boolean;
+  /** Direct `<c:dPt><c:spPr>` DrawingML shape paint. Bubble charts consume
+   * this carrier for gradient, pattern, picture, and unresolved fill
+   * provenance; other classic families retain their established point model. */
+  chartexStyle?: ChartExElementStyle | null;
   /** Direct point outline color (no `#`). */
   lineColor?: string;
   /** Direct point outline width in EMU. */
@@ -336,6 +345,8 @@ export interface ChartDataPointOverride {
   markerLine?: string;
   /** Direct point marker-outline width in EMU. */
   markerLineWidthEmu?: number;
+  /** Direct `<c:dPt><c:bubble3D>` override. Only bubble charts consume it. */
+  bubble3D?: boolean | null;
   /**
    * `<c:dPt><c:explosion val>` (ECMA-376 §21.2.2.61) — the amount this
    * pie/doughnut slice is moved out from the center. The schema type is

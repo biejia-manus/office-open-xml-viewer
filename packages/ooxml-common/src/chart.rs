@@ -1378,6 +1378,13 @@ pub struct ChartSeries {
     pub err_bars: Option<Vec<ChartErrBars>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bubble_sizes: Option<Vec<Option<f64>>>,
+    /// Effective default authored on the owning `<c:bubbleChart>` group.
+    /// Kept per series because one plot area can contain multiple bubble groups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bubble_3d_group_default: Option<bool>,
+    /// Direct `<c:bubbleChart><c:ser><c:bubble3D>` override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bubble_3d: Option<bool>,
     /// `<c:ser><c:smooth val>` (ECMA-376 §21.2.2.194) — line/area series flag
     /// requesting a smoothed (spline) curve. `None` (omitted) = straight
     /// polyline (the default); only serialized when the file sets it.
@@ -1496,6 +1503,10 @@ pub struct ChartDataPointOverride {
     pub color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_hidden: Option<bool>,
+    /// Direct classic `<c:dPt><c:spPr>` shape paint. Bubble charts consume the
+    /// shared bounded carrier; other families keep their established fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chartex_style: Option<ChartExElementStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1518,6 +1529,10 @@ pub struct ChartDataPointOverride {
     pub marker_line: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marker_line_width_emu: Option<u32>,
+    /// Direct `<c:dPt><c:bubble3D>` override. CT_DPt is shared across classic
+    /// chart families; only the bubble renderer consumes this effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bubble_3d: Option<bool>,
     /// `<c:dPt><c:explosion val>` (§21.2.2.61) — pie/doughnut slice pull-out
     /// amount. The schema type is `CT_UnsignedInt` (unbounded `xsd:unsignedInt`);
     /// the spec text itself doesn't define a 0–100 range or "percentage" unit,
@@ -4128,6 +4143,18 @@ fn bool_child(parent: Node, name: &str) -> Option<bool> {
     })
 }
 
+/// Read one `CT_Boolean` child without accepting producer-specific lexical
+/// aliases. ECMA-376 defines xsd:boolean and an implied `true` value when the
+/// element is present without `val`. A present invalid value remains authored
+/// but fails closed to `false` instead of reviving a less-specific `true`.
+fn strict_boolean_child(parent: Node, name: &str) -> Option<bool> {
+    child(parent, name).map(|node| {
+        node.attribute("val")
+            .map(|value| crate::drawing::parse_xsd_bool(value).unwrap_or(false))
+            .unwrap_or(true)
+    })
+}
+
 /// `<c:ser><c:trendline>` (ECMA-376 §21.2.2.211, `CT_Trendline`) — every
 /// trendline declared on `ser_node` (0..N). Each carries a required
 /// `<c:trendlineType>` plus optional order/period/forward/backward/intercept,
@@ -5977,6 +6004,7 @@ fn parse_chartex_data_point_overrides(
                 idx,
                 color,
                 fill_hidden,
+                chartex_style: None,
                 line_color,
                 line_width_emu,
                 line_dash,
@@ -5988,6 +6016,7 @@ fn parse_chartex_data_point_overrides(
                 marker_fill_paint_authored: None,
                 marker_line: None,
                 marker_line_width_emu: None,
+                bubble_3d: None,
                 explosion: None,
             })
         })
@@ -6754,6 +6783,8 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
         data_label_colors,
         categories: None,
         bubble_sizes: None,
+        bubble_3d_group_default: None,
+        bubble_3d: None,
         val_format_code: source_number_format,
         cat_format_code: None,
         cat_format_builtin_id: None,
@@ -8126,6 +8157,7 @@ pub fn parse_data_point_overrides_with_images(
         ser_node,
         resolver,
         image_resolver,
+        false,
         &mut paint_budget,
         &mut paint_budget_exceeded,
     )
@@ -8135,6 +8167,7 @@ fn parse_data_point_overrides_with_budget(
     ser_node: Node,
     resolver: &dyn ColorResolver,
     image_resolver: &dyn ChartImageResolver,
+    include_shape_style: bool,
     paint_budget: &mut usize,
     paint_budget_exceeded: &mut bool,
 ) -> Vec<ChartDataPointOverride> {
@@ -8149,6 +8182,46 @@ fn parse_data_point_overrides_with_budget(
             .unwrap_or(0);
         let (color, fill_hidden, line_color, line_width_emu, line_dash, line_hidden) =
             parse_data_point_shape(dpt, resolver);
+        let shape = child(dpt, "spPr");
+        let shape_fill_component_count = if include_shape_style {
+            shape
+                .and_then(chart_style_paint_component_count)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let shape_line_component_count = if include_shape_style {
+            shape
+                .and_then(|sp_pr| child(sp_pr, "ln"))
+                .and_then(chart_style_paint_component_count)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let shape_component_count =
+            shape_fill_component_count.saturating_add(shape_line_component_count);
+        let shape_style = if include_shape_style
+            && shape_fill_component_count <= MAX_CHART_MARKER_GRADIENT_STOPS
+            && shape_line_component_count <= MAX_CHART_MARKER_GRADIENT_STOPS
+            && shape_component_count <= *paint_budget
+        {
+            *paint_budget -= shape_component_count;
+            shape.map(|_| {
+                parse_chartex_element_style(
+                    dpt,
+                    resolver,
+                    None,
+                    None,
+                    image_resolver,
+                    ChartImageSource::Chart,
+                )
+            })
+        } else {
+            if include_shape_style && shape_component_count > 0 {
+                *paint_budget_exceeded = true;
+            }
+            None
+        };
         let mk = child(dpt, "marker");
         let (
             marker_symbol,
@@ -8166,10 +8239,12 @@ fn parse_data_point_overrides_with_budget(
             paint_budget_exceeded,
         );
         let explosion = extract_dpt_explosion(dpt);
+        let bubble_3d = strict_boolean_child(dpt, "bubble3D");
         result.push(ChartDataPointOverride {
             idx,
             color,
             fill_hidden,
+            chartex_style: shape_style,
             line_color,
             line_width_emu,
             line_dash,
@@ -8181,6 +8256,7 @@ fn parse_data_point_overrides_with_budget(
             marker_fill_paint_authored,
             marker_line,
             marker_line_width_emu,
+            bubble_3d,
             explosion,
         });
     }
@@ -10764,6 +10840,10 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
             } else {
                 None
             };
+            let bubble_group = group.filter(|node| node.tag_name().name() == "bubbleChart");
+            let bubble_3d_group_default =
+                bubble_group.and_then(|owner| strict_boolean_child(owner, "bubble3D"));
+            let bubble_3d = bubble_group.and_then(|_| strict_boolean_child(*ser, "bubble3D"));
             let mut source_hidden = collect_source_hidden(*ser, val_tag, references);
             if series_is_scatter_like {
                 merge_source_hidden(
@@ -10941,6 +11021,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                     *ser,
                     color_resolver,
                     image_resolver,
+                    bubble_group.is_some(),
                     &mut marker_paint_budget,
                     &mut marker_paint_budget_exceeded,
                 )
@@ -10948,6 +11029,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 .filter(|o| {
                     o.color.is_some()
                         || o.fill_hidden.is_some()
+                        || o.chartex_style.is_some()
                         || o.line_color.is_some()
                         || o.line_width_emu.is_some()
                         || o.line_dash.is_some()
@@ -10959,6 +11041,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                         || o.marker_fill_paint_authored.is_some()
                         || o.marker_line.is_some()
                         || o.marker_line_width_emu.is_some()
+                        || o.bubble_3d.is_some()
                         || o.explosion.is_some()
                 })
                 .collect();
@@ -11254,6 +11337,8 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 data_label_colors: None,
                 categories: series_categories,
                 bubble_sizes,
+                bubble_3d_group_default,
+                bubble_3d,
                 val_format_code,
                 cat_format_code,
                 cat_format_builtin_id,
@@ -12331,6 +12416,8 @@ mod tests {
                 series_data_labels: None,
                 err_bars: None,
                 bubble_sizes: None,
+                bubble_3d_group_default: None,
+                bubble_3d: None,
                 smooth: None,
                 trend_lines: None,
                 line_hidden: None,
@@ -16380,6 +16467,7 @@ Subtitle</a:t></a:r></a:p>
             document.root_element(),
             &FixtureResolver,
             &EmptyChartImageResolver,
+            false,
             &mut component_budget,
             &mut paint_budget_exceeded,
         );
@@ -20689,6 +20777,156 @@ Subtitle</a:t></a:r></a:p>
         )
         .expect("explicit false showNegBubbles parses");
         assert_eq!(disabled_chart.show_negative_bubbles, Some(false));
+    }
+
+    #[test]
+    fn parse_chart_part_preserves_bubble3d_group_series_and_point_provenance() {
+        for namespace in [C_NS, "http://purl.oclc.org/ooxml/drawingml/chart"] {
+            let xml = format!(
+                r#"<c:chartSpace xmlns:c="{namespace}"><c:chart><c:plotArea>
+                  <c:bubbleChart>
+                    <c:ser><c:idx val="0"/><c:order val="0"/>
+                      <c:dPt><c:idx val="0"/><c:bubble3D/></c:dPt>
+                      <c:xVal><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:xVal>
+                      <c:yVal><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>3</c:v></c:pt><c:pt idx="1"><c:v>4</c:v></c:pt></c:numLit></c:yVal>
+                      <c:bubbleSize><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>5</c:v></c:pt><c:pt idx="1"><c:v>6</c:v></c:pt></c:numLit></c:bubbleSize>
+                      <c:bubble3D val="0"/>
+                    </c:ser>
+                    <c:bubble3D/>
+                    <c:axId val="1"/><c:axId val="2"/>
+                  </c:bubbleChart>
+                  <c:bubbleChart>
+                    <c:ser><c:idx val="1"/><c:order val="1"/>
+                      <c:dPt><c:idx val="0"/><c:bubble3D/></c:dPt>
+                      <c:dPt><c:idx val="1"/><c:bubble3D val="TRUE"/></c:dPt>
+                      <c:xVal><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:xVal>
+                      <c:yVal><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>7</c:v></c:pt><c:pt idx="1"><c:v>8</c:v></c:pt></c:numLit></c:yVal>
+                      <c:bubbleSize><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>5</c:v></c:pt><c:pt idx="1"><c:v>6</c:v></c:pt></c:numLit></c:bubbleSize>
+                    </c:ser>
+                    <c:bubble3D val="false"/>
+                    <c:axId val="1"/><c:axId val="2"/>
+                  </c:bubbleChart>
+                </c:plotArea></c:chart></c:chartSpace>"#
+            );
+            let document = root_of(&xml);
+            let chart = parse_chart_part(document.root_element(), &FixtureResolver)
+                .expect("bubble chart parses");
+
+            assert_eq!(chart.series.len(), 2);
+            assert_eq!(chart.series[0].bubble_3d_group_default, Some(true));
+            assert_eq!(chart.series[0].bubble_3d, Some(false));
+            let first_points = chart.series[0]
+                .data_point_overrides
+                .as_ref()
+                .expect("bubble3D-only point is retained");
+            assert_eq!(first_points.len(), 1);
+            assert_eq!(first_points[0].bubble_3d, Some(true));
+
+            assert_eq!(chart.series[1].bubble_3d_group_default, Some(false));
+            assert_eq!(chart.series[1].bubble_3d, None);
+            let second_points = chart.series[1]
+                .data_point_overrides
+                .as_ref()
+                .expect("both point booleans are retained");
+            assert_eq!(second_points.len(), 2);
+            assert_eq!(second_points[0].bubble_3d, Some(true));
+            assert_eq!(
+                second_points[1].bubble_3d,
+                Some(false),
+                "invalid xsd:boolean stays authored and fails closed"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_chart_part_ignores_legacy_series_bubble3d_outside_bubble_family() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart><c:plotArea><c:lineChart>
+              <c:ser><c:idx val="0"/><c:order val="0"/>
+                <c:dPt><c:idx val="0"/><c:spPr><a:gradFill><a:gsLst>
+                  <a:gs pos="0"><a:srgbClr val="112233"/></a:gs>
+                  <a:gs pos="100000"><a:srgbClr val="DDEEFF"/></a:gs>
+                </a:gsLst></a:gradFill></c:spPr><c:bubble3D/></c:dPt>
+                <c:cat><c:strLit><c:ptCount val="1"/><c:pt idx="0"><c:v>A</c:v></c:pt></c:strLit></c:cat>
+                <c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val>
+                <c:bubble3D/>
+              </c:ser>
+            </c:lineChart></c:plotArea></c:chart></c:chartSpace>"#
+        );
+        let document = root_of(&xml);
+        let chart =
+            parse_chart_part(document.root_element(), &FixtureResolver).expect("line chart parses");
+        assert_eq!(chart.series[0].bubble_3d_group_default, None);
+        assert_eq!(chart.series[0].bubble_3d, None);
+        let point = &chart.series[0].data_point_overrides.as_ref().unwrap()[0];
+        assert_eq!(
+            point.bubble_3d,
+            Some(true),
+            "CT_DPt is shared and retains the point value without applying it to lines"
+        );
+        assert_eq!(
+            point.chartex_style, None,
+            "non-bubble dPt keeps the legacy model"
+        );
+    }
+
+    #[test]
+    fn parse_chart_part_keeps_bounded_bubble_point_structured_fill() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart><c:plotArea>
+              <c:bubbleChart><c:ser><c:idx val="0"/><c:order val="0"/>
+                <c:dPt><c:idx val="0"/><c:spPr><a:gradFill><a:gsLst>
+                  <a:gs pos="0"><a:srgbClr val="112233"/></a:gs>
+                  <a:gs pos="100000"><a:srgbClr val="DDEEFF"/></a:gs>
+                </a:gsLst></a:gradFill></c:spPr></c:dPt>
+                <c:xVal><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:xVal>
+                <c:yVal><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>2</c:v></c:pt></c:numLit></c:yVal>
+                <c:bubbleSize><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>3</c:v></c:pt></c:numLit></c:bubbleSize>
+              </c:ser></c:bubbleChart>
+            </c:plotArea></c:chart></c:chartSpace>"#
+        );
+        let document = root_of(&xml);
+        let chart = parse_chart_part(document.root_element(), &FixtureResolver)
+            .expect("bubble chart parses");
+        let point = &chart.series[0].data_point_overrides.as_ref().unwrap()[0];
+        let style = point
+            .chartex_style
+            .as_ref()
+            .expect("bubble dPt keeps shape paint");
+        assert_eq!(style.fill_paint_authored, Some(true));
+        assert!(matches!(
+            style.fill_paints.as_deref(),
+            Some([Some(ChartStyleFill::Gradient { stops, .. })]) if stops.len() == 2
+        ));
+    }
+
+    #[test]
+    fn bubble_point_shape_paints_share_the_marker_aggregate_budget() {
+        let xml = format!(
+            r#"<c:ser xmlns:c="{C_NS}" xmlns:a="{A_NS}">
+              <c:dPt><c:idx val="0"/><c:spPr><a:pattFill prst="pct20">
+                <a:fgClr><a:srgbClr val="112233"/></a:fgClr>
+                <a:bgClr><a:srgbClr val="DDEEFF"/></a:bgClr>
+              </a:pattFill></c:spPr></c:dPt>
+              <c:dPt><c:idx val="1"/><c:spPr><a:ln><a:pattFill prst="pct30">
+                <a:fgClr><a:srgbClr val="445566"/></a:fgClr>
+                <a:bgClr><a:srgbClr val="AABBCC"/></a:bgClr>
+              </a:pattFill></a:ln></c:spPr></c:dPt>
+            </c:ser>"#
+        );
+        let document = root_of(&xml);
+        let mut component_budget = 1;
+        let mut paint_budget_exceeded = false;
+        let _ = parse_data_point_overrides_with_budget(
+            document.root_element(),
+            &FixtureResolver,
+            &EmptyChartImageResolver,
+            true,
+            &mut component_budget,
+            &mut paint_budget_exceeded,
+        );
+        assert!(paint_budget_exceeded);
+        assert_eq!(component_budget, 0);
     }
 
     /// Office varies a lone bubble series by point when `<c:varyColors>` is
