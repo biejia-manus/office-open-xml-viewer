@@ -72,6 +72,9 @@ export function sourceChartStructureCount(chart: ChartModel): number {
       if (!add(values.length)) return MAX_CANVAS_CHART_POINTS + 1;
     }
   }
+  if (!add(chart.ofPie?.customSplitIndices?.length ?? 0)) {
+    return MAX_CANVAS_CHART_POINTS + 1;
+  }
   return total;
 }
 

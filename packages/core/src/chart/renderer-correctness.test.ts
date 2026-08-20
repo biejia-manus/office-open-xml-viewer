@@ -12568,6 +12568,61 @@ describe('ofPie secondary plots (§21.2.2.126)', () => {
     );
     expect(detailBars).toHaveLength(2);
   });
+
+  it('uses the Office omission rule without a fixed three-point tail', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      ...ofPieModel('pie'),
+      ofPie: {
+        ...ofPieModel('pie').ofPie as NonNullable<ChartModel['ofPie']>,
+        splitType: 'auto',
+        splitTypeAuthored: false,
+        splitPos: null,
+      },
+    }), RECT, 1);
+    const arcsPerCenter = new Map<string, number>();
+    for (const arc of rec.arcs) {
+      const center = `${arc.x.toFixed(2)},${arc.y.toFixed(2)}`;
+      arcsPerCenter.set(center, (arcsPerCenter.get(center) ?? 0) + 1);
+    }
+    // Six points => ceil(6 / 3) = two details. The primary has four source
+    // slices plus the aggregate; the secondary has exactly two slices.
+    expect([...arcsPerCenter.values()].sort((a, b) => a - b)).toEqual([2, 5]);
+  });
+
+  it('does not invent a secondary split for Office-prohibited explicit auto', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      ...ofPieModel('pie'),
+      ofPie: {
+        ...ofPieModel('pie').ofPie as NonNullable<ChartModel['ofPie']>,
+        splitType: 'auto',
+        splitTypeAuthored: true,
+        splitPos: null,
+      },
+    }), RECT, 1);
+    const centers = new Set(rec.arcs.map(arc => `${arc.x.toFixed(2)},${arc.y.toFixed(2)}`));
+    expect(centers.size).toBe(1);
+    expect(rec.arcs).toHaveLength(6);
+  });
+
+  it.each([
+    { splitType: 'pos' as const, splitPos: 6, customSplitIndices: null },
+    { splitType: 'cust' as const, splitPos: null, customSplitIndices: [0, 1, 2, 3, 4, 5] },
+  ])('keeps an aggregate-only primary plot when $splitType selects every point', split => {
+    const rec = recordingCtx();
+    const model = ofPieModel('pie');
+    renderChart(rec.ctx, {
+      ...model,
+      ofPie: { ...model.ofPie as NonNullable<ChartModel['ofPie']>, ...split },
+    }, RECT, 1);
+    const arcsPerCenter = new Map<string, number>();
+    for (const arc of rec.arcs) {
+      const center = `${arc.x.toFixed(2)},${arc.y.toFixed(2)}`;
+      arcsPerCenter.set(center, (arcsPerCenter.get(center) ?? 0) + 1);
+    }
+    expect([...arcsPerCenter.values()].sort((a, b) => a - b)).toEqual([1, 6]);
+  });
 });
 
 describe('classic line-chart group decorations', () => {

@@ -91,6 +91,7 @@ import {
   type CategoryGapPolicy,
 } from './category-spacing.js';
 import { planHistogramBins } from './histogram-binning.js';
+import { planOfPieSecondaryIndices } from './of-pie.js';
 import {
   boxWhiskerGeometry,
   boxWhiskerPointCount,
@@ -8962,41 +8963,6 @@ interface OfPiePoint {
   value: number;
 }
 
-function ofPieSecondaryIndices(chart: ChartModel, values: number[]): Set<number> {
-  const options = chart.ofPie;
-  const finitePositive = values
-    .map((value, sourceIndex) => ({ value, sourceIndex }))
-    .filter(point => Number.isFinite(point.value) && point.value > 0);
-  const selected = new Set<number>();
-  if (finitePositive.length < 2) return selected;
-  const splitType = options?.splitType ?? 'auto';
-  const splitPos = options?.splitPos;
-  if (splitType === 'cust') {
-    for (const index of options?.customSplitIndices ?? []) {
-      if (finitePositive.some(point => point.sourceIndex === index)) selected.add(index);
-    }
-  } else if (splitType === 'val' && splitPos != null && Number.isFinite(splitPos)) {
-    for (const point of finitePositive) if (point.value <= splitPos) selected.add(point.sourceIndex);
-  } else if (splitType === 'percent' && splitPos != null && Number.isFinite(splitPos)) {
-    const total = finitePositive.reduce((sum, point) => sum + point.value, 0);
-    for (const point of finitePositive) {
-      if (total > 0 && (point.value / total) * 100 <= splitPos) selected.add(point.sourceIndex);
-    }
-  } else {
-    // Position is a count from the end. Excel's omitted `auto` currently uses
-    // the same tail split with three detail points; the boundary corpus keeps
-    // this compatibility default observable rather than hiding it in paint.
-    const count = splitType === 'pos' && splitPos != null && Number.isFinite(splitPos)
-      ? Math.max(0, Math.floor(splitPos))
-      : 3;
-    for (const point of finitePositive.slice(-count)) selected.add(point.sourceIndex);
-  }
-  // Both plots must remain non-empty. Malformed/all-point custom splits degrade
-  // deterministically by retaining the first finite point in the primary plot.
-  if (selected.size >= finitePositive.length) selected.delete(finitePositive[0].sourceIndex);
-  return selected;
-}
-
 /** ECMA-376 §21.2.2.126 pie-of-pie / bar-of-pie. Source point identity stays
  * attached to every detail item; only the primary plot receives one aggregate
  * slice. Automatic geometry is deliberately compact and parameterized solely
@@ -9010,9 +8976,8 @@ function renderOfPieChart(
 ): void {
   const source = chart.series[0];
   if (!source) return;
-  const values = source.values.map(value => value == null ? 0 : Math.abs(value));
-  const secondarySet = ofPieSecondaryIndices(chart, values);
-  if (secondarySet.size === 0) {
+  const secondarySet = planOfPieSecondaryIndices(chart.ofPie, source.values);
+  if (secondarySet == null || secondarySet.size === 0) {
     renderPieChart(
       ctx, { ...chart, chartType: 'pie' }, r, false, ptToPx, shapeRotationDeg,
     );
@@ -9020,12 +8985,18 @@ function renderOfPieChart(
   }
   const primary: OfPiePoint[] = [];
   const secondary: OfPiePoint[] = [];
-  for (let sourceIndex = 0; sourceIndex < values.length; sourceIndex++) {
-    const value = values[sourceIndex];
+  for (let sourceIndex = 0; sourceIndex < source.values.length; sourceIndex++) {
+    const sourceValue = source.values[sourceIndex];
+    const value = sourceValue == null ? 0 : Math.abs(sourceValue);
     if (!(value > 0) || !Number.isFinite(value)) continue;
     (secondarySet.has(sourceIndex) ? secondary : primary).push({ sourceIndex, value });
   }
-  if (primary.length === 0 || secondary.length === 0) return;
+  if (secondary.length === 0) {
+    renderPieChart(
+      ctx, { ...chart, chartType: 'pie' }, r, false, ptToPx, shapeRotationDeg,
+    );
+    return;
+  }
 
   const legendChart: ChartModel = { ...chart, chartType: 'pie' };
   const legend = measuredLegendReserve(ctx, legendChart, r.w, r.h, 0.28, ptToPx);
