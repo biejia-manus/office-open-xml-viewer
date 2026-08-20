@@ -14683,6 +14683,30 @@ describe('CH13 — stock chart (high/low/close)', () => {
 });
 
 describe('surface contour charts', () => {
+  const wireframeSurfaceModel = (over: Partial<ChartModel> = {}): ChartModel => baseModel({
+    chartType: 'surface3D',
+    categories: ['X1', 'X2'],
+    valMin: 0,
+    valMax: 10,
+    valAxisMajorUnit: 10,
+    surfaceWireframe: true,
+    catAxisHidden: true,
+    valAxisHidden: true,
+    catAxisMajorGridlines: false,
+    valAxisMajorGridlines: false,
+    threeD: {
+      rotationX: 30,
+      rotationY: 20,
+      perspective: 30,
+      seriesAxis: { hidden: true, lineHidden: true, majorTickMark: 'none' },
+    },
+    series: [
+      series({ name: 'Y1', values: [2, 4] }),
+      series({ name: 'Y2', values: [6, 8] }),
+    ],
+    ...over,
+  });
+
   it('renders surface3D as the same bounded source-grid mesh without flattening it to another family', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
@@ -14700,6 +14724,169 @@ describe('surface contour charts', () => {
     }), RECT, 1);
     expect(rec.texts.map(text => text.text)).not.toContain('Unsupported chart');
     expect(rec.filledPaths.length).toBeGreaterThan(0);
+  });
+
+  it('uses the linked dataPointWireframe line for a Surface wireframe mesh', () => {
+    const rec = recordingCtx();
+    const wireframeGradient = {
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 0,
+      stops: Array.from({ length: 4_096 }, (_, index) => ({
+        position: index / 4_095,
+        color: index === 0 ? '123456' : 'ABCDEF',
+      })),
+    };
+    const filledSurfaceGradient = {
+      ...wireframeGradient,
+      stops: [
+        { position: 0, color: 'FF0000' },
+        { position: 1, color: 'FFCCCC' },
+      ],
+    };
+    renderChart(rec.ctx, wireframeSurfaceModel({
+      chartStyleRoles: {
+        dataPoint3D: {
+          linePaints: [filledSurfaceGradient],
+          linePaintAuthored: true,
+        },
+        dataPointWireframe: {
+          linePaints: [wireframeGradient],
+          linePaintAuthored: true,
+          lineColorIndex: 0,
+          lineWidthEmu: 25_400,
+          lineDash: 'dash',
+          lineCap: 'rnd',
+          lineJoin: 'bevel',
+        },
+      },
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(1);
+    expect(rec.gradients[0].stops).toHaveLength(4_096);
+    expect(rec.gradients[0].stops[0]?.color).toBe('rgba(18,52,86,1)');
+    const wireframe = rec.strokeDetails.filter(stroke =>
+      stroke.lineWidth === 2
+      && stroke.dash.length > 0
+      && stroke.cap === 'round'
+      && stroke.join === 'bevel'
+    );
+    expect(wireframe).toHaveLength(4);
+  });
+
+  it('keeps unresolved, no-fill, and compound dataPointWireframe lines fail-closed', () => {
+    for (const role of [
+      { linePaintAuthored: true, lineColorIndex: 0 },
+      { lineHidden: true, lineColorIndex: 0 },
+      { lineCompound: 'dbl' },
+    ]) {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, wireframeSurfaceModel({
+        chartStyleRoles: { dataPointWireframe: role },
+      }), RECT, 1);
+      expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#595959')).toBe(false);
+    }
+  });
+
+  it('does not guess a relative dataPointWireframe palette index', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, wireframeSurfaceModel({
+      chartStyleRoles: {
+        dataPointWireframe: {
+          lineColors: ['123456', 'ABCDEF'],
+          linePaintAuthored: true,
+        },
+      },
+    }), RECT, 1);
+
+    expect(rec.strokeDetails.some(stroke =>
+      stroke.strokeStyle === '#123456' || stroke.strokeStyle === '#ABCDEF'
+    )).toBe(false);
+    expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#595959')).toBe(false);
+  });
+
+  it('does not let a linked wireframe line overwrite direct series or band outlines', () => {
+    const linked = {
+      lineColors: ['123456'],
+      lineColorIndex: 0,
+      linePaintAuthored: true,
+    };
+    const directModels: Array<Partial<ChartModel>> = [
+      {
+        series: [
+          series({ name: 'Y1', values: [2, 4], lineColor: 'AA0000' }),
+          series({ name: 'Y2', values: [6, 8] }),
+        ],
+      },
+      {
+        series: [
+          series({
+            name: 'Y1', values: [2, 4],
+            chartexStyle: { lineHidden: true, linePaintAuthored: true },
+          }),
+          series({ name: 'Y2', values: [6, 8] }),
+        ],
+      },
+      { surfaceBandFormats: [{ idx: 0, lineColor: '00AA00' }] },
+    ];
+    for (const direct of directModels) {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, wireframeSurfaceModel({
+        ...direct,
+        chartStyleRoles: { dataPointWireframe: linked },
+      }), RECT, 1);
+      expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#123456')).toBe(false);
+      expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#595959')).toBe(false);
+    }
+  });
+
+  it('does not apply dataPointWireframe paint to a filled Surface', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, wireframeSurfaceModel({
+      surfaceWireframe: false,
+      chartStyleRoles: {
+        dataPointWireframe: {
+          linePaints: [{
+            fillType: 'gradient',
+            gradType: 'linear',
+            angle: 0,
+            stops: Array.from({ length: 4_097 }, (_, index) => ({
+              position: index / 4_096,
+              color: '123456',
+            })),
+          }],
+          linePaintAuthored: true,
+          lineColorIndex: 0,
+        },
+      },
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(0);
+    expect(rec.filledPaths.length).toBeGreaterThan(0);
+  });
+
+  it('rejects an oversized dataPointWireframe line before resolving it', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, wireframeSurfaceModel({
+      chartStyleRoles: {
+        dataPointWireframe: {
+          linePaints: [{
+            fillType: 'gradient',
+            gradType: 'linear',
+            angle: 0,
+            stops: Array.from({ length: 4_097 }, (_, index) => ({
+              position: index / 4_096,
+              color: '123456',
+            })),
+          }],
+          linePaintAuthored: true,
+          lineColorIndex: 0,
+        },
+      },
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(0);
+    expect(rec.strokeDetails).toHaveLength(0);
   });
 
   it('resolves Surface band paint once with direct structured/unresolved/no-fill precedence', () => {
