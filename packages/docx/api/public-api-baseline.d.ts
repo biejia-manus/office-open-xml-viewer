@@ -626,6 +626,10 @@ export interface ChartSeries {
     barGroupOverlap?: number | null;
     useSecondaryAxis?: boolean | null;
     categories?: string[] | null;
+    /** Bubble-only provenance for a string-backed `<c:xVal>` source. Excel
+     * exposes such a lone bubble series as one legend entry per point while a
+     * numeric X source keeps the ordinary one-entry-per-series legend. */
+    bubbleXSourceIsString?: boolean | null;
     showMarker?: boolean | null;
     valFormatCode?: string | null;
     catFormatCode?: string | null;

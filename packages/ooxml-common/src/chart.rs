@@ -1452,6 +1452,10 @@ pub struct ChartSeries {
     pub use_secondary_axis: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub categories: Option<Vec<String>>,
+    /// Bubble-only source provenance. A string-backed `<c:xVal>` has distinct
+    /// Office legend semantics from a numeric X source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bubble_x_source_is_string: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_marker: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -6976,6 +6980,7 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
         explosion: None,
         data_label_colors,
         categories: None,
+        bubble_x_source_is_string: None,
         bubble_sizes: None,
         bubble_3d_group_default: None,
         bubble_3d: None,
@@ -11334,6 +11339,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
             let series_type = group
                 .map(|p| p.tag_name().name())
                 .and_then(group_series_type);
+            let bubble_group = group.filter(|node| node.tag_name().name() == "bubbleChart");
             let line_group_index = group
                 .and_then(|owner| line_group_indices.get(&owner.id()))
                 .copied();
@@ -11426,6 +11432,21 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                     }
                 }
             };
+            let bubble_x_source_is_string = bubble_group
+                .and_then(|_| child(*ser, "xVal"))
+                .and_then(|source| {
+                    if child(source, "strRef").is_some()
+                        || child(source, "strLit").is_some()
+                        || child(source, "multiLvlStrRef").is_some()
+                    {
+                        Some(true)
+                    } else if child(source, "numRef").is_some() || child(source, "numLit").is_some()
+                    {
+                        Some(false)
+                    } else {
+                        None
+                    }
+                });
 
             // Y values (scatter/bubble → `<c:yVal>`, else `<c:val>`), collected
             // POSITIONALLY. The series' own cache `<c:ptCount>` sizes the vector
@@ -11466,7 +11487,6 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
             } else {
                 None
             };
-            let bubble_group = group.filter(|node| node.tag_name().name() == "bubbleChart");
             let bubble_3d_group_default =
                 bubble_group.and_then(|owner| strict_boolean_child(owner, "bubble3D"));
             let bubble_3d = bubble_group.and_then(|_| strict_boolean_child(*ser, "bubble3D"));
@@ -11974,6 +11994,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 // path that currently consumes this separate color array.
                 data_label_colors: None,
                 categories: series_categories,
+                bubble_x_source_is_string,
                 bubble_sizes,
                 bubble_3d_group_default,
                 bubble_3d,
@@ -13038,6 +13059,7 @@ mod tests {
                 bar_group_overlap: None,
                 use_secondary_axis: None,
                 categories: None,
+                bubble_x_source_is_string: None,
                 show_marker: None,
                 val_format_code: None,
                 cat_format_code: None,
@@ -22009,6 +22031,41 @@ Subtitle</a:t></a:r></a:p>
                 Some("FF0000".to_string()),
                 Some("00000000".to_string()),
             ]),
+        );
+    }
+
+    #[test]
+    fn parse_chart_part_keeps_bubble_x_source_kind_for_legend_semantics() {
+        let series = |x_source: &str| {
+            format!(
+                r#"<c:ser><c:idx val="0"/><c:order val="0"/>
+                  <c:xVal>{x_source}</c:xVal>
+                  <c:yVal><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>2</c:v></c:pt></c:numLit></c:yVal>
+                  <c:bubbleSize><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>3</c:v></c:pt></c:numLit></c:bubbleSize>
+                </c:ser>"#
+            )
+        };
+        let text_xml = chart_space_with_group(&format!(
+            "<c:bubbleChart>{}</c:bubbleChart>",
+            series(
+                r#"<c:strRef><c:f>Labels</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>Project A</c:v></c:pt></c:strCache></c:strRef>"#
+            )
+        ));
+        let text_doc = chart_space_of(&text_xml);
+        let text_chart = parse_chart_part(text_doc.root_element(), &FixtureResolver)
+            .expect("text-x bubble parses");
+        assert_eq!(text_chart.series[0].bubble_x_source_is_string, Some(true));
+
+        let numeric_xml = chart_space_with_group(&format!(
+            "<c:bubbleChart>{}</c:bubbleChart>",
+            series(r#"<c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit>"#)
+        ));
+        let numeric_doc = chart_space_of(&numeric_xml);
+        let numeric_chart = parse_chart_part(numeric_doc.root_element(), &FixtureResolver)
+            .expect("numeric-x bubble parses");
+        assert_eq!(
+            numeric_chart.series[0].bubble_x_source_is_string,
+            Some(false)
         );
     }
 

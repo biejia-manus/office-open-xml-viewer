@@ -260,18 +260,21 @@ function legendIsCategoryDriven(chartType: string | undefined): boolean {
   return chartType === 'pie' || chartType === 'doughnut';
 }
 
-/** §21.2.2.227 `<c:varyColors val="1"/>` on a SINGLE-series bar/column chart:
- *  Office colors each bar from the theme/palette sequence (like a pie's slices)
- *  and lists one legend entry per data point. Restricted to the bar family with
- *  exactly one series — the only case Office varies this way, and the only case
- *  the shared parser sets `varyColors` for. Pie/doughnut are already
- *  category-driven via {@link legendIsCategoryDriven}; this covers the bar case
- *  so the plot fill and the legend agree on the same per-point resolution. */
+/** Whether the legend is point-driven outside the pie/doughnut families.
+ * §21.2.2.227 `<c:varyColors val="1"/>` drives the single-series bar case.
+ * Office also exposes a lone bubble series whose `<c:xVal>` is string-backed
+ * as one entry per point; the parser preserves that source provenance rather
+ * than inferring it from the cached values. */
 export function chartVariesColorsByPoint(chart: {
   chartType?: string | null;
-  series: unknown[];
+  series: Array<{ bubbleXSourceIsString?: boolean | null }>;
   varyColors?: boolean | null;
 }): boolean {
+  if (
+    chart.chartType === 'bubble' &&
+    chart.series.length === 1 &&
+    chart.series[0]?.bubbleXSourceIsString === true
+  ) return true;
   return (
     !!chart.varyColors &&
     chart.series.length === 1 &&
@@ -810,6 +813,31 @@ function legendMarkerFor(
   };
 }
 
+function bubblePointLegendMarker(
+  chart: ChartModel,
+  series: ChartSeries,
+  point: NonNullable<ChartSeries['dataPointOverrides']>[number] | undefined,
+  pointIndex: number,
+): LegendMarker {
+  const fallback = chartColor(0, series);
+  const fill = bubblePointFill(chart, series, point, pointIndex, fallback);
+  const line = bubblePointLine(chart, series, point, pointIndex);
+  return {
+    symbol: 'circle',
+    fill: fill.color,
+    fillPaint: fill.paint,
+    line: line.color,
+    lineWidthEmu: line.widthEmu ?? null,
+    linePaint: line.paint,
+    lineDash: line.dash,
+    lineCustomDash: line.customDash,
+    lineCap: line.cap,
+    lineJoin: line.join,
+    bubble3D: bubblePointIsThreeD(series, point),
+    withLine: false,
+  };
+}
+
 function drawLegendSwatch(
   ctx: CanvasRenderingContext2D,
   style: LegendSwatchStyle,
@@ -974,9 +1002,9 @@ interface DataLabelLegendKey {
   shapeRotationDeg: number;
 }
 
-/** Build the legend entries for a chart. Pie/doughnut legends are
- *  category-driven (one row per data point of the first series, labeled by
- *  category); every other chart type is series-driven (one row per series). */
+/** Build the legend entries for a chart. Pie/doughnut and the explicitly
+ *  resolved point-driven compatibility cases use one row per data point;
+ *  ordinary charts use one row per series. */
 function buildLegendEntries(
   series: ChartSeries[],
   chartType: string | undefined,
@@ -990,9 +1018,9 @@ function buildLegendEntries(
   chart?: ChartModel,
 ): LegendEntry[] {
   if (varyByPoint || legendIsCategoryDriven(chartType)) {
-    // Category-driven: one entry per data point of the first series, labeled by
+    // Point-driven: one entry per data point of the first series, labeled by
     // its category and colored exactly like the mark the plot draws for that
-    // point (pie slice, or a varyColors bar). §21.2.2.227.
+    // point (pie slice, varyColors bar, or string-X bubble).
     const first = series[0];
     const n = first ? first.values.length : 0;
     const cats = first?.categories ?? chartCategories;
@@ -1000,12 +1028,15 @@ function buildLegendEntries(
     const entries = Array.from({ length: n }, (_, i) => {
       const point = overrides.get(i);
       const lineVisible = (point?.lineHidden ?? first?.lineHidden) !== true;
+      const bubbleMarker = chartType === 'bubble' && chart && first
+        ? bubblePointLegendMarker(chart, first, point, i)
+        : null;
       return {
         label: (cats[i] ?? `Item ${i + 1}`).toString(),
         color: legendIsCategoryDriven(chartType) && first
           ? pieSliceColor(i, first, pieVaryColors)
           : legendEntryColor(chartType, series, i, varyByPoint),
-        marker: null, // pie/doughnut/varyColors keys are always filled swatches.
+        marker: bubbleMarker,
         swatchStyle: legendSwatchStyle(chartType),
         fillPaint: point?.fillHidden === true
           ? null
@@ -1448,8 +1479,8 @@ function drawLegendForLayout(
   if (!leg) return;
   const legStyle = legendTextStyle(chart, ptToPx);
   const legendSeries = legendSeriesWithTrendlines(chart);
-  // §21.2.2.227 varyColors single-series bar: the legend lists one entry per
-  // data point (colored like each bar), so the legend and the plot fill agree.
+  // Point-driven legends list one entry per data point, so key paint and plot
+  // paint resolve through the same point precedence.
   const varyByPoint = chartVariesColorsByPoint(chart);
   const sideInset = Math.min(
     LEGEND_SIDE_PADDING / 2,
@@ -11368,7 +11399,9 @@ function renderRadarChart(
 // family). So `computeSecondaryAxis` is never called here — the CH7 helper is
 // wired only into the category-axis families (bar already; line + area now).
 function scatterXValue(cats: string[], index: number, useIndexX: boolean): number | null {
-  if (useIndexX) return index;
+  // A string-backed `<c:xVal>` is plotted by Office as the one-based ordinal
+  // sequence 1..N. Zero-based array indices remain an implementation detail.
+  if (useIndexX) return index + 1;
   const raw = cats[index];
   if (raw == null) return null;
   const value = parseFloat(raw);
@@ -11831,6 +11864,10 @@ function renderScatterChart(
   };
   const allNumericX = numericXValues(entries);
   const useIndexX = allNumericX.length === 0;
+  const textBubbleOrdinalMax = entries.length === 1
+    && entries[0].series.bubbleXSourceIsString === true
+    ? entries[0].series.values.length + 1
+    : null;
   const pairedExtents = (
     entries: Array<{ series: ChartSeries; index: number }>,
   ): { x: { min: number; max: number }; y: { min: number; max: number } } => {
@@ -11991,8 +12028,10 @@ function renderScatterChart(
   const xAxisPlan = planNumericValueAxis({
     dataMin: xMin,
     dataMax: xMax,
-    explicitMin: chart.catAxisMin,
-    explicitMax: chart.catAxisMax,
+    // Office gives a string-backed lone bubble series one empty ordinal slot
+    // on each side (four points => 0..5). Authored axis bounds still win.
+    explicitMin: chart.catAxisMin ?? (textBubbleOrdinalMax == null ? null : 0),
+    explicitMax: chart.catAxisMax ?? textBubbleOrdinalMax,
     axisLenPt: pw / ptToPx,
     axisOrientation: 'horizontal',
     majorUnit: chart.catAxisMajorUnit,
