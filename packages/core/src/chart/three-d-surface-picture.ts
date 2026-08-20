@@ -12,6 +12,7 @@ import {
   type SurfacePictureQuad,
 } from './three-d-surface-picture-plan.js';
 import type { ChartThreeDSurfaceGeometry, ThreeDScenePoint } from './three-d.js';
+import { MAX_CHART_IMAGE_FILL_TILES } from './resource-limits.js';
 
 function relativeRectQuad(
   quad: SurfacePictureQuad,
@@ -50,6 +51,21 @@ function screenAlignedFace(
   const bottom = byY.slice(2).sort((left, right) => left.projected.x - right.projected.x);
   if (new Set([...top, ...bottom].map(item => item.index)).size !== 4) return null;
   return [top[0].scenePoint, top[1].scenePoint, bottom[1].scenePoint, bottom[0].scenePoint];
+}
+
+/** Office plain-stack observation: derive one repetition height from the
+ * projected plot-face aspect and source aspect, then share it across the
+ * selected floor/wall target. Repetitions start at the target's lower edge.
+ * Authored DPI does not affect this chart pictureOptions mode. */
+function plainStackFraction(
+  referenceAspect: number | null | undefined,
+  sourceWidth: number,
+  sourceHeight: number,
+): number | null {
+  if (!(referenceAspect != null && Number.isFinite(referenceAspect) && referenceAspect > 0)
+    || !(sourceWidth > 0) || !(sourceHeight > 0)) return null;
+  const fraction = referenceAspect * sourceHeight / sourceWidth;
+  return Number.isFinite(fraction) && fraction > 0 ? fraction : null;
 }
 
 export function paintChartThreeDSurfacePicture(
@@ -97,6 +113,28 @@ export function paintChartThreeDSurfacePicture(
     project(interpolate(face[2], face[1], lower)),
     project(interpolate(face[3], face[0], lower)),
   ];
+  const stackFraction = plan.mode === 'stack'
+    ? plainStackFraction(geometry.pictureStackAspect, natural.w, natural.h)
+    : null;
+
+  if (plan.mode === 'stack') {
+    if (stackFraction == null) return false;
+    let work = 0;
+    let hasFace = false;
+    for (const faceIndex of visibleFaceIndices) {
+      if (!surfacePictureFaceIsEnabled(plan, faceIndex)) continue;
+      const face = geometry.thickness === 0 && faceIndex === 0
+        ? [geometry.inner[3], geometry.inner[2], geometry.inner[1], geometry.inner[0]]
+        : screenAlignedFace(geometry.faces[faceIndex] ?? [], project);
+      if (!face) continue;
+      const repetitions = Math.ceil(1 / stackFraction);
+      if (!Number.isSafeInteger(repetitions) || repetitions < 1) return false;
+      work += repetitions;
+      if (work > MAX_CHART_IMAGE_FILL_TILES) return false;
+      hasFace = true;
+    }
+    if (!hasFace) return false;
+  }
 
   ctx.save();
   if (fill.alpha != null) ctx.globalAlpha *= fill.alpha;
@@ -128,7 +166,7 @@ export function paintChartThreeDSurfacePicture(
       drawProjected(image, ctx, natural.w, natural.h, destination, 0.5, sourceRect);
       ctx.restore();
     }
-  } else if (plan.stackUnit != null) {
+  } else {
     for (const faceIndex of visibleFaceIndices) {
       if (!surfacePictureFaceIsEnabled(plan, faceIndex)) continue;
       const face = geometry.thickness === 0 && faceIndex === 0
@@ -146,13 +184,22 @@ export function paintChartThreeDSurfacePicture(
       // faces. End faces have no value-axis extent, so Office maps one whole
       // source there instead of compressing every repetition into thickness.
       const repetitions = surfacePictureFaceRepetitions(plan, faceIndex);
-      if (surfacePictureFaceUsesValueAxis(plan, faceIndex)) {
+      if (plan.mode === 'stack') {
+        if (stackFraction == null) continue;
+        for (let index = 0; index < Math.ceil(1 / stackFraction); index++) {
+          drawProjected(
+            image, ctx, natural.w, natural.h,
+            stackQuad(face, index * stackFraction, (index + 1) * stackFraction),
+            0.5, sourceRect,
+          );
+        }
+      } else if (plan.stackUnit != null && surfacePictureFaceUsesValueAxis(plan, faceIndex)) {
         for (let index = 0; index < repetitions; index++) {
           const lower = index * plan.stackUnit / valueSpan;
           const upper = (index + 1) * plan.stackUnit / valueSpan;
           drawProjected(image, ctx, natural.w, natural.h, stackQuad(face, lower, upper), 0.5, sourceRect);
         }
-      } else {
+      } else if (plan.stackUnit != null) {
         drawProjected(image, ctx, natural.w, natural.h, quad, 0.5, sourceRect);
       }
       ctx.restore();

@@ -1602,11 +1602,20 @@ describe('classic 3-D compatibility projection', () => {
       return rec.drawImages.length;
     };
     const backStretch = draws(model('backWall', 'stretch'));
+    const backStack = draws(model('backWall', 'stack'));
     const backStackScale = draws(model('backWall', 'stackScale'));
     expect(backStretch).toBeGreaterThan(0);
+    expect(backStack).toBeGreaterThan(0);
     expect(backStackScale).toBeGreaterThan(backStretch);
     expect(draws(model('floor', 'stackScale'))).toBe(draws(model('floor', 'stretch')));
-    expect(collectChartMarkerImageFills(model('backWall', 'stack'))).toEqual([]);
+    expect(collectChartMarkerImageFills(model('backWall', 'stack'))).toEqual([picture]);
+    const reversedStack = {
+      ...model('backWall', 'stack'),
+      valAxisOrientation: 'maxMin' as const,
+    } satisfies ChartModel;
+    expect(collectChartMarkerImageFills(reversedStack)).toEqual([picture]);
+    expect(draws(reversedStack)).toBe(backStack);
+    expect(collectChartMarkerImageFills(model('backWall', 'stack', 25))).toEqual([]);
     expect(collectChartMarkerImageFills(model('backWall', 'stretch', 25))).toEqual([picture]);
     for (const kind of ['backWall', 'sideWall'] as const) {
       const thickStretch = model(kind, 'stretch', 25);

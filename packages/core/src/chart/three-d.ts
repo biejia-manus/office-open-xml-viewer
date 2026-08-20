@@ -238,6 +238,8 @@ export interface ChartThreeDSurfaceGeometry {
   outer: ThreeDScenePoint[];
   /** One planar face at zero thickness, otherwise the closed six-face slab. */
   faces: ThreeDScenePoint[][];
+  /** Projected plot-face width/height used by Office plain picture stacking. */
+  pictureStackAspect: number | null;
 }
 
 const MAX_UNSIGNED_INT = 4_294_967_295;
@@ -258,6 +260,22 @@ export function planChartThreeDSurfaceGeometry(
   const floorY = projection.topology.axisY === 'min' ? front.y : front.y + front.h;
   const topY = floorY === front.y ? front.y + front.h : front.y;
   const { nearDepth, farDepth } = projection.topology;
+  const stackReference = [
+    projection.projectUnbounded(xMin, topY, farDepth),
+    projection.projectUnbounded(xMax, topY, farDepth),
+    projection.projectUnbounded(xMin, floorY, farDepth),
+  ];
+  const stackReferenceWidth = Math.hypot(
+    stackReference[0].x - stackReference[1].x,
+    stackReference[0].y - stackReference[1].y,
+  );
+  const stackReferenceHeight = Math.hypot(
+    stackReference[0].x - stackReference[2].x,
+    stackReference[0].y - stackReference[2].y,
+  );
+  const pictureStackAspect = stackReferenceWidth > 0 && stackReferenceHeight > 0
+    ? stackReferenceWidth / stackReferenceHeight
+    : null;
   const rawPercent = thicknessPercent == null ? 0 : thicknessPercent;
   const validPercent = Number.isFinite(rawPercent)
     && rawPercent >= 0 && rawPercent <= MAX_UNSIGNED_INT ? rawPercent : 0;
@@ -293,7 +311,9 @@ export function planChartThreeDSurfaceGeometry(
     const outerDepth = farDepth === 0 ? -depthOffset : 1 + depthOffset;
     outer = inner.map(point => ({ ...point, depth: outerDepth }));
   }
-  if (!(thickness > 0)) return { thickness: 0, inner, outer: [...inner], faces: [inner] };
+  if (!(thickness > 0)) {
+    return { thickness: 0, inner, outer: [...inner], faces: [inner], pictureStackAspect };
+  }
   const sides = inner.map((point, index) => [
     point,
     inner[(index + 1) % inner.length],
@@ -334,7 +354,7 @@ export function planChartThreeDSurfaceGeometry(
     const dot = normal.x * outward.x + normal.y * outward.y + normal.depth * outward.depth;
     return dot < 0 ? [...face].reverse() : face;
   });
-  return { thickness, inner, outer, faces };
+  return { thickness, inner, outer, faces, pictureStackAspect };
 }
 
 /** Refit the complete base cuboid and the three authored surface slabs into

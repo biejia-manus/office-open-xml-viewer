@@ -151,4 +151,26 @@ describe('positive-thickness CT_Surface picture faces', () => {
     expect(planChartThreeDSurfacePicture(fill, allFaces, 'backWall', 2_728)).not.toBeNull();
     expect(planChartThreeDSurfacePicture(fill, allFaces, 'backWall', 2_730)).toBeNull();
   });
+
+  it('retains plain stack only for the observed identity rectangle boundary', () => {
+    const surface = {
+      thicknessPercent: 0,
+      pictureOptions: { pictureFormat: 'stack' as const },
+    };
+    expect(planChartThreeDSurfacePicture(fill, surface, 'backWall', 10)).toEqual({
+      mode: 'stack', repetitions: 1, slabFaces: undefined,
+    });
+    expect(planChartThreeDSurfacePicture(fill, {
+      ...surface,
+      thicknessPercent: 25,
+    }, 'backWall', 10)).toBeNull();
+    expect(planChartThreeDSurfacePicture({
+      ...fill,
+      srcRect: { l: 0.1, t: 0, r: 0, b: 0 },
+    }, surface, 'backWall', 10)).toBeNull();
+    expect(planChartThreeDSurfacePicture({
+      ...fill,
+      fillRect: { l: -0.1, t: 0, r: 0, b: 0 },
+    }, surface, 'backWall', 10)).toBeNull();
+  });
 });
