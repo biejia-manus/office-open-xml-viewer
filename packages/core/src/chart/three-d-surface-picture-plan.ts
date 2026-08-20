@@ -80,9 +80,12 @@ function relativeRectIsSupported(rect: ImageFill['srcRect'] | ImageFill['fillRec
   const r = rect.r ?? 0;
   const b = rect.b ?? 0;
   const values = [l, t, r, b];
-  return values.every(value => Number.isFinite(value) && value >= 0)
-    && l + r < 1
-    && t + b < 1;
+  const right = 1 - r;
+  const bottom = 1 - b;
+  return values.every(Number.isFinite)
+    && right > l && bottom > t
+    && Math.min(1, right) > Math.max(0, l)
+    && Math.min(1, bottom) > Math.max(0, t);
 }
 
 /** The Office-observed, bounded subset of CT_Surface pictureOptions.
@@ -91,9 +94,9 @@ function relativeRectIsSupported(rect: ImageFill['srcRect'] | ImageFill['fillRec
  * Excel/PDF observations establish full-face stretch and value-axis
  * stackScale on planar and positive-thickness back/side walls; floor ignores
  * pictureStackUnit. Positive-thickness front/sides/end targets are
- * independently authored and map to the bounded six-face slab. Non-negative
- * source crops and destination insets retain DrawingML's source/destination
- * rectangle mapping on each observed face. */
+ * independently authored and map to the bounded six-face slab. Signed source
+ * and destination rectangles retain DrawingML's mapping, including observed
+ * outsets, on each face. */
 export function planChartThreeDSurfacePicture(
   fill: ImageFill,
   surface: ChartThreeDSurface | null | undefined,

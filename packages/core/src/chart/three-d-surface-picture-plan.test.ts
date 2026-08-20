@@ -14,7 +14,7 @@ const fill = {
 };
 
 describe('positive-thickness CT_Surface picture faces', () => {
-  it('accepts a bounded positive source crop but keeps unmeasured crop modes closed', () => {
+  it('accepts bounded source crops and observed outsets only for stretch', () => {
     expect(planChartThreeDSurfacePicture({
       ...fill,
       srcRect: { l: 0.25, t: 0, r: 0, b: 0 },
@@ -25,22 +25,34 @@ describe('positive-thickness CT_Surface picture faces', () => {
     expect(planChartThreeDSurfacePicture({
       ...fill,
       srcRect: { l: -0.25, t: 0, r: 0, b: 0 },
-    }, undefined, 'backWall', 10)).toBeNull();
+    }, undefined, 'backWall', 10)).toEqual({
+      mode: 'stretch', repetitions: 1, slabFaces: undefined,
+    });
     expect(planChartThreeDSurfacePicture({
       ...fill,
       srcRect: { l: 0.6, t: 0, r: 0.4, b: 0 },
     }, undefined, 'backWall', 10)).toBeNull();
     expect(planChartThreeDSurfacePicture({
       ...fill,
-      srcRect: { l: 0.25, t: 0, r: 0, b: 0 },
-      fillRect: { l: -0.1, t: 0, r: 0, b: 0 },
-    }, undefined, 'backWall', 10)).toBeNull();
+      srcRect: { l: -0.25, t: 0, r: 0, b: 0 },
+    }, {
+      pictureOptions: {
+        pictureFormat: 'stackScale',
+        pictureStackUnit: 2,
+      },
+    }, 'backWall', 10)).toBeNull();
   });
 
-  it('accepts a bounded positive stretch destination inset only', () => {
+  it('accepts bounded stretch destination insets and outsets only', () => {
     expect(planChartThreeDSurfacePicture({
       ...fill,
       fillRect: { l: 0.25, t: 0, r: 0, b: 0 },
+    }, undefined, 'backWall', 10)).toEqual({
+      mode: 'stretch', repetitions: 1, slabFaces: undefined,
+    });
+    expect(planChartThreeDSurfacePicture({
+      ...fill,
+      fillRect: { l: -0.25, t: 0, r: 0, b: 0 },
     }, undefined, 'backWall', 10)).toEqual({
       mode: 'stretch', repetitions: 1, slabFaces: undefined,
     });

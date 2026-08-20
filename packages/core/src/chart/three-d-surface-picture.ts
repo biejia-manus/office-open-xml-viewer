@@ -1,6 +1,6 @@
 import type { ImageFill } from '../types/common.js';
 import type { ChartThreeDSurface } from '../types/chart.js';
-import { cropSourceRect, imageNaturalSize } from '../image/crop.js';
+import { cropSourceMapping, imageNaturalSize } from '../image/crop.js';
 import { drawProjected, projectQuadPoint } from '../shape/scene3d-draw.js';
 import {
   planChartThreeDSurfacePicture,
@@ -13,17 +13,17 @@ import {
 } from './three-d-surface-picture-plan.js';
 import type { ChartThreeDSurfaceGeometry, ThreeDScenePoint } from './three-d.js';
 
-function fillRectQuad(
+function relativeRectQuad(
   quad: SurfacePictureQuad,
-  fillRect: ImageFill['fillRect'],
+  rect: ImageFill['srcRect'] | ImageFill['fillRect'],
 ): SurfacePictureQuad | null {
-  if (!fillRect || ![fillRect.l, fillRect.t, fillRect.r, fillRect.b].some(value => (value ?? 0) !== 0)) {
+  if (!rect || ![rect.l, rect.t, rect.r, rect.b].some(value => (value ?? 0) !== 0)) {
     return quad;
   }
-  const left = fillRect.l ?? 0;
-  const top = fillRect.t ?? 0;
-  const right = 1 - (fillRect.r ?? 0);
-  const bottom = 1 - (fillRect.b ?? 0);
+  const left = rect.l ?? 0;
+  const top = rect.t ?? 0;
+  const right = 1 - (rect.r ?? 0);
+  const bottom = 1 - (rect.b ?? 0);
   const points = [
     projectQuadPoint(quad, left, top),
     projectQuadPoint(quad, right, top),
@@ -67,7 +67,7 @@ export function paintChartThreeDSurfacePicture(
   if (!plan || geometry.inner.length !== 4) return false;
   const natural = imageNaturalSize(image);
   if (!(natural.w > 0) || !(natural.h > 0)) return false;
-  const crop = cropSourceRect(image, fill.srcRect);
+  const crop = cropSourceMapping(image, fill.srcRect);
   const sourceRect = crop
     ? { x0: crop.sx, y0: crop.sy, x1: crop.sx + crop.sw, y1: crop.sy + crop.sh }
     : undefined;
@@ -108,7 +108,16 @@ export function paintChartThreeDSurfacePicture(
         ? fullQuad
         : aligned?.map(project) as SurfacePictureQuad | undefined;
       if (!quad) continue;
-      const destination = fillRectQuad(quad, fill.fillRect);
+      const fillDestination = relativeRectQuad(quad, fill.fillRect);
+      if (!fillDestination) continue;
+      const destination = crop
+        ? relativeRectQuad(fillDestination, {
+          l: crop.dxFraction,
+          t: crop.dyFraction,
+          r: 1 - crop.dxFraction - crop.dwFraction,
+          b: 1 - crop.dyFraction - crop.dhFraction,
+        })
+        : fillDestination;
       if (!destination) continue;
       ctx.save();
       ctx.beginPath();
