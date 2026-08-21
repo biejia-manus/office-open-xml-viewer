@@ -4000,14 +4000,22 @@ struct DirectShapeLine {
 }
 
 fn extract_direct_shape_fill(shape: Option<Node>, resolver: &dyn ColorResolver) -> DirectShapeFill {
+    extract_direct_shape_fill_with_images(
+        shape,
+        resolver,
+        &EmptyChartImageResolver,
+        ChartImageSource::Chart,
+    )
+}
+
+fn extract_direct_shape_fill_with_images(
+    shape: Option<Node>,
+    resolver: &dyn ColorResolver,
+    image_resolver: &dyn ChartImageResolver,
+    image_source: ChartImageSource,
+) -> DirectShapeFill {
     let fill_paint = shape.and_then(|shape| {
-        parse_chart_style_paint(
-            shape,
-            resolver,
-            None,
-            &EmptyChartImageResolver,
-            ChartImageSource::Chart,
-        )
+        parse_chart_style_paint(shape, resolver, None, image_resolver, image_source)
     });
     let paint_authored = shape
         .and_then(|shape| {
@@ -7393,7 +7401,12 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
         chart_line_style.hidden = Some(true);
         chart_line_style.paint_authored = Some(true);
     }
-    let chart_fill_style = extract_direct_shape_fill(chart_space_sp_pr, resolver);
+    let chart_fill_style = extract_direct_shape_fill_with_images(
+        chart_space_sp_pr,
+        resolver,
+        image_resolver,
+        ChartImageSource::Chart,
+    );
     let chart_bg = if chart_fill_style.paint_authored == Some(true) {
         chart_fill_style.color.clone()
     } else {
@@ -10890,7 +10903,12 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         .descendants()
         .find(|n| n.is_element() && n.tag_name().name() == "plotArea")?;
 
-    let plot_area_fill_style = extract_direct_shape_fill(child(plot_area, "spPr"), color_resolver);
+    let plot_area_fill_style = extract_direct_shape_fill_with_images(
+        child(plot_area, "spPr"),
+        color_resolver,
+        image_resolver,
+        ChartImageSource::Chart,
+    );
     let plot_area_bg = plot_area_fill_style.color;
     let plot_area_line_style = extract_direct_shape_line(plot_area, color_resolver);
     let data_table = extract_chart_data_table(plot_area, color_resolver);
@@ -12171,7 +12189,12 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     let chart_sp_pr = root
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "spPr");
-    let chart_fill_style = extract_direct_shape_fill(chart_sp_pr, color_resolver);
+    let chart_fill_style = extract_direct_shape_fill_with_images(
+        chart_sp_pr,
+        color_resolver,
+        image_resolver,
+        ChartImageSource::Chart,
+    );
     // `CT_ShapeProperties` carries a fill choice. Merely authoring another
     // property (commonly `<a:ln><a:noFill/></a:ln>`) does not override the
     // host application's default chart-area fill. A direct but unsupported
@@ -14402,6 +14425,55 @@ Subtitle</a:t></a:r></a:p>
         ));
         assert_eq!(model.chart_fill_hidden, None);
         assert_eq!(model.chart_fill_paint_authored, Some(true));
+    }
+
+    #[test]
+    fn parse_chart_part_resolves_direct_chart_and_plot_picture_fills() {
+        struct Images;
+        impl ChartImageResolver for Images {
+            fn resolve_image(
+                &self,
+                source: ChartImageSource,
+                relationship_id: &str,
+            ) -> Option<(String, String)> {
+                if source != ChartImageSource::Chart {
+                    return None;
+                }
+                match relationship_id {
+                    "rChart" => Some(("xl/media/chart.png".to_owned(), "image/png".to_owned())),
+                    "rPlot" => Some(("xl/media/plot.png".to_owned(), "image/png".to_owned())),
+                    _ => None,
+                }
+            }
+        }
+        let document = root_of(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <c:chart><c:plotArea>
+                <c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart>
+                <c:spPr><a:blipFill rotWithShape="1"><a:blip r:embed="rPlot"/><a:stretch><a:fillRect/></a:stretch></a:blipFill></c:spPr>
+              </c:plotArea></c:chart>
+              <c:spPr><a:blipFill dpi="0" rotWithShape="0"><a:blip r:embed="rChart"/><a:srcRect/><a:stretch><a:fillRect/></a:stretch></a:blipFill></c:spPr>
+            </c:chartSpace>"#,
+        );
+        let model = parse_chart_part_with_style_parts_and_images(
+            document.root_element(),
+            &FixtureResolver,
+            None,
+            None,
+            &Images,
+        )
+        .expect("classic chart parses");
+
+        assert!(matches!(
+            model.chart_fill,
+            Some(ChartStyleFill::Image { ref image_path, stretch: true, .. })
+                if image_path == "xl/media/chart.png"
+        ));
+        assert!(matches!(
+            model.plot_area_fill,
+            Some(ChartStyleFill::Image { ref image_path, stretch: true, .. })
+                if image_path == "xl/media/plot.png"
+        ));
     }
 
     #[test]

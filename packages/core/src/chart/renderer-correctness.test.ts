@@ -43,6 +43,35 @@ it('uses collision-free tuple keys for decoded chart image sources', () => {
   }));
 });
 
+it('prefetches and paints direct chart-space and plot-area picture fills', () => {
+  const chartPicture = {
+    fillType: 'image' as const,
+    imagePath: 'xl/media/chart-background.png',
+    mimeType: 'image/png',
+    stretch: true,
+  };
+  const plotPicture = {
+    fillType: 'image' as const,
+    imagePath: 'xl/media/plot-background.png',
+    mimeType: 'image/png',
+    stretch: true,
+  };
+  const model = baseModel({
+    chartFill: chartPicture,
+    chartFillPaintAuthored: true,
+    plotAreaFill: plotPicture,
+    plotAreaFillPaintAuthored: true,
+    series: [series({ values: [1] })],
+  });
+  const bitmap = { width: 8, height: 8 } as unknown as CanvasImageSource;
+
+  expect(collectChartMarkerImageFills(model)).toEqual([chartPicture, plotPicture]);
+  const rec = recordingCtx();
+  renderChartCore(rec.ctx, model, RECT, 1, 0, testThreeD, undefined, () => bitmap);
+  expect(rec.drawImages).toHaveLength(2);
+  expect(rec.drawImages.every(call => call[0] === bitmap)).toBe(true);
+});
+
 it('collects only the effective direct bubble point picture', () => {
   const seriesPicture = {
     fillType: 'image' as const,
@@ -1338,7 +1367,7 @@ describe('classic 3-D compatibility projection', () => {
     expect(rec.strokes.filter(stroke => stroke.ss === '#898989')).toHaveLength(0);
   });
 
-  it('uses the shared visible hairline floor for authored 0.25pt 3-D axes', () => {
+  it('uses a one-pixel visible floor for authored 0.25pt 3-D axes', () => {
     const rec = strokedPolylineCtx();
     renderChart(rec.ctx, baseModel({
       chartType: 'clusteredBar',
@@ -1372,7 +1401,7 @@ describe('classic 3-D compatibility projection', () => {
     for (const color of ['#FF00FF', '#00AA00', '#0000FF']) {
       const strokes = rec.strokes.filter(stroke => stroke.ss === color);
       expect(strokes.length).toBeGreaterThan(0);
-      expect(strokes.every(stroke => stroke.lw === 0.5)).toBe(true);
+      expect(strokes.every(stroke => stroke.lw === 1)).toBe(true);
     }
   });
 

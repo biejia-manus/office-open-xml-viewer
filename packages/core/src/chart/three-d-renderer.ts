@@ -2208,7 +2208,11 @@ function threeDAxisStroke(
 ): ThreeDStroke {
   const stroke = threeDStroke(color, widthEmu, dash, ptToPx, '898989', 1);
   if (widthEmu == null || !Number.isFinite(widthEmu) || widthEmu < 0) return stroke;
-  const width = axisLineWidthPx(widthEmu, ptToPx);
+  // Excel rasterizes an authored 0.25pt 3-D axis as a visible one-pixel rule.
+  // The shared 0.5px hairline is sufficient for flat axes/grid rules, but a
+  // projected 3-D rule loses more coverage to antialiasing and must retain one
+  // full Canvas pixel before projection.
+  const width = Math.max(1, axisLineWidthPx(widthEmu, ptToPx));
   return { ...stroke, width, dash: pptxPresetDashArray(dash ?? 'solid', width) };
 }
 
