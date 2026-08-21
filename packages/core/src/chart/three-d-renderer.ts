@@ -2834,6 +2834,14 @@ function renderCartesian(
     // made its convergence visibly too severe.
     sceneDepthScale: bars ? (depthArranged ? 0.65 : 0.10) : 0.40,
     perspectiveTangentGain: depthArranged ? 1 : 2,
+    // MS-OE376 §2.1.1501(a) assigns omitted hPercent to Office automatic
+    // scaling. Repeated Excel/PDF line/area probes resolve that automatic
+    // model-space height to one third of the scene width; an authored
+    // hPercent continues to own the ratio in planChartThreeDProjection.
+    sceneHeightScale: !bars
+      && !(chart.threeD.heightPercentAuthored ?? chart.threeD.heightPercent != null)
+      ? 1 / 3
+      : undefined,
   });
   if (!projection) return true;
   projection = fitChartThreeDProjectionToWallThickness(projection, chart.threeD, plot);
@@ -2896,9 +2904,42 @@ function renderCartesian(
     dataMin = logarithmic ? extent.min : Math.min(0, extent.min);
     dataMax = logarithmic ? extent.max : Math.max(0, extent.max);
   }
+  const projectedValueAxisStart = horizontal
+    ? projection.project(
+        projection.front.x,
+        projection.topology.axisY === 'min'
+          ? projection.front.y
+          : projection.front.y + projection.front.h,
+        projection.topology.nearDepth,
+      )
+    : projection.project(
+        projection.topology.axisX === 'min'
+          ? projection.front.x
+          : projection.front.x + projection.front.w,
+        projection.front.y,
+        projection.topology.nearDepth,
+      );
+  const projectedValueAxisEnd = horizontal
+    ? projection.project(
+        projection.front.x + projection.front.w,
+        projection.topology.axisY === 'min'
+          ? projection.front.y
+          : projection.front.y + projection.front.h,
+        projection.topology.nearDepth,
+      )
+    : projection.project(
+        projection.topology.axisX === 'min'
+          ? projection.front.x
+          : projection.front.x + projection.front.w,
+        projection.front.y + projection.front.h,
+        projection.topology.nearDepth,
+      );
+  const projectedValueAxisLenPt = Math.hypot(
+    projectedValueAxisEnd.x - projectedValueAxisStart.x,
+    projectedValueAxisEnd.y - projectedValueAxisStart.y,
+  ) / ptToPx;
   const axis = axisPlan(
-    chart, dataMin, dataMax,
-    (horizontal ? projection.front.w : projection.front.h) / ptToPx,
+    chart, dataMin, dataMax, projectedValueAxisLenPt,
     percent, horizontal ? 'horizontal' : 'vertical',
   );
   // A column/bar datum is zero only while zero belongs to the value-axis
