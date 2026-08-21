@@ -93,7 +93,9 @@ pub struct Document {
     /// ECMA-376 §17.13.5 — track-changes events found in the body. Each entry
     /// is one `<w:ins>` or `<w:del>` block, with the change author / date /
     /// text content. Empty when the document has no tracked changes.
-    /// Renderer ignores this; surfaced for tools (MCP, agents).
+    /// A flat tool-facing projection (MCP, agents) whose shape is pinned:
+    /// moves are deliberately NOT listed here (run-level `revision` tags carry
+    /// them). The renderer reads the run tags, not this list.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub revisions: Vec<DocxRevision>,
     /// ECMA-376 §17.13.4 — `word/comments.xml` flat list. Each comment carries

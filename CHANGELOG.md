@@ -5,6 +5,36 @@ semantic versioning. While the major version is zero, minor releases may contain
 explicitly documented breaking changes; patch releases remain compatible with
 the corresponding minor release.
 
+## Unreleased
+
+- **Word tracked changes (ECMA-376 §17.13.5):** the default render is now the
+  document's FINAL state — deleted (`w:del`) and moved-away (`w:moveFrom`)
+  text is hidden, and moved-in (`w:moveTo`) text renders at its destination.
+  Previously deleted text was drawn as ordinary body text and moved text
+  disappeared entirely (`w:moveFrom`/`w:moveTo` were unparsed; inserted text
+  inside text boxes was also dropped). The new opt-in markup view —
+  `showTrackedChanges` on `RenderPageOptions` and both viewers, with runtime
+  `setShowTrackedChanges` — draws insertions/moveTo with an author-coloured
+  underline, deletions/moveFrom with an author-coloured strikethrough (the
+  stable eight-colour palette, first-appearance author indexing), and a
+  vertical change bar in the margin beside every changed line. Each view is a
+  separately cached layout variant; documents without revisions lay out
+  byte-identically in both. This supersedes the non-functional
+  `showTrackChanges` render option removed in 0.77 (the retained paint
+  pipeline never consulted it) with a functional, differently-named switch.
+- **Word comments (ECMA-376 §17.13.4):** comment anchors
+  (`commentRangeStart`/`End`, `commentReference`) are now parsed as
+  zero-effect paragraph marks, `word/commentsExtended.xml` supplies reply
+  threading and resolved state, and the opt-in `showComments` viewer option
+  (with `commentsGutterWidth` and runtime `setShowComments`) draws Word-style
+  margin balloons to the right of the page: commented ranges tinted,
+  connector lines, threaded replies nested in the parent balloon, resolved
+  threads hidden, balloons capped at ten lines with anchor-ordered stacking,
+  truncation toward the next balloon, and click-to-select expansion. Comment
+  data also grows `DocComment.parentId` / `resolved` / `paragraphs` and
+  `DocxDocument.commentAnchorRanges()`; both features work in main and
+  worker render modes.
+
 ## 0.80.2 — 2026-08-18
 
 Compatible patch release improving Office document fidelity and navigation
