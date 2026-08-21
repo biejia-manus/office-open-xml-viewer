@@ -146,11 +146,12 @@ export function planChartThreeDSurfacePicture(
   if ((options?.pictureStackUnitAuthored === true || options?.pictureStackUnit != null)
     && format !== 'stackScale') return null;
   if (fill.tile) {
-    if (format !== 'stretch' || !rectIsIdentity(fill.srcRect) || !rectIsIdentity(fill.fillRect)) {
+    if (format !== 'stretch' || !rectIsIdentity(fill.fillRect)) {
       return null;
     }
     // Physical tile size and the final aggregate work depend on the decoded
-    // image and each projected face. The painter resolves both before drawing.
+    // image and each projected face. The painter resolves both before drawing,
+    // then applies the authored source rectangle inside every bounded tile.
     return boundedSurfacePicturePlan({ mode: 'tile', repetitions: 1, slabFaces });
   }
   if (format === 'stretch') {
