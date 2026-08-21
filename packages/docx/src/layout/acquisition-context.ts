@@ -114,6 +114,9 @@ export interface BodyAcquisitionState extends AnchorFloatRegistrationState {
   kinsoku: KinsokuRules;
   defaultTabPt: number;
   currentDateMs?: number;
+  /** ECMA-376 §17.13.5 tracked-change view (from the selected LayoutOptions):
+   * true = markup view, absent/false = final view (deletions hidden). */
+  showTrackedChanges?: boolean;
   noteNumbers?: Map<string, number>;
   noteReferenceNumber?: number;
   containerShading?: string | null;
@@ -143,6 +146,7 @@ export type BodyMeasurementContext = Readonly<Pick<
   | 'kinsoku'
   | 'defaultTabPt'
   | 'currentDateMs'
+  | 'showTrackedChanges'
   | 'noteNumbers'
   | 'noteReferenceNumber'
   | 'verticalCJK'

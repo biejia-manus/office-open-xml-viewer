@@ -75,6 +75,7 @@ export function paragraphMeasurementEnvironment(
     displayPageNumber: state.displayPageNumber,
     pageNumberFormat: state.pageNumberFormat,
     currentDateMs: state.currentDateMs,
+    showTrackedChanges: state.showTrackedChanges,
     noteNumbers: state.noteNumbers,
     noteReferenceNumber: state.noteReferenceNumber,
     pageWritingMode: writingModeFromTextDirection(state.sectionLayout.textDirection),

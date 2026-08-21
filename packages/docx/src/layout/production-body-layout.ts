@@ -306,6 +306,7 @@ function buildMeasureState(
     },
     retainedTablesBySourceIndex: new Map<number, RetainedTableRecord>(),
     currentDateMs: layoutOptions?.currentDateMs,
+    showTrackedChanges: layoutOptions?.showTrackedChanges,
     kinsoku: layoutSettings.kinsoku,
     defaultTabPt: layoutSettings.defaultTabPt,
     // ECMA-376 §17.6.20 + §20.4.3.x (issue #988 ②, Codex review F1): for a

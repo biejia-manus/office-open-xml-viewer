@@ -91,7 +91,10 @@ export interface LoadOptions extends CoreLoadOptions {
 }
 
 /** Options for {@link DocxDocument.collectPageRuns}. */
-export type CollectPageRunsOptions = Pick<RenderPageOptions, 'width' | 'currentDate'>;
+export type CollectPageRunsOptions = Pick<
+  RenderPageOptions,
+  'width' | 'currentDate' | 'showTrackedChanges'
+>;
 
 /** IX6 — options for {@link DocxDocument.renderPageToBitmap}: the serializable
  *  render knobs plus an OPTIONAL `onTextRun`. The callback stays main-thread (it
@@ -714,6 +717,7 @@ export class DocxDocument {
       currentDate: wireOpts.currentDate,
       defaultCurrentDateMs: runtime.defaultCurrentDateMs,
       width: wireOpts.width,
+      showTrackedChanges: wireOpts.showTrackedChanges,
     });
   }
 

@@ -642,6 +642,11 @@ export interface LineLayoutEnvironment {
   readonly displayPageNumber?: number;
   readonly pageNumberFormat?: NumberFormat;
   readonly currentDateMs?: number;
+  /** ECMA-376 §17.13.5 tracked-change view. `true` = markup view: revision
+   * content stays visible for author-coloured decoration. Absent/false =
+   * final view: deleted (`w:del`) and moved-away (`w:moveFrom`) runs produce
+   * no segments, so line breaking sees the accepted document state. */
+  readonly showTrackedChanges?: boolean;
   readonly noteNumbers?: ReadonlyMap<string, number>;
   readonly noteReferenceNumber?: number;
   readonly verticalCJK?: boolean;
@@ -3253,6 +3258,19 @@ export function buildSegments(
   };
 
   for (const [runIndex, run] of runs.entries()) {
+    // ECMA-376 §17.13.5 final view (the default): deleted (`w:del`,
+    // §17.13.5.14) and moved-away (`w:moveFrom`, §17.13.5.22) content is not
+    // part of the document's final state, so no segment is produced and line
+    // breaking/pagination see the text as an accepted document. The markup
+    // view (`showTrackedChanges`) keeps every revision run visible so it can
+    // be decorated. Insertions/moveTo render in both views.
+    const runRevisionKind = (run as { revision?: { kind?: string } }).revision?.kind;
+    if (
+      environment.showTrackedChanges !== true
+      && (runRevisionKind === 'deletion' || runRevisionKind === 'moveFrom')
+    ) {
+      continue;
+    }
     const emittedStart = segs.length;
     if (run.type === 'text') {
       const t = run as unknown as DocxTextRun & { type: 'text' };
