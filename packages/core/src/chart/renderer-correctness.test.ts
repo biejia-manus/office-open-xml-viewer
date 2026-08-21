@@ -1314,6 +1314,68 @@ describe('classic 3-D compatibility projection', () => {
     expect(rec.strokes.filter(stroke => stroke.ss === '#FF00FF')).toHaveLength(0);
   });
 
+  it('does not invent 3-D category-depth gridlines when majorGridlines is omitted', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B'],
+      valAxisMajorGridlines: false,
+      catAxisLineColor: '000000',
+      valAxisLineColor: '000000',
+      threeD: {
+        rotationX: 15,
+        rotationY: 20,
+        depthPercent: 100,
+        perspective: 30,
+        floor: { lineHidden: true },
+        sideWall: { lineHidden: true },
+        backWall: { lineHidden: true },
+        seriesAxis: { hidden: true, lineHidden: true, majorTickMark: 'none' },
+      },
+      series: [series({ values: [5, 15], lineHidden: true })],
+    }), RECT, 1);
+
+    expect(rec.strokes.filter(stroke => stroke.ss === '#898989')).toHaveLength(0);
+  });
+
+  it('uses the shared visible hairline floor for authored 0.25pt 3-D axes', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B'],
+      catAxisLineColor: 'FF00FF',
+      catAxisLineWidthEmu: 3_175,
+      catAxisMajorGridlines: false,
+      valAxisLineColor: '00AA00',
+      valAxisLineWidthEmu: 3_175,
+      valAxisMajorGridlines: false,
+      threeD: {
+        rotationX: 15,
+        rotationY: 20,
+        depthPercent: 100,
+        perspective: 30,
+        barGrouping: 'standard',
+        floor: { lineHidden: true },
+        sideWall: { lineHidden: true },
+        backWall: { lineHidden: true },
+        seriesAxis: {
+          hidden: false,
+          lineHidden: false,
+          lineColor: '0000FF',
+          lineWidthEmu: 3_175,
+          majorTickMark: 'none',
+        },
+      },
+      series: [series({ values: [5, 15], lineHidden: true })],
+    }), RECT, 1);
+
+    for (const color of ['#FF00FF', '#00AA00', '#0000FF']) {
+      const strokes = rec.strokes.filter(stroke => stroke.ss === color);
+      expect(strokes.length).toBeGreaterThan(0);
+      expect(strokes.every(stroke => stroke.lw === 0.5)).toBe(true);
+    }
+  });
+
   it('draws 6pt major and 4pt minor value ticks as horizontal screen annotations', () => {
     const rec = strokedPolylineCtx();
     renderChart(rec.ctx, baseModel({
