@@ -1528,6 +1528,44 @@ export function drawLegendForLayout(
     chart.categories, ptToPx, fillPaints, shapeRotationDeg, chart.varyColors !== false, chart, leg);
 }
 
+/** Expand a cartesian plot's automatic top inset around an authored top legend.
+ * A non-overlay manual legend still participates in chart layout: its authored
+ * rectangle replaces the automatic legend rectangle, so the plot must start
+ * below its actual bottom rather than below the shorter measured reserve. Keep
+ * the existing automatic legend-to-plot clearance unchanged. */
+function manualTopLegendPlotInset(
+  chart: ChartModel,
+  legend: MeasuredLegendLayout | null,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  titleBandH: number,
+  automaticInset: number,
+): number {
+  if (!legend
+    || legend.side !== 't'
+    || chart.legendOverlay === true
+    || chart.legendManualLayout == null) return automaticInset;
+  const defaultBox = {
+    x: x + LEGEND_HORIZONTAL_INSET,
+    y: y + titleBandH + 2,
+    w: Math.max(0, w - LEGEND_HORIZONTAL_PADDING),
+    h: legend.reserveH,
+  };
+  const manualBox = resolveManualLayoutRect(
+    chart.legendManualLayout,
+    { x, y, w, h },
+    defaultBox,
+  );
+  if (!manualBox) return automaticInset;
+  const automaticGap = Math.max(0, y + automaticInset - (defaultBox.y + defaultBox.h));
+  return Math.max(
+    automaticInset,
+    manualBox.y + manualBox.h - y + automaticGap,
+  );
+}
+
 export function drawAxisTick(
   ctx: CanvasRenderingContext2D,
   mode: string | null | undefined,
@@ -3782,6 +3820,9 @@ export function renderBarChart(
       )
       : legLeftW + Math.max(valTitleW + valLabelBandW, dataTableHeaderW),
   };
+  pad.t = manualTopLegendPlotInset(
+    chart, leg, x, y, w, h, titleH, pad.t,
+  );
 
   // `layoutTarget="outer"` includes tick labels and axis titles, but not the
   // chart title or legend. Convert only those measured axis bands to the inner
@@ -3847,7 +3888,9 @@ export function renderBarChart(
     titleH = titleBand.bandH;
     padT = titleH + legTopH + valAxLabelFontPx / 2 + 2
       + secondaryCatLabelBandH + secondaryCatTitleBandH;
-    pad.t = padT;
+    pad.t = manualTopLegendPlotInset(
+      chart, leg, x, y, w, h, titleH, padT,
+    );
     frame = computeChartFrame(chart, x, y, w, h, ptToPx, {
       titleBand,
       legendSideReserveFrac: 0.22,
