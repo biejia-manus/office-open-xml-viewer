@@ -14972,6 +14972,10 @@ function renderChartImpl(
     // (transparent) per OOXML, so the underlying slide/sheet shows through.
     if (chart.chartFillHidden === true) {
       // Direct or linked `noFill`: retain the host surface beneath the chart.
+    } else if (chart.chartFill?.fillType === 'image') {
+      paintChartImageFill(
+        ctx, chart.chartFill, x, y, w, h, ptToPx, shapeRotationDeg,
+      );
     } else if (chart.chartFill) {
       const fill = resolveFill(chart.chartFill, ctx, x, y, w, h, shapeRotationDeg);
       if (fill) ctx.fillStyle = fill;
