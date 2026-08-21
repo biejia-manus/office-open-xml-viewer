@@ -90,10 +90,17 @@ function alignmentOffset(
 const TILE_ALIGNMENTS = new Set(['tl', 't', 'tr', 'l', 'ctr', 'r', 'bl', 'b', 'br']);
 const TILE_FLIPS = new Set(['none', 'x', 'y', 'xy']);
 
-interface TileGeometry {
+export interface ChartImageTileMetrics {
   alignment: string;
   tileW: number;
   tileH: number;
+  offsetX: number;
+  offsetY: number;
+  flipX: boolean;
+  flipY: boolean;
+}
+
+interface TileGeometry extends ChartImageTileMetrics {
   columns: number;
   rows: number;
   repetitions: number;
@@ -113,13 +120,13 @@ export function chartImageFillSource(fill: ImageFill): CanvasImageSource | null 
   return activeLookup?.(fill) ?? null;
 }
 
-function imageTileGeometry(
+/** Resolve the shared DrawingML tile size, offset, alignment and mirroring.
+ * Destination-specific repetition counts remain with each consumer. */
+export function chartImageTileMetrics(
   fill: ImageFill,
   image: CanvasImageSource,
-  w: number,
-  h: number,
-  ptToPx: number,
-): TileGeometry | null {
+  ptToPx = PT_TO_PX,
+): ChartImageTileMetrics | null {
   const tile = fill.tile;
   // CT_TileInfoProperties@flip defaults to none. Its remaining placement
   // attributes and CT_BlipFillProperties@dpi have no usable schema default.
@@ -141,11 +148,48 @@ function imageTileGeometry(
   const tileW = natural.w * (sx as number) * cssPixelsPerImagePixel;
   const tileH = natural.h * (sy as number) * cssPixelsPerImagePixel;
   if (!(tileW > 0) || !(tileH > 0)) return null;
+  return {
+    alignment: algn,
+    tileW,
+    tileH,
+    offsetX: (tx as number) / EMU_PER_PT * ptToPx,
+    offsetY: (ty as number) / EMU_PER_PT * ptToPx,
+    flipX: flip === 'x' || flip === 'xy',
+    flipY: flip === 'y' || flip === 'xy',
+  };
+}
+
+/** Place the authored tile-grid origin in one destination's local coordinates. */
+export function chartImageTileOrigin(
+  metrics: ChartImageTileMetrics,
+  width: number,
+  height: number,
+): { x: number; y: number } {
+  const anchor = alignmentOffset(
+    metrics.alignment,
+    width,
+    height,
+    metrics.tileW,
+    metrics.tileH,
+  );
+  return { x: anchor.x + metrics.offsetX, y: anchor.y + metrics.offsetY };
+}
+
+function imageTileGeometry(
+  fill: ImageFill,
+  image: CanvasImageSource,
+  w: number,
+  h: number,
+  ptToPx: number,
+): TileGeometry | null {
+  const metrics = chartImageTileMetrics(fill, image, ptToPx);
+  if (!metrics) return null;
+  const { tileW, tileH } = metrics;
   const columns = Math.ceil(w / tileW) + 2;
   const rows = Math.ceil(h / tileH) + 2;
   const repetitions = columns * rows;
   if (!Number.isSafeInteger(repetitions)) return null;
-  return { alignment: algn, tileW, tileH, columns, rows, repetitions };
+  return { ...metrics, columns, rows, repetitions };
 }
 
 /** Exact Canvas image-draw work for one picture fill at the destination size.
@@ -470,14 +514,14 @@ export function paintChartImageFill(
     ctx.restore();
     return false;
   }
-  const { alignment, tileW, tileH, columns, rows } = geometry;
-  const anchor = alignmentOffset(alignment, w, h, tileW, tileH);
-  const originX = x + anchor.x + (fill.tile.tx as number) / EMU_PER_PT * ptToPx;
-  const originY = y + anchor.y + (fill.tile.ty as number) / EMU_PER_PT * ptToPx;
+  const {
+    tileW, tileH, flipX, flipY, columns, rows,
+  } = geometry;
+  const origin = chartImageTileOrigin(geometry, w, h);
+  const originX = x + origin.x;
+  const originY = y + origin.y;
   const firstColumn = Math.floor((x - originX) / tileW) - 1;
   const firstRow = Math.floor((y - originY) / tileH) - 1;
-  const flipX = fill.tile.flip === 'x' || fill.tile.flip === 'xy';
-  const flipY = fill.tile.flip === 'y' || fill.tile.flip === 'xy';
   for (let row = firstRow; row < firstRow + rows; row++) {
     for (let column = firstColumn; column < firstColumn + columns; column++) {
       const dx = originX + column * tileW;

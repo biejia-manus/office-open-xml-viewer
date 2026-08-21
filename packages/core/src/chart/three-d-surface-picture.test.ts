@@ -13,33 +13,57 @@ function paint(
     projectXScale?: number;
     pictureStackAspect?: number;
   } = {},
-): { painted: boolean; draws: unknown[][]; transforms: number[][] } {
+): {
+  painted: boolean;
+  draws: unknown[][];
+  sourceDraws: unknown[][];
+  transforms: number[][];
+  operations: Array<{ kind: 'translate' | 'scale'; values: number[] }>;
+} {
   const transforms: number[][] = [];
   const draws: unknown[][] = [];
-  const state: Record<string, unknown> = { globalAlpha: 1 };
-  const ctx = new Proxy(state, {
-    get(_target, property: string) {
-      if (property === 'getTransform') {
-        return () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
-      }
-      if (property === 'setTransform') {
-        return (...args: number[]) => transforms.push(args);
-      }
-      if (property === 'drawImage') {
-        return (...args: unknown[]) => draws.push(args);
-      }
-      if (property in state) return state[property];
-      return () => undefined;
-    },
-    set(_target, property: string, value) {
-      state[property] = value;
-      return true;
-    },
-  }) as unknown as CanvasRenderingContext2D;
+  const operations: Array<{ kind: 'translate' | 'scale'; values: number[] }> = [];
   const image = {
     width: options.imageWidth ?? 100,
     height: options.imageHeight ?? 100,
   } as unknown as CanvasImageSource;
+  const makeContext = (canvas: object): CanvasRenderingContext2D => {
+    const state: Record<string, unknown> = { globalAlpha: 1, canvas };
+    return new Proxy(state, {
+      get(_target, property: string) {
+        if (property === 'getTransform') {
+          return () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+        }
+        if (property === 'setTransform') {
+          return (...args: number[]) => transforms.push(args);
+        }
+        if (property === 'drawImage') {
+          return (...args: unknown[]) => draws.push(args);
+        }
+        if (property === 'translate' || property === 'scale') {
+          return (...values: number[]) => operations.push({ kind: property, values });
+        }
+        if (property in state) return state[property];
+        return () => undefined;
+      },
+      set(_target, property: string, value) {
+        state[property] = value;
+        return true;
+      },
+    }) as unknown as CanvasRenderingContext2D;
+  };
+  class RecordingCanvas {
+    readonly width: number;
+    readonly height: number;
+    private readonly context: CanvasRenderingContext2D;
+    constructor(width: number, height: number) {
+      this.width = width;
+      this.height = height;
+      this.context = makeContext(this);
+    }
+    getContext(): CanvasRenderingContext2D { return this.context; }
+  }
+  const ctx = makeContext(new RecordingCanvas(1, 1));
   const faceWidth = options.faceWidth ?? 100;
   const faceHeight = options.faceHeight ?? 100;
   const painted = paintChartThreeDSurfacePicture(
@@ -63,12 +87,19 @@ function paint(
       faces: [],
       pictureStackAspect: options.pictureStackAspect
         ?? faceWidth * (options.projectXScale ?? 1) / faceHeight,
+      modelDepth: faceWidth,
     },
     [0],
     point => ({ x: point.x * (options.projectXScale ?? 1), y: point.y }),
     10,
   );
-  return { painted, draws, transforms };
+  return {
+    painted,
+    draws,
+    sourceDraws: draws.filter(call => call[0] === image),
+    transforms,
+    operations,
+  };
 }
 
 const imageFill = {
@@ -191,5 +222,88 @@ describe('CT_Surface plain stacked pictures', () => {
     });
     expect(result.painted).toBe(false);
     expect(result.draws).toHaveLength(0);
+  });
+});
+
+describe('CT_Surface tiled pictures', () => {
+  const tiled = {
+    ...imageFill,
+    stretch: false,
+    dpi: 96,
+    tile: { tx: 0, ty: 0, sx: 1, sy: 1, flip: 'none', algn: 'tl' },
+  } satisfies ImageFill;
+
+  it('repeats the physical source size in face-local coordinates', () => {
+    const result = paint(tiled, {
+      imageWidth: 50,
+      imageHeight: 25,
+      faceWidth: 100,
+      faceHeight: 100,
+    });
+    expect(result.painted).toBe(true);
+    expect(result.sourceDraws).toHaveLength(8);
+  });
+
+  it('applies scale and alignment before projecting the tile grid', () => {
+    const full = paint(tiled, {
+      imageWidth: 50,
+      imageHeight: 25,
+      faceWidth: 100,
+      faceHeight: 100,
+    });
+    const half = paint({
+      ...tiled,
+      tile: { ...tiled.tile, sx: 0.5, sy: 0.5, algn: 'ctr' },
+    }, {
+      imageWidth: 50,
+      imageHeight: 25,
+      faceWidth: 100,
+      faceHeight: 100,
+    });
+    expect(full.painted).toBe(true);
+    expect(half.painted).toBe(true);
+    expect(half.sourceDraws.length).toBeGreaterThan(full.sourceDraws.length);
+    expect(half.operations).not.toEqual(full.operations);
+  });
+
+  it('mirrors alternating face-local columns and rows', () => {
+    const none = paint(tiled, {
+      imageWidth: 50,
+      imageHeight: 25,
+      faceWidth: 100,
+      faceHeight: 100,
+    });
+    const mirrored = paint({
+      ...tiled,
+      tile: { ...tiled.tile, flip: 'xy' },
+    }, {
+      imageWidth: 50,
+      imageHeight: 25,
+      faceWidth: 100,
+      faceHeight: 100,
+    });
+    expect(mirrored.painted).toBe(true);
+    expect(mirrored.sourceDraws).toHaveLength(none.sourceDraws.length);
+    expect(mirrored.operations).not.toEqual(none.operations);
+  });
+
+  it('accepts the exact tile-work ceiling and rejects one additional column atomically', () => {
+    const exact = paint(tiled, {
+      imageWidth: 1,
+      imageHeight: 1,
+      faceWidth: 64,
+      faceHeight: 64,
+    });
+    expect(exact.painted).toBe(true);
+    expect(exact.sourceDraws).toHaveLength(4096);
+
+    const exceeded = paint(tiled, {
+      imageWidth: 1,
+      imageHeight: 1,
+      faceWidth: 65,
+      faceHeight: 64,
+    });
+    expect(exceeded.painted).toBe(false);
+    expect(exceeded.draws).toHaveLength(0);
   });
 });

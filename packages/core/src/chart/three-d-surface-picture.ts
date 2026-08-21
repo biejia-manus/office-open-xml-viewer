@@ -1,7 +1,10 @@
 import type { ImageFill } from '../types/common.js';
 import type { ChartThreeDSurface } from '../types/chart.js';
-import { cropSourceMapping, imageNaturalSize } from '../image/crop.js';
+import { createAuxCanvasForContext, type AuxCanvas, type AuxContext } from '../canvas/aux-canvas.js';
+import { MAX_CANVAS_AREA, MAX_CANVAS_DIMENSION } from '../canvas/clamp.js';
+import { cropSourceMapping, drawImageCropped, imageNaturalSize } from '../image/crop.js';
 import { drawProjected, projectQuadPoint } from '../shape/scene3d-draw.js';
+import { chartImageTileMetrics, chartImageTileOrigin } from './image-fill.js';
 import {
   planChartThreeDSurfacePicture,
   surfacePictureFaceIsEnabled,
@@ -53,6 +56,17 @@ function screenAlignedFace(
   return [top[0].scenePoint, top[1].scenePoint, bottom[1].scenePoint, bottom[0].scenePoint];
 }
 
+function surfacePictureSceneFace(
+  geometry: ChartThreeDSurfaceGeometry,
+  faceIndex: number,
+  project: (point: ThreeDScenePoint) => SurfacePicturePoint,
+): [ThreeDScenePoint, ThreeDScenePoint, ThreeDScenePoint, ThreeDScenePoint] | null {
+  if (geometry.thickness === 0 && faceIndex === 0) {
+    return [geometry.inner[3], geometry.inner[2], geometry.inner[1], geometry.inner[0]];
+  }
+  return screenAlignedFace(geometry.faces[faceIndex] ?? [], project);
+}
+
 /** Office plain-stack observation: derive one repetition height from the
  * projected plot-face aspect and source aspect, then share it across the
  * selected floor/wall target. Repetitions start at the target's lower edge.
@@ -66,6 +80,18 @@ function plainStackFraction(
     || !(sourceWidth > 0) || !(sourceHeight > 0)) return null;
   const fraction = referenceAspect * sourceHeight / sourceWidth;
   return Number.isFinite(fraction) && fraction > 0 ? fraction : null;
+}
+
+function sceneMetricDistance(
+  first: ThreeDScenePoint,
+  second: ThreeDScenePoint,
+  modelDepth: number,
+): number {
+  return Math.hypot(
+    first.x - second.x,
+    first.y - second.y,
+    (first.depth - second.depth) * modelDepth,
+  );
 }
 
 export function paintChartThreeDSurfacePicture(
@@ -116,6 +142,21 @@ export function paintChartThreeDSurfacePicture(
   const stackFraction = plan.mode === 'stack'
     ? plainStackFraction(geometry.pictureStackAspect, natural.w, natural.h)
     : null;
+  const tileMetrics = plan.mode === 'tile'
+    ? chartImageTileMetrics(fill, image)
+    : null;
+  const tileFaces: Array<{
+    faceIndex: number;
+    width: number;
+    height: number;
+    origin: { x: number; y: number };
+    firstColumn: number;
+    firstRow: number;
+    lastColumn: number;
+    lastRow: number;
+    canvas: AuxCanvas;
+    context: AuxContext;
+  }> = [];
 
   if (plan.mode === 'stack') {
     if (stackFraction == null) return false;
@@ -123,14 +164,62 @@ export function paintChartThreeDSurfacePicture(
     let hasFace = false;
     for (const faceIndex of visibleFaceIndices) {
       if (!surfacePictureFaceIsEnabled(plan, faceIndex)) continue;
-      const face = geometry.thickness === 0 && faceIndex === 0
-        ? [geometry.inner[3], geometry.inner[2], geometry.inner[1], geometry.inner[0]]
-        : screenAlignedFace(geometry.faces[faceIndex] ?? [], project);
+      const face = surfacePictureSceneFace(geometry, faceIndex, project);
       if (!face) continue;
       const repetitions = Math.ceil(1 / stackFraction);
       if (!Number.isSafeInteger(repetitions) || repetitions < 1) return false;
       work += repetitions;
       if (work > MAX_CHART_IMAGE_FILL_TILES) return false;
+      hasFace = true;
+    }
+    if (!hasFace) return false;
+  }
+
+  if (plan.mode === 'tile') {
+    if (!tileMetrics) return false;
+    let work = 0;
+    let canvasArea = 0;
+    let hasFace = false;
+    for (const faceIndex of visibleFaceIndices) {
+      if (!surfacePictureFaceIsEnabled(plan, faceIndex)) continue;
+      const face = surfacePictureSceneFace(geometry, faceIndex, project);
+      if (!face) continue;
+      const width = sceneMetricDistance(face[0], face[1], geometry.modelDepth);
+      const height = sceneMetricDistance(face[0], face[3], geometry.modelDepth);
+      if (!(width > 0) || !(height > 0)) continue;
+      const origin = chartImageTileOrigin(tileMetrics, width, height);
+      const firstColumn = Math.floor(-origin.x / tileMetrics.tileW);
+      const firstRow = Math.floor(-origin.y / tileMetrics.tileH);
+      const lastColumn = Math.ceil((width - origin.x) / tileMetrics.tileW);
+      const lastRow = Math.ceil((height - origin.y) / tileMetrics.tileH);
+      const columns = Math.max(0, lastColumn - firstColumn);
+      const rows = Math.max(0, lastRow - firstRow);
+      const repetitions = columns * rows;
+      if (!Number.isSafeInteger(repetitions)) return false;
+      work += repetitions;
+      if (work > MAX_CHART_IMAGE_FILL_TILES) return false;
+      if (repetitions === 0) continue;
+      const canvasWidth = Math.ceil(width);
+      const canvasHeight = Math.ceil(height);
+      if (!(canvasWidth > 0 && canvasWidth <= MAX_CANVAS_DIMENSION)
+        || !(canvasHeight > 0 && canvasHeight <= MAX_CANVAS_DIMENSION)
+        || canvasWidth > Math.floor((MAX_CANVAS_AREA - canvasArea) / canvasHeight)) return false;
+      canvasArea += canvasWidth * canvasHeight;
+      const canvas = createAuxCanvasForContext(ctx, canvasWidth, canvasHeight);
+      const context = canvas?.getContext('2d');
+      if (!canvas || !context) return false;
+      tileFaces.push({
+        faceIndex,
+        width,
+        height,
+        origin,
+        firstColumn,
+        firstRow,
+        lastColumn,
+        lastRow,
+        canvas,
+        context,
+      });
       hasFace = true;
     }
     if (!hasFace) return false;
@@ -169,9 +258,7 @@ export function paintChartThreeDSurfacePicture(
   } else {
     for (const faceIndex of visibleFaceIndices) {
       if (!surfacePictureFaceIsEnabled(plan, faceIndex)) continue;
-      const face = geometry.thickness === 0 && faceIndex === 0
-        ? [geometry.inner[3], geometry.inner[2], geometry.inner[1], geometry.inner[0]]
-        : screenAlignedFace(geometry.faces[faceIndex] ?? [], project);
+      const face = surfacePictureSceneFace(geometry, faceIndex, project);
       if (!face) continue;
       const quad = face.map(project) as SurfacePictureQuad;
       ctx.save();
@@ -184,7 +271,48 @@ export function paintChartThreeDSurfacePicture(
       // faces. End faces have no value-axis extent, so Office maps one whole
       // source there instead of compressing every repetition into thickness.
       const repetitions = surfacePictureFaceRepetitions(plan, faceIndex);
-      if (plan.mode === 'stack') {
+      if (plan.mode === 'tile') {
+        if (!tileMetrics) continue;
+        const tileFace = tileFaces.find(candidate => candidate.faceIndex === faceIndex);
+        if (!tileFace) continue;
+        const scaleX = tileFace.canvas.width / tileFace.width;
+        const scaleY = tileFace.canvas.height / tileFace.height;
+        tileFace.context.save();
+        tileFace.context.scale(scaleX, scaleY);
+        for (let row = tileFace.firstRow; row < tileFace.lastRow; row++) {
+          for (let column = tileFace.firstColumn; column < tileFace.lastColumn; column++) {
+            const dx = tileFace.origin.x + column * tileMetrics.tileW;
+            const dy = tileFace.origin.y + row * tileMetrics.tileH;
+            const mirrorX = tileMetrics.flipX && Math.abs(column) % 2 === 1;
+            const mirrorY = tileMetrics.flipY && Math.abs(row) % 2 === 1;
+            tileFace.context.save();
+            tileFace.context.translate(
+              dx + (mirrorX ? tileMetrics.tileW : 0),
+              dy + (mirrorY ? tileMetrics.tileH : 0),
+            );
+            tileFace.context.scale(mirrorX ? -1 : 1, mirrorY ? -1 : 1);
+            drawImageCropped(
+              tileFace.context,
+              image,
+              fill.srcRect,
+              0,
+              0,
+              tileMetrics.tileW,
+              tileMetrics.tileH,
+            );
+            tileFace.context.restore();
+          }
+        }
+        tileFace.context.restore();
+        drawProjected(
+          tileFace.canvas,
+          ctx,
+          tileFace.canvas.width,
+          tileFace.canvas.height,
+          quad,
+          0.5,
+        );
+      } else if (plan.mode === 'stack') {
         if (stackFraction == null) continue;
         for (let index = 0; index < Math.ceil(1 / stackFraction); index++) {
           drawProjected(

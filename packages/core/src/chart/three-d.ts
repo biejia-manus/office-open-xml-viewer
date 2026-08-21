@@ -240,6 +240,8 @@ export interface ChartThreeDSurfaceGeometry {
   faces: ThreeDScenePoint[][];
   /** Projected plot-face width/height used by Office plain picture stacking. */
   pictureStackAspect: number | null;
+  /** CSS-pixel metric represented by one normalized scene-depth unit. */
+  modelDepth: number;
 }
 
 const MAX_UNSIGNED_INT = 4_294_967_295;
@@ -312,7 +314,14 @@ export function planChartThreeDSurfaceGeometry(
     outer = inner.map(point => ({ ...point, depth: outerDepth }));
   }
   if (!(thickness > 0)) {
-    return { thickness: 0, inner, outer: [...inner], faces: [inner], pictureStackAspect };
+    return {
+      thickness: 0,
+      inner,
+      outer: [...inner],
+      faces: [inner],
+      pictureStackAspect,
+      modelDepth: projection.modelDepth,
+    };
   }
   const sides = inner.map((point, index) => [
     point,
@@ -354,7 +363,7 @@ export function planChartThreeDSurfaceGeometry(
     const dot = normal.x * outward.x + normal.y * outward.y + normal.depth * outward.depth;
     return dot < 0 ? [...face].reverse() : face;
   });
-  return { thickness, inner, outer, faces, pictureStackAspect };
+  return { thickness, inner, outer, faces, pictureStackAspect, modelDepth: projection.modelDepth };
 }
 
 /** Refit the complete base cuboid and the three authored surface slabs into

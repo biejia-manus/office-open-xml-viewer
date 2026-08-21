@@ -12,7 +12,7 @@ export type SurfacePictureQuad = [
 ];
 
 export interface SurfacePicturePlan {
-  mode: 'stretch' | 'stack' | 'stackScale';
+  mode: 'stretch' | 'stack' | 'stackScale' | 'tile';
   repetitions: number;
   stackUnit?: number;
   slabFaces?: {
@@ -104,7 +104,7 @@ export function planChartThreeDSurfacePicture(
   kind: ChartThreeDSurfaceKind,
   valueSpan?: number,
 ): SurfacePicturePlan | null {
-  if (fill.tile || fill.stretch !== true
+  if ((fill.tile != null) === (fill.stretch === true)
     || !relativeRectIsSupported(fill.srcRect) || !relativeRectIsSupported(fill.fillRect)
     || fill.rotWithShape === false
     || (fill.alpha != null && (!Number.isFinite(fill.alpha) || fill.alpha < 0 || fill.alpha > 1))) {
@@ -133,6 +133,14 @@ export function planChartThreeDSurfacePicture(
   }
   if ((options?.pictureStackUnitAuthored === true || options?.pictureStackUnit != null)
     && format !== 'stackScale') return null;
+  if (fill.tile) {
+    if (format !== 'stretch' || !rectIsIdentity(fill.srcRect) || !rectIsIdentity(fill.fillRect)) {
+      return null;
+    }
+    // Physical tile size and the final aggregate work depend on the decoded
+    // image and each projected face. The painter resolves both before drawing.
+    return boundedSurfacePicturePlan({ mode: 'tile', repetitions: 1, slabFaces });
+  }
   if (format === 'stretch') {
     return boundedSurfacePicturePlan({ mode: 'stretch', repetitions: 1, slabFaces });
   }

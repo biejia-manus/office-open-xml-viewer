@@ -173,4 +173,29 @@ describe('positive-thickness CT_Surface picture faces', () => {
       fillRect: { l: -0.1, t: 0, r: 0, b: 0 },
     }, surface, 'backWall', 10)).toBeNull();
   });
+
+  it('retains an explicit DrawingML tile grid on planar and thick surfaces', () => {
+    const tiled = {
+      ...fill,
+      stretch: false,
+      dpi: 96,
+      tile: { tx: 0, ty: 0, sx: 1, sy: 1, flip: 'none', algn: 'tl' },
+    };
+    expect(planChartThreeDSurfacePicture(tiled, {
+      thicknessPercent: 0,
+      pictureOptions: { applyToFront: true, pictureFormat: 'stretch' },
+    }, 'backWall', 10)).toEqual({ mode: 'tile', repetitions: 1, slabFaces: undefined });
+    expect(planChartThreeDSurfacePicture(tiled, {
+      thicknessPercent: 25,
+      pictureOptions: { pictureFormat: 'stretch' },
+    }, 'backWall', 10)).toEqual({
+      mode: 'tile',
+      repetitions: 1,
+      slabFaces: { front: true, sides: true, end: true },
+    });
+    expect(planChartThreeDSurfacePicture({
+      ...tiled,
+      srcRect: { l: 0.1, t: 0, r: 0, b: 0 },
+    }, undefined, 'backWall', 10)).toBeNull();
+  });
 });
