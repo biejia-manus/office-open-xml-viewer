@@ -924,6 +924,9 @@ export interface ChartModel {
     | null;
   /** `<c:catAx><c:title><c:layout><c:manualLayout>`. */
   catAxisTitleManualLayout?: ChartManualLayout | null;
+  /** Effective sum of the DrawingML top/bottom text insets for the
+   * category-axis title, including CT_TextBodyProperties defaults. */
+  catAxisTitleTextVerticalInsetEmu?: number | null;
   /** `<c:valAx><c:title>` run-prop font size (hpt). null = renderer default. */
   valAxisTitleFontSizeHpt?: number | null;
   /** `<c:valAx><c:title>` run-prop bold flag. null = not bold. */
@@ -947,6 +950,9 @@ export interface ChartModel {
     | null;
   /** `<c:valAx><c:title><c:layout><c:manualLayout>`. */
   valAxisTitleManualLayout?: ChartManualLayout | null;
+  /** Effective sum of the DrawingML top/bottom text insets for the
+   * value-axis title. */
+  valAxisTitleTextVerticalInsetEmu?: number | null;
   // ── Chart text font faces (CH10) ─────────────────────────────────────────
   // Each is the `<a:latin typeface>` (ECMA-376 §20.1.4.2.24) resolved from the
   // element's `<c:txPr>`. When absent the renderer falls back to the theme

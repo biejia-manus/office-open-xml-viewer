@@ -34,6 +34,7 @@ import {
   axisTitleFontPx,
   axisTitleMargin,
   axisTitleRotationRad,
+  axisTitleVerticalInsetPx,
   cartesianTitleBand,
   chartLegendBands,
   chartLegendReserve,
@@ -1590,11 +1591,21 @@ function titleAndPlot(
   ctx.restore();
   const legendBands = chartLegendBands(legendReserve, chart.legendOverlay === true);
   const axisBands = chartAxisTitleBands(chart, rect.w, rect.h, ptToPx);
+  const catAxisTitleInset = axisTitleVerticalInsetPx(
+    chart.catAxisTitleTextVerticalInsetEmu, ptToPx,
+  );
+  const valAxisTitleInset = axisTitleVerticalInsetPx(
+    chart.valAxisTitleTextVerticalInsetEmu, ptToPx,
+  );
   const leftTitleBand = orientation === 'horizontal'
-    ? chart.catAxisTitle ? axisBands.catFontPx + axisTitleMargin(rect.w) + 4 : 0
+    ? chart.catAxisTitle
+      ? axisBands.catFontPx + catAxisTitleInset + axisTitleMargin(rect.w) + 4
+      : 0
     : orientation === 'vertical' ? axisBands.valBandW : 0;
   const bottomTitleBand = orientation === 'horizontal'
-    ? chart.valAxisTitle ? axisBands.valFontPx + axisTitleMargin(rect.h) + 4 : 0
+    ? chart.valAxisTitle
+      ? axisBands.valFontPx + valAxisTitleInset + axisTitleMargin(rect.h) + 4
+      : 0
     : orientation === 'vertical' ? axisBands.catBandH : 0;
   const frame = computeChartFrame(chart, rect.x, rect.y, rect.w, rect.h, ptToPx, {
     titleBand: band,

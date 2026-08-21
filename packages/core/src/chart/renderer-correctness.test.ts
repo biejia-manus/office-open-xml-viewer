@@ -4495,6 +4495,23 @@ describe('classic 3-D compatibility projection', () => {
     expect(rec.texts.map(item => item.text)).toContain('Employees');
   });
 
+  it('reserves the effective DrawingML text insets for a 3-D axis title', () => {
+    const titleY = (withInsets: boolean): number => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'line', categories: ['A', 'B'],
+        catAxisTitle: 'Categories', catAxisTitleFontSizeHpt: 1000,
+        catAxisTitleTextVerticalInsetEmu: withInsets ? 91_440 : undefined,
+        threeD: { rotationX: 15, rotationY: 20 },
+        series: [series({ values: [1, 2] })],
+      }), RECT, 1);
+      expect(rec.texts.map(item => item.text)).toContain('Categories');
+      return rec.translations.at(-1)?.y ?? Number.NaN;
+    };
+
+    expect(titleY(true)).toBeCloseTo(titleY(false) - 7.2);
+  });
+
   it('rejects derived 3-D face work before expanding a moderate source cache', () => {
     const rec = recordingCtx();
     const values = Array.from({ length: 300 }, (_, index) => index + 1);

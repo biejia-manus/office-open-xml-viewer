@@ -404,6 +404,7 @@ export interface ChartModel {
     catAxisTitleRotation?: number | null;
     catAxisTitleVerticalMode?: 'horz' | 'vert' | 'vert270' | 'wordArtVert' | 'eaVert' | 'mongolianVert' | 'wordArtVertRtl' | null;
     catAxisTitleManualLayout?: ChartManualLayout | null;
+    catAxisTitleTextVerticalInsetEmu?: number | null;
     valAxisTitleFontSizeHpt?: number | null;
     valAxisTitleFontBold?: boolean | null;
     valAxisTitleFontItalic?: boolean | null;
@@ -411,6 +412,7 @@ export interface ChartModel {
     valAxisTitleRotation?: number | null;
     valAxisTitleVerticalMode?: 'horz' | 'vert' | 'vert270' | 'wordArtVert' | 'eaVert' | 'mongolianVert' | 'wordArtVertRtl' | null;
     valAxisTitleManualLayout?: ChartManualLayout | null;
+    valAxisTitleTextVerticalInsetEmu?: number | null;
     catAxisFontFace?: string | null;
     valAxisFontFace?: string | null;
     catAxisTitleFontFace?: string | null;
