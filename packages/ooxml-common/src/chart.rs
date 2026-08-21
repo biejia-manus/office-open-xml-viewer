@@ -4015,13 +4015,7 @@ fn extract_direct_shape_fill_with_images(
     image_source: ChartImageSource,
 ) -> DirectShapeFill {
     let fill_paint = shape.and_then(|shape| {
-        parse_chart_style_paint(
-            shape,
-            resolver,
-            None,
-            image_resolver,
-            image_source,
-        )
+        parse_chart_style_paint(shape, resolver, None, image_resolver, image_source)
     });
     let paint_authored = shape
         .and_then(|shape| {
