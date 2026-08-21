@@ -12647,36 +12647,76 @@ function renderScatterChart(
   drawAxisTitles(ctx, chart, x, y, w, h, px0, py0, pw, ph, legLeftW, legBottomH, catTitlePx, valTitlePx);
 }
 
-const BUBBLE_3D_MATERIAL_COMPONENTS = 5;
+// The fixed Office-observed material below is three bounded gradients with
+// 4 + 5 + 6 stops. Keep this exact so marker paint preflight charges every
+// component before any chart-wide work begins.
+const BUBBLE_3D_MATERIAL_COMPONENTS = 15;
 
 /** Paint the bounded application-defined material observed in current Excel
- * vector output for `bubble3D`. The highlight remains in shape-local
- * coordinates, so a PPTX host transform rotates the complete bubble without a
- * second lighting model. `source-atop` preserves the authored fill alpha. */
+ * vector output for `bubble3D`. A single radial envelope cannot independently
+ * express the measured diffuse highlight, right/lower falloff, and narrow
+ * lower reflected-light band, so those three fixed components are composited
+ * in that order. They remain in shape-local coordinates, so a PPTX host
+ * transform rotates the complete bubble without a second lighting model.
+ * `source-atop` preserves the authored fill alpha on every pass. */
 function paintBubble3DMaterial(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
   sizePx: number,
 ): void {
-  const highlightX = cx - sizePx * 0.08;
-  const highlightY = cy - sizePx * 0.17;
-  const material = ctx.createRadialGradient(
-    highlightX, highlightY, 0,
-    highlightX, highlightY, sizePx * 0.72,
-  );
-  material.addColorStop(0, 'rgba(255,255,255,0.78)');
-  material.addColorStop(0.2, 'rgba(255,255,255,0.48)');
-  material.addColorStop(0.48, 'rgba(255,255,255,0)');
-  material.addColorStop(0.78, 'rgba(0,0,0,0.18)');
-  material.addColorStop(1, 'rgba(0,0,0,0.5)');
   const previousComposite = ctx.globalCompositeOperation;
   const previousFill = ctx.fillStyle;
   ctx.save();
   ctx.clip();
-  ctx.globalCompositeOperation = 'source-atop';
-  ctx.fillStyle = material;
-  ctx.fillRect(cx - sizePx / 2, cy - sizePx / 2, sizePx, sizePx);
+  const paintLayer = (material: CanvasGradient) => {
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.fillStyle = material;
+    ctx.fillRect(cx - sizePx / 2, cy - sizePx / 2, sizePx, sizePx);
+  };
+
+  const diffuseX = cx - sizePx * 0.08;
+  const diffuseY = cy - sizePx * 0.17;
+  const diffuse = ctx.createRadialGradient(
+    diffuseX, diffuseY, 0,
+    diffuseX, diffuseY, sizePx * 0.55,
+  );
+  diffuse.addColorStop(0, 'rgba(255,255,255,0.72)');
+  diffuse.addColorStop(0.14, 'rgba(255,255,255,0.48)');
+  diffuse.addColorStop(0.38, 'rgba(255,255,255,0.1)');
+  diffuse.addColorStop(1, 'rgba(255,255,255,0)');
+  paintLayer(diffuse);
+
+  const shadeX = cx - sizePx * 0.08;
+  const shadeY = cy - sizePx * 0.18;
+  const shade = ctx.createRadialGradient(
+    shadeX, shadeY, 0,
+    shadeX, shadeY, sizePx * 0.78,
+  );
+  shade.addColorStop(0, 'rgba(0,0,0,0)');
+  shade.addColorStop(0.3, 'rgba(0,0,0,0)');
+  shade.addColorStop(0.46, 'rgba(0,0,0,0.22)');
+  shade.addColorStop(0.66, 'rgba(0,0,0,0.48)');
+  shade.addColorStop(1, 'rgba(0,0,0,0.62)');
+  paintLayer(shade);
+
+  // Put the annulus center above and to the left. Its 0.8--0.95 radius band
+  // crosses the lower-left edge and lower center while remaining clear of the
+  // dark lower-right shoulder.
+  const rimX = cx - sizePx * 0.2;
+  const rimY = cy - sizePx * 0.45;
+  const lowerRim = ctx.createRadialGradient(
+    rimX, rimY, 0,
+    rimX, rimY, sizePx,
+  );
+  lowerRim.addColorStop(0, 'rgba(255,255,255,0)');
+  lowerRim.addColorStop(0.76, 'rgba(255,255,255,0)');
+  lowerRim.addColorStop(0.82, 'rgba(255,255,255,0.05)');
+  lowerRim.addColorStop(0.87, 'rgba(255,255,255,0.12)');
+  lowerRim.addColorStop(0.95, 'rgba(255,255,255,0.28)');
+  lowerRim.addColorStop(1, 'rgba(255,255,255,0)');
+  paintLayer(lowerRim);
+
   // Recording contexts used by hosts/tests do not necessarily model a full
   // Canvas state stack, so restore the property explicitly as well.
   ctx.globalCompositeOperation = previousComposite;

@@ -202,11 +202,11 @@ it('prefetches and paints one bubble picture for both plot and 3-D legend key', 
   });
   const bitmap = { width: 8, height: 8 } as unknown as CanvasImageSource;
   expect(collectChartMarkerImageFills(model)).toEqual([picture]);
-  expect(classicMarkerPaintWorkCount(model, () => bitmap, 1, RECT)).toBe(12);
+  expect(classicMarkerPaintWorkCount(model, () => bitmap, 1, RECT)).toBe(32);
   const rec = recordingCtx();
   renderChartCore(rec.ctx, model, RECT, 1, 0, testThreeD, undefined, () => bitmap);
   expect(rec.drawImages).toHaveLength(2);
-  expect(rec.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(2);
+  expect(rec.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(6);
 });
 const renderChart: typeof renderChartCore = (
   ctx,
@@ -3639,7 +3639,7 @@ describe('classic 3-D compatibility projection', () => {
     expect(classicMarkerPaintWorkCount(model, undefined, 1, RECT)).toBe(5);
   });
 
-  it('charges the fixed bubble3D material for plot, legend, and label keys', () => {
+  it('charges every fixed bubble3D material stop for plot, legend, and label keys', () => {
     const model = baseModel({
       chartType: 'bubble', showLegend: true, categories: ['0'],
       series: [series({
@@ -3651,7 +3651,8 @@ describe('classic 3-D compatibility projection', () => {
       })],
       catAxisMin: 0, catAxisMax: 1, valMin: 0, valMax: 1,
     });
-    expect(classicMarkerPaintWorkCount(model, undefined, 1, RECT)).toBe(15);
+    // Three fixed gradients consume 4 + 5 + 6 stops per painted bubble.
+    expect(classicMarkerPaintWorkCount(model, undefined, 1, RECT)).toBe(45);
 
     model.series[0].chartexStyle = {
       fillHidden: true, fillPaintAuthored: true,
@@ -10150,11 +10151,13 @@ describe('CH9 — bubble scale and numeric-X trendlines', () => {
     }), RECT, 1);
 
     const materials = rec.gradients.filter(gradient => gradient.kind === 'radial');
-    expect(materials).toHaveLength(6);
-    expect(materials.every(gradient => gradient.stops.length === 5)).toBe(true);
+    expect(materials).toHaveLength(18);
+    expect(materials.map(gradient => gradient.stops.length)).toEqual(
+      Array.from({ length: 6 }, () => [4, 5, 6]).flat(),
+    );
   });
 
-  it('paints one bounded Office-observed material in local bubble coordinates', () => {
+  it('paints bounded independent diffuse, shade, and lower-rim material layers', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
       chartType: 'bubble', categories: ['1'],
@@ -10167,17 +10170,47 @@ describe('CH9 — bubble scale and numeric-X trendlines', () => {
       catAxisMin: 0, catAxisMax: 2, valMin: 0, valMax: 2,
     }), RECT, 1);
 
-    const material = rec.gradients.find(gradient => gradient.kind === 'radial');
-    expect(material).toBeDefined();
-    expect(material!.stops).toHaveLength(5);
+    const materials = rec.gradients.filter(gradient => gradient.kind === 'radial');
+    expect(materials).toHaveLength(3);
+    expect(materials.map(gradient => gradient.stops.length)).toEqual([4, 5, 6]);
     const bubble = rec.arcs.at(-1)!;
     const size = bubble.r * 2;
-    const [highlightX, highlightY, innerRadius, , , outerRadius] = material!.args;
-    expect((highlightX - (bubble.x - bubble.r)) / size).toBeCloseTo(0.42, 2);
-    expect((highlightY - (bubble.y - bubble.r)) / size).toBeCloseTo(0.33, 2);
-    expect(innerRadius).toBe(0);
-    expect(outerRadius / size).toBeCloseTo(0.72, 2);
-    expect(rec.compositeModes).toContain('source-atop');
+    const normalizedGradient = (gradient: (typeof materials)[number]) => {
+      const [x0, y0, innerRadius, x1, y1, outerRadius] = gradient.args;
+      return {
+        x0: (x0 - (bubble.x - bubble.r)) / size,
+        y0: (y0 - (bubble.y - bubble.r)) / size,
+        innerRadius: innerRadius / size,
+        x1: (x1 - (bubble.x - bubble.r)) / size,
+        y1: (y1 - (bubble.y - bubble.r)) / size,
+        outerRadius: outerRadius / size,
+      };
+    };
+    expect(normalizedGradient(materials[0])).toMatchObject({
+      x0: expect.closeTo(0.42, 2), y0: expect.closeTo(0.33, 2),
+      innerRadius: 0, x1: expect.closeTo(0.42, 2), y1: expect.closeTo(0.33, 2),
+      outerRadius: expect.closeTo(0.55, 2),
+    });
+    expect(normalizedGradient(materials[1])).toMatchObject({
+      x0: expect.closeTo(0.42, 2), y0: expect.closeTo(0.32, 2),
+      innerRadius: 0, x1: expect.closeTo(0.42, 2), y1: expect.closeTo(0.32, 2),
+      outerRadius: expect.closeTo(0.78, 2),
+    });
+    expect(normalizedGradient(materials[2])).toMatchObject({
+      x0: expect.closeTo(0.30, 2), y0: expect.closeTo(0.05, 2),
+      innerRadius: 0, x1: expect.closeTo(0.30, 2), y1: expect.closeTo(0.05, 2),
+      outerRadius: expect.closeTo(1, 2),
+    });
+    expect(materials[0].stops.some(stop => stop.color === 'rgba(255,255,255,0.72)'))
+      .toBe(true);
+    expect(materials[1].stops.some(stop => stop.color === 'rgba(0,0,0,0.62)'))
+      .toBe(true);
+    expect(materials[2].stops.some(stop => stop.color === 'rgba(255,255,255,0.28)'))
+      .toBe(true);
+    expect(materials.flatMap(material => material.stops).every(stop =>
+      /^rgba\((?:255,255,255|0,0,0),/.test(stop.color)
+    )).toBe(true);
+    expect(rec.compositeModes.filter(mode => mode === 'source-atop')).toHaveLength(3);
   });
 
   it('keeps noFill and outline independent from the bubble3D material', () => {
@@ -10228,7 +10261,7 @@ describe('CH9 — bubble scale and numeric-X trendlines', () => {
     expect(rec.paintEvents.some(event =>
       event.kind === 'fill' && event.fillStyle === '#FFFFFF'
     )).toBe(true);
-    expect(rec.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(1);
+    expect(rec.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(3);
     expect(rec.strokeDetails.filter(stroke => stroke.strokeStyle === '#7F6000')).toHaveLength(2);
   });
 
@@ -10243,7 +10276,7 @@ describe('CH9 — bubble scale and numeric-X trendlines', () => {
       catAxisMin: 0, catAxisMax: 2, valMin: 0, valMax: 2,
     }), RECT, 1);
 
-    expect(rec.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(2);
+    expect(rec.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(6);
   });
 
   it('lists textual bubble x values as point legend entries', () => {
