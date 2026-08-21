@@ -107,6 +107,7 @@ import {
   chartStyleLineDecision,
 } from './style-paint.js';
 import { drawingmlLineDashArray } from '../draw/dash.js';
+import { axisLineWidthPx } from './axis-style.js';
 import {
   MAX_CHART_PAINT_COMPONENTS,
   MAX_CHART_PAINT_RECIPE_COMPONENTS,
@@ -1786,8 +1787,8 @@ function drawThreeDSeriesAxis(
   }
 
   if (!spec.lineHidden) {
-    applyThreeDStroke(ctx, threeDStroke(
-      spec.lineColor, spec.lineWidthEmu, spec.lineDash, ptToPx, '898989', 1,
+    applyThreeDStroke(ctx, threeDAxisStroke(
+      spec.lineColor, spec.lineWidthEmu, spec.lineDash, ptToPx,
     ));
     ctx.beginPath();
     ctx.moveTo(start.x, start.y);
@@ -2199,6 +2200,18 @@ function threeDStroke(
   };
 }
 
+function threeDAxisStroke(
+  color: string | null | undefined,
+  widthEmu: number | null | undefined,
+  dash: string | null | undefined,
+  ptToPx: number,
+): ThreeDStroke {
+  const stroke = threeDStroke(color, widthEmu, dash, ptToPx, '898989', 1);
+  if (widthEmu == null || !Number.isFinite(widthEmu) || widthEmu < 0) return stroke;
+  const width = axisLineWidthPx(widthEmu, ptToPx);
+  return { ...stroke, width, dash: pptxPresetDashArray(dash ?? 'solid', width) };
+}
+
 function applyThreeDStroke(ctx: CanvasRenderingContext2D, stroke: ThreeDStroke): void {
   ctx.strokeStyle = stroke.color;
   ctx.lineWidth = stroke.width;
@@ -2213,7 +2226,6 @@ function walls(
   orientation: 'vertical' | 'horizontal',
   categoryCount: number,
   categoryBetween: boolean,
-  categoryReversed: boolean,
   ptToPx: number,
 ): void {
   const { front } = projection;
@@ -2382,9 +2394,9 @@ function walls(
       1,
     ), true);
   }
-  // Office retains automatic category-depth rays when majorGridlines is
-  // absent. An authored majorGridlines element instead owns the interval-rule
-  // positions and stroke, including continuation across thick surface faces.
+  // CT_CatAx/majorGridlines is optional. Only an authored element contributes
+  // category-grid geometry; omission must not synthesize depth rays. Authored
+  // rules continue across visible thick surface faces.
   const strokeCategorySurfaceGrid = (
     fractions: readonly number[],
     stroke: ThreeDStroke,
@@ -2413,8 +2425,7 @@ function walls(
       ),
     );
   }
-  const authoredCategoryGrid = chart.catAxisMajorGridlines === true;
-  if (authoredCategoryGrid) {
+  if (chart.catAxisMajorGridlines === true) {
     strokeCategorySurfaceGrid(
       categoryGridlineFractions(categoryCount, categoryBetween),
       threeDStroke(
@@ -2426,28 +2437,6 @@ function walls(
         0.5,
       ),
     );
-  } else {
-    applyThreeDStroke(ctx, threeDStroke(null, null, null, ptToPx, '898989', 1));
-    const categoryFractions = Array.from({ length: categoryCount }, (_, categoryIndex) =>
-      categoryPositionFraction(
-        categoryIndex,
-        categoryCount,
-        categoryBetween,
-        categoryReversed,
-      ));
-    for (const fraction of categoryFractions) {
-      if (orientation === 'vertical') {
-        const x = front.x + fraction * front.w;
-        const near = projection.project(x, floorY, nearDepth);
-        const far = projection.project(x, floorY, farDepth);
-        ctx.beginPath(); ctx.moveTo(near.x, near.y); ctx.lineTo(far.x, far.y); ctx.stroke();
-      } else {
-        const y = front.y + fraction * front.h;
-        const near = projection.project(farX, y, nearDepth);
-        const far = projection.project(farX, y, farDepth);
-        ctx.beginPath(); ctx.moveTo(near.x, near.y); ctx.lineTo(far.x, far.y); ctx.stroke();
-      }
-    }
   }
   const strokeSurface = (
     faces: readonly { points: readonly Point[] }[],
@@ -2525,11 +2514,11 @@ function frontAxes(
     ? !chart.valAxisHidden && !chart.valAxisLineHidden
     : !chart.catAxisHidden && !chart.catAxisLineHidden;
   if (drawHorizontal) {
-    applyThreeDStroke(ctx, threeDStroke(
+    applyThreeDStroke(ctx, threeDAxisStroke(
       orientation === 'vertical' ? chart.catAxisLineColor : chart.valAxisLineColor,
       orientation === 'vertical' ? chart.catAxisLineWidthEmu : chart.valAxisLineWidthEmu,
       orientation === 'vertical' ? chart.catAxisLineDash : chart.valAxisLineDash,
-      ptToPx, '898989', 1,
+      ptToPx,
     ));
     ctx.beginPath();
     ctx.moveTo(geometry.horizontalStart.x, geometry.horizontalStart.y);
@@ -2537,11 +2526,11 @@ function frontAxes(
     ctx.stroke();
   }
   if (drawVertical) {
-    applyThreeDStroke(ctx, threeDStroke(
+    applyThreeDStroke(ctx, threeDAxisStroke(
       orientation === 'vertical' ? chart.valAxisLineColor : chart.catAxisLineColor,
       orientation === 'vertical' ? chart.valAxisLineWidthEmu : chart.catAxisLineWidthEmu,
       orientation === 'vertical' ? chart.valAxisLineDash : chart.catAxisLineDash,
-      ptToPx, '898989', 1,
+      ptToPx,
     ));
     ctx.beginPath();
     ctx.moveTo(geometry.verticalStart.x, geometry.verticalStart.y);
@@ -2728,9 +2717,9 @@ function cartesianAxisTicks(
   );
   const valueMinorTickMark = chart.valAxisMinorTickMark ?? 'none';
   if (!chart.valAxisHidden && !chart.valAxisLineHidden) {
-    applyThreeDStroke(ctx, threeDStroke(
+    applyThreeDStroke(ctx, threeDAxisStroke(
       chart.valAxisLineColor, chart.valAxisLineWidthEmu, chart.valAxisLineDash,
-      ptToPx, '898989', 1,
+      ptToPx,
     ));
     const valueAnchor = (value: number) => orientation === 'horizontal'
       ? projection.project(front.x + axis.fraction(value) * front.w, axisY, depth)
@@ -2753,9 +2742,9 @@ function cartesianAxisTicks(
     }
   }
   if (!chart.catAxisHidden && !chart.catAxisLineHidden) {
-    applyThreeDStroke(ctx, threeDStroke(
+    applyThreeDStroke(ctx, threeDAxisStroke(
       chart.catAxisLineColor, chart.catAxisLineWidthEmu, chart.catAxisLineDash,
-      ptToPx, '898989', 1,
+      ptToPx,
     ));
     const categoryStart = orientation === 'vertical'
       ? geometry.horizontalStart : geometry.verticalStart;
@@ -2953,7 +2942,7 @@ function renderCartesian(
   if (!bars) {
     walls(
       ctx, chart, projection, axis, horizontal ? 'horizontal' : 'vertical',
-      categoryCount, categoryBetween, categoryReversed, ptToPx,
+      categoryCount, categoryBetween, ptToPx,
     );
   }
   const { front } = projection;
@@ -3179,7 +3168,7 @@ function renderCartesian(
     }
     walls(
       ctx, chart, projection, axis, horizontal ? 'horizontal' : 'vertical',
-      categoryCount, categoryBetween, categoryReversed, ptToPx,
+      categoryCount, categoryBetween, ptToPx,
     );
     // Build one scene list and sort every visible face by camera-space depth.
     // A logical series index is not a view depth after rotation, and painting
