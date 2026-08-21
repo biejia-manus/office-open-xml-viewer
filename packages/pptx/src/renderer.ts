@@ -3599,6 +3599,11 @@ export function renderTextBody(
   // `vert`/`vert270` (whose spec meaning IS to rotate every glyph), keeping those
   // paths byte-identical.
   eaVertUpright = false,
+  // A zero-height table row asks PowerPoint to derive its height from the
+  // natural line box. A positive a:tr@h is instead an authored minimum: use the
+  // glyph-size box when checking whether content actually exceeds that minimum,
+  // so implicit leading alone does not enlarge an already-sufficient row.
+  measureNaturalLineSpacing = measureOnly,
 ): number | void {
   // Vertical text: rotate rendering context so text flows top-to-bottom.
   // "vert" and "eaVert" both approximate to 90° clockwise rotation.
@@ -3955,14 +3960,14 @@ export function renderTextBody(
         maxSizePx = bulletImage.sizePx;
       }
 
-      // PowerPoint's existing natural-line approximation for painting. Table
-      // row auto-sizing is different: ECMA-376 §21.1.2.2.5/.11 defines
-      // percentage spacing from the largest authored text size, and omitted
-      // spacing from that point size. A substituted font's design-line-height
-      // floor must not enlarge the table structure (the glyphs are still
-      // painted with the normal floor below). This matters for rows whose
-      // authored height already accommodates the text: using Meiryo's taller
-      // design box used to grow every such row even though PowerPoint did not.
+      // PowerPoint's natural single-line box is 120% of the authored text size.
+      // An explicit percentage is instead based directly on that authored size
+      // (ECMA-376 §21.1.2.2.5/.11). Table measurement therefore retains the
+      // natural 120% box only when line spacing is omitted in an auto-height
+      // row. A positive a:tr@h remains a minimum and uses the glyph-size box for
+      // overflow measurement. Both exclude a substituted font's larger
+      // design-metric floor; glyph painting may keep that floor below without
+      // enlarging the table structure.
       const naturalSingle = maxSizePx * 1.2;
       const implicitSingle = Math.max(naturalSingle, designSingle);
       let lineHeight: number;
@@ -3974,7 +3979,9 @@ export function renderTextBody(
           lineHeight = para.spaceLine.val * PT_TO_EMU * scale;
         }
       } else {
-        lineHeight = measureOnly ? maxSizePx : implicitSingle;
+        lineHeight = measureOnly
+          ? (measureNaturalLineSpacing ? naturalSingle : maxSizePx)
+          : implicitSingle;
       }
       // normAutofit lnSpcReduction (ECMA-376 §21.1.2.1.3): PowerPoint reduces
       // each paragraph's line spacing by this fraction alongside the font
@@ -5824,7 +5831,7 @@ export function renderTable(ctx: CanvasRenderingContext2D, el: TableElement, sca
       const cellW = spannedWidth(ci, cell.gridSpan || 1);
       const needed = (renderTextBody(
         ctx, cell.textBody, 0, 0, cellW, 0, scale, null, 0, false, false,
-        '#000000', slideNumber, rc, undefined, true,
+        '#000000', slideNumber, rc, undefined, true, undefined, false, row.height === 0,
       ) as number) || 0;
       if (needed > rowHeights[ri]) rowHeights[ri] = needed;
     }
@@ -5841,9 +5848,12 @@ export function renderTable(ctx: CanvasRenderingContext2D, el: TableElement, sca
       const span = cell.rowSpan || 1;
       if (span <= 1 || !cell.textBody) continue;
       const cellW = spannedWidth(ci, cell.gridSpan || 1);
+      const hasAutoHeightRow = el.rows
+        .slice(ri, Math.min(el.rows.length, ri + span))
+        .some((spannedRow) => spannedRow.height === 0);
       const needed = (renderTextBody(
         ctx, cell.textBody, 0, 0, cellW, 0, scale, null, 0, false, false,
-        '#000000', slideNumber, rc, undefined, true,
+        '#000000', slideNumber, rc, undefined, true, undefined, false, hasAutoHeightRow,
       ) as number) || 0;
       let have = 0;
       for (let s = 0; s < span && ri + s < rowHeights.length; s++) have += rowHeights[ri + s];
