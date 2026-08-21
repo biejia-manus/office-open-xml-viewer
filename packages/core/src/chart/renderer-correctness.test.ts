@@ -1275,6 +1275,7 @@ describe('classic 3-D compatibility projection', () => {
     renderChart(rec.ctx, baseModel({
       chartType: 'clusteredBar',
       categories: ['A', 'B'],
+      valAxisMajorGridlines: true,
       threeD: { rotationX: 15, rotationY: 20, depthPercent: 100, perspective: 30 },
       series: [series({ values: [10, 20] })],
     }), RECT, 1);
@@ -1295,6 +1296,22 @@ describe('classic 3-D compatibility projection', () => {
     expect(Math.min(...slopes)).toBeGreaterThan(0.04);
     expect(Math.max(...slopes)).toBeLessThan(0.16);
     expect(Math.max(...slopes) - Math.min(...slopes)).toBeGreaterThan(0.02);
+  });
+
+  it('does not invent 3-D value gridlines when majorGridlines is omitted', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B'],
+      valAxisGridlineColor: 'FF00FF',
+      valMin: 0,
+      valMax: 20,
+      valAxisMajorUnit: 5,
+      threeD: { rotationX: 15, rotationY: 20, depthPercent: 100, perspective: 30 },
+      series: [series({ values: [5, 15] })],
+    }), RECT, 1);
+
+    expect(rec.strokes.filter(stroke => stroke.ss === '#FF00FF')).toHaveLength(0);
   });
 
   it('draws 6pt major and 4pt minor value ticks as horizontal screen annotations', () => {
@@ -2628,14 +2645,36 @@ describe('classic 3-D compatibility projection', () => {
       ],
     }), RECT, 1);
     const sequence = rec.paintEvents
-      .filter(event => event.kind === 'fill'
-        && ['#FF0000', '#00FF00'].includes(String(event.fillStyle)))
-      .map(event => event.kind === 'fill' ? String(event.fillStyle) : '');
+      .filter((event): event is FillPaintEvent => event.kind === 'fill')
+      .map(event => isMaterialColor(event.fillStyle, 'FF0000')
+        ? 'red'
+        : isMaterialColor(event.fillStyle, '00FF00') ? 'green' : null)
+      .filter((color): color is 'red' | 'green' => color != null);
     expect(sequence.length).toBeGreaterThanOrEqual(6);
     expect(sequence.some((color, index) => index > 0
       && index + 1 < sequence.length
       && color !== sequence[index - 1]
       && color === sequence[index + 1])).toBe(true);
+  });
+
+  it('extrudes each 3-D line stroke through its series depth interval', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      valMin: 0,
+      valMax: 40,
+      threeD: {
+        rotationX: 15, rotationY: 20, depthPercent: 100,
+        gapDepthPercent: 150, perspective: 30,
+      },
+      series: [series({ lineColor: 'FF0000', lineWidthEmu: 38_100, values: [20, 30] })],
+    }), RECT, 1);
+    const redFaces = materialFills(rec, 'FF0000');
+    // A flat stroke emits one screen-space polygon. Excel renders Line3D as a
+    // solid ribbon, so its camera projection exposes multiple shaded faces.
+    expect(redFaces.length).toBeGreaterThan(1);
+    expect(new Set(redFaces.map(event => event.fillStyle)).size).toBeGreaterThan(1);
   });
 
   it('applies a direct 3-D line point style to the segment ending at that point', () => {
@@ -2909,7 +2948,7 @@ describe('classic 3-D compatibility projection', () => {
     });
     const rec = recordingCtx();
     renderChart(rec.ctx, chart, RECT, 1);
-    const lineSegments = rec.filledPaths.filter(path => path.fillStyle === '#FF0000');
+    const lineSegments = rec.filledPaths.filter(path => isMaterialColor(path.fillStyle, 'FF0000'));
     expect(lineSegments.length).toBeGreaterThanOrEqual(2);
     const labels = recordingCtx();
     renderChart(labels.ctx, chart, RECT, 1);
@@ -7837,6 +7876,41 @@ describe('ChartEx flat layouts dispatch to semantic renderers', () => {
     expect(semanticLabels).toEqual(['Increase', 'Decrease', 'Total']);
   });
 
+  it('keeps Waterfall point fill/outline formatting above series noFill and linked colors', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'waterfall',
+      categories: ['Start', 'Increase', 'Decrease A', 'Decrease B', 'Decrease C', 'End'],
+      subtotalIndices: [5],
+      catAxisHidden: true,
+      valAxisHidden: true,
+      chartexDataPointStyle: {
+        fillColors: ['E46970', '8977D7', 'A5A5A5'],
+        fillPaintAuthored: true,
+      },
+      series: [series({
+        values: [245, 235, -52, -40, -108, 280],
+        chartexStyle: {
+          fillHidden: true,
+          fillPaintAuthored: true,
+          lineColors: ['E46970'],
+          linePaintAuthored: true,
+        },
+        dataPointOverrides: [
+          { idx: 0, color: '196ECA', lineHidden: true },
+          { idx: 1, lineColor: '196ECA' },
+          { idx: 5, color: '196ECA', lineHidden: true },
+        ],
+      })],
+    }), RECT, 1);
+
+    expect(rec.rects.filter(rect => rect.fs === '#196ECA')).toHaveLength(2);
+    expect(rec.rects.filter(rect => ['#E46970', '#8977D7', '#A5A5A5'].includes(rect.fs)))
+      .toHaveLength(0);
+    expect(rec.strokeRects.filter(rect => rect.ss === '#196ECA')).toHaveLength(1);
+    expect(rec.strokeRects.filter(rect => rect.ss === '#E46970')).toHaveLength(3);
+  });
+
   const chartExLegendModel = (
     chartType: string,
     localStyle: ChartSeries['chartexStyle'],
@@ -10527,7 +10601,7 @@ describe('showDLblsOverMax (§21.2.2.180)', () => {
     expect(renderedLabelTexts(chart)).toEqual(['5', '15']);
   });
 
-  it('compares stacked endpoints and negative values to the numeric maximum', () => {
+  it('compares each stacked data-point value, not the cumulative endpoint, to the numeric maximum', () => {
     const stacked = {
       chartType: 'stackedBar',
       categories: ['stack'],
@@ -10539,6 +10613,23 @@ describe('showDLblsOverMax (§21.2.2.180)', () => {
       valMax: 10,
       showLegend: false,
     } as ChartModel;
+    expect(renderedLabelTexts(stacked)).toEqual(['8', '8']);
+
+    const roundedPercentTotal = {
+      chartType: 'stackedBarPct',
+      categories: ['rounded'],
+      series: [
+        { name: 'Base', values: [0.18], color: '4472C4' },
+        { name: 'Middle', values: [0.456], color: 'ED7D31' },
+        { name: 'Top', values: [0.365], color: 'A5A5A5', seriesDataLabels: labels },
+      ],
+      valMin: 0,
+      valMax: 1,
+      showLegend: false,
+    } as ChartModel;
+    expect(renderedLabelTexts(roundedPercentTotal)).toEqual(['0.365']);
+
+    stacked.series[1].values = [15];
     expect(renderedLabelTexts(stacked)).toEqual(['8']);
 
     const negative = {

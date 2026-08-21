@@ -79,6 +79,7 @@ import {
 } from './category-spacing.js';
 import {
   buildThreeDAreaStripMeshes,
+  buildThreeDLineRibbonMesh,
   buildThreeDPieSectorMesh,
   buildThreeDShapeMesh,
   DEFAULT_THREE_D_ROUND_SEGMENTS,
@@ -2367,7 +2368,11 @@ function walls(
       0.5,
     ), true);
   }
-  if (chart.valAxisMajorGridlines !== false) {
+  // CT_ValAx/majorGridlines is an optional element, not an on-by-default
+  // property. Its absence therefore contributes no value-grid geometry. This
+  // mirrors the 2-D axis path and prevents synthetic back-wall rules from
+  // appearing in 3-D charts that author only the axis line.
+  if (chart.valAxisMajorGridlines === true) {
     drawValueGrid(axis.majorTicks, threeDStroke(
       chart.valAxisGridlineColor,
       chart.valAxisGridlineWidthEmu,
@@ -2375,7 +2380,7 @@ function walls(
       ptToPx,
       '898989',
       1,
-    ), chart.valAxisMajorGridlines === true);
+    ), true);
   }
   // Office retains automatic category-depth rays when majorGridlines is
   // absent. An authored majorGridlines element instead owns the interval-rule
@@ -3447,6 +3452,7 @@ function renderCartesian(
       }
       const lineStrokeRuns: Array<{
         path: ProjectedStrokePoint[];
+        modelPath: Point[];
         ownerIndex: number;
         startClipped: boolean;
         endClipped: boolean;
@@ -3565,6 +3571,13 @@ function renderCartesian(
             );
             const start = projectModelPoint(at(clipped.startT));
             const end = projectModelPoint(at(clipped.endT));
+            const modelStart = at(clipped.startT);
+            const modelEnd = at(clipped.endT);
+            const toModelPoint = (point: ModelLinePoint): Point => ({
+              x: point.x,
+              y: front.y + front.h
+                - Math.max(0, Math.min(1, point.fraction)) * front.h,
+            });
             const continues = visible != null && Math.hypot(
               visible.path.at(-1)!.x - start.x,
               visible.path.at(-1)!.y - start.y,
@@ -3573,6 +3586,7 @@ function renderCartesian(
               finishVisibleRun(visible);
               visible = {
                 path: [start, end],
+                modelPath: [toModelPoint(modelStart), toModelPoint(modelEnd)],
                 ownerIndex: endModel.ownerIndex,
                 startClipped: index > 0 || clipped.startT > 0,
                 endClipped: index + 1 < sampled.length - 1 || clipped.endT < 1,
@@ -3581,6 +3595,7 @@ function renderCartesian(
               };
             } else {
               visible!.path.push(end);
+              visible!.modelPath.push(toModelPoint(modelEnd));
               visible!.endClipped = index + 1 < sampled.length - 1 || clipped.endT < 1;
             }
             traversedLength += modelLength;
@@ -3613,12 +3628,17 @@ function renderCartesian(
           return paint;
         };
         const strokeFaceGroups = new Map<ThreeDDatumPaint, SceneFace[]>();
+        const lineRibbonBudget: ScenePrimitiveBudget = {
+          remaining: MAX_PROJECTED_STROKE_PRIMITIVES,
+          exceeded: false,
+        };
         const pushStrokeGeometry = (
           path: readonly ProjectedStrokePoint[],
           paint: ThreeDDatumPaint,
           startCap: CanvasLineCap,
           endCap: CanvasLineCap = startCap,
           dashOffset = 0,
+          modelPath?: readonly Point[],
         ) => {
           if (paint.lineFill === null) return;
           // Automatic 3-D line/area edges use the darker Chart Style line
@@ -3633,7 +3653,7 @@ function renderCartesian(
           const lineDash = drawingmlLineDashArray(
             paint.lineCustomDash, paint.lineDash, lineWidth,
           );
-          const strokes = buildProjectedStrokePrimitives(path, {
+          const strokeOptions = {
             width: lineWidth,
             dash: lineDash,
             dashOffset,
@@ -3641,7 +3661,52 @@ function renderCartesian(
             startCap,
             endCap,
             lineJoin: paint.lineJoin,
-          });
+          };
+          // ECMA Line3D is a depth-bearing ribbon. Tessellate the same bounded
+          // dash/cap/join polygon in the chart's model X/Y plane, extrude it
+          // through the series interval, then hand every face to the existing
+          // camera/depth/material pipeline. Area ridges remain ordinary edge
+          // strokes because their slab already supplies the depth faces.
+          if (!areaFamily && modelPath && modelPath.length >= 2) {
+            const modelStrokes = buildProjectedStrokePrimitives(
+              modelPath.map(point => ({ ...point, cameraDepth: 0, cameraWeight: 1 })),
+              strokeOptions,
+            );
+            if (modelStrokes == null) {
+              strokeBudgetExceeded = true;
+              return;
+            }
+            const group = strokeFaceGroups.get(paint) ?? [];
+            for (const stroke of modelStrokes) {
+              const mesh = buildThreeDLineRibbonMesh({
+                outline: stroke.points,
+                nearDepth: depthInterval.near,
+                farDepth: depthInterval.far,
+              });
+              if (!mesh) continue;
+              const faces = projectThreeDMesh(
+                projection, mesh, strokeStyle, undefined, lineRibbonBudget,
+              ).map(face => ({ ...face, paintRole: 'outline' as const }));
+              if (lineRibbonBudget.exceeded) {
+                strokeBudgetExceeded = true;
+                return;
+              }
+              group.push(...faces);
+              for (const face of faces) {
+                sceneCommands.push({
+                  points: face.points,
+                  cameraDepth: face.cameraDepth,
+                  cameraDepths: face.cameraDepths,
+                  cameraWeights: face.cameraWeights,
+                  layer: 1,
+                  paint: () => paintSceneFace(ctx, face),
+                });
+              }
+            }
+            strokeFaceGroups.set(paint, group);
+            return;
+          }
+          const strokes = buildProjectedStrokePrimitives(path, strokeOptions);
           if (strokes == null) {
             strokeBudgetExceeded = true;
             return;
@@ -3687,6 +3752,7 @@ function renderCartesian(
               item.startClipped ? 'butt' : paint.lineCap,
               item.endClipped ? 'butt' : paint.lineCap,
               item.dashOffset,
+              item.modelPath,
             );
           }
         }

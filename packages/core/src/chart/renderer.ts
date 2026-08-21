@@ -13,7 +13,11 @@ import {
   withChartImageLookup,
 } from './image-fill.js';
 import { paintChartThreeDSurfacePicture } from './three-d-surface-picture.js';
-import { mergeChartLabelBoxes, paintChartLabelBox } from './label-box.js';
+import {
+  chartLabelBoxHasVisiblePaint,
+  mergeChartLabelBoxes,
+  paintChartLabelBox,
+} from './label-box.js';
 import { strokeChartFrameRect } from './compound-frame.js';
 import {
   anchoredDataLabelPoint,
@@ -3086,10 +3090,12 @@ function dataLabelRectIntersection(a: DataLabelRect, b: DataLabelRect): DataLabe
   return right > x && bottom > y ? { x, y, w: right - x, h: bottom - y } : null;
 }
 
-/** ECMA-376 §21.2.2.180: omission/false suppresses a label whose plotted value
+/** ECMA-376 §21.2.2.180: omission/false suppresses a label whose data-point value
  * is numerically greater than the effective value-axis maximum. This gate runs
  * after the shared axis planner has resolved authored and automatic bounds; it
- * never changes those bounds. */
+ * never changes those bounds. For stacked charts the comparison remains the
+ * point's authored value; the cumulative stack endpoint is layout geometry,
+ * not the value represented by that label. */
 function dataLabelWithinAxisMaximum(
   chart: Pick<ChartModel, 'showDataLabelsOverMax'>,
   plottedValue: number,
@@ -4365,9 +4371,6 @@ export function renderBarChart(
         ? (raw / stackSum) * percentGroupMultiplier(s)
         : raw;
       const negative = sv < 0;
-      const plottedLabelValue = isStackedGroup
-        ? (negative ? negOffset : posOffset) + sv
-        : sv;
       const labelAxisMaximum = secondary && secScale ? secScale.max : plan.max;
       const useNegativeStyle = negative
         && (s.invertIfNegative === true || s.automaticNegativeStyle === true);
@@ -4499,7 +4502,7 @@ export function renderBarChart(
           isPercentGroup ? sv / 100 : undefined,
           s.useSecondaryAxis && sec ? sec.displayUnits : chart.valAxisDisplayUnits,
         );
-        if (label && dataLabelWithinAxisMaximum(chart, plottedLabelValue, labelAxisMaximum)) {
+        if (label && dataLabelWithinAxisMaximum(chart, raw, labelAxisMaximum)) {
           // ECMA-376 §21.2.2.30 / §21.1.2.3.2 — data label font size comes from
           // `<c:dLbls><c:txPr>...<a:defRPr@sz>` (hundredths of a point). When
           // the file specifies one we honor it; otherwise the proportional
@@ -4600,7 +4603,7 @@ export function renderBarChart(
           isPercentGroup ? sv / 100 : undefined,
           s.useSecondaryAxis && sec ? sec.displayUnits : chart.valAxisDisplayUnits,
         );
-        if (label && dataLabelWithinAxisMaximum(chart, plottedLabelValue, labelAxisMaximum)) {
+        if (label && dataLabelWithinAxisMaximum(chart, raw, labelAxisMaximum)) {
           const sizeHpt = label.fontSizeHpt ?? chart.dataLabelFontSizeHpt;
           const lsz = chartTextFontSizePx(sizeHpt, ptToPx)
             ?? Math.max(7, Math.min(11, barW * 0.6));
@@ -10297,7 +10300,9 @@ function drawPieRichLabels(
   for (let index = 0; index < vals.length; index++) {
     const override = overridesByIndex.get(index);
     if (dataLabelIsDeleted(def, override)) continue;
-    if (override?.labelBox || def.labelBox) calloutIndices.add(index);
+    if (chartLabelBoxHasVisiblePaint(mergeChartLabelBoxes(override?.labelBox, def.labelBox))) {
+      calloutIndices.add(index);
+    }
   }
   // Boxed labels have their own paint/collision pass, but only those points are
   // dispatched to it. A per-point spPr must not turn every sibling into a
@@ -10486,22 +10491,14 @@ function drawPieRichLabels(
     );
   }
 
-  drawPieOutsideLabels(
-    ctx, chart, def, outsideLabels, cx2, cy2, outerR, ptToPx,
-    chartX, chartY, chartW, chartH,
-  );
+  drawPieOutsideLabels(ctx, outsideLabels, chartX, chartY, chartW, chartH);
 }
 
-/** Plain `<c:dLblPos val="outEnd">` label block. `outEnd` gives a topological
- * requirement (outside the pie) but no radial-distance formula. Keep the whole
- * measured text rectangle outside the rim; placing only its centre outside lets
- * long category names overlap the slices. */
+/** Plain `<c:dLblPos val="outEnd">` label block. */
 interface PieOutsideLabel {
   lines: string[];
   rich?: RichDataLabelBlock;
   legendKey?: DataLabelLegendKey;
-  rimX: number;
-  rimY: number;
   boxW: number;
   boxH: number;
   unrotatedW: number;
@@ -10515,43 +10512,6 @@ interface PieOutsideLabel {
   font: string;
   cxBox: number;
   cyBox: number;
-  initialCx: number;
-  initialCy: number;
-  leftSide: boolean;
-}
-
-function pointToRectDistance(
-  px: number, py: number,
-  rectCx: number, rectCy: number,
-  halfW: number, halfH: number,
-): number {
-  const dx = Math.max(Math.abs(rectCx - px) - halfW, 0);
-  const dy = Math.max(Math.abs(rectCy - py) - halfH, 0);
-  return Math.hypot(dx, dy);
-}
-
-/** Find the first point on a slice-midpoint ray whose complete text rectangle
- * clears the pie. The monotone binary solve is geometry-only and avoids a
- * label-length or slice-angle tuning constant. */
-function outsideLabelRadialDistance(
-  midAngle: number,
-  outerR: number,
-  halfW: number,
-  halfH: number,
-  clearance: number,
-): number {
-  const ux = Math.cos(midAngle);
-  const uy = Math.sin(midAngle);
-  const target = outerR + clearance;
-  let low = 0;
-  let high = target + Math.hypot(halfW, halfH);
-  for (let i = 0; i < 32; i++) {
-    const mid = (low + high) / 2;
-    const distance = pointToRectDistance(0, 0, ux * mid, uy * mid, halfW, halfH);
-    if (distance >= target) high = mid;
-    else low = mid;
-  }
-  return high;
 }
 
 function createPieOutsideLabel(
@@ -10580,36 +10540,27 @@ function createPieOutsideLabel(
   );
   boxW = rotated.w;
   boxH = rotated.h;
-  const clearance = fontPx * 0.5;
-  const distance = outsideLabelRadialDistance(
-    midAngle, outerR, boxW / 2, boxH / 2, clearance,
-  );
+  // `outEnd` does not define a collision solver. Keep automatic labels on the
+  // slice-midpoint ray just beyond the rim; moving them according to browser
+  // font metrics invents leader lines that Office does not draw for the same
+  // authored labels. The radial offset is the existing Office-observed pie
+  // label placement used before collision handling was introduced.
+  const distance = outerR + Math.max(10, outerR * 0.12);
   const cxBox = pieCx + Math.cos(midAngle) * distance;
   const cyBox = pieCy + Math.sin(midAngle) * distance;
   return {
     lines, rich, legendKey,
-    rimX: pieCx + Math.cos(midAngle) * outerR,
-    rimY: pieCy + Math.sin(midAngle) * outerR,
     boxW, boxH, unrotatedW, unrotatedH, textStyle, ptToPx,
     lineHeight, fontPx, bold, fontColor, font,
-    cxBox, cyBox, initialCx: cxBox, initialCy: cyBox,
-    leftSide: Math.cos(midAngle) < 0,
+    cxBox, cyBox,
   };
 }
 
-/** Paint plain outEnd labels in the chart-space gutters around the authored
- * plot rectangle. Collision adjustment is bounded by chart space, and after a
- * vertical move the horizontal coordinate is solved again so the label cannot
- * be pushed back across the pie rim. */
+/** Paint automatic plain outEnd labels at their authored slice-midpoint anchors.
+ * Rich callout labels retain their separate bounded collision/leader resolver. */
 function drawPieOutsideLabels(
   ctx: CanvasRenderingContext2D,
-  chart: ChartModel,
-  def: ChartSeriesDataLabels,
   labels: PieOutsideLabel[],
-  pieCx: number,
-  pieCy: number,
-  outerR: number,
-  ptToPx: number,
   boundsX: number,
   boundsY: number,
   boundsW: number,
@@ -10617,72 +10568,10 @@ function drawPieOutsideLabels(
 ): void {
   if (labels.length === 0) return;
 
-  const topLimit = boundsY;
-  const bottomLimit = boundsY + boundsH;
-  const separate = (column: PieOutsideLabel[]): void => {
-    column.sort((a, b) => a.cyBox - b.cyBox);
-    for (let i = 1; i < column.length; i++) {
-      const previous = column[i - 1];
-      const current = column[i];
-      const minY = previous.cyBox + (previous.boxH + current.boxH) / 2;
-      if (current.cyBox < minY) current.cyBox = minY;
-    }
-    if (column.length === 0) return;
-    const bottomOverflow = column[column.length - 1].cyBox
-      + column[column.length - 1].boxH / 2 - bottomLimit;
-    if (bottomOverflow > 0) for (const label of column) label.cyBox -= bottomOverflow;
-    const topOverflow = topLimit - (column[0].cyBox - column[0].boxH / 2);
-    if (topOverflow > 0) for (const label of column) label.cyBox += topOverflow;
-  };
-  separate(labels.filter(label => !label.leftSide));
-  separate(labels.filter(label => label.leftSide));
-
-  // Re-solve horizontal placement after collision movement. For a fixed label
-  // y-range, the nearest vertical distance to the pie centre determines the
-  // exact horizontal clearance required for the full rectangle.
-  for (const label of labels) {
-    const target = outerR + label.fontPx * 0.5;
-    const halfW = label.boxW / 2;
-    const halfH = label.boxH / 2;
-    const nearestDy = Math.max(Math.abs(label.cyBox - pieCy) - halfH, 0);
-    if (nearestDy < target) {
-      const requiredDx = Math.sqrt(Math.max(0, target * target - nearestDy * nearestDy));
-      label.cxBox = label.leftSide
-        ? Math.min(label.cxBox, pieCx - requiredDx - halfW)
-        : Math.max(label.cxBox, pieCx + requiredDx + halfW);
-    }
-
-    // Prefer keeping labels inside chart space, but never trade the outEnd
-    // invariant for a clamp that would put text back over the pie.
-    const clampedX = clamp(label.cxBox, boundsX + halfW, boundsX + boundsW - halfW);
-    if (pointToRectDistance(pieCx, pieCy, clampedX, label.cyBox, halfW, halfH) >= target) {
-      label.cxBox = clampedX;
-    }
-  }
-
   ctx.save();
   ctx.beginPath();
   ctx.rect(boundsX, boundsY, boundsW, boundsH);
   ctx.clip();
-  const leader = chartStyleRoleLeaderLine(chart, def);
-  const leaderColor = leader.color ? `#${leader.color}` : '#a6a6a6';
-  const leaderPx = leader.widthEmu
-    ? Math.max(0.5, (leader.widthEmu / EMU_PER_PT) * ptToPx)
-    : 1;
-  ctx.setLineDash(dashPatternForPreset(leader.dash ?? undefined, leaderPx));
-  for (const label of labels) {
-    const moved = Math.abs(label.cxBox - label.initialCx) > 0.5
-      || Math.abs(label.cyBox - label.initialCy) > 0.5;
-    if (!def.showLeaderLines || leader.hidden === true || !moved) continue;
-    const edgeX = clamp(label.rimX, label.cxBox - label.boxW / 2, label.cxBox + label.boxW / 2);
-    const edgeY = clamp(label.rimY, label.cyBox - label.boxH / 2, label.cyBox + label.boxH / 2);
-    ctx.beginPath();
-    ctx.moveTo(label.rimX, label.rimY);
-    ctx.lineTo(edgeX, edgeY);
-    ctx.strokeStyle = leaderColor;
-    ctx.lineWidth = leaderPx;
-    ctx.stroke();
-  }
 
   for (const label of labels) {
     const insets = dataLabelInsets(label.textStyle, label.ptToPx);
