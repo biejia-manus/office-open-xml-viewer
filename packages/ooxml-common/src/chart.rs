@@ -574,6 +574,10 @@ pub struct ChartModel {
     pub cat_axis_title_vertical_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cat_axis_title_manual_layout: Option<ChartManualLayout>,
+    /// Effective sum of the DrawingML top/bottom text insets for the
+    /// category-axis title, including CT_TextBodyProperties defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cat_axis_title_text_vertical_inset_emu: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub val_axis_title_font_size_hpt: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -590,6 +594,10 @@ pub struct ChartModel {
     pub val_axis_title_vertical_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub val_axis_title_manual_layout: Option<ChartManualLayout>,
+    /// Effective sum of the DrawingML top/bottom text insets for the
+    /// value-axis title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub val_axis_title_text_vertical_inset_emu: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart_border_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3772,6 +3780,35 @@ fn axis_title_body_properties<'a, 'input>(
         .and_then(|rich| child(rich, "bodyPr"));
     let txpr_body_pr = child(title, "txPr").and_then(|txpr| child(txpr, "bodyPr"));
     Some((rich_body_pr, txpr_body_pr))
+}
+
+/// Effective local top/bottom text insets for an axis-title text body.
+///
+/// The rich-text bodyPr wins property-by-property over the title txPr bodyPr;
+/// the remaining omissions use the CT_TextBodyProperties defaults. Keeping
+/// only the resolved sum in the chart wire model is enough for the renderer's
+/// cross-axis layout band without adding a second complete text-body model.
+pub fn extract_axis_title_vertical_inset(axis_node: Node) -> Option<i64> {
+    let (rich_body_pr, txpr_body_pr) = axis_title_body_properties(axis_node)?;
+    let spec = BodyPrDefaults::spec();
+    let txpr = txpr_body_pr.map(|body_pr| parse_body_pr(body_pr, &spec));
+    let rich_defaults = txpr.as_ref().map_or_else(
+        || spec.clone(),
+        |body| BodyPrDefaults {
+            anchor: body.anchor.clone(),
+            wrap: body.wrap.clone(),
+            vert: body.vert.clone(),
+            l_ins: body.l_ins,
+            t_ins: body.t_ins,
+            r_ins: body.r_ins,
+            b_ins: body.b_ins,
+            auto_fit: body.auto_fit.clone(),
+        },
+    );
+    let effective = rich_body_pr
+        .map(|body_pr| parse_body_pr(body_pr, &rich_defaults))
+        .or(txpr)?;
+    Some(effective.t_ins.saturating_add(effective.b_ins))
 }
 
 /// Authored DrawingML `bodyPr@rot` for an axis title in raw `ST_Angle` units.
@@ -7212,6 +7249,8 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
     let cat_axis_title_rotation = cat_axis.and_then(extract_axis_title_rotation);
     let cat_axis_title_vertical_mode = cat_axis.and_then(extract_axis_title_vertical_mode);
     let cat_axis_title_manual_layout = cat_axis.and_then(extract_axis_title_manual_layout);
+    let cat_axis_title_text_vertical_inset_emu =
+        cat_axis.and_then(extract_axis_title_vertical_inset);
     let inline_val_title_size = val_axis.and_then(extract_axis_title_size);
     let inline_val_title_bold = val_axis.and_then(extract_axis_title_bold);
     let inline_val_title_italic = val_axis.and_then(extract_axis_title_italic);
@@ -7220,6 +7259,8 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
     let val_axis_title_rotation = val_axis.and_then(extract_axis_title_rotation);
     let val_axis_title_vertical_mode = val_axis.and_then(extract_axis_title_vertical_mode);
     let val_axis_title_manual_layout = val_axis.and_then(extract_axis_title_manual_layout);
+    let val_axis_title_text_vertical_inset_emu =
+        val_axis.and_then(extract_axis_title_vertical_inset);
     let (
         raw_style_axis_title_size,
         style_axis_title_bold,
@@ -7503,6 +7544,7 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
         cat_axis_title_rotation,
         cat_axis_title_vertical_mode,
         cat_axis_title_manual_layout,
+        cat_axis_title_text_vertical_inset_emu,
         val_axis_title_font_size_hpt,
         val_axis_title_font_bold,
         val_axis_title_font_italic,
@@ -7510,6 +7552,7 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
         val_axis_title_rotation,
         val_axis_title_vertical_mode,
         val_axis_title_manual_layout,
+        val_axis_title_text_vertical_inset_emu,
         title_font_bold: chartex_title_font_bold,
         cat_axis_font_bold,
         cat_axis_font_italic,
@@ -12488,6 +12531,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     let mut cat_axis_title_rotation: Option<i32> = None;
     let mut cat_axis_title_vertical_mode: Option<String> = None;
     let mut cat_axis_title_manual_layout: Option<ChartManualLayout> = None;
+    let mut cat_axis_title_text_vertical_inset_emu: Option<i64> = None;
     let mut val_axis_title: Option<String> = None;
     let mut val_axis_title_size: Option<i32> = None;
     let mut val_axis_title_bold: Option<bool> = None;
@@ -12497,6 +12541,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     let mut val_axis_title_rotation: Option<i32> = None;
     let mut val_axis_title_vertical_mode: Option<String> = None;
     let mut val_axis_title_manual_layout: Option<ChartManualLayout> = None;
+    let mut val_axis_title_text_vertical_inset_emu: Option<i64> = None;
     for ax in plot_area
         .children()
         .filter(|n| n.is_element() && matches!(n.tag_name().name(), "catAx" | "dateAx" | "valAx"))
@@ -12525,6 +12570,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                     cat_axis_title_rotation = extract_axis_title_rotation(ax);
                     cat_axis_title_vertical_mode = extract_axis_title_vertical_mode(ax);
                     cat_axis_title_manual_layout = extract_axis_title_manual_layout(ax);
+                    cat_axis_title_text_vertical_inset_emu = extract_axis_title_vertical_inset(ax);
                 }
             }
         } else if val_axis_title.is_none() {
@@ -12539,6 +12585,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 val_axis_title_rotation = extract_axis_title_rotation(ax);
                 val_axis_title_vertical_mode = extract_axis_title_vertical_mode(ax);
                 val_axis_title_manual_layout = extract_axis_title_manual_layout(ax);
+                val_axis_title_text_vertical_inset_emu = extract_axis_title_vertical_inset(ax);
             }
         }
     }
@@ -12859,6 +12906,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         cat_axis_title_rotation,
         cat_axis_title_vertical_mode,
         cat_axis_title_manual_layout,
+        cat_axis_title_text_vertical_inset_emu,
         val_axis_title_font_size_hpt: val_axis_title_size,
         val_axis_title_font_bold: val_axis_title_bold,
         val_axis_title_font_italic: val_axis_title_italic,
@@ -12866,6 +12914,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         val_axis_title_rotation,
         val_axis_title_vertical_mode,
         val_axis_title_manual_layout,
+        val_axis_title_text_vertical_inset_emu,
         title_font_bold,
         cat_axis_font_bold,
         cat_axis_font_italic,
@@ -13219,6 +13268,7 @@ mod tests {
             cat_axis_title_rotation: None,
             cat_axis_title_vertical_mode: None,
             cat_axis_title_manual_layout: None,
+            cat_axis_title_text_vertical_inset_emu: None,
             val_axis_title_font_size_hpt: None,
             val_axis_title_font_bold: None,
             val_axis_title_font_italic: None,
@@ -13226,6 +13276,7 @@ mod tests {
             val_axis_title_rotation: None,
             val_axis_title_vertical_mode: None,
             val_axis_title_manual_layout: None,
+            val_axis_title_text_vertical_inset_emu: None,
             chart_border_color: None,
             chart_border_line_fill: None,
             chart_border_width_emu: None,
@@ -14106,6 +14157,18 @@ Subtitle</a:t></a:r></a:p>
     }
 
     #[test]
+    fn chart_title_text_preserves_an_authored_space() {
+        let xml = r#"<c:catAx xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+            <c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t> </a:t></a:r></a:p></c:rich></c:tx></c:title>
+        </c:catAx>"#;
+        let document = root_of(xml);
+        assert_eq!(
+            extract_chart_title_text(document.root_element()).as_deref(),
+            Some(" ")
+        );
+    }
+
+    #[test]
     fn chart_title_srgb_skips_non_solidfill_srgb() {
         // An `<a:srgbClr>` that is NOT a direct child of `<a:solidFill>` (here a
         // gradient stop) must be ignored.
@@ -14270,6 +14333,30 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(
             extract_axis_title_vertical_mode(txpr_doc.root_element()).as_deref(),
             Some("eaVert")
+        );
+    }
+
+    #[test]
+    fn axis_title_vertical_insets_use_text_body_defaults_and_property_cascade() {
+        let defaults_xml = r#"<c:catAx xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+            <c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t> </a:t></a:r></a:p></c:rich></c:tx></c:title>
+        </c:catAx>"#;
+        let defaults_doc = root_of(defaults_xml);
+        assert_eq!(
+            extract_axis_title_vertical_inset(defaults_doc.root_element()),
+            Some(91_440)
+        );
+
+        let cascade_xml = r#"<c:valAx xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+            <c:title>
+              <c:tx><c:rich><a:bodyPr tIns="3pt"/><a:p><a:r><a:t>Value</a:t></a:r></a:p></c:rich></c:tx>
+              <c:txPr><a:bodyPr tIns="1pt" bIns="2pt"/><a:p/></c:txPr>
+            </c:title>
+        </c:valAx>"#;
+        let cascade_doc = root_of(cascade_xml);
+        assert_eq!(
+            extract_axis_title_vertical_inset(cascade_doc.root_element()),
+            Some(63_500)
         );
     }
 
@@ -15727,7 +15814,9 @@ Subtitle</a:t></a:r></a:p>
         assert!(!m.val_axis_hidden);
         assert_eq!(m.cat_axis_title_rotation, None);
         assert_eq!(m.cat_axis_title_vertical_mode.as_deref(), Some("horz"));
+        assert_eq!(m.cat_axis_title_text_vertical_inset_emu, Some(91_440));
         assert_eq!(m.val_axis_title_rotation, Some(-1_800_000));
+        assert_eq!(m.val_axis_title_text_vertical_inset_emu, Some(91_440));
         let val_title_layout = m
             .val_axis_title_manual_layout
             .expect("value-axis title manual layout");
@@ -18268,6 +18357,7 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(model.cat_axis_title_font_bold, Some(true));
         assert_eq!(model.cat_axis_title_font_italic, Some(true));
         assert_eq!(model.cat_axis_title_font_color.as_deref(), Some("445566"));
+        assert_eq!(model.cat_axis_title_text_vertical_inset_emu, Some(91_440));
         assert_eq!(
             model.cat_axis_title_font_face.as_deref(),
             Some("Style Axis")
@@ -18277,6 +18367,7 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(model.val_axis_title_font_bold, Some(false));
         assert_eq!(model.val_axis_title_font_italic, Some(true));
         assert_eq!(model.val_axis_title_font_color.as_deref(), Some("778899"));
+        assert_eq!(model.val_axis_title_text_vertical_inset_emu, Some(91_440));
         assert_eq!(
             model.val_axis_title_font_face.as_deref(),
             Some("Inline Val")
