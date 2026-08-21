@@ -1681,7 +1681,11 @@ describe('classic 3-D compatibility projection', () => {
       dpi: 96,
       tile: { tx: 0, ty: 0, sx: 1, sy: 1, flip: 'none', algn: 'tl' },
     };
-    const model = (thicknessPercent: number, scale = 1) => baseModel({
+    const model = (
+      thicknessPercent: number,
+      scale = 1,
+      srcRect?: { l: number; t: number; r: number; b: number },
+    ) => baseModel({
       chartType: 'line',
       categories: ['A', 'B', 'C'],
       valMin: 0,
@@ -1695,7 +1699,11 @@ describe('classic 3-D compatibility projection', () => {
         backWall: {
           thicknessPercent,
           style: {
-            fillPaints: [{ ...tiled, tile: { ...tiled.tile, sx: scale, sy: scale } }],
+            fillPaints: [{
+              ...tiled,
+              srcRect,
+              tile: { ...tiled.tile, sx: scale, sy: scale },
+            }],
             fillPaintAuthored: true,
           },
           pictureOptions: {
@@ -1733,6 +1741,8 @@ describe('classic 3-D compatibility projection', () => {
     expect(planar).toBeGreaterThan(0);
     expect(draws(model(0, 0.5))).toBeGreaterThan(planar);
     expect(draws(model(25))).toBeGreaterThan(0);
+    expect(draws(model(0, 1, { l: 0.25, t: 0, r: 0, b: 0 }))).toBeGreaterThan(0);
+    expect(draws(model(25, 1, { l: -0.25, t: 0, r: 0, b: 0 }))).toBeGreaterThan(0);
   });
 
   it('uses the same planar CT_Surface picture path for Surface3D', () => {

@@ -200,6 +200,18 @@ describe('positive-thickness CT_Surface picture faces', () => {
     expect(planChartThreeDSurfacePicture({
       ...tiled,
       srcRect: { l: 0.1, t: 0, r: 0, b: 0 },
+    }, undefined, 'backWall', 10)).toEqual({
+      mode: 'tile', repetitions: 1, slabFaces: undefined,
+    });
+    expect(planChartThreeDSurfacePicture({
+      ...tiled,
+      srcRect: { l: -0.1, t: 0, r: 0, b: 0 },
+    }, undefined, 'backWall', 10)).toEqual({
+      mode: 'tile', repetitions: 1, slabFaces: undefined,
+    });
+    expect(planChartThreeDSurfacePicture({
+      ...tiled,
+      fillRect: { l: 0.1, t: 0, r: 0, b: 0 },
     }, undefined, 'backWall', 10)).toBeNull();
   });
 });

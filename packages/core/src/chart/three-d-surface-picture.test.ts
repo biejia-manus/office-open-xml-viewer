@@ -341,6 +341,36 @@ describe('CT_Surface tiled pictures', () => {
     expect(mirrored.operations).not.toEqual(none.operations);
   });
 
+  it('applies a positive source crop independently inside each tile', () => {
+    const result = paint({
+      ...tiled,
+      srcRect: { l: 0.25, t: 0, r: 0, b: 0 },
+    }, {
+      imageWidth: 80,
+      imageHeight: 40,
+      faceWidth: 80,
+      faceHeight: 40,
+    });
+    expect(result.painted).toBe(true);
+    expect(result.sourceDraws).toHaveLength(1);
+    expect(result.sourceDraws[0].slice(1)).toEqual([20, 0, 60, 40, 0, 0, 80, 40]);
+  });
+
+  it('preserves transparent destination space for a source outset in each tile', () => {
+    const result = paint({
+      ...tiled,
+      srcRect: { l: -0.25, t: 0, r: 0, b: 0 },
+    }, {
+      imageWidth: 80,
+      imageHeight: 40,
+      faceWidth: 80,
+      faceHeight: 40,
+    });
+    expect(result.painted).toBe(true);
+    expect(result.sourceDraws).toHaveLength(1);
+    expect(result.sourceDraws[0].slice(1)).toEqual([0, 0, 80, 40, 16, 0, 64, 40]);
+  });
+
   it('accepts the exact tile-work ceiling and rejects one additional column atomically', () => {
     const exact = paint(tiled, {
       imageWidth: 1,
