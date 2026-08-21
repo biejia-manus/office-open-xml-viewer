@@ -1461,12 +1461,18 @@ describe('classic 3-D compatibility projection', () => {
         catAxisGridlineColor: 'FF00FF',
         catAxisGridlineWidthEmu: 25_400,
         catAxisGridlineDash: 'dash',
+        catAxisMinorGridlines: true,
+        catAxisMinorGridlineColor: 'FF8000',
+        catAxisMinorGridlineWidthEmu: 25_400,
+        catAxisMinorGridlineDash: 'dot',
         valAxisMajorGridlines: true,
         valAxisGridlineColor: '00FFFF',
         valAxisGridlineWidthEmu: 25_400,
         valAxisGridlineDash: 'dot',
         valAxisMinorGridlines: true,
         valAxisMinorGridlineColor: '123456',
+        valAxisMinorGridlineWidthEmu: 25_400,
+        valAxisMinorGridlineDash: 'dash',
         valAxisMinorUnit: 1,
         valMin: 0,
         valMax: 10,
@@ -1483,23 +1489,24 @@ describe('classic 3-D compatibility projection', () => {
     };
     const planar = render(0);
     const thick = render(25);
-    for (const color of ['#FF00FF', '#00FFFF']) {
+    for (const color of ['#FF00FF', '#FF8000', '#00FFFF', '#123456']) {
       const planarLines = planar.filter(stroke => stroke.ss === color);
       const thickLines = thick.filter(stroke => stroke.ss === color);
+      expect(planarLines.length).toBeGreaterThan(0);
       expect(thickLines.length).toBeGreaterThan(0);
       expect(thickLines.length).toBeGreaterThan(planarLines.length);
       expect(thickLines.every(stroke => stroke.lw === 2)).toBe(true);
       expect(thickLines.every(stroke => stroke.dash.length > 0)).toBe(true);
     }
-    expect(thick.filter(stroke => stroke.ss === '#123456')).toHaveLength(
-      planar.filter(stroke => stroke.ss === '#123456').length,
-    );
-    const planarArea = render(0, 'area');
-    const thickArea = render(25, 'area');
-    for (const color of ['#FF00FF', '#00FFFF']) {
-      expect(thickArea.filter(stroke => stroke.ss === color)).toHaveLength(
-        planarArea.filter(stroke => stroke.ss === color).length,
-      );
+    for (const chartType of ['area', 'clusteredBar', 'clusteredBarH']) {
+      const planarFamily = render(0, chartType);
+      const thickFamily = render(25, chartType);
+      for (const color of ['#FF00FF', '#FF8000', '#00FFFF', '#123456']) {
+        expect(planarFamily.filter(stroke => stroke.ss === color).length)
+          .toBeGreaterThan(0);
+        expect(thickFamily.filter(stroke => stroke.ss === color).length)
+          .toBeGreaterThan(planarFamily.filter(stroke => stroke.ss === color).length);
+      }
     }
   });
 
@@ -16541,10 +16548,19 @@ describe('surface contour charts', () => {
         catAxisGridlineColor: 'FF00FF',
         catAxisGridlineWidthEmu: 25_400,
         catAxisGridlineDash: 'dash',
+        catAxisMinorGridlines: true,
+        catAxisMinorGridlineColor: 'FF8000',
+        catAxisMinorGridlineWidthEmu: 25_400,
+        catAxisMinorGridlineDash: 'dot',
         valAxisMajorGridlines: true,
         valAxisGridlineColor: '00FFFF',
         valAxisGridlineWidthEmu: 25_400,
         valAxisGridlineDash: 'dot',
+        valAxisMinorGridlines: true,
+        valAxisMinorGridlineColor: '123456',
+        valAxisMinorGridlineWidthEmu: 25_400,
+        valAxisMinorGridlineDash: 'dash',
+        valAxisMinorUnit: 1,
         valMin: 0,
         valMax: 10,
         valAxisMajorUnit: 2,
@@ -16564,7 +16580,7 @@ describe('surface contour charts', () => {
     };
     const planar = render(0);
     const thick = render(25);
-    for (const color of ['#FF00FF', '#00FFFF']) {
+    for (const color of ['#FF00FF', '#FF8000', '#00FFFF', '#123456']) {
       const planarLines = planar.filter(stroke => stroke.ss === color);
       const thickLines = thick.filter(stroke => stroke.ss === color);
       expect(planarLines.length).toBeGreaterThan(0);
@@ -16668,10 +16684,11 @@ describe('surface contour charts', () => {
     const categoryLengthSquared = categoryDx * categoryDx + categoryDy * categoryDy;
     const categoryGridStrokes = rec.strokes
       .filter(stroke => stroke.ss === '#00AA00' && stroke.points.length === 2);
-    // A planar Surface retains one floor segment per rule. Positive-thickness
-    // exterior continuation has its own face-count tests below.
-    expect(categoryGridStrokes).toHaveLength(3);
+    // Excel continues each planar rule across both the floor and back wall.
+    // Positive-thickness exterior continuation has its own face-count tests.
+    expect(categoryGridStrokes).toHaveLength(6);
     const gridFractions = categoryGridStrokes
+      .filter((_, index) => index % 2 === 0)
       .map(stroke => {
         const point = stroke.points[0];
         return ((point.x - categoryStart.x) * categoryDx

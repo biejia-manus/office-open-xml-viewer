@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   categoryGridlineFractions,
+  categoryMinorGridlineFractions,
   categoryLabelAnchorFraction,
   categoryLabelOffsetPx,
 } from './category-spacing.js';
@@ -11,6 +12,15 @@ describe('categoryGridlineFractions', () => {
     expect(categoryGridlineFractions(3, false)).toEqual([0, 0.5, 1]);
     expect(categoryGridlineFractions(1, false)).toEqual([0.5]);
     expect(categoryGridlineFractions(0, true)).toEqual([]);
+  });
+});
+
+describe('categoryMinorGridlineFractions', () => {
+  it('returns centres for between axes and interior midpoints for mid-category axes', () => {
+    expect(categoryMinorGridlineFractions(3, true)).toEqual([1 / 6, 0.5, 5 / 6]);
+    expect(categoryMinorGridlineFractions(3, false)).toEqual([0.25, 0.75]);
+    expect(categoryMinorGridlineFractions(1, false)).toEqual([]);
+    expect(categoryMinorGridlineFractions(0, true)).toEqual([]);
   });
 });
 
