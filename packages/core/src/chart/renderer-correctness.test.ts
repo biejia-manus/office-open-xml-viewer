@@ -1410,7 +1410,7 @@ describe('classic 3-D compatibility projection', () => {
     expect(rec.strokes.filter(stroke => stroke.ss === '#898989')).toHaveLength(0);
   });
 
-  it('uses a one-pixel visible floor for authored 0.25pt 3-D axes', () => {
+  it('keeps authored 0.25pt 3-D axes at the two-pixel Office raster floor', () => {
     const rec = strokedPolylineCtx();
     renderChart(rec.ctx, baseModel({
       chartType: 'clusteredBar',
@@ -1444,8 +1444,39 @@ describe('classic 3-D compatibility projection', () => {
     for (const color of ['#FF00FF', '#00AA00', '#0000FF']) {
       const strokes = rec.strokes.filter(stroke => stroke.ss === color);
       expect(strokes.length).toBeGreaterThan(0);
-      expect(strokes.every(stroke => stroke.lw === 1)).toBe(true);
+      expect(strokes.every(stroke => stroke.lw === 2)).toBe(true);
     }
+  });
+
+  it('does not turn a linked gridline style into unauthored 3-D grid geometry', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B'],
+      chartStyleRoles: {
+        gridlineMajor: { lineColors: ['FF00FF'], lineWidthEmu: 12_700 },
+      },
+      valAxisMajorGridlines: undefined,
+      catAxisMajorGridlines: undefined,
+      catAxisLineColor: '000000',
+      valAxisLineColor: '000000',
+      threeD: {
+        rotationX: 15,
+        rotationY: 20,
+        depthPercent: 100,
+        perspective: 30,
+        floor: { lineColor: '808080', lineWidthEmu: 12_700 },
+        sideWall: { lineColor: '808080', lineWidthEmu: 12_700 },
+        backWall: { lineColor: '808080', lineWidthEmu: 12_700 },
+        seriesAxis: { hidden: true, lineHidden: true, majorTickMark: 'none' },
+      },
+      series: [series({ values: [5, 15], lineHidden: true })],
+    }), RECT, 1);
+
+    expect(rec.strokes.filter(stroke => stroke.ss === '#FF00FF')).toHaveLength(0);
+    const wallStrokes = rec.strokes.filter(stroke => stroke.ss === '#808080');
+    expect(wallStrokes).toHaveLength(3);
+    expect(wallStrokes.every(stroke => stroke.points.length >= 4)).toBe(true);
   });
 
   it('draws 6pt major and 4pt minor value ticks as horizontal screen annotations', () => {
