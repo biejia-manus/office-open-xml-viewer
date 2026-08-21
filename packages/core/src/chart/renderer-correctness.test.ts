@@ -1449,6 +1449,28 @@ describe('classic 3-D compatibility projection', () => {
     ) > 1)).toBe(true);
   });
 
+  it('uses the projected 3-D value-axis length for an automatic explicit-span unit', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'line',
+      categories: ['A', 'B'],
+      valMin: 0,
+      valMax: 5,
+      valAxisFormatCode: '0',
+      valAxisMajorGridlines: false,
+      catAxisMajorTickMark: 'none',
+      threeD: {
+        rotationX: 20,
+        rotationY: 20,
+        depthPercent: 100,
+        perspective: 30,
+      },
+      series: [series({ values: [2, 5], showMarker: false })],
+    }), { x: 0, y: 0, w: 738, h: 439 }, 4 / 3);
+    expect(rec.texts.map(item => item.text).filter(text => /^\d+$/.test(text)))
+      .toEqual(['0', '1', '2', '3', '4', '5']);
+  });
+
   it('keeps unfilled 3-D floor and walls transparent while honoring authored fills', () => {
     const automatic = recordingCtx();
     renderChart(automatic.ctx, baseModel({
@@ -4378,7 +4400,7 @@ describe('classic 3-D compatibility projection', () => {
         series({ values: [0.2, 0.8], chartexStyle: { lineDash: 'dash' } }),
         series({ values: [0.8, 0.2], chartexStyle: { lineDash: 'dash' } }),
       ],
-    }), { x: 0, y: 0, w: 100_000, h: 100_000 }, 1);
+    }), { x: 0, y: 0, w: 200_000, h: 200_000 }, 1);
     expect(rec.texts.map(text => text.text)).toContain('(too many data points)');
     expect(rec.rects.some(rect => rect.fs === '#FFFFFF')).toBe(false);
   });
