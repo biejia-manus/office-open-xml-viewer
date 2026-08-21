@@ -404,6 +404,38 @@ describe('pie / doughnut ctr data-label radius (§21.2.2.48, PowerPoint layout)'
     }
   });
 
+  it('keeps the complete outEnd text boxes outside the pie, not only their centers', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'pie',
+      categories: ['Long right-side category', 'Long left-side category'],
+      plotAreaManualLayout: {
+        xMode: 'edge', yMode: 'edge', x: 0.3, y: 0.15, w: 0.4, h: 0.7,
+      },
+      series: [series({
+        name: 'Share',
+        values: [50, 50],
+        categories: ['Long right-side category', 'Long left-side category'],
+        seriesDataLabels: {
+          showVal: true, showCatName: true, showSerName: false, showPercent: false,
+          position: 'outEnd', separator: '\n', fontSizeHpt: 1200,
+        },
+      })],
+    }), RECT, 1);
+
+    const { cx, cy, outerR } = pieGeometry(rec.arcs);
+    const categoryLabels = rec.texts.filter(t => t.text.startsWith('Long '));
+    expect(categoryLabels).toHaveLength(2);
+    for (const label of categoryLabels) {
+      const fontPx = Number(/(\d+(?:\.\d+)?)px/.exec(label.font)?.[1] ?? 12);
+      const halfW = label.text.length * fontPx * 0.6 / 2;
+      const halfH = fontPx / 2;
+      const dx = Math.max(Math.abs(label.x - cx) - halfW, 0);
+      const dy = Math.max(Math.abs(label.y - cy) - halfH, 0);
+      expect(Math.hypot(dx, dy)).toBeGreaterThanOrEqual(outerR);
+    }
+  });
+
   it('does not invent leader lines when ordinary outEnd labels do not collide', () => {
     const rec = recordingCtx('#A6A6A6');
     renderChart(rec.ctx, baseModel({

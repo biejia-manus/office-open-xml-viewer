@@ -10514,6 +10514,40 @@ interface PieOutsideLabel {
   cyBox: number;
 }
 
+function pointToRectDistance(
+  px: number, py: number,
+  rectCx: number, rectCy: number,
+  halfW: number, halfH: number,
+): number {
+  const dx = Math.max(Math.abs(rectCx - px) - halfW, 0);
+  const dy = Math.max(Math.abs(rectCy - py) - halfH, 0);
+  return Math.hypot(dx, dy);
+}
+
+/** Find the first point on a slice-midpoint ray whose complete visible label
+ * rectangle clears the pie. This restores the release geometry without
+ * reintroducing collision moves or their synthetic leader lines. */
+function outsideLabelRadialDistance(
+  midAngle: number,
+  outerR: number,
+  halfW: number,
+  halfH: number,
+  clearance: number,
+): number {
+  const ux = Math.cos(midAngle);
+  const uy = Math.sin(midAngle);
+  const target = outerR + clearance;
+  let low = 0;
+  let high = target + Math.hypot(halfW, halfH);
+  for (let i = 0; i < 32; i++) {
+    const mid = (low + high) / 2;
+    const distance = pointToRectDistance(0, 0, ux * mid, uy * mid, halfW, halfH);
+    if (distance >= target) high = mid;
+    else low = mid;
+  }
+  return high;
+}
+
 function createPieOutsideLabel(
   lines: string[],
   midAngle: number,
@@ -10532,6 +10566,9 @@ function createPieOutsideLabel(
   textStyle: DataLabelTextStyle = {},
   ptToPx = 1,
 ): PieOutsideLabel {
+  const visibleRotated = rotatedDataLabelSize(
+    boxW, boxH, textStyle.textRotation, textStyle.textVerticalMode,
+  );
   const insets = dataLabelInsets(textStyle, ptToPx);
   const unrotatedW = boxW + insets.left + insets.right;
   const unrotatedH = boxH + insets.top + insets.bottom;
@@ -10540,12 +10577,13 @@ function createPieOutsideLabel(
   );
   boxW = rotated.w;
   boxH = rotated.h;
-  // `outEnd` does not define a collision solver. Keep automatic labels on the
-  // slice-midpoint ray just beyond the rim; moving them according to browser
-  // font metrics invents leader lines that Office does not draw for the same
-  // authored labels. The radial offset is the existing Office-observed pie
-  // label placement used before collision handling was introduced.
-  const distance = outerR + Math.max(10, outerR * 0.12);
+  // `outEnd` requires the visible label content, rather than only its anchor,
+  // to clear the pie. Keep the release-era radial geometry while leaving each
+  // label on its authored slice-midpoint ray; no collision movement means no
+  // synthetic leader line is introduced.
+  const distance = outsideLabelRadialDistance(
+    midAngle, outerR, visibleRotated.w / 2, visibleRotated.h / 2, fontPx * 0.5,
+  );
   const cxBox = pieCx + Math.cos(midAngle) * distance;
   const cyBox = pieCy + Math.sin(midAngle) * distance;
   return {
