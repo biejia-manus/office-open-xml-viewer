@@ -7351,7 +7351,7 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
         extract_legend_text_props(root);
     let legend_font_color = extract_legend_font_color(root, resolver);
     let legend_frame = extract_legend_frame_style(root, resolver);
-    let chart_line_style = extract_direct_shape_line(root, resolver);
+    let mut chart_line_style = extract_direct_shape_line(root, resolver);
 
     // `<cx:catScaling gapWidth>` (chartEx) — same semantics as legacy
     // `<c:gapWidth>` but stored as a *fraction* (e.g. 0.8 ≡ 80%) instead of
@@ -7368,6 +7368,27 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
     let chart_space_sp_pr = root
         .children()
         .find(|node| node.is_element() && node.tag_name().name() == "spPr");
+    // Chart Style's `allowNoLineOverride` modifier permits a chart-owned
+    // shape-property override to replace the linked chart-area outline with
+    // no line (MS-ODRAWXML §2.8.4.8). PowerPoint-authored ChartEx parts use a
+    // direct chartSpace `spPr` containing only the background fill for that
+    // override; do not revive the linked style's light-grey outline merely
+    // because the local `spPr` has no `a:ln` child.
+    let chart_area_allows_no_line_override = style_element("chartArea")
+        .and_then(|entry| entry.attribute("mods"))
+        .is_some_and(|mods| {
+            mods.split_ascii_whitespace()
+                .any(|modifier| modifier == "allowNoLineOverride")
+        });
+    if chart_space_sp_pr.is_some()
+        && chart_space_sp_pr
+            .and_then(|sp_pr| child(sp_pr, "ln"))
+            .is_none()
+        && chart_area_allows_no_line_override
+    {
+        chart_line_style.hidden = Some(true);
+        chart_line_style.paint_authored = Some(true);
+    }
     let chart_fill_style = extract_direct_shape_fill(chart_space_sp_pr, resolver);
     let chart_bg = if chart_fill_style.paint_authored == Some(true) {
         chart_fill_style.color.clone()
@@ -11881,6 +11902,8 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                     ChartImageSource::Chart,
                 )
             });
+            let inverted_fill_authored =
+                matches!(inverted_paint.as_ref(), Some(ChartStylePaint::Fill(_)));
             let (mut inverted_fill, mut inverted_fill_hidden) = match inverted_paint {
                 Some(ChartStylePaint::NoFill) => (None, Some(true)),
                 Some(ChartStylePaint::Fill(fill)) => (Some(*fill), None),
@@ -11891,6 +11914,18 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 inverted_format
                     .map(|format| extract_sp_pr_ln_style(format, color_resolver))
                     .unwrap_or((None, None, false));
+            // Excel retains a visible 0.75pt black boundary when the Office
+            // 2010 negative-bar extension authors an alternate fill but omits
+            // `<a:ln>`. Without that effective outline a white inverted fill
+            // disappears against the common white plot-area background.
+            if inverted_fill_authored
+                && inverted_shape
+                    .and_then(|shape| child(shape, "ln"))
+                    .is_none()
+            {
+                inverted_line_color = Some("000000".to_string());
+                inverted_line_width_emu = Some(9_525);
+            }
 
             // Excel's implicit classic-chart style gives an entirely-negative,
             // otherwise unformatted bar/column series an outline-only marker.
@@ -16346,8 +16381,8 @@ Subtitle</a:t></a:r></a:p>
             })
         );
         assert_eq!(series.inverted_fill_hidden, None);
-        assert_eq!(series.inverted_line_color, None);
-        assert_eq!(series.inverted_line_width_emu, None);
+        assert_eq!(series.inverted_line_color.as_deref(), Some("000000"));
+        assert_eq!(series.inverted_line_width_emu, Some(9_525));
         assert_eq!(series.inverted_line_hidden, None);
     }
 
@@ -18360,6 +18395,50 @@ Subtitle</a:t></a:r></a:p>
                 .fill_hidden,
             Some(true)
         );
+    }
+
+    #[test]
+    fn parse_chartex_chart_space_fill_can_override_an_allowed_linked_outline() {
+        let xml = format!(
+            r#"<cx:chartSpace xmlns:cx="{CX_NS}" xmlns:a="{A_NS}">
+              <cx:chart><cx:plotArea><cx:plotAreaRegion>
+                <cx:series layoutId="boxWhisker"/>
+              </cx:plotAreaRegion></cx:plotArea></cx:chart>
+              <cx:spPr><a:solidFill><a:schemeClr val="bg1"/></a:solidFill></cx:spPr>
+            </cx:chartSpace>"#
+        );
+        let style = format!(
+            r#"<cs:chartStyle xmlns:cs="{CS_NS}" xmlns:a="{A_NS}">
+              <cs:chartArea mods="allowNoFillOverride allowNoLineOverride">
+                <cs:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="D9D9D9"/></a:solidFill></a:ln></cs:spPr>
+              </cs:chartArea>
+            </cs:chartStyle>"#
+        );
+        let document = chart_space_of(&xml);
+        let model = parse_chartex_part_with_style_parts(
+            document.root_element(),
+            &FixtureResolver,
+            Some(&style),
+            None,
+        )
+        .expect("ChartEx chart area parses");
+
+        assert_eq!(model.chart_fill_paint_authored, Some(true));
+        assert_eq!(model.chart_border_hidden, Some(true));
+        assert_eq!(model.chart_border_paint_authored, Some(true));
+
+        // Without the modifier the same fill-only local spPr does not invent
+        // a no-line override; the linked outline remains eligible in core.
+        let unmodified = style.replace(" mods=\"allowNoFillOverride allowNoLineOverride\"", "");
+        let control = parse_chartex_part_with_style_parts(
+            document.root_element(),
+            &FixtureResolver,
+            Some(&unmodified),
+            None,
+        )
+        .expect("control ChartEx chart area parses");
+        assert_eq!(control.chart_border_hidden, None);
+        assert_eq!(control.chart_border_paint_authored, None);
     }
 
     #[test]

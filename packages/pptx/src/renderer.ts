@@ -3955,21 +3955,26 @@ export function renderTextBody(
         maxSizePx = bulletImage.sizePx;
       }
 
-      // PowerPoint's existing natural-line approximation for authored
-      // percentage spacing. The document-font design floor applies only when
-      // line spacing is omitted; an explicit percentage is already the
-      // author's vertical-spacing decision, and `spcPts` remains absolute.
+      // PowerPoint's existing natural-line approximation for painting. Table
+      // row auto-sizing is different: ECMA-376 §21.1.2.2.5/.11 defines
+      // percentage spacing from the largest authored text size, and omitted
+      // spacing from that point size. A substituted font's design-line-height
+      // floor must not enlarge the table structure (the glyphs are still
+      // painted with the normal floor below). This matters for rows whose
+      // authored height already accommodates the text: using Meiryo's taller
+      // design box used to grow every such row even though PowerPoint did not.
       const naturalSingle = maxSizePx * 1.2;
       const implicitSingle = Math.max(naturalSingle, designSingle);
       let lineHeight: number;
       if (para.spaceLine) {
         if (para.spaceLine.type === 'pct') {
-          lineHeight = naturalSingle * (para.spaceLine.val / 100000);
+          const percentageBase = measureOnly ? maxSizePx : naturalSingle;
+          lineHeight = percentageBase * (para.spaceLine.val / 100000);
         } else {
           lineHeight = para.spaceLine.val * PT_TO_EMU * scale;
         }
       } else {
-        lineHeight = implicitSingle;
+        lineHeight = measureOnly ? maxSizePx : implicitSingle;
       }
       // normAutofit lnSpcReduction (ECMA-376 §21.1.2.1.3): PowerPoint reduces
       // each paragraph's line spacing by this fraction alongside the font
