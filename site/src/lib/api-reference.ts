@@ -43,6 +43,13 @@ export const formatRenderModeGuidance: Readonly<Record<'docx' | 'xlsx' | 'pptx',
 
 export const optionalChartRenderers: readonly OptionalRendererReference[] = [
   {
+    name: 'Microsoft ChartEx renderer',
+    entry: '@silurus/ooxml/chart-ex',
+    exportName: 'chartEx',
+    contract: 'ChartExRenderer',
+    desc: 'Renders the newer cx:* waterfall, histogram, Pareto, funnel, box-and-whisker, sunburst and treemap families. Classic c:* 2-D charts remain in the format entries.',
+  },
+  {
     name: '3-D chart renderer',
     entry: '@silurus/ooxml/three-d',
     exportName: 'threeD',
@@ -71,6 +78,7 @@ const WORKER_TIMEOUT = { name: 'workerTimeoutMs', type: 'number', def: 'unlimite
 const MATH = { name: 'math', type: 'MathRenderer', def: 'undefined', desc: 'Opt-in OMML equation engine (MathJax + STIX Two Math, ~3 MB). Import it from the separate @silurus/ooxml/math entry — `import { math } from "@silurus/ooxml/math"` — and pass it to render equations in either mode. Omit it and equations are skipped; the MathJax asset is not fetched. When passed, that standalone asset is fetched lazily the first time a document contains an equation.', emphasis: 'Opt-in OMML equation engine (MathJax + STIX Two Math, ~3 MB).' };
 const THREE_D = { name: 'threeD', type: 'ChartThreeDRenderer', def: 'undefined', desc: 'Opt-in model-space 3-D chart renderer. Import `threeD` from the separate `@silurus/ooxml/three-d` entry and inject it once. Omit it to use the canonical 2-D fallback and avoid loading or evaluating the mesh/camera implementation in main mode. The self-contained worker asset retains the worker-side implementation. It renders the view angle authored in OOXML in main and worker modes.', emphasis: 'Opt-in model-space 3-D chart renderer.', detailsHref: '/announcements/v079-chart-rendering-addons#one-3-d-scene-for-axes-and-data', detailsLabel: '3-D scope' };
 const REGION_MAP = { name: 'regionMap', type: 'ChartRegionMapRenderer', def: 'undefined', desc: 'Opt-in offline ChartEx Region Map renderer using a pinned, public-domain Natural Earth country asset. Import `regionMap` from `@silurus/ooxml/region-map` and inject it once. Unsupported cached or sub-country views fail closed. The built-in renderer works in main and worker modes.', emphasis: 'Opt-in offline ChartEx Region Map renderer', detailsHref: '/announcements/v079-chart-rendering-addons#offline-country-region-maps', detailsLabel: 'Region Map scope' };
+const CHART_EX = { name: 'chartEx', type: 'ChartExRenderer', def: 'undefined', desc: 'Opt-in renderer for Microsoft ChartEx (`cx:*`) chart families. Import `chartEx` from `@silurus/ooxml/chart-ex` and inject it once. Classic 2-D charts stay in the default format entries; ChartEx is opt-in. The built-in renderer works in main and worker modes.', emphasis: 'Classic 2-D charts stay in the default format entries; ChartEx is opt-in.' };
 const MODE = { name: 'mode', type: "'main' | 'worker'", def: "'main'", desc: "Use 'main' for the smallest worker download, the lowest single-frame overhead or custom renderer objects; parsing still runs in a Worker, while Canvas rendering runs on the main thread. Use 'worker' when document layout and paint would compete with application UI responsiveness. It requires Worker and OffscreenCanvas, downloads a larger render worker and transfers an ImageBitmap per frame. Built-in math, 3-D and Region Map renderers use the same options in both modes. In worker mode, use the bitmap render methods instead of methods that accept a Canvas.", emphasis: "Use 'worker' when document layout and paint would compete with application UI responsiveness." };
 const VIEWER_MODE = { name: 'mode', type: "'main' | 'worker'", def: "'main'", desc: "Use 'main' for ordinary previews, the smallest worker download or custom renderer objects. Use 'worker' when rendering larger or more complex documents would compete with scrolling, navigation or other application UI. Worker mode requires Worker and OffscreenCanvas, downloads a larger render worker and transfers an ImageBitmap per frame. Viewer navigation, zoom, virtualized scrolling, selection, find, hyperlinks and the built-in math, 3-D and Region Map renderers remain available in both modes.", emphasis: "Use 'worker' when rendering larger or more complex documents would compete with scrolling, navigation or other application UI." };
 const ZOOM_MIN_MAX = { name: 'zoomMin / zoomMax', type: 'number', def: '0.1 / 4', desc: 'Zoom factor bounds for setScale / fitWidth / fitPage (10%–400%).' };
@@ -145,6 +153,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
         MATH,
         THREE_D,
         REGION_MAP,
+        CHART_EX,
         VIEWER_MODE,
         ZOOM_MIN_MAX,
         ON_SCALE_CHANGE,
@@ -177,7 +186,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
       name: 'PptxPresentation',
       ctor: 'await PptxPresentation.load(source, options?)',
       note: 'Headless engine — parse once, render any slide into any canvas you supply (scroll views, thumbnail grids, master–detail).',
-      options: [GFONTS, PASSWORD, WASM_URL, ZIP, RESOURCE_LIMITS, RESOURCE_METRICS, DEBUG, WORKER_TIMEOUT, MATH, THREE_D, REGION_MAP, MODE],
+      options: [GFONTS, PASSWORD, WASM_URL, ZIP, RESOURCE_LIMITS, RESOURCE_METRICS, DEBUG, WORKER_TIMEOUT, MATH, THREE_D, REGION_MAP, CHART_EX, MODE],
       methods: [
         { sig: 'static load(source, options?): Promise<PptxPresentation>', desc: 'Parse a deck from a URL or ArrayBuffer.' },
         { sig: 'get slideCount(): number', desc: 'Total slides.' },
@@ -227,6 +236,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
         MATH,
         THREE_D,
         REGION_MAP,
+        CHART_EX,
         DPR,
         MODE,
         { name: 'onVisibleSlideChange', type: '(topIndex: number, total: number) => void', desc: 'Fires when the top-most visible slide changes.' },
@@ -270,6 +280,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
         MATH,
         THREE_D,
         REGION_MAP,
+        CHART_EX,
         VIEWER_MODE,
         ZOOM_MIN_MAX,
         ON_SCALE_CHANGE,
@@ -298,7 +309,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
       name: 'DocxDocument',
       ctor: 'await DocxDocument.load(source, options?)',
       note: 'Headless engine — render any page into any canvas you supply.',
-      options: [GFONTS, PASSWORD, WASM_URL, ZIP, RESOURCE_LIMITS, RESOURCE_METRICS, DEBUG, WORKER_TIMEOUT, MATH, THREE_D, REGION_MAP, MODE],
+      options: [GFONTS, PASSWORD, WASM_URL, ZIP, RESOURCE_LIMITS, RESOURCE_METRICS, DEBUG, WORKER_TIMEOUT, MATH, THREE_D, REGION_MAP, CHART_EX, MODE],
       methods: [
         { sig: 'static load(source, options?): Promise<DocxDocument>', desc: 'Parse a document from a URL or ArrayBuffer.' },
         { sig: 'get pageCount(): number', desc: 'Total pages.' },
@@ -342,6 +353,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
         MATH,
         THREE_D,
         REGION_MAP,
+        CHART_EX,
         DPR,
         MODE,
         { name: 'onVisiblePageChange', type: '(topIndex: number, total: number) => void', desc: 'Fires when the top-most visible page changes.' },
@@ -387,6 +399,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
         MATH,
         THREE_D,
         REGION_MAP,
+        CHART_EX,
         VIEWER_MODE,
         ON_SCALE_CHANGE,
         ON_HYPERLINK_CLICK,
@@ -455,6 +468,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
         MATH,
         THREE_D,
         REGION_MAP,
+        CHART_EX,
         VIEWER_MODE,
         ON_SCALE_CHANGE,
         ON_HYPERLINK_CLICK,
@@ -495,7 +509,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
       name: 'XlsxWorkbook',
       ctor: 'await XlsxWorkbook.load(source, options?)',
       note: 'Headless engine — parse once, render any sheet viewport into any canvas you supply.',
-      options: [GFONTS, PASSWORD, WASM_URL, ZIP, RESOURCE_LIMITS, RESOURCE_METRICS, DEBUG, WORKER_TIMEOUT, MATH, THREE_D, REGION_MAP, MODE],
+      options: [GFONTS, PASSWORD, WASM_URL, ZIP, RESOURCE_LIMITS, RESOURCE_METRICS, DEBUG, WORKER_TIMEOUT, MATH, THREE_D, REGION_MAP, CHART_EX, MODE],
       methods: [
         { sig: 'static load(source, options?): Promise<XlsxWorkbook>', desc: 'Parse a workbook from a URL or ArrayBuffer.' },
         { sig: 'get sheetNames(): string[]', desc: 'Names of all sheets.' },

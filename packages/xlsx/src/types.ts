@@ -7,6 +7,7 @@ import type {
   ArrowEnd,
   ChartThreeDRenderer,
   ChartRegionMapRenderer,
+  ChartExRenderer,
 } from '@silurus/ooxml-core';
 
 export type ShapeFill = Exclude<Fill, { fillType: 'image' } | { fillType: 'none' }>;
@@ -1099,6 +1100,8 @@ export interface RenderViewportOptions extends XlsxRenderViewportOptions {
   threeD?: ChartThreeDRenderer;
   /** @internal Optional synchronous offline Region Map renderer. */
   regionMap?: ChartRegionMapRenderer;
+  /** @internal Optional Microsoft ChartEx renderer. */
+  chartEx?: ChartExRenderer;
 }
 
 export type WorkerRequest =

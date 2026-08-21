@@ -116,6 +116,11 @@ recorded in [Chart compatibility evidence and scope](chart-compatibility-evidenc
 
 ## ChartEx layouts
 
+The ChartEx family renderer is an optional main/worker capability imported from
+`@silurus/ooxml/chart-ex`. Classic DrawingML 2-D chart families remain in each
+format entry. Without the optional renderer, recognized ChartEx models retain
+their parsed data but paint the deterministic unsupported-chart placeholder.
+
 MS-ODRAWXML §2.24.4.19 defines exactly eight `ST_SeriesLayout` values:
 `boxWhisker`, `clusteredColumn`, `funnel`, `paretoLine`, `regionMap`,
 `sunburst`, `treemap`, and `waterfall`. Histogram and Pareto are semantic

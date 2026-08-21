@@ -6,7 +6,12 @@ import type {
   SlicerItem, SlicerStyle, SlicerElementStyle,
   PhoneticRun, PhoneticProperties, PhoneticAlignment, Duotone,
 } from './types.js';
-import type { Stroke, ChartThreeDRenderer, ChartRegionMapRenderer } from '@silurus/ooxml-core';
+import type {
+  Stroke,
+  ChartThreeDRenderer,
+  ChartRegionMapRenderer,
+  ChartExRenderer,
+} from '@silurus/ooxml-core';
 import { chartImageFillKey } from '@silurus/ooxml-core';
 import { placePhoneticRuns } from './phonetic.js';
 import { crispOffset, renderChart, renderSparkline, renderPresetShape, createAuxCanvas, PT_TO_PX, EMU_PER_PX, mathToMathML, rasterizeMathSvg, tintMathRaster, classifyCjkFont, classifyFontGeneric, cjkFallbackChain, NON_CJK_SANS_FALLBACKS, NON_CJK_SERIF_FALLBACKS, kinsokuAdjustedSplit, DEFAULT_KINSOKU_RULES, isCjkBreakChar, isLatinWordCodePoint, isUax14NoBreakPair, containsSeaScript, isGraphemeFillText, seaMixedBreakOffsets, fitSeaWordPrefix, graphemeClusterOffsets, xlsxBorderDashArray, drawImageCropped, hexToRgba, intendedSingleLinePx, verticalTrLongMark, verticalVertGlyphReachable, applyStroke, resolveFill, type SparklineModel, type MathNode, type MathRenderer, type RasterizedMathSvg } from '@silurus/ooxml-core';
@@ -3807,7 +3812,7 @@ export function renderViewport(
     ctx, worksheet, colAxis, rowAxis, opts.loadedImages, cs,
     startRow, startCol, scrollOffsetX, scrollOffsetY,
     scrollAreaX, scrollAreaY, scrollAreaW, scrollAreaH,
-    worksheet.rightToLeft === true, canvasW, opts.threeD, opts.regionMap,
+    worksheet.rightToLeft === true, canvasW, opts.threeD, opts.regionMap, opts.chartEx,
   );
 
   // ── Anchored slicers (Office 2010+ pivot/table filter buttons) ──
@@ -4113,6 +4118,7 @@ function renderAnchoredDrawings(
   canvasW: number,
   threeD?: ChartThreeDRenderer,
   regionMap?: ChartRegionMapRenderer,
+  chartEx?: ChartExRenderer,
 ): void {
   const drawings: AnchoredDrawing[] = [];
   let fallbackOrder = 0;
@@ -4156,6 +4162,7 @@ function renderAnchoredDrawings(
         [drawing.anchor],
         threeD,
         regionMap,
+        chartEx,
       );
     }
   }
@@ -5293,6 +5300,7 @@ function renderCharts(
   anchors: readonly ChartAnchor[] = ws.charts,
   threeD?: ChartThreeDRenderer,
   regionMap?: ChartRegionMapRenderer,
+  chartEx?: ChartExRenderer,
 ): void {
   if (scrollAreaW <= 0 || scrollAreaH <= 0) return;
 
@@ -5342,6 +5350,7 @@ function renderCharts(
       threeD,
       regionMap,
       fill => loadedImages?.get(chartImageFillKey(fill)),
+      chartEx,
     );
     ctx.restore();
   }
