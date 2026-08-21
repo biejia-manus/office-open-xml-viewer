@@ -157,6 +157,7 @@ import {
 } from './material-color.js';
 import {
   fitChartThreeDProjectionToWallThickness,
+  planChartThreeDSurfaceGridSegments,
   planChartThreeDSurfaceGeometry,
   planChartThreeDProjection,
   type ThreeDScenePoint,
@@ -6937,7 +6938,7 @@ function renderLineChart(
   // Category-axis MAJOR gridlines (`<c:catAx><c:majorGridlines>`, §21.2.2.100):
   // vertical lines at the category ticks across the plot height. Off by default
   // (byte-stable). Shared placement with the bar renderer via
-  // `catGridlineFractions`.
+  // `categoryGridlineFractions`.
   if (!chart.catAxisHidden && drawCatMajorGridlines(chart)) {
     const cg = catGridStroke(chart, ptToPx);
     ctx.strokeStyle = cg.color;
@@ -8463,9 +8464,12 @@ function renderSurfaceChart(
     color: string,
     width: number,
     dash: string | null | undefined,
+    unbounded = false,
   ): void => {
     if (scenePoints.length < 2) return;
-    const points = scenePoints.map(point => projection.project(point.x, point.y, point.depth));
+    const points = unbounded
+      ? scenePoints.map(point => projection.projectUnbounded(point.x, point.y, point.depth))
+      : scenePoints.map(point => projection.project(point.x, point.y, point.depth));
     ctx.beginPath();
     ctx.moveTo(points[0].x, points[0].y);
     for (let index = 1; index < points.length; index++) ctx.lineTo(points[index].x, points[index].y);
@@ -8486,6 +8490,27 @@ function renderSurfaceChart(
     return planChartThreeDSurfaceGeometry(projection, kind, surface?.thicknessPercent);
   });
   const surfaceKinds = ['floor', 'sideWall', 'backWall'] as const;
+  const strokeSurfaceGridRule = (
+    slabIndex: number,
+    coordinate: 'x' | 'y',
+    fraction: number,
+    color: string,
+    width: number,
+    dash: string | null | undefined,
+  ): void => {
+    const slab = surfaceSlabs[slabIndex];
+    const kind = surfaceKinds[slabIndex];
+    for (const segment of planChartThreeDSurfaceGridSegments(
+      slab,
+      kind,
+      coordinate,
+      fraction,
+    )) {
+      if (slab.thickness > 0
+        && !projection.cameraFacing(slab.faces[segment.faceIndex])) continue;
+      strokeScenePath(segment.scenePoints, color, width, dash, true);
+    }
+  };
   // Keep the pre-thickness Surface3D path byte-stable when all three values
   // are omitted/zero. Its existing floor plane is family-owned; positive
   // thickness opts into the shared camera-aware CT_Surface slabs.
@@ -8590,15 +8615,28 @@ function renderSurfaceChart(
       ptToPx,
     );
     for (const value of surfaceMajorLines) {
+      const fraction = surfaceFrac(value);
       const gridY = toValueY(value);
-      strokeScenePath([
-        { x: front.x, y: gridY, depth: farDepth },
-        { x: front.x + front.w, y: gridY, depth: farDepth },
-      ], line.color, line.width, chart.valAxisGridlineDash);
-      strokeScenePath([
-        { x: farX, y: gridY, depth: nearDepth },
-        { x: farX, y: gridY, depth: farDepth },
-      ], line.color, line.width, chart.valAxisGridlineDash);
+      if (surfaceSlabs[2].thickness > 0) {
+        strokeSurfaceGridRule(
+          2, 'y', fraction, line.color, line.width, chart.valAxisGridlineDash,
+        );
+      } else {
+        strokeScenePath([
+          { x: front.x, y: gridY, depth: farDepth },
+          { x: front.x + front.w, y: gridY, depth: farDepth },
+        ], line.color, line.width, chart.valAxisGridlineDash);
+      }
+      if (surfaceSlabs[1].thickness > 0) {
+        strokeSurfaceGridRule(
+          1, 'y', fraction, line.color, line.width, chart.valAxisGridlineDash,
+        );
+      } else {
+        strokeScenePath([
+          { x: farX, y: gridY, depth: nearDepth },
+          { x: farX, y: gridY, depth: farDepth },
+        ], line.color, line.width, chart.valAxisGridlineDash);
+      }
     }
   }
   if (chart.catAxisMajorGridlines) {
@@ -8612,10 +8650,21 @@ function renderSurfaceChart(
     // incorrectly draw lines through the 25%/75% data points of a two-column
     // Surface instead of the 0%/50%/100% boundaries authored by the axis.
     for (const fraction of catGridlineFractions(chart, columnCount)) {
-      strokeScenePath([
-        { x: front.x + fraction * front.w, y: floorY, depth: nearDepth },
-        { x: front.x + fraction * front.w, y: floorY, depth: farDepth },
-      ], line.color, line.width, chart.catAxisGridlineDash);
+      if (surfaceSlabs[0].thickness > 0) {
+        strokeSurfaceGridRule(
+          0, 'x', fraction, line.color, line.width, chart.catAxisGridlineDash,
+        );
+      } else {
+        strokeScenePath([
+          { x: front.x + fraction * front.w, y: floorY, depth: nearDepth },
+          { x: front.x + fraction * front.w, y: floorY, depth: farDepth },
+        ], line.color, line.width, chart.catAxisGridlineDash);
+      }
+      if (surfaceSlabs[2].thickness > 0) {
+        strokeSurfaceGridRule(
+          2, 'x', fraction, line.color, line.width, chart.catAxisGridlineDash,
+        );
+      }
     }
   }
 

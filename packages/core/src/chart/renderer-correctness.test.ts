@@ -1450,6 +1450,59 @@ describe('classic 3-D compatibility projection', () => {
     expect(Math.max(...points.map(point => point.y))).toBeLessThanOrEqual(RECT.y + RECT.h + 1e-9);
   });
 
+  it('continues authored category and value gridlines across visible thick CT_Surface faces', () => {
+    const render = (thicknessPercent: number, chartType = 'line') => {
+      const rec = strokedPolylineCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType,
+        categories: ['A', 'B', 'C'],
+        catAxisCrossBetween: 'between',
+        catAxisMajorGridlines: true,
+        catAxisGridlineColor: 'FF00FF',
+        catAxisGridlineWidthEmu: 25_400,
+        catAxisGridlineDash: 'dash',
+        valAxisMajorGridlines: true,
+        valAxisGridlineColor: '00FFFF',
+        valAxisGridlineWidthEmu: 25_400,
+        valAxisGridlineDash: 'dot',
+        valAxisMinorGridlines: true,
+        valAxisMinorGridlineColor: '123456',
+        valAxisMinorUnit: 1,
+        valMin: 0,
+        valMax: 10,
+        valAxisMajorUnit: 2,
+        threeD: {
+          rotationX: 20, rotationY: 20, depthPercent: 100, perspective: 30,
+          floor: { fillColor: 'C00000', thicknessPercent },
+          sideWall: { fillColor: '008000', thicknessPercent },
+          backWall: { fillColor: '4472C4', thicknessPercent },
+        },
+        series: [series({ values: [2, 8, 4], showMarker: false })],
+      }), RECT, 1);
+      return rec.strokes;
+    };
+    const planar = render(0);
+    const thick = render(25);
+    for (const color of ['#FF00FF', '#00FFFF']) {
+      const planarLines = planar.filter(stroke => stroke.ss === color);
+      const thickLines = thick.filter(stroke => stroke.ss === color);
+      expect(thickLines.length).toBeGreaterThan(0);
+      expect(thickLines.length).toBeGreaterThan(planarLines.length);
+      expect(thickLines.every(stroke => stroke.lw === 2)).toBe(true);
+      expect(thickLines.every(stroke => stroke.dash.length > 0)).toBe(true);
+    }
+    expect(thick.filter(stroke => stroke.ss === '#123456')).toHaveLength(
+      planar.filter(stroke => stroke.ss === '#123456').length,
+    );
+    const planarArea = render(0, 'area');
+    const thickArea = render(25, 'area');
+    for (const color of ['#FF00FF', '#00FFFF']) {
+      expect(thickArea.filter(stroke => stroke.ss === color)).toHaveLength(
+        planarArea.filter(stroke => stroke.ss === color).length,
+      );
+    }
+  });
+
   it('prefetches and projects only applicable flat CT_Surface stretch pictures', () => {
     const picture = {
       fillType: 'image' as const,
@@ -16477,6 +16530,50 @@ describe('surface contour charts', () => {
     }
   });
 
+  it('continues Surface3D category and value gridlines across visible thick slab faces', () => {
+    const render = (thicknessPercent: number) => {
+      const rec = strokedPolylineCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'surface3D',
+        categories: ['X1', 'X2', 'X3'],
+        catAxisCrossBetween: 'between',
+        catAxisMajorGridlines: true,
+        catAxisGridlineColor: 'FF00FF',
+        catAxisGridlineWidthEmu: 25_400,
+        catAxisGridlineDash: 'dash',
+        valAxisMajorGridlines: true,
+        valAxisGridlineColor: '00FFFF',
+        valAxisGridlineWidthEmu: 25_400,
+        valAxisGridlineDash: 'dot',
+        valMin: 0,
+        valMax: 10,
+        valAxisMajorUnit: 2,
+        surfaceWireframe: false,
+        threeD: {
+          rotationX: 20, rotationY: 20, perspective: 30,
+          floor: { fillColor: 'C00000', thicknessPercent },
+          sideWall: { fillColor: '008000', thicknessPercent },
+          backWall: { fillColor: '4472C4', thicknessPercent },
+        },
+        series: [
+          series({ name: 'Y1', values: [2, 5, 3] }),
+          series({ name: 'Y2', values: [4, 9, 6] }),
+        ],
+      }), RECT, 1);
+      return rec.strokes;
+    };
+    const planar = render(0);
+    const thick = render(25);
+    for (const color of ['#FF00FF', '#00FFFF']) {
+      const planarLines = planar.filter(stroke => stroke.ss === color);
+      const thickLines = thick.filter(stroke => stroke.ss === color);
+      expect(planarLines.length).toBeGreaterThan(0);
+      expect(thickLines.length).toBeGreaterThan(planarLines.length);
+      expect(thickLines.every(stroke => stroke.lw === 2)).toBe(true);
+      expect(thickLines.every(stroke => stroke.dash.length > 0)).toBe(true);
+    }
+  });
+
   it('rejects an oversized linked Surface recipe before resolving any paint', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
@@ -16569,8 +16666,12 @@ describe('surface contour charts', () => {
     const categoryDx = categoryEnd.x - categoryStart.x;
     const categoryDy = categoryEnd.y - categoryStart.y;
     const categoryLengthSquared = categoryDx * categoryDx + categoryDy * categoryDy;
-    const gridFractions = rec.strokes
-      .filter(stroke => stroke.ss === '#00AA00' && stroke.points.length === 2)
+    const categoryGridStrokes = rec.strokes
+      .filter(stroke => stroke.ss === '#00AA00' && stroke.points.length === 2);
+    // A planar Surface retains one floor segment per rule. Positive-thickness
+    // exterior continuation has its own face-count tests below.
+    expect(categoryGridStrokes).toHaveLength(3);
+    const gridFractions = categoryGridStrokes
       .map(stroke => {
         const point = stroke.points[0];
         return ((point.x - categoryStart.x) * categoryDx

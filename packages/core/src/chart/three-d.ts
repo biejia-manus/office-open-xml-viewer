@@ -244,6 +244,12 @@ export interface ChartThreeDSurfaceGeometry {
   modelDepth: number;
 }
 
+export interface ChartThreeDSurfaceGridSegment {
+  /** Index into {@link ChartThreeDSurfaceGeometry.faces}. */
+  faceIndex: number;
+  scenePoints: [ThreeDScenePoint, ThreeDScenePoint];
+}
+
 const MAX_UNSIGNED_INT = 4_294_967_295;
 
 /** Resolve one CT_Surface as a bounded slab outside the plot volume.
@@ -364,6 +370,59 @@ export function planChartThreeDSurfaceGeometry(
     return dot < 0 ? [...face].reverse() : face;
   });
   return { thickness, inner, outer, faces, pictureStackAspect, modelDepth: projection.modelDepth };
+}
+
+/** Continue one grid rule over the planar face or every corresponding face of
+ * a positive-thickness CT_Surface slab. The input fraction is expressed in
+ * the owning plot-face x or y direction, so no screen-space fitting or camera
+ * heuristic is involved. */
+export function planChartThreeDSurfaceGridSegments(
+  geometry: ChartThreeDSurfaceGeometry,
+  kind: ChartThreeDSurfaceKind,
+  coordinate: 'x' | 'y',
+  fraction: number,
+): ChartThreeDSurfaceGridSegment[] {
+  if (!Number.isFinite(fraction) || fraction < 0 || fraction > 1) return [];
+  if ((coordinate === 'x' && kind === 'sideWall')
+    || (coordinate === 'y' && kind === 'floor')) return [];
+  const interpolate = (start: ThreeDScenePoint, end: ThreeDScenePoint): ThreeDScenePoint => ({
+    x: start.x + (end.x - start.x) * fraction,
+    y: start.y + (end.y - start.y) * fraction,
+    depth: start.depth + (end.depth - start.depth) * fraction,
+  });
+  let innerStart: ThreeDScenePoint;
+  let innerEnd: ThreeDScenePoint;
+  let outerStart: ThreeDScenePoint;
+  let outerEnd: ThreeDScenePoint;
+  let startFaceIndex: number;
+  let endFaceIndex: number;
+  if (coordinate === 'x') {
+    innerStart = interpolate(geometry.inner[0], geometry.inner[1]);
+    innerEnd = interpolate(geometry.inner[3], geometry.inner[2]);
+    outerStart = interpolate(geometry.outer[0], geometry.outer[1]);
+    outerEnd = interpolate(geometry.outer[3], geometry.outer[2]);
+    startFaceIndex = 2;
+    endFaceIndex = 4;
+  } else {
+    innerStart = interpolate(geometry.inner[0], geometry.inner[3]);
+    innerEnd = interpolate(geometry.inner[1], geometry.inner[2]);
+    outerStart = interpolate(geometry.outer[0], geometry.outer[3]);
+    outerEnd = interpolate(geometry.outer[1], geometry.outer[2]);
+    startFaceIndex = 5;
+    endFaceIndex = 3;
+  }
+  const segments: ChartThreeDSurfaceGridSegment[] = [{
+    faceIndex: 0,
+    scenePoints: [innerStart, innerEnd],
+  }];
+  if (geometry.thickness > 0) {
+    segments.push(
+      { faceIndex: 1, scenePoints: [outerStart, outerEnd] },
+      { faceIndex: startFaceIndex, scenePoints: [innerStart, outerStart] },
+      { faceIndex: endFaceIndex, scenePoints: [innerEnd, outerEnd] },
+    );
+  }
+  return segments;
 }
 
 /** Refit the complete base cuboid and the three authored surface slabs into
