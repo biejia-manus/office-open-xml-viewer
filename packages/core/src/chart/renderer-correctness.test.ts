@@ -1289,6 +1289,49 @@ describe('classic 3-D compatibility projection', () => {
     }
   });
 
+  it('uses the observed compact 3-D column tick density with only an authored maximum', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B', 'C', 'D'],
+      valMax: 8,
+      valAxisMajorGridlines: false,
+      threeD: {
+        rotationX: 15,
+        rotationY: 20,
+        depthPercent: 100,
+        perspective: 30,
+        gapDepthPercent: 150,
+      },
+      series: [series({ values: [8, 6, 4, 2] })],
+    }), { x: 0, y: 0, w: 300, h: 190 }, 1);
+
+    const labels = rec.texts.map(text => text.text);
+    expect(labels).toEqual(expect.arrayContaining(['0', '2', '4', '6', '8']));
+    expect(labels).not.toEqual(expect.arrayContaining(['1', '3', '5', '7']));
+  });
+
+  it('keeps the ordinary one-sided tick density when 3-D display units are authored', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B', 'C', 'D'],
+      valMax: 8,
+      valAxisDisplayUnits: { divisor: 100, builtInUnit: 'hundreds', label: null },
+      threeD: {
+        rotationX: 15,
+        rotationY: 20,
+        depthPercent: 100,
+        perspective: 30,
+        gapDepthPercent: 150,
+      },
+      series: [series({ values: [8, 6, 4, 2] })],
+    }), { x: 0, y: 0, w: 300, h: 190 }, 1);
+
+    const labels = rec.texts.map(text => text.text);
+    expect(labels).toEqual(expect.arrayContaining(['0', '0.01', '0.02', '0.03']));
+  });
+
   it('keeps the ordinary 2-D bar path when view3D is absent', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
