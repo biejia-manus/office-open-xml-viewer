@@ -29,7 +29,13 @@ export function normalizeLayoutOptions(
     ? defaultCurrentDateMs
     : typeof currentDate === 'number' ? currentDate : currentDate.getTime();
   if (!Number.isFinite(currentDateMs)) throw new RangeError('currentDate must resolve to finite epoch milliseconds');
-  return Object.freeze({ currentDateMs, showTrackedChanges: showTrackedChanges === true });
+  // The final-view default omits the key entirely so normalized default
+  // options keep their historical `{ currentDateMs }` shape (and the default
+  // variant's options object stays deep-equal to pre-axis builds).
+  return Object.freeze({
+    currentDateMs,
+    ...(showTrackedChanges === true ? { showTrackedChanges: true as const } : {}),
+  });
 }
 
 export function layoutOptionsForRender(input: LayoutRenderSelectionInput): LayoutOptions {

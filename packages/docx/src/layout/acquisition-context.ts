@@ -117,6 +117,9 @@ export interface BodyAcquisitionState extends AnchorFloatRegistrationState {
   /** ECMA-376 §17.13.5 tracked-change view (from the selected LayoutOptions):
    * true = markup view, absent/false = final view (deletions hidden). */
   showTrackedChanges?: boolean;
+  /** Markup-view author → stable palette colour resolver; built once per
+   * layout session (only when showTrackedChanges is set). */
+  revisionAuthorColor?: (author?: string) => string;
   noteNumbers?: Map<string, number>;
   noteReferenceNumber?: number;
   containerShading?: string | null;
@@ -147,6 +150,7 @@ export type BodyMeasurementContext = Readonly<Pick<
   | 'defaultTabPt'
   | 'currentDateMs'
   | 'showTrackedChanges'
+  | 'revisionAuthorColor'
   | 'noteNumbers'
   | 'noteReferenceNumber'
   | 'verticalCJK'

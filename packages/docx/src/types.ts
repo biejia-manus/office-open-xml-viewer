@@ -133,14 +133,14 @@ export interface DocComment {
   initials?: string;
   date?: string;
   text: string;
-  /** [MS-DOCX] §2.5.3.1 `w15:commentEx@paraIdParent` resolved to the parent
-   *  comment's `id` — present when this comment is a reply in a thread.
-   *  Absent for top-level comments and for documents without
-   *  `word/commentsExtended.xml`. */
+  /** `w15:commentEx@paraIdParent` (the commentsExtended extension part)
+   *  resolved to the parent comment's `id` — present when this comment is a
+   *  reply in a thread. Absent for top-level comments and for documents
+   *  without `word/commentsExtended.xml`. */
   parentId?: string;
-  /** [MS-DOCX] §2.5.3.1 `w15:commentEx@done` — `true` when the thread is
-   *  marked resolved. Absent when the document ships no commentsExtended
-   *  entry for this comment. */
+  /** `w15:commentEx@done` (the commentsExtended extension part) — `true` when
+   *  the thread is marked resolved. Absent when the document ships no
+   *  commentsExtended entry for this comment. */
   resolved?: boolean;
   /** Per-paragraph plain text of the comment body, in document order (one
    *  entry per `<w:p>`, empty string for an empty paragraph). {@link text} is
