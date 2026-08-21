@@ -2074,7 +2074,7 @@ function axisPlan(
 ): NumericValueAxisPlan {
   const factor = percent ? 100 : 1;
   const minorTickMark = chart.valAxisMinorTickMark ?? 'none';
-  return planNumericValueAxis({
+  const options = {
     dataMin,
     dataMax,
     explicitMin: chart.valMin == null ? (percent ? dataMin : null) : chart.valMin * factor,
@@ -2086,6 +2086,26 @@ function axisPlan(
     logBase: chart.valAxisLogBase,
     reversed: chart.valAxisOrientation === 'maxMin',
     needMinor: chart.valAxisMinorGridlines === true || minorTickMark !== 'none',
+  } as const;
+  const automaticPlan = planNumericValueAxis(options);
+
+  // In the measured compact classic 3-D column charts, Excel applies its
+  // explicit-bounds vertical density rule when only one value-axis bound is
+  // authored. Keep that application-defined behavior local to the observed
+  // family instead of changing the shared 2-D automatic-axis policy.
+  const compactThreeDColumnWithOneBound = !percent
+    && orientation === 'vertical'
+    && (chart.chartType === 'clusteredBar' || chart.chartType === 'stackedBar')
+    && chart.valAxisMajorUnit == null
+    && chart.valAxisLogBase == null
+    && chart.valAxisDisplayUnits == null
+    && ((chart.valMin == null) !== (chart.valMax == null));
+  if (!compactThreeDColumnWithOneBound) return automaticPlan;
+
+  return planNumericValueAxis({
+    ...options,
+    explicitMin: automaticPlan.min,
+    explicitMax: automaticPlan.max,
   });
 }
 
