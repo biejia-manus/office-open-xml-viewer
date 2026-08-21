@@ -8065,7 +8065,27 @@ function renderSurfaceChart(
     { length: rawMajorLineCount },
     (_, index) => surfaceMin + index * step,
   );
-
+  const wireframeSplitFractions = (start: number, end: number): number[] => {
+    const low = Math.min(start, end);
+    const high = Math.max(start, end);
+    const firstBoundary = Math.max(
+      1,
+      Math.floor((low - surfaceMin) / step) + 1,
+    );
+    const lastBoundary = Math.min(
+      bandCount - 1,
+      Math.ceil((high - surfaceMin) / step) - 1,
+    );
+    const fractions = [0];
+    if (start !== end) {
+      for (let boundary = firstBoundary; boundary <= lastBoundary; boundary++) {
+        fractions.push((surfaceMin + boundary * step - start) / (end - start));
+      }
+    }
+    fractions.push(1);
+    fractions.sort((left, right) => left - right);
+    return fractions;
+  };
   const bandColors = Array.from({ length: bandCount }, (_, index) =>
     legacyPattern2Color(
       chart.themeAccentColors ?? [],
@@ -8087,29 +8107,6 @@ function renderSurfaceChart(
       || (style?.lineColors?.length ?? 0) > 0
       || (style?.linePaints?.length ?? 0) > 0
     );
-  const styleHasLineFormatting = (style: ChartSeries['chartexStyle']): boolean =>
-    styleHasLinePaint(style)
-    || style?.lineWidthEmu != null
-    || style?.lineDashAuthored === true
-    || style?.lineDash != null
-    || style?.lineCustomDash != null
-    || style?.lineCap != null
-    || style?.lineJoin != null
-    || style?.lineCompound != null;
-  const directWireframeLineAuthored = chart.surfaceWireframe === true && (
-    rows.some(row =>
-      row.lineColor != null
-      || row.lineWidthEmu != null
-      || row.lineHidden === true
-      || styleHasLineFormatting(row.chartexStyle)
-    )
-    || [...bandFormats.values()].some(format =>
-      format.lineColor != null
-      || format.lineWidthEmu != null
-      || format.lineHidden === true
-      || styleHasLineFormatting(format.style)
-    )
-  );
   const bandFillRecipes = chart.surfaceWireframe === true ? [] : Array.from(
     { length: bandCount }, (_, index) => {
       const format = bandFormats.get(index);
@@ -8134,22 +8131,160 @@ function renderSurfaceChart(
         : decision;
     },
   );
-  // MS-ODRAWXML scopes dataPointWireframe to Surface wireframes, but does not
-  // define how a relative Chart Colors palette or direct band/series outline
-  // is segmented across the connected mesh. Consume only a fixed linked line
-  // reference when no direct line layer needs that missing segmentation;
-  // otherwise fail closed instead of selecting palette entry zero by guess.
+  interface SurfaceWireframeLineStyle {
+    paint: ChartModel['plotAreaLineFill'] | null | undefined;
+    lineWidthEmu: number | null | undefined;
+    lineDash: string | null | undefined;
+    lineCustomDash: ChartModel['plotAreaLineCustomDash'];
+    lineCap: string | null | undefined;
+    lineJoin: string | null | undefined;
+    lineCompound: string | null | undefined;
+  }
+  const styleGeometry = (
+    direct: ChartSeries['chartexStyle'],
+    fallback: SurfaceWireframeLineStyle,
+  ): Omit<SurfaceWireframeLineStyle, 'paint'> => {
+    const effectiveDirect = direct?.lineNoStyle === true ? undefined : direct;
+    const dashAuthored = effectiveDirect?.lineDashAuthored === true
+      || effectiveDirect?.lineDash != null
+      || effectiveDirect?.lineCustomDash != null;
+    return {
+      lineWidthEmu: effectiveDirect?.lineWidthEmu ?? fallback.lineWidthEmu,
+      lineDash: dashAuthored ? effectiveDirect?.lineDash : fallback.lineDash,
+      lineCustomDash: dashAuthored
+        ? effectiveDirect?.lineCustomDash : fallback.lineCustomDash,
+      lineCap: effectiveDirect?.lineCap ?? fallback.lineCap,
+      lineJoin: effectiveDirect?.lineJoin ?? fallback.lineJoin,
+      lineCompound: effectiveDirect?.lineCompound ?? fallback.lineCompound,
+    };
+  };
+  // Office's Surface wireframe uses a fixed dataPointWireframe reference as
+  // the mesh default. A relative palette has no single chart-wide index, so it
+  // remains fail-closed rather than silently choosing entry zero.
   const fixedWireframeLineIndex = linkedWireframeStyle?.lineColorIndex;
-  const unsupportedWireframeCompound = linkedWireframeStyle?.lineCompound != null;
-  const wireframeLineRecipe = chart.surfaceWireframe !== true
-    ? undefined
-    : directWireframeLineAuthored || unsupportedWireframeCompound
-      ? null
-      : !styleHasLinePaint(linkedWireframeStyle)
-        ? undefined
-        : fixedWireframeLineIndex != null
-          ? chartStyleLineDecision(linkedWireframeStyle, fixedWireframeLineIndex)
-          : null;
+  let linkedWireframePaint: ChartModel['plotAreaLineFill'] | null | undefined;
+  if (!styleHasLinePaint(linkedWireframeStyle)) linkedWireframePaint = undefined;
+  else if (linkedWireframeStyle?.lineHidden === true) {
+    linkedWireframePaint = chartStyleLineDecision(linkedWireframeStyle, 0);
+  } else {
+    linkedWireframePaint = fixedWireframeLineIndex != null
+      ? chartStyleLineDecision(linkedWireframeStyle, fixedWireframeLineIndex)
+      : null;
+  }
+  const emptyWireframeStyle: SurfaceWireframeLineStyle = {
+    paint: undefined,
+    lineWidthEmu: undefined,
+    lineDash: undefined,
+    lineCustomDash: undefined,
+    lineCap: undefined,
+    lineJoin: undefined,
+    lineCompound: undefined,
+  };
+  const linkedGeometry = linkedWireframeStyle?.lineNoStyle === true
+    ? emptyWireframeStyle
+    : {
+      paint: linkedWireframePaint,
+      lineWidthEmu: linkedWireframeStyle?.lineWidthEmu,
+      lineDash: linkedWireframeStyle?.lineDash,
+      lineCustomDash: linkedWireframeStyle?.lineCustomDash,
+      lineCap: linkedWireframeStyle?.lineCap,
+      lineJoin: linkedWireframeStyle?.lineJoin,
+      lineCompound: linkedWireframeStyle?.lineCompound,
+    };
+  const firstSurfaceSeries = rows[0];
+  let directSeriesPaint: ChartModel['plotAreaLineFill'] | null | undefined;
+  if (firstSurfaceSeries?.lineHidden === true) directSeriesPaint = null;
+  else if (firstSurfaceSeries?.lineColor != null) {
+    directSeriesPaint = { fillType: 'solid', color: firstSurfaceSeries.lineColor };
+  } else {
+    directSeriesPaint = chartStyleLineDecision(firstSurfaceSeries?.chartexStyle, 0);
+  }
+  const baseGeometry = styleGeometry(firstSurfaceSeries?.chartexStyle, linkedGeometry);
+  const baseWireframeStyle: SurfaceWireframeLineStyle = {
+    paint: directSeriesPaint === undefined ? linkedWireframePaint : directSeriesPaint,
+    ...baseGeometry,
+    lineWidthEmu: firstSurfaceSeries?.lineWidthEmu ?? baseGeometry.lineWidthEmu,
+  };
+  if (baseWireframeStyle.lineCompound != null) baseWireframeStyle.paint = null;
+  const directBandLineDecisions = Array.from({ length: bandCount }, (_, index) => {
+    const format = bandFormats.get(index);
+    if (!format) return undefined;
+    if (format.lineHidden === true) return null;
+    if (format.lineColor != null) return { fillType: 'solid' as const, color: format.lineColor };
+    return chartStyleLineDecision(format.style, index);
+  });
+  const wireframeLineStyles = directBandLineDecisions.map((directPaint, index) => {
+    const format = bandFormats.get(index);
+    const geometry = styleGeometry(format?.style, baseWireframeStyle);
+    const style: SurfaceWireframeLineStyle = {
+      paint: directPaint === undefined ? baseWireframeStyle.paint : directPaint,
+      ...geometry,
+      lineWidthEmu: format?.lineWidthEmu ?? geometry.lineWidthEmu,
+    };
+    if (style.lineCompound != null) style.paint = null;
+    return style;
+  });
+  const sameWireframeStyle = (
+    left: SurfaceWireframeLineStyle,
+    right: SurfaceWireframeLineStyle,
+  ): boolean => left.paint !== undefined
+    && left.paint === right.paint
+    && left.lineWidthEmu === right.lineWidthEmu
+    && left.lineDash === right.lineDash
+    && left.lineCustomDash === right.lineCustomDash
+    && left.lineCap === right.lineCap
+    && left.lineJoin === right.lineJoin
+    && left.lineCompound === right.lineCompound;
+  interface SurfaceWireframeBandRun {
+    from: number;
+    to: number;
+    band: number;
+  }
+  const wireframeBandRuns = (start: number, end: number): SurfaceWireframeBandRun[] => {
+    const fractions = wireframeSplitFractions(start, end);
+    const runs: SurfaceWireframeBandRun[] = [];
+    for (let index = 0; index < fractions.length - 1; index++) {
+      const from = fractions[index];
+      const to = fractions[index + 1];
+      const midpoint = start + (end - start) * ((from + to) / 2);
+      const band = Math.max(0, Math.min(
+        bandCount - 1,
+        Math.floor((midpoint - surfaceMin) / step),
+      ));
+      const previous = runs[runs.length - 1];
+      if (previous
+        && directBandLineDecisions[previous.band] === undefined
+        && directBandLineDecisions[band] === undefined
+        && sameWireframeStyle(
+          wireframeLineStyles[previous.band], wireframeLineStyles[band],
+        )) previous.to = to;
+      else runs.push({ from, to, band });
+    }
+    return runs;
+  };
+  if (chart.surfaceWireframe === true) {
+    let wireframeSegmentCount = 0;
+    const chargeEdge = (start: number | null, end: number | null): boolean => {
+      if (start == null || end == null || !Number.isFinite(start) || !Number.isFinite(end)) {
+        return true;
+      }
+      wireframeSegmentCount += wireframeBandRuns(start, end).length;
+      return wireframeSegmentCount <= MAX_SURFACE_PAINT_POLYGONS;
+    };
+    for (let row = 0; row < rowCount; row++) {
+      for (let column = 0; column < columnCount - 1; column++) {
+        if (!chargeEdge(rows[row].values[column], rows[row].values[column + 1])) return;
+      }
+    }
+    for (let column = 0; column < columnCount; column++) {
+      for (let row = 0; row < rowCount - 1; row++) {
+        if (!chargeEdge(rows[row].values[column], rows[row + 1].values[column])) return;
+      }
+    }
+  }
+  const usesBaseWireframeLine = directBandLineDecisions.some(
+    decision => decision === undefined,
+  );
   const surfaceFacePaints = [
     { surface: chart.threeD?.floor, role: 'floor' as const },
     { surface: chart.threeD?.sideWall, role: 'wall' as const },
@@ -8159,7 +8294,13 @@ function renderSurfaceChart(
   for (const recipe of [
     ...bandFillRecipes,
     ...bandLineRecipes,
-    wireframeLineRecipe,
+    ...(chart.surfaceWireframe === true
+      && usesBaseWireframeLine
+      ? [baseWireframeStyle.paint]
+      : []),
+    ...(chart.surfaceWireframe === true
+      ? directBandLineDecisions.filter(decision => decision !== undefined)
+      : []),
     ...surfaceFacePaints.flatMap(paint => [paint.fill, paint.line]),
   ]) {
     if (recipe == null) continue;
@@ -8260,6 +8401,30 @@ function renderSurfaceChart(
     depth: number;
   }
   const paints: SurfacePaint[] = [];
+  interface SurfaceWireframeSegment {
+    points: [{ x: number; y: number }, { x: number; y: number }];
+    band: number;
+  }
+  const wireframeSegments: SurfaceWireframeSegment[] = [];
+  const appendWireframeEdge = (start: SurfaceVertex, end: SurfaceVertex): void => {
+    const pointAt = (fraction: number): SurfaceVertex => ({
+      x: start.x + (end.x - start.x) * fraction,
+      y: start.y + (end.y - start.y) * fraction,
+      depth: start.depth + (end.depth - start.depth) * fraction,
+      value: start.value + (end.value - start.value) * fraction,
+    });
+    for (const run of wireframeBandRuns(start.value, end.value)) {
+      const from = pointAt(run.from);
+      const to = pointAt(run.to);
+      wireframeSegments.push({
+        points: [
+          projection.project(from.x, from.y, from.depth),
+          projection.project(to.x, to.y, to.depth),
+        ],
+        band: run.band,
+      });
+    }
+  };
   const paintTriangle = (triangle: SurfaceVertex[]): void => {
     if (chart.surfaceWireframe === true) return;
     const triangleMin = Math.min(...triangle.map(vertex => vertex.value));
@@ -8495,6 +8660,40 @@ function renderSurfaceChart(
       }
     }
   }
+  if (chart.surfaceWireframe === true) {
+    for (let row = 0; row < rowCount; row++) {
+      for (let column = 0; column < columnCount - 1; column++) {
+        const startValue = rows[row].values[column];
+        const endValue = rows[row].values[column + 1];
+        if (startValue == null || endValue == null
+          || !Number.isFinite(startValue) || !Number.isFinite(endValue)) continue;
+        appendWireframeEdge(
+          {
+            x: toX(column), y: toValueY(startValue), depth: toDepth(row), value: startValue,
+          },
+          {
+            x: toX(column + 1), y: toValueY(endValue), depth: toDepth(row), value: endValue,
+          },
+        );
+      }
+    }
+    for (let column = 0; column < columnCount; column++) {
+      for (let row = 0; row < rowCount - 1; row++) {
+        const startValue = rows[row].values[column];
+        const endValue = rows[row + 1].values[column];
+        if (startValue == null || endValue == null
+          || !Number.isFinite(startValue) || !Number.isFinite(endValue)) continue;
+        appendWireframeEdge(
+          {
+            x: toX(column), y: toValueY(startValue), depth: toDepth(row), value: startValue,
+          },
+          {
+            x: toX(column), y: toValueY(endValue), depth: toDepth(row + 1), value: endValue,
+          },
+        );
+      }
+    }
+  }
   paints.sort((left, right) => left.depth - right.depth);
   const bandBounds = Array.from({ length: bandCount }, () => ({
     minX: Number.POSITIVE_INFINITY,
@@ -8505,6 +8704,15 @@ function renderSurfaceChart(
   for (const paint of paints) {
     const bounds = bandBounds[paint.band];
     for (const point of paint.points) {
+      bounds.minX = Math.min(bounds.minX, point.x);
+      bounds.minY = Math.min(bounds.minY, point.y);
+      bounds.maxX = Math.max(bounds.maxX, point.x);
+      bounds.maxY = Math.max(bounds.maxY, point.y);
+    }
+  }
+  for (const segment of wireframeSegments) {
+    const bounds = bandBounds[segment.band];
+    for (const point of segment.points) {
       bounds.minX = Math.min(bounds.minX, point.x);
       bounds.minY = Math.min(bounds.minY, point.y);
       bounds.maxX = Math.max(bounds.maxX, point.x);
@@ -8577,50 +8785,37 @@ function renderSurfaceChart(
     }
   }
   if (chart.surfaceWireframe === true) {
-    const wireframeLine = wireframeLineRecipe?.fillType === 'solid'
-      ? `#${wireframeLineRecipe.color}`
-      : wireframeLineRecipe
-        ? resolveFill(wireframeLineRecipe, ctx, px0, py0, pw, ph)
-        : wireframeLineRecipe;
-    if (wireframeLine !== null) {
-      const geometry = directWireframeLineAuthored
-        || linkedWireframeStyle?.lineNoStyle === true
-        ? undefined : linkedWireframeStyle;
-      ctx.strokeStyle = wireframeLine ?? '#595959';
-      ctx.lineWidth = geometry?.lineWidthEmu != null
-        ? axisLineWidthPx(geometry.lineWidthEmu, ptToPx)
+    const baseWireframeLine = !usesBaseWireframeLine
+      ? undefined
+      : baseWireframeStyle.paint?.fillType === 'solid'
+      ? `#${baseWireframeStyle.paint.color}`
+      : baseWireframeStyle.paint
+        ? resolveFill(baseWireframeStyle.paint, ctx, px0, py0, pw, ph)
+        : baseWireframeStyle.paint;
+    const resolvedWireframeLines = directBandLineDecisions.map((decision, band) =>
+      decision === undefined ? baseWireframeLine : resolveBandPaint(decision, band)
+    );
+    for (const segment of wireframeSegments) {
+      const style = wireframeLineStyles[segment.band];
+      const line = resolvedWireframeLines[segment.band];
+      if (line === null) continue;
+      ctx.beginPath();
+      ctx.moveTo(segment.points[0].x, segment.points[0].y);
+      ctx.lineTo(segment.points[1].x, segment.points[1].y);
+      ctx.strokeStyle = line ?? bandColors[segment.band];
+      ctx.lineWidth = style.lineWidthEmu != null
+        ? axisLineWidthPx(style.lineWidthEmu, ptToPx)
         : Math.max(1, 0.75 * ptToPx);
       ctx.setLineDash(drawingmlLineDashArray(
-        geometry?.lineCustomDash,
-        geometry?.lineDash,
+        style.lineCustomDash,
+        style.lineDash,
         ctx.lineWidth,
       ));
-      const cap = geometry?.lineCap;
-      const join = geometry?.lineJoin;
+      const cap = style.lineCap;
+      const join = style.lineJoin;
       ctx.lineCap = cap === 'rnd' ? 'round' : cap === 'sq' ? 'square' : 'butt';
       ctx.lineJoin = join === 'round' || join === 'bevel' ? join : 'miter';
-      for (let row = 0; row < rowCount; row++) {
-        ctx.beginPath();
-        for (let column = 0; column < columnCount; column++) {
-          const value = rows[row].values[column];
-          if (value == null || !Number.isFinite(value)) continue;
-          const point = projection.project(toX(column), toValueY(value), toDepth(row));
-          if (column === 0) ctx.moveTo(point.x, point.y);
-          else ctx.lineTo(point.x, point.y);
-        }
-        ctx.stroke();
-      }
-      for (let column = 0; column < columnCount; column++) {
-        ctx.beginPath();
-        for (let row = 0; row < rowCount; row++) {
-          const value = rows[row].values[column];
-          if (value == null || !Number.isFinite(value)) continue;
-          const point = projection.project(toX(column), toValueY(value), toDepth(row));
-          if (row === 0) ctx.moveTo(point.x, point.y);
-          else ctx.lineTo(point.x, point.y);
-        }
-        ctx.stroke();
-      }
+      ctx.stroke();
     }
   }
   ctx.restore();

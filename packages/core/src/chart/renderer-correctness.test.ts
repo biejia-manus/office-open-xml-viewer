@@ -16123,39 +16123,143 @@ describe('surface contour charts', () => {
     expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#595959')).toBe(false);
   });
 
-  it('does not let a linked wireframe line overwrite direct series or band outlines', () => {
-    const linked = {
-      lineColors: ['123456'],
-      lineColorIndex: 0,
-      linePaintAuthored: true,
-    };
-    const directModels: Array<Partial<ChartModel>> = [
-      {
-        series: [
-          series({ name: 'Y1', values: [2, 4], lineColor: 'AA0000' }),
-          series({ name: 'Y2', values: [6, 8] }),
-        ],
+  it('uses the first Surface series as the mesh default and lets direct bands override it', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, wireframeSurfaceModel({
+      valMax: 20,
+      valAxisMajorUnit: 10,
+      series: [
+        series({
+          name: 'Y1', values: [2, 18], lineColor: 'AA0000', lineWidthEmu: 50_800,
+          chartexStyle: { lineDash: 'dash', lineDashAuthored: true },
+        }),
+        series({
+          name: 'Y2', values: [2, 18], lineColor: '00AA00', lineWidthEmu: 25_400,
+          chartexStyle: { lineDash: 'dot', lineDashAuthored: true },
+        }),
+      ],
+      surfaceBandFormats: [{
+        idx: 0,
+        lineColor: '00FFFF',
+        lineWidthEmu: 38_100,
+        style: { lineDash: 'dot', lineDashAuthored: true },
+      }],
+      chartStyleRoles: {
+        dataPointWireframe: {
+          lineColors: ['123456'],
+          lineColorIndex: 0,
+          linePaintAuthored: true,
+        },
       },
-      {
-        series: [
-          series({
-            name: 'Y1', values: [2, 4],
-            chartexStyle: { lineHidden: true, linePaintAuthored: true },
-          }),
-          series({ name: 'Y2', values: [6, 8] }),
-        ],
-      },
-      { surfaceBandFormats: [{ idx: 0, lineColor: '00AA00' }] },
-    ];
-    for (const direct of directModels) {
-      const rec = recordingCtx();
-      renderChart(rec.ctx, wireframeSurfaceModel({
-        ...direct,
-        chartStyleRoles: { dataPointWireframe: linked },
-      }), RECT, 1);
-      expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#123456')).toBe(false);
-      expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#595959')).toBe(false);
-    }
+    }), RECT, 1);
+
+    const mesh = rec.strokeDetails.filter(stroke =>
+      stroke.strokeStyle === '#AA0000' || stroke.strokeStyle === '#00FFFF'
+    );
+    expect(mesh.filter(stroke => stroke.strokeStyle === '#AA0000')).toHaveLength(3);
+    expect(mesh.filter(stroke => stroke.strokeStyle === '#00FFFF')).toHaveLength(3);
+    expect(mesh.every(stroke => stroke.dash.length > 0)).toBe(true);
+    expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#00AA00')).toBe(false);
+    expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#123456')).toBe(false);
+  });
+
+  it('keeps a uniform first-series wireframe as one path per source-grid line', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, wireframeSurfaceModel({
+      valMax: 20,
+      valAxisMajorUnit: 10,
+      series: [
+        series({
+          name: 'Y1', values: [2, 18], lineColor: 'AA0000',
+          chartexStyle: { lineDash: 'dash', lineDashAuthored: true },
+        }),
+        series({ name: 'Y2', values: [2, 18], lineColor: '00AA00' }),
+      ],
+    }), RECT, 1);
+
+    expect(rec.strokeDetails.filter(stroke => stroke.strokeStyle === '#AA0000'))
+      .toHaveLength(4);
+    expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#00AA00')).toBe(false);
+  });
+
+  it('resolves one structured first-series wireframe recipe for all fallback bands', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, wireframeSurfaceModel({
+      valMax: 20,
+      valAxisMajorUnit: 10,
+      series: [
+        series({
+          name: 'Y1', values: [2, 18],
+          chartexStyle: {
+            linePaints: [{
+              fillType: 'gradient', gradType: 'linear', angle: 0,
+              stops: [
+                { position: 0, color: '112233' },
+                { position: 1, color: 'DDEEFF' },
+              ],
+            }],
+            linePaintAuthored: true,
+          },
+        }),
+        series({ name: 'Y2', values: [2, 18] }),
+      ],
+      surfaceBandFormats: [{ idx: 0, lineColor: '00FFFF' }],
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(1);
+    expect(rec.strokeDetails.filter(stroke => stroke.strokeStyle === '[object Object]'))
+      .toHaveLength(3);
+    expect(rec.strokeDetails.filter(stroke => stroke.strokeStyle === '#00FFFF'))
+      .toHaveLength(3);
+  });
+
+  it('keeps first-series no-line and direct band no-line authoritative per band', () => {
+    const firstSeriesNoLine = recordingCtx();
+    renderChart(firstSeriesNoLine.ctx, wireframeSurfaceModel({
+      series: [
+        series({
+          name: 'Y1', values: [2, 4],
+          chartexStyle: { lineHidden: true, linePaintAuthored: true },
+        }),
+        series({ name: 'Y2', values: [6, 8], lineColor: '00AA00' }),
+      ],
+    }), RECT, 1);
+    expect(firstSeriesNoLine.strokeDetails.some(stroke =>
+      stroke.strokeStyle === '#595959' || stroke.strokeStyle === '#00AA00'
+    )).toBe(false);
+
+    const bandNoLine = recordingCtx();
+    renderChart(bandNoLine.ctx, wireframeSurfaceModel({
+      valMax: 20,
+      valAxisMajorUnit: 10,
+      series: [
+        series({ name: 'Y1', values: [2, 18], lineColor: 'AA0000' }),
+        series({ name: 'Y2', values: [2, 18], lineColor: '00AA00' }),
+      ],
+      surfaceBandFormats: [{ idx: 0, lineHidden: true }],
+    }), RECT, 1);
+    expect(bandNoLine.strokeDetails.filter(stroke => stroke.strokeStyle === '#AA0000'))
+      .toHaveLength(3);
+    expect(bandNoLine.strokeDetails.some(stroke => stroke.strokeStyle === '#00AA00'))
+      .toBe(false);
+  });
+
+  it('ignores later-series wireframe defaults and retains automatic band colours', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, wireframeSurfaceModel({
+      valMax: 20,
+      valAxisMajorUnit: 10,
+      series: [
+        series({ name: 'Y1', values: [2, 18] }),
+        series({ name: 'Y2', values: [2, 18], lineColor: '00B050' }),
+      ],
+    }), RECT, 1);
+
+    const meshColors = new Set(rec.strokeDetails
+      .map(stroke => stroke.strokeStyle)
+      .filter(color => color !== '#000000'));
+    expect(meshColors.size).toBe(2);
+    expect(meshColors.has('#00B050')).toBe(false);
   });
 
   it('does not apply dataPointWireframe paint to a filled Surface', () => {
@@ -16184,19 +16288,20 @@ describe('surface contour charts', () => {
   });
 
   it('rejects an oversized dataPointWireframe line before resolving it', () => {
+    const oversized = {
+      fillType: 'gradient' as const,
+      gradType: 'linear' as const,
+      angle: 0,
+      stops: Array.from({ length: 4_097 }, (_, index) => ({
+        position: index / 4_096,
+        color: '123456',
+      })),
+    };
     const rec = recordingCtx();
     renderChart(rec.ctx, wireframeSurfaceModel({
       chartStyleRoles: {
         dataPointWireframe: {
-          linePaints: [{
-            fillType: 'gradient',
-            gradType: 'linear',
-            angle: 0,
-            stops: Array.from({ length: 4_097 }, (_, index) => ({
-              position: index / 4_096,
-              color: '123456',
-            })),
-          }],
+          linePaints: [oversized],
           linePaintAuthored: true,
           lineColorIndex: 0,
         },
@@ -16205,6 +16310,45 @@ describe('surface contour charts', () => {
 
     expect(rec.gradients).toHaveLength(0);
     expect(rec.strokeDetails).toHaveLength(0);
+
+    const direct = recordingCtx();
+    renderChart(direct.ctx, wireframeSurfaceModel({
+      surfaceBandFormats: [{
+        idx: 0,
+        style: { linePaints: [oversized], linePaintAuthored: true },
+      }],
+    }), RECT, 1);
+    expect(direct.gradients).toHaveLength(0);
+    expect(direct.strokeDetails).toHaveLength(0);
+  });
+
+  it('does not charge or resolve a first-series recipe fully overridden by direct bands', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, wireframeSurfaceModel({
+      series: [
+        series({
+          name: 'Y1', values: [2, 4],
+          chartexStyle: {
+            linePaints: [{
+              fillType: 'gradient',
+              gradType: 'linear',
+              angle: 0,
+              stops: Array.from({ length: 4_097 }, (_, index) => ({
+                position: index / 4_096,
+                color: '123456',
+              })),
+            }],
+            linePaintAuthored: true,
+          },
+        }),
+        series({ name: 'Y2', values: [6, 8] }),
+      ],
+      surfaceBandFormats: [{ idx: 0, lineColor: '00FFFF' }],
+    }), RECT, 1);
+
+    expect(rec.gradients).toHaveLength(0);
+    expect(rec.strokeDetails.filter(stroke => stroke.strokeStyle === '#00FFFF'))
+      .toHaveLength(4);
   });
 
   it('resolves Surface band paint once with direct structured/unresolved/no-fill precedence', () => {
