@@ -7,7 +7,7 @@
 // captured through a lightweight recording context, complementing the
 // draw-call-signature characterization test.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type {
   ChartModel,
   ChartRect,
@@ -1668,6 +1668,69 @@ describe('classic 3-D compatibility projection', () => {
       ...model('backWall', 'stackScale'),
       valMax: 8_194,
     })).toEqual([]);
+  });
+
+  it('projects bounded DrawingML tile grids across planar and thick Surface faces', () => {
+    const tiled = {
+      fillType: 'image' as const,
+      imagePath: 'xl/media/surface-tile.png',
+      mimeType: 'image/png',
+      stretch: false,
+      dpi: 96,
+      tile: { tx: 0, ty: 0, sx: 1, sy: 1, flip: 'none', algn: 'tl' },
+    };
+    const model = (thicknessPercent: number, scale = 1) => baseModel({
+      chartType: 'line',
+      categories: ['A', 'B', 'C'],
+      valMin: 0,
+      valMax: 10,
+      valAxisMajorGridlines: false,
+      threeD: {
+        rotationX: 20,
+        rotationY: 20,
+        depthPercent: 100,
+        perspective: 30,
+        backWall: {
+          thicknessPercent,
+          style: {
+            fillPaints: [{ ...tiled, tile: { ...tiled.tile, sx: scale, sy: scale } }],
+            fillPaintAuthored: true,
+          },
+          pictureOptions: {
+            applyToFront: true,
+            applyToSides: true,
+            applyToEnd: true,
+            pictureFormat: 'stretch',
+          },
+        },
+      },
+      series: [series({ values: [2, 8, 4], showMarker: false })],
+    });
+    const bitmap = { width: 80, height: 40 } as unknown as CanvasImageSource;
+    const draws = (chart: ChartModel) => {
+      expect(collectChartMarkerImageFills(chart)).toHaveLength(1);
+      const rec = recordingCtx();
+      class TestOffscreenCanvas {
+        readonly width: number;
+        readonly height: number;
+        constructor(width: number, height: number) {
+          this.width = width;
+          this.height = height;
+        }
+        getContext(): CanvasRenderingContext2D { return rec.ctx; }
+      }
+      vi.stubGlobal('OffscreenCanvas', TestOffscreenCanvas);
+      try {
+        renderChartCore(rec.ctx, chart, RECT, 1, 0, testThreeD, undefined, () => bitmap);
+        return rec.drawImages.length;
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    };
+    const planar = draws(model(0));
+    expect(planar).toBeGreaterThan(0);
+    expect(draws(model(0, 0.5))).toBeGreaterThan(planar);
+    expect(draws(model(25))).toBeGreaterThan(0);
   });
 
   it('uses the same planar CT_Surface picture path for Surface3D', () => {
