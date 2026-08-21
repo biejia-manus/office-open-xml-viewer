@@ -88,6 +88,7 @@ import {
 } from './chart-number-format.js';
 import { elideToWidth } from './text-elide.js';
 import {
+  categoryMinorGridlineFractions,
   categoryLabelAnchorFraction,
   categoryLabelOffsetPx,
   categoryPositionFraction,
@@ -8511,6 +8512,29 @@ function renderSurfaceChart(
       strokeScenePath(segment.scenePoints, color, width, dash, true);
     }
   };
+  const strokeAuthoredValueSurfaceRules = (
+    values: readonly number[],
+    color: string,
+    width: number,
+    dash: string | null | undefined,
+  ): void => {
+    for (const value of values) {
+      const fraction = surfaceFrac(value);
+      strokeSurfaceGridRule(1, 'y', fraction, color, width, dash);
+      strokeSurfaceGridRule(2, 'y', fraction, color, width, dash);
+    }
+  };
+  const strokeAuthoredCategorySurfaceRules = (
+    fractions: readonly number[],
+    color: string,
+    width: number,
+    dash: string | null | undefined,
+  ): void => {
+    for (const fraction of fractions) {
+      strokeSurfaceGridRule(0, 'x', fraction, color, width, dash);
+      strokeSurfaceGridRule(2, 'x', fraction, color, width, dash);
+    }
+  };
   // Keep the pre-thickness Surface3D path byte-stable when all three values
   // are omitted/zero. Its existing floor plane is family-owned; positive
   // thickness opts into the shared camera-aware CT_Surface slabs.
@@ -8608,36 +8632,63 @@ function renderSurfaceChart(
       }
     }
   }
+  if (chart.valAxisMinorGridlines === true) {
+    const line = valMinorGridStroke(chart, ptToPx);
+    strokeAuthoredValueSurfaceRules(
+      provisionalAxis.minorLines.filter(value => value >= surfaceMin && value <= surfaceMax),
+      line.color,
+      line.width,
+      chart.valAxisMinorGridlineDash,
+    );
+  }
   if (drawValMajorGridlines(chart)) {
     const line = resolveGridline(
       chart.valAxisGridlineColor,
       chart.valAxisGridlineWidthEmu,
       ptToPx,
     );
-    for (const value of surfaceMajorLines) {
-      const fraction = surfaceFrac(value);
-      const gridY = toValueY(value);
-      if (surfaceSlabs[2].thickness > 0) {
-        strokeSurfaceGridRule(
-          2, 'y', fraction, line.color, line.width, chart.valAxisGridlineDash,
-        );
-      } else {
-        strokeScenePath([
-          { x: front.x, y: gridY, depth: farDepth },
-          { x: front.x + front.w, y: gridY, depth: farDepth },
-        ], line.color, line.width, chart.valAxisGridlineDash);
-      }
-      if (surfaceSlabs[1].thickness > 0) {
-        strokeSurfaceGridRule(
-          1, 'y', fraction, line.color, line.width, chart.valAxisGridlineDash,
-        );
-      } else {
-        strokeScenePath([
-          { x: farX, y: gridY, depth: nearDepth },
-          { x: farX, y: gridY, depth: farDepth },
-        ], line.color, line.width, chart.valAxisGridlineDash);
+    if (chart.valAxisMajorGridlines === true) {
+      strokeAuthoredValueSurfaceRules(
+        surfaceMajorLines,
+        line.color,
+        line.width,
+        chart.valAxisGridlineDash,
+      );
+    } else {
+      for (const value of surfaceMajorLines) {
+        const fraction = surfaceFrac(value);
+        const gridY = toValueY(value);
+        if (surfaceSlabs[2].thickness > 0) {
+          strokeSurfaceGridRule(
+            2, 'y', fraction, line.color, line.width, chart.valAxisGridlineDash,
+          );
+        } else {
+          strokeScenePath([
+            { x: front.x, y: gridY, depth: farDepth },
+            { x: front.x + front.w, y: gridY, depth: farDepth },
+          ], line.color, line.width, chart.valAxisGridlineDash);
+        }
+        if (surfaceSlabs[1].thickness > 0) {
+          strokeSurfaceGridRule(
+            1, 'y', fraction, line.color, line.width, chart.valAxisGridlineDash,
+          );
+        } else {
+          strokeScenePath([
+            { x: farX, y: gridY, depth: nearDepth },
+            { x: farX, y: gridY, depth: farDepth },
+          ], line.color, line.width, chart.valAxisGridlineDash);
+        }
       }
     }
+  }
+  if (chart.catAxisMinorGridlines === true) {
+    const line = catMinorGridStroke(chart, ptToPx);
+    strokeAuthoredCategorySurfaceRules(
+      categoryMinorGridlineFractions(columnCount, categoryBetween),
+      line.color,
+      line.width,
+      chart.catAxisMinorGridlineDash,
+    );
   }
   if (chart.catAxisMajorGridlines) {
     const line = resolveGridline(
@@ -8649,23 +8700,12 @@ function renderSurfaceChart(
     // points remain at the interval centres. Using `toX(column)` here would
     // incorrectly draw lines through the 25%/75% data points of a two-column
     // Surface instead of the 0%/50%/100% boundaries authored by the axis.
-    for (const fraction of catGridlineFractions(chart, columnCount)) {
-      if (surfaceSlabs[0].thickness > 0) {
-        strokeSurfaceGridRule(
-          0, 'x', fraction, line.color, line.width, chart.catAxisGridlineDash,
-        );
-      } else {
-        strokeScenePath([
-          { x: front.x + fraction * front.w, y: floorY, depth: nearDepth },
-          { x: front.x + fraction * front.w, y: floorY, depth: farDepth },
-        ], line.color, line.width, chart.catAxisGridlineDash);
-      }
-      if (surfaceSlabs[2].thickness > 0) {
-        strokeSurfaceGridRule(
-          2, 'x', fraction, line.color, line.width, chart.catAxisGridlineDash,
-        );
-      }
-    }
+    strokeAuthoredCategorySurfaceRules(
+      catGridlineFractions(chart, columnCount),
+      line.color,
+      line.width,
+      chart.catAxisGridlineDash,
+    );
   }
 
   for (let row = 0; row < rowCount - 1; row++) {

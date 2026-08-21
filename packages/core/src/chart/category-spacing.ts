@@ -47,6 +47,22 @@ export function categoryGridlineFractions(count: number, between: boolean): numb
   return fractions;
 }
 
+/** Category-axis minor gridline positions. Office places minor rules halfway
+ * between the major rules: at category centres for a between-category axis,
+ * and at the interior midpoints between category centres for a mid-category
+ * axis. */
+export function categoryMinorGridlineFractions(count: number, between: boolean): number[] {
+  if (count <= 0) return [];
+  if (between) {
+    return Array.from({ length: count }, (_, index) => (index + 0.5) / count);
+  }
+  if (count <= 1) return [];
+  return Array.from(
+    { length: count - 1 },
+    (_, index) => (index + 0.5) / (count - 1),
+  );
+}
+
 /**
  * Resolve the physical text anchor inside one category label cell.
  *
