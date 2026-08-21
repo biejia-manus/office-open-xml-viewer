@@ -111,9 +111,8 @@ describe('DocxScrollViewer — showTrackedChanges option (main mode)', () => {
     const { v, engine } = await setupScroll();
     expect(engine.renderCalls.length).toBeGreaterThan(0);
     for (const call of engine.renderCalls) {
-      // The scroll viewer resolves the option to a live boolean field, so the
-      // default reaches the engine as an explicit false — the same final-view
-      // variant an absent flag selects (the layout key only exists when true).
+      // The scroll viewer emits the flag only for the markup view, so default
+      // render calls keep their historical option shape (no key at all).
       expect(call.showTrackedChanges ?? false).toBe(false);
     }
     v.destroy();

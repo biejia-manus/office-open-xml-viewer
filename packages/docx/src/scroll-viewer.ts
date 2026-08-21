@@ -1030,7 +1030,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         dpr,
         defaultTextColor: this._opts.defaultTextColor,
         currentDate: this._opts.currentDate,
-        showTrackedChanges: this._showTrackedChanges,
+        ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
         onTextRun,
       });
     } catch (error) {
@@ -1203,7 +1203,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         dpr,
         defaultTextColor: this._opts.defaultTextColor,
         currentDate: this._opts.currentDate,
-        showTrackedChanges: this._showTrackedChanges,
+        ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
         onTextRun: wantRuns ? (r) => runs.push(r) : undefined,
       });
       // Stale if EITHER (a) the epoch moved (a setScale rescaled mid-flight, so
@@ -1649,7 +1649,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         dpr,
         defaultTextColor: this._opts.defaultTextColor,
         currentDate: this._opts.currentDate,
-        showTrackedChanges: this._showTrackedChanges,
+        ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
         onTextRun,
       })
       .then(() => {
@@ -1841,7 +1841,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     return this._doc.collectPageRuns(page, {
       width: this._pageWidthPx(page),
       currentDate: this._opts.currentDate,
-      showTrackedChanges: this._showTrackedChanges,
+      ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
     });
   }
 
@@ -2126,7 +2126,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         yPt: localY / rect.height * pageSize.heightPt,
       }, {
         currentDate: this._opts.currentDate,
-        showTrackedChanges: this._showTrackedChanges,
+        ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
         maxTextCharacters: MAX_DOCX_ELEMENT_TEXT_CHARACTERS,
       });
     } catch (error) {
