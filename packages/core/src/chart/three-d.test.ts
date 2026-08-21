@@ -3,6 +3,7 @@ import {
   fitChartThreeDProjectionToWallThickness,
   fitChartThreeDProjectionToPoints,
   pieThreeDThicknessMultiplier,
+  planChartThreeDSurfaceGridSegments,
   planChartThreeDSurfaceGeometry,
   planChartThreeDProjection,
   planThreeDBarClusterSlot,
@@ -151,6 +152,26 @@ describe('threeDWallGeometry', () => {
     expect(Math.max(...points.map(point => point.x))).toBeLessThanOrEqual(PLOT.x + PLOT.w + 1e-9);
     expect(Math.min(...points.map(point => point.y))).toBeGreaterThanOrEqual(PLOT.y - 1e-9);
     expect(Math.max(...points.map(point => point.y))).toBeLessThanOrEqual(PLOT.y + PLOT.h + 1e-9);
+  });
+
+  it('plans one planar grid rule and four corresponding thick-slab segments', () => {
+    const plan = planChartThreeDProjection({
+      rotationX: 20, rotationY: 20, depthPercent: 100, perspective: 30,
+    }, PLOT, { sceneDepthScale: 1 });
+    if (!plan) throw new Error('projection not planned');
+    const planar = planChartThreeDSurfaceGeometry(plan, 'floor', 0);
+    const thickFloor = planChartThreeDSurfaceGeometry(plan, 'floor', 25);
+    const thickBack = planChartThreeDSurfaceGeometry(plan, 'backWall', 25);
+    expect(planChartThreeDSurfaceGridSegments(planar, 'floor', 'x', 0.5))
+      .toHaveLength(1);
+    expect(planChartThreeDSurfaceGridSegments(thickFloor, 'floor', 'x', 0.5)
+      .map(segment => segment.faceIndex)).toEqual([0, 1, 2, 4]);
+    expect(planChartThreeDSurfaceGridSegments(thickBack, 'backWall', 'y', 0.5)
+      .map(segment => segment.faceIndex)).toEqual([0, 1, 5, 3]);
+    expect(planChartThreeDSurfaceGridSegments(thickFloor, 'floor', 'y', 0.5))
+      .toEqual([]);
+    expect(planChartThreeDSurfaceGridSegments(thickBack, 'backWall', 'x', -0.1))
+      .toEqual([]);
   });
 });
 

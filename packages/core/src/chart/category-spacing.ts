@@ -35,6 +35,18 @@ export function categoryPositionFraction(
   return reversed ? 1 - fraction : fraction;
 }
 
+/** Category-axis major gridline positions. A between-category axis owns all
+ * interval boundaries; a mid-category axis owns the category centres. */
+export function categoryGridlineFractions(count: number, between: boolean): number[] {
+  if (count <= 0) return [];
+  const fractions: number[] = [];
+  const last = between ? count : count - 1;
+  for (let index = 0; index <= last; index++) {
+    fractions.push(between ? index / count : count === 1 ? 0.5 : index / (count - 1));
+  }
+  return fractions;
+}
+
 /**
  * Resolve the physical text anchor inside one category label cell.
  *

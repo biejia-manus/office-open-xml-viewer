@@ -62,6 +62,7 @@ import {
   fitChartThreeDProjectionToPoints,
   fitChartThreeDProjectionToWallThickness,
   pieThreeDThicknessMultiplier,
+  planChartThreeDSurfaceGridSegments,
   planChartThreeDSurfaceGeometry,
   planChartThreeDProjection,
   planThreeDBarClusterSlot,
@@ -70,7 +71,11 @@ import {
   type ThreeDScenePoint,
 } from './three-d.js';
 import { scaleHexColor } from './material-color.js';
-import { categoryLabelOffsetPx, categoryPositionFraction } from './category-spacing.js';
+import {
+  categoryGridlineFractions,
+  categoryLabelOffsetPx,
+  categoryPositionFraction,
+} from './category-spacing.js';
 import {
   buildThreeDAreaStripMeshes,
   buildThreeDPieSectorMesh,
@@ -2221,7 +2226,7 @@ function walls(
     surface: NonNullable<ChartModel['threeD']>['floor'],
   ) => {
     const slab = planChartThreeDSurfaceGeometry(projection, kind, surface?.thicknessPercent);
-    return { slab, faces: slab.faces
+    const faces = slab.faces
       .map((scenePoints, faceIndex) => ({ scenePoints, faceIndex }))
       .filter(({ scenePoints }) => slab.thickness === 0 || projection.cameraFacing(scenePoints))
       .map(({ scenePoints, faceIndex }) => ({
@@ -2235,7 +2240,12 @@ function walls(
           0,
         ) / scenePoints.length,
       }))
-      .sort((left, right) => left.depth - right.depth) };
+      .sort((left, right) => left.depth - right.depth);
+    return {
+      slab,
+      faces,
+      visibleFaceIndices: new Set(faces.map(face => face.faceIndex)),
+    };
   };
   const floorSurface = projectedSurfaceFaces('floor', chart.threeD?.floor);
   const sideWallSurface = projectedSurfaceFaces('sideWall', chart.threeD?.sideWall);
@@ -2286,25 +2296,65 @@ function walls(
   drawSurfaceFill(floorSurface, chart.threeD?.floor, 'floor', 'floor');
   drawSurfaceFill(sideWallSurface, chart.threeD?.sideWall, 'wall', 'sideWall');
   drawSurfaceFill(backWallSurface, chart.threeD?.backWall, 'wall', 'backWall');
-  const drawValueGrid = (values: readonly number[], stroke: ThreeDStroke) => {
+  const strokeSurfaceGridRule = (
+    group: ReturnType<typeof projectedSurfaceFaces>,
+    kind: 'floor' | 'sideWall' | 'backWall',
+    coordinate: 'x' | 'y',
+    fraction: number,
+    includeExterior = true,
+  ): void => {
+    for (const segment of planChartThreeDSurfaceGridSegments(
+      group.slab,
+      kind,
+      coordinate,
+      fraction,
+    )) {
+      if (!includeExterior && segment.faceIndex !== 0) continue;
+      if (!group.visibleFaceIndices.has(segment.faceIndex)) continue;
+      const [start, end] = segment.scenePoints.map(point =>
+        projection.projectUnbounded(point.x, point.y, point.depth)
+      );
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+    }
+  };
+  const extendLineMajorGridRules = chart.chartType.toLowerCase().includes('line')
+    && orientation === 'vertical';
+  const drawValueGrid = (
+    values: readonly number[],
+    stroke: ThreeDStroke,
+    extendExterior: boolean,
+  ) => {
     applyThreeDStroke(ctx, stroke);
     for (const value of values) {
-    if (orientation === 'horizontal') {
-      const x = front.x + axis.fraction(value) * front.w;
-      const near = projection.project(x, floorY, farDepth);
-      const far = projection.project(x, oppositeFloorY, farDepth);
-      ctx.beginPath(); ctx.moveTo(near.x, near.y); ctx.lineTo(far.x, far.y); ctx.stroke();
-    } else {
-      const y = front.y + front.h - axis.fraction(value) * front.h;
-      const sideNear = projection.project(farX, y, nearDepth);
-      const sideFar = projection.project(farX, y, farDepth);
-      const backEnd = projection.project(farX === xMin ? xMax : xMin, y, farDepth);
-      // The same value plane crosses both the visible side wall and the back
-      // wall. Leaving out the side segment makes the grid appear to change
-      // direction at the wall boundary even though the scene is projective.
-      ctx.beginPath(); ctx.moveTo(sideNear.x, sideNear.y); ctx.lineTo(sideFar.x, sideFar.y); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(sideFar.x, sideFar.y); ctx.lineTo(backEnd.x, backEnd.y); ctx.stroke();
-    }
+      if (orientation === 'horizontal') {
+        const fraction = axis.fraction(value);
+        const x = front.x + fraction * front.w;
+        const near = projection.project(x, floorY, farDepth);
+        const far = projection.project(x, oppositeFloorY, farDepth);
+        ctx.beginPath(); ctx.moveTo(near.x, near.y); ctx.lineTo(far.x, far.y); ctx.stroke();
+      } else {
+        // The same value plane crosses both the visible side wall and the back
+        // wall. Leaving out the side segment makes the grid appear to change
+        // direction at the wall boundary even though the scene is projective.
+        const fraction = axis.fraction(value);
+        const y = front.y + front.h - fraction * front.h;
+        const sideNear = projection.project(farX, y, nearDepth);
+        const sideFar = projection.project(farX, y, farDepth);
+        const backEnd = projection.project(farX === xMin ? xMax : xMin, y, farDepth);
+        if (extendExterior && sideWallSurface.slab.thickness > 0) {
+          strokeSurfaceGridRule(sideWallSurface, 'sideWall', 'y', fraction);
+        } else {
+          ctx.beginPath(); ctx.moveTo(sideNear.x, sideNear.y); ctx.lineTo(sideFar.x, sideFar.y); ctx.stroke();
+        }
+        if (extendExterior && backWallSurface.slab.thickness > 0) {
+          strokeSurfaceGridRule(backWallSurface, 'backWall', 'y', fraction);
+        } else {
+          ctx.beginPath(); ctx.moveTo(sideFar.x, sideFar.y); ctx.lineTo(backEnd.x, backEnd.y); ctx.stroke();
+        }
+      }
     }
   };
   if (chart.valAxisMinorGridlines === true) {
@@ -2315,7 +2365,7 @@ function walls(
       ptToPx,
       'D9D9D9',
       0.5,
-    ));
+    ), false);
   }
   if (chart.valAxisMajorGridlines !== false) {
     drawValueGrid(axis.majorTicks, threeDStroke(
@@ -2325,27 +2375,55 @@ function walls(
       ptToPx,
       '898989',
       1,
-    ));
+    ), extendLineMajorGridRules);
   }
-  // Category-depth rays divide the 3-D wall itself. Office retains them when
-  // c:catAx has no 2-D majorGridlines, so keep their automatic wall stroke
-  // independent from authored category-axis gridline styling.
-  applyThreeDStroke(ctx, threeDStroke(null, null, null, ptToPx, '898989', 1));
-  for (let categoryIndex = 0; categoryIndex < categoryCount; categoryIndex++) {
+  // Office retains automatic category-depth rays when majorGridlines is
+  // absent. An authored majorGridlines element instead owns the interval-rule
+  // positions and stroke, including continuation across thick surface faces.
+  const authoredCategoryGrid = chart.catAxisMajorGridlines === true
+    && extendLineMajorGridRules
+    && (floorSurface.slab.thickness > 0 || backWallSurface.slab.thickness > 0);
+  applyThreeDStroke(ctx, authoredCategoryGrid
+    ? threeDStroke(
+      chart.catAxisGridlineColor,
+      chart.catAxisGridlineWidthEmu,
+      chart.catAxisGridlineDash,
+      ptToPx,
+      'E0E0E0',
+      0.5,
+    )
+    : threeDStroke(null, null, null, ptToPx, '898989', 1));
+  const categoryFractions = authoredCategoryGrid
+    ? categoryGridlineFractions(categoryCount, categoryBetween)
+    : Array.from({ length: categoryCount }, (_, categoryIndex) =>
+      categoryPositionFraction(
+        categoryIndex,
+        categoryCount,
+        categoryBetween,
+        categoryReversed,
+      ));
+  for (const fraction of categoryFractions) {
     if (orientation === 'vertical') {
-      const x = front.x + categoryPositionFraction(
-        categoryIndex, categoryCount, categoryBetween, categoryReversed,
-      ) * front.w;
-      const near = projection.project(x, floorY, nearDepth);
-      const far = projection.project(x, floorY, farDepth);
-      ctx.beginPath(); ctx.moveTo(near.x, near.y); ctx.lineTo(far.x, far.y); ctx.stroke();
+      if (authoredCategoryGrid && floorSurface.slab.thickness > 0) {
+        strokeSurfaceGridRule(floorSurface, 'floor', 'x', fraction);
+      } else {
+        const x = front.x + fraction * front.w;
+        const near = projection.project(x, floorY, nearDepth);
+        const far = projection.project(x, floorY, farDepth);
+        ctx.beginPath(); ctx.moveTo(near.x, near.y); ctx.lineTo(far.x, far.y); ctx.stroke();
+      }
+      if (authoredCategoryGrid && backWallSurface.slab.thickness > 0) {
+        strokeSurfaceGridRule(backWallSurface, 'backWall', 'x', fraction);
+      }
     } else {
-      const y = front.y + categoryPositionFraction(
-        categoryIndex, categoryCount, categoryBetween, categoryReversed,
-      ) * front.h;
-      const near = projection.project(farX, y, nearDepth);
-      const far = projection.project(farX, y, farDepth);
-      ctx.beginPath(); ctx.moveTo(near.x, near.y); ctx.lineTo(far.x, far.y); ctx.stroke();
+      if (authoredCategoryGrid && sideWallSurface.slab.thickness > 0) {
+        strokeSurfaceGridRule(sideWallSurface, 'sideWall', 'y', fraction);
+      } else {
+        const y = front.y + fraction * front.h;
+        const near = projection.project(farX, y, nearDepth);
+        const far = projection.project(farX, y, farDepth);
+        ctx.beginPath(); ctx.moveTo(near.x, near.y); ctx.lineTo(far.x, far.y); ctx.stroke();
+      }
     }
   }
   const strokeSurface = (
