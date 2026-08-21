@@ -1498,10 +1498,14 @@ pub struct ChartSeries {
     pub bubble_sizes: Option<Vec<Option<f64>>>,
     /// Effective default authored on the owning `<c:bubbleChart>` group.
     /// Kept per series because one plot area can contain multiple bubble groups.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "bubble3DGroupDefault",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub bubble_3d_group_default: Option<bool>,
     /// Direct `<c:bubbleChart><c:ser><c:bubble3D>` override.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "bubble3D", default, skip_serializing_if = "Option::is_none")]
     pub bubble_3d: Option<bool>,
     /// `<c:ser><c:smooth val>` (ECMA-376 §21.2.2.194) — line/area series flag
     /// requesting a smoothed (spline) curve. `None` (omitted) = straight
@@ -1649,7 +1653,7 @@ pub struct ChartDataPointOverride {
     pub marker_line_width_emu: Option<u32>,
     /// Direct `<c:dPt><c:bubble3D>` override. CT_DPt is shared across classic
     /// chart families; only the bubble renderer consumes this effect.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "bubble3D", default, skip_serializing_if = "Option::is_none")]
     pub bubble_3d: Option<bool>,
     /// `<c:dPt><c:explosion val>` (§21.2.2.61) — pie/doughnut slice pull-out
     /// amount. The schema type is `CT_UnsignedInt` (unbounded `xsd:unsignedInt`);
@@ -21941,6 +21945,18 @@ Subtitle</a:t></a:r></a:p>
                 Some(false),
                 "invalid xsd:boolean stays authored and fails closed"
             );
+
+            let wire = serde_json::to_value(&chart).expect("chart serializes");
+            assert_eq!(wire["series"][0]["bubble3DGroupDefault"], true);
+            assert_eq!(wire["series"][0]["bubble3D"], false);
+            assert_eq!(
+                wire["series"][0]["dataPointOverrides"][0]["bubble3D"], true,
+                "the Rust-to-TypeScript boundary preserves DrawingML's 3D token"
+            );
+            assert!(wire["series"][0].get("bubble3d").is_none());
+            assert!(wire["series"][0]["dataPointOverrides"][0]
+                .get("bubble3d")
+                .is_none());
         }
     }
 
