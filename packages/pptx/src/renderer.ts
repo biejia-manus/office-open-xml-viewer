@@ -103,7 +103,14 @@ import {
 } from '@silurus/ooxml-core';
 import type { WarpEnvelope, WarpGlyphTransform } from '@silurus/ooxml-core';
 import type { CameraInput, Vec2, BevelInput, ExtrusionInput, BevelRegion } from '@silurus/ooxml-core';
-import type { MathNode, MathRenderer, RasterizedMathSvg, ChartThreeDRenderer, ChartRegionMapRenderer } from '@silurus/ooxml-core';
+import type {
+  MathNode,
+  MathRenderer,
+  RasterizedMathSvg,
+  ChartThreeDRenderer,
+  ChartRegionMapRenderer,
+  ChartExRenderer,
+} from '@silurus/ooxml-core';
 import type { HyperlinkTarget } from '@silurus/ooxml-core';
 import { paintDistanceAwareReflectionBlur } from './reflection-blur';
 import { classifyPptxHyperlink } from './hyperlink';
@@ -6149,6 +6156,7 @@ export type SlideRenderOptions = RenderOptions & {
   math?: MathRenderer;
   threeD?: ChartThreeDRenderer;
   regionMap?: ChartRegionMapRenderer;
+  chartEx?: ChartExRenderer;
   dim?: DimOptions;
 };
 
@@ -6546,6 +6554,7 @@ async function renderSlideLeased(
         fill => chartMarkerImages.get(
           chartImageFillKey(fill),
         ),
+        opts.chartEx,
       );
       ctx.restore();
     }

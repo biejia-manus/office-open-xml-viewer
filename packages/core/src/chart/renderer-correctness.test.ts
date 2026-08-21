@@ -19,6 +19,7 @@ import {
   classicMarkerPaintWorkCount,
   renderChart as renderChartCore,
 } from './renderer.js';
+import { renderChartExChart } from './chart-ex-renderer.js';
 import { renderSimpleThreeDChart } from './three-d-renderer.js';
 import { formatChartValWithCode } from './chart-number-format.js';
 import { BOX_WHISKER_SLOT_GUTTER_FRACTION } from './box-whisker.js';
@@ -31,6 +32,7 @@ import {
 import { MAX_CANVAS_CHART_POINTS, sourceChartStructureCount } from './resource-limits.js';
 
 const testThreeD = { render: renderSimpleThreeDChart };
+const testChartEx = { render: renderChartExChart };
 
 it('uses collision-free tuple keys for decoded chart image sources', () => {
   expect(chartImageFillKey({
@@ -178,8 +180,26 @@ it('prefetches and paints one bubble picture for both plot and 3-D legend key', 
   expect(rec.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(2);
 });
 const renderChart: typeof renderChartCore = (
-  ctx, chart, rect, ptToPx, shapeRotationDeg, threeD = testThreeD,
-) => renderChartCore(ctx, chart, rect, ptToPx, shapeRotationDeg, threeD);
+  ctx,
+  chart,
+  rect,
+  ptToPx,
+  shapeRotationDeg,
+  threeD = testThreeD,
+  regionMap,
+  imageLookup,
+  chartEx = testChartEx,
+) => renderChartCore(
+  ctx,
+  chart,
+  rect,
+  ptToPx,
+  shapeRotationDeg,
+  threeD,
+  regionMap,
+  imageLookup,
+  chartEx,
+);
 
 interface RectCall { x: number; y: number; w: number; h: number; fs: string }
 interface StrokeRectCall {
@@ -524,6 +544,40 @@ function plotGroup(
 }
 
 const RECT: ChartRect = { x: 0, y: 0, w: 640, h: 360 };
+
+it('keeps classic 2-D charts in the default renderer and ChartEx opt-in', () => {
+  const classic = recordingCtx();
+  renderChartCore(classic.ctx, baseModel({
+    chartType: 'line',
+    categories: ['A', 'B'],
+    series: [series({ values: [1, 2] })],
+  }), RECT, 1);
+  expect(classic.texts.map(item => item.text)).not.toContain('Unsupported chart');
+
+  const omitted = recordingCtx();
+  const waterfall = baseModel({
+    chartType: 'waterfall',
+    categories: ['A', 'B'],
+    series: [series({ values: [1, 2] })],
+  });
+  renderChartCore(omitted.ctx, waterfall, RECT, 1);
+  expect(omitted.texts.map(item => item.text)).toContain('Unsupported chart');
+
+  const enabled = recordingCtx();
+  renderChartCore(
+    enabled.ctx,
+    waterfall,
+    RECT,
+    1,
+    0,
+    undefined,
+    undefined,
+    undefined,
+    testChartEx,
+  );
+  expect(enabled.texts.map(item => item.text)).not.toContain('Unsupported chart');
+  expect(enabled.rects.length).toBeGreaterThan(0);
+});
 
 describe('ordered classic plot groups', () => {
   it.each([

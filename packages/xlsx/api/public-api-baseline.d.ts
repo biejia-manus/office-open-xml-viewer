@@ -679,6 +679,9 @@ export interface ChartRect {
     w: number;
     h: number;
 }
+export interface ChartExRenderer {
+    render(ctx: CanvasRenderingContext2D, chart: ChartModel, rect: ChartRect, ptToPx: number, shapeRotationDeg?: number): boolean;
+}
 export interface ChartRegionMapRenderer {
     render(ctx: CanvasRenderingContext2D, chart: ChartModel, rect: ChartRect, ptToPx: number, shapeRotationDeg?: number): boolean;
 }
@@ -1138,6 +1141,7 @@ interface LoadOptions__emitterCollision1 {
     math?: MathRenderer;
     threeD?: ChartThreeDRenderer;
     regionMap?: ChartRegionMapRenderer;
+    chartEx?: ChartExRenderer;
 }
 export interface MathAccent {
     kind: 'accent';
