@@ -272,6 +272,53 @@ pub struct DocxComment {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
     pub text: String,
+    /// [MS-DOCX] §2.5.3.1 `w15:commentEx@paraIdParent` resolved to the parent
+    /// comment's `w:id` — set when this comment is a reply in a thread. The
+    /// join key is the `w14:paraId` of the LAST paragraph of each comment's
+    /// body in `word/comments.xml`. Absent for top-level comments and for
+    /// documents without `word/commentsExtended.xml`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// [MS-DOCX] §2.5.3.1 `w15:commentEx@done` — `Some(true)` when the thread
+    /// is marked resolved. Absent when the document ships no commentsExtended
+    /// entry for this comment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<bool>,
+    /// Per-paragraph plain text of the comment body, in document order (one
+    /// entry per `<w:p>`, empty string for an empty paragraph). The flattened
+    /// `text` join above predates this field and keeps its exact shape.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub paragraphs: Vec<String>,
+}
+
+/// One comment-anchor boundary inside a paragraph (ECMA-376 §17.13.4).
+/// `commentRangeStart` (§17.13.4.4) / `commentRangeEnd` (§17.13.4.3) delimit
+/// the annotated text; `commentReference` (§17.13.4.5) marks the anchor run.
+/// Marks are pure metadata: they produce no run, occupy no width, and do not
+/// perturb run splitting or coalescing, so layout geometry is unchanged
+/// whether or not a document carries comments.
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DocxCommentMark {
+    /// `@w:id` linking the mark to its `word/comments.xml` entry.
+    pub id: String,
+    /// "rangeStart" | "rangeEnd" | "reference".
+    pub kind: String,
+    /// Boundary position: the mark sits immediately BEFORE
+    /// `paragraph.runs[run_index]` (== `runs.len()` at record time, i.e. the
+    /// paragraph end when no further run follows).
+    pub run_index: u32,
+    /// UTF-16 length of `runs[run_index - 1]`'s text when the mark was
+    /// recorded (0 when the previous run is absent or not a text run). If that
+    /// run's final text is LONGER, later content was absorbed into it across
+    /// this boundary (the `<w:noBreakHyphen>` merge, §17.3.3.18) and the true
+    /// boundary falls inside that run at this UTF-16 offset.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub prev_run_utf16_len: u32,
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 /// ECMA-376 §17.11.2 (endnote) / §17.11.10 (footnote) — one note's block-level
@@ -793,6 +840,11 @@ pub struct DocParagraph {
     /// is free to make instead.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub bookmarks: Vec<String>,
+    /// ECMA-376 §17.13.4 comment-anchor boundaries inside this paragraph, in
+    /// document order. Empty (and omitted from JSON) for the common paragraph
+    /// that anchors no comment, so existing snapshots are unchanged.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub comment_marks: Vec<DocxCommentMark>,
     /// Paragraph background hex color (w:shd fill on paragraph)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shading: Option<String>,

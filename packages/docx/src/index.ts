@@ -192,6 +192,8 @@ export type {
   RunRevision,
   DocRevision,
   DocComment,
+  // Comment-anchor boundary (reachable via DocParagraph.commentMarks).
+  DocxCommentMark,
   DocNote,
   NoteRef,
   // Paragraph / line-spacing sub-types.
