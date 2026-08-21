@@ -7381,7 +7381,9 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
                 .any(|modifier| modifier == "allowNoLineOverride")
         });
     if chart_space_sp_pr.is_some()
-        && chart_space_sp_pr.and_then(|sp_pr| child(sp_pr, "ln")).is_none()
+        && chart_space_sp_pr
+            .and_then(|sp_pr| child(sp_pr, "ln"))
+            .is_none()
         && chart_area_allows_no_line_override
     {
         chart_line_style.hidden = Some(true);
@@ -11900,10 +11902,8 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                     ChartImageSource::Chart,
                 )
             });
-            let inverted_fill_authored = matches!(
-                inverted_paint.as_ref(),
-                Some(ChartStylePaint::Fill(_))
-            );
+            let inverted_fill_authored =
+                matches!(inverted_paint.as_ref(), Some(ChartStylePaint::Fill(_)));
             let (mut inverted_fill, mut inverted_fill_hidden) = match inverted_paint {
                 Some(ChartStylePaint::NoFill) => (None, Some(true)),
                 Some(ChartStylePaint::Fill(fill)) => (Some(*fill), None),
@@ -11919,7 +11919,9 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
             // `<a:ln>`. Without that effective outline a white inverted fill
             // disappears against the common white plot-area background.
             if inverted_fill_authored
-                && inverted_shape.and_then(|shape| child(shape, "ln")).is_none()
+                && inverted_shape
+                    .and_then(|shape| child(shape, "ln"))
+                    .is_none()
             {
                 inverted_line_color = Some("000000".to_string());
                 inverted_line_width_emu = Some(9_525);
@@ -18427,10 +18429,7 @@ Subtitle</a:t></a:r></a:p>
 
         // Without the modifier the same fill-only local spPr does not invent
         // a no-line override; the linked outline remains eligible in core.
-        let unmodified = style.replace(
-            " mods=\"allowNoFillOverride allowNoLineOverride\"",
-            "",
-        );
+        let unmodified = style.replace(" mods=\"allowNoFillOverride allowNoLineOverride\"", "");
         let control = parse_chartex_part_with_style_parts(
             document.root_element(),
             &FixtureResolver,
