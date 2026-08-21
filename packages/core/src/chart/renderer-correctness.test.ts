@@ -4829,6 +4829,41 @@ describe('bar chart authored layout and fills', () => {
     )).toBe(true);
   });
 
+  it('keeps a non-overlay manual top legend outside the automatic bar plot', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      title: 'Revenue',
+      titlePresent: true,
+      titleFontSizeHpt: 1200,
+      categories: ['A'],
+      series: [series({ name: 'Series', values: [10] })],
+      valMin: 0,
+      valMax: 10,
+      valAxisMajorUnit: 5,
+      valAxisFontSizeHpt: 1000,
+      showLegend: true,
+      legendPos: 't',
+      legendOverlay: false,
+      legendFillColor: '123456',
+      legendFontSizeHpt: 1000,
+      legendManualLayout: {
+        xMode: 'edge', yMode: 'edge', wMode: 'factor', hMode: 'factor',
+        x: 0.1, y: 0.25, w: 0.5, h: 0.1,
+      },
+    }), RECT, 1);
+
+    const legend = rec.rects.find(rect => rect.fs === '#123456');
+    if (!legend) throw new Error('expected the authored legend frame');
+    const horizontalGridLines = rec.strokedPaths
+      .filter(path => path.points.length === 2
+        && Math.abs(path.points[0].y - path.points[1].y) < 0.001
+        && Math.abs(path.points[1].x - path.points[0].x) > RECT.w / 2);
+    expect(horizontalGridLines.length).toBeGreaterThan(0);
+    const plotTop = Math.min(...horizontalGridLines.map(path => path.points[0].y));
+    expect(plotTop).toBeGreaterThanOrEqual(legend.y + legend.h);
+  });
+
   it('does not reserve plot space for an overlay legend and retains manual placement', () => {
     const render = (overlay: boolean) => {
       const rec = recordingCtx();
