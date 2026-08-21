@@ -43,6 +43,9 @@ function projectTextRun(
     ...(geometry.paragraphId !== undefined
       ? { paragraphId: geometry.paragraphId }
       : {}),
+    ...(placement.sourceRunIndex !== undefined
+      ? { sourceRunIndex: placement.sourceRunIndex }
+      : {}),
     text: placement.text,
     x: origin.xPt,
     y: origin.yPt,

@@ -1645,6 +1645,10 @@ export interface DocxTextRunInfo {
   }>;
   /** Authored `w14:paraId`, when present. */
   paragraphId?: string;
+  /** Index of the originating run within the owning paragraph's normalized
+   *  runs. With {@link source}, this joins a rendered fragment back to its
+   *  model run — e.g. to place ECMA-376 §17.13.4 comment-anchor overlays. */
+  sourceRunIndex?: number;
   text: string;
   /** Left edge in canvas CSS px. */
   x: number;
