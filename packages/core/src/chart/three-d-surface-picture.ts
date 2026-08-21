@@ -9,6 +9,7 @@ import {
   planChartThreeDSurfacePicture,
   surfacePictureFaceIsEnabled,
   surfacePictureFaceRepetitions,
+  surfacePictureFaceUsesStackedMapping,
   surfacePictureFaceUsesValueAxis,
   type ChartThreeDSurfaceKind,
   type SurfacePicturePoint,
@@ -166,7 +167,9 @@ export function paintChartThreeDSurfacePicture(
       if (!surfacePictureFaceIsEnabled(plan, faceIndex)) continue;
       const face = surfacePictureSceneFace(geometry, faceIndex, project);
       if (!face) continue;
-      const repetitions = Math.ceil(1 / stackFraction);
+      const repetitions = surfacePictureFaceUsesStackedMapping(plan, faceIndex)
+        ? Math.ceil(1 / stackFraction)
+        : 1;
       if (!Number.isSafeInteger(repetitions) || repetitions < 1) return false;
       work += repetitions;
       if (work > MAX_CHART_IMAGE_FILL_TILES) return false;
@@ -314,12 +317,16 @@ export function paintChartThreeDSurfacePicture(
         );
       } else if (plan.mode === 'stack') {
         if (stackFraction == null) continue;
-        for (let index = 0; index < Math.ceil(1 / stackFraction); index++) {
-          drawProjected(
-            image, ctx, natural.w, natural.h,
-            stackQuad(face, index * stackFraction, (index + 1) * stackFraction),
-            0.5, sourceRect,
-          );
+        if (surfacePictureFaceUsesStackedMapping(plan, faceIndex)) {
+          for (let index = 0; index < Math.ceil(1 / stackFraction); index++) {
+            drawProjected(
+              image, ctx, natural.w, natural.h,
+              stackQuad(face, index * stackFraction, (index + 1) * stackFraction),
+              0.5, sourceRect,
+            );
+          }
+        } else {
+          drawProjected(image, ctx, natural.w, natural.h, quad, 0.5, sourceRect);
         }
       } else if (plan.stackUnit != null && surfacePictureFaceUsesValueAxis(plan, faceIndex)) {
         for (let index = 0; index < repetitions; index++) {

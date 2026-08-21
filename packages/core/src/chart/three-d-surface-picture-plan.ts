@@ -38,6 +38,19 @@ export function surfacePictureFaceIsEnabled(
   return faceIndex % 2 === 0 ? plan.slabFaces.end : plan.slabFaces.sides;
 }
 
+/** Whether a repeated picture mode advances across this face. Office applies
+ * both plain stack and stackScale across planar targets and thick front/side
+ * faces. A slab end face has no corresponding repetition extent, so it maps
+ * one complete source image. */
+export function surfacePictureFaceUsesStackedMapping(
+  plan: SurfacePicturePlan,
+  faceIndex: number,
+): boolean {
+  if ((plan.mode !== 'stack' && plan.mode !== 'stackScale')
+    || !surfacePictureFaceIsEnabled(plan, faceIndex)) return false;
+  return !plan.slabFaces || faceIndex === 0 || faceIndex % 2 === 1;
+}
+
 /** Number of source images mapped along one visible face. The two slab end
  * faces have no value-axis extent, so stackScale maps one complete source;
  * front/side faces retain the value-unit repetition count. */
@@ -56,8 +69,7 @@ export function surfacePictureFaceUsesValueAxis(
   plan: SurfacePicturePlan,
   faceIndex: number,
 ): boolean {
-  if (plan.mode !== 'stackScale' || !surfacePictureFaceIsEnabled(plan, faceIndex)) return false;
-  return !plan.slabFaces || faceIndex === 0 || faceIndex % 2 === 1;
+  return plan.mode === 'stackScale' && surfacePictureFaceUsesStackedMapping(plan, faceIndex);
 }
 
 function boundedSurfacePicturePlan(plan: SurfacePicturePlan): SurfacePicturePlan | null {
@@ -145,9 +157,9 @@ export function planChartThreeDSurfacePicture(
     return boundedSurfacePicturePlan({ mode: 'stretch', repetitions: 1, slabFaces });
   }
   if (format === 'stack') {
-    if (thickness !== 0) return null;
     // The final repetition count depends on the decoded image aspect and the
-    // face geometry. The painter calculates and bounds that count atomically.
+    // face geometry. The painter calculates and bounds that count atomically;
+    // positive-thickness end faces map one complete source instead.
     return boundedSurfacePicturePlan({ mode: 'stack', repetitions: 1, slabFaces });
   }
   if (format !== 'stackScale') return null;

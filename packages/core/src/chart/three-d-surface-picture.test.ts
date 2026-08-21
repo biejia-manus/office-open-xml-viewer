@@ -12,6 +12,9 @@ function paint(
     pictureFormat?: 'stretch' | 'stack' | 'stackScale';
     projectXScale?: number;
     pictureStackAspect?: number;
+    thicknessPercent?: number;
+    faceIndex?: number;
+    faceIndices?: readonly number[];
   } = {},
 ): {
   painted: boolean;
@@ -66,30 +69,41 @@ function paint(
   const ctx = makeContext(new RecordingCanvas(1, 1));
   const faceWidth = options.faceWidth ?? 100;
   const faceHeight = options.faceHeight ?? 100;
+  const faceIndex = options.faceIndex ?? 0;
+  const faceIndices = options.faceIndices ?? [faceIndex];
+  const thicknessPercent = options.thicknessPercent ?? 0;
+  const inner = [
+    { x: 0, y: faceHeight, depth: 0 },
+    { x: faceWidth, y: faceHeight, depth: 0 },
+    { x: faceWidth, y: 0, depth: 0 },
+    { x: 0, y: 0, depth: 0 },
+  ];
   const painted = paintChartThreeDSurfacePicture(
     ctx,
     fill,
     image,
     {
-      thicknessPercent: 0,
-      pictureOptions: { pictureFormat: options.pictureFormat ?? 'stretch' },
+      thicknessPercent,
+      pictureOptions: {
+        applyToFront: true,
+        applyToSides: true,
+        applyToEnd: true,
+        pictureFormat: options.pictureFormat ?? 'stretch',
+      },
     },
     'backWall',
     {
-      thickness: 0,
-      inner: [
-        { x: 0, y: faceHeight, depth: 0 },
-        { x: faceWidth, y: faceHeight, depth: 0 },
-        { x: faceWidth, y: 0, depth: 0 },
-        { x: 0, y: 0, depth: 0 },
-      ],
+      thickness: thicknessPercent > 0 ? 1 : 0,
+      inner,
       outer: [],
-      faces: [],
+      faces: thicknessPercent > 0
+        ? Array.from({ length: 6 }, (_, index) => faceIndices.includes(index) ? inner : [])
+        : [],
       pictureStackAspect: options.pictureStackAspect
         ?? faceWidth * (options.projectXScale ?? 1) / faceHeight,
       modelDepth: faceWidth,
     },
-    [0],
+    faceIndices,
     point => ({ x: point.x * (options.projectXScale ?? 1), y: point.y }),
     10,
   );
@@ -214,6 +228,27 @@ describe('CT_Surface plain stacked pictures', () => {
     expect(result.draws).toHaveLength(2);
   });
 
+  it('repeats thick front/side faces but maps one complete source on end faces', () => {
+    const common = {
+      imageWidth: 800,
+      imageHeight: 100,
+      faceWidth: 400,
+      faceHeight: 100,
+      pictureFormat: 'stack' as const,
+      pictureStackAspect: 4,
+      thicknessPercent: 25,
+    };
+    const front = paint(imageFill, { ...common, faceIndex: 0 });
+    const side = paint(imageFill, { ...common, faceIndex: 3 });
+    const end = paint(imageFill, { ...common, faceIndex: 2 });
+    expect(front.painted).toBe(true);
+    expect(side.painted).toBe(true);
+    expect(end.painted).toBe(true);
+    expect(front.draws).toHaveLength(2);
+    expect(side.draws).toHaveLength(2);
+    expect(end.draws).toHaveLength(1);
+  });
+
   it('fails closed before drawing when aspect repetition exceeds the image-work ceiling', () => {
     const result = paint(imageFill, {
       imageWidth: 4_097 * 400, imageHeight: 100,
@@ -222,6 +257,25 @@ describe('CT_Surface plain stacked pictures', () => {
     });
     expect(result.painted).toBe(false);
     expect(result.draws).toHaveLength(0);
+  });
+
+  it('bounds the aggregate plain-stack work across every thick slab face', () => {
+    const common = {
+      imageHeight: 100,
+      faceWidth: 400,
+      faceHeight: 100,
+      pictureFormat: 'stack' as const,
+      pictureStackAspect: 4,
+      thicknessPercent: 25,
+      faceIndices: [0, 2, 3, 4, 5],
+    };
+    const withinLimit = paint(imageFill, { ...common, imageWidth: 400 * 1_364 });
+    expect(withinLimit.painted).toBe(true);
+    expect(withinLimit.draws).toHaveLength(4_094);
+
+    const exceeded = paint(imageFill, { ...common, imageWidth: 400 * 1_365 });
+    expect(exceeded.painted).toBe(false);
+    expect(exceeded.draws).toHaveLength(0);
   });
 });
 
