@@ -5148,15 +5148,20 @@ fn parse_para_content(
                     );
                 }
             }
-            "ins" | "del" => {
+            "ins" | "del" | "moveFrom" | "moveTo" => {
                 // ECMA-376 §17.13.5 — build a RunRevision context covering
                 // every descendant run so the renderer can paint tracked
                 // changes inline. Nested ins/del isn't legal per spec; the
-                // inner block wins if it occurs anyway.
-                let kind = if child.tag_name().name() == "ins" {
-                    "insertion"
-                } else {
-                    "deletion"
+                // inner block wins if it occurs anyway. Move revisions
+                // (`w:moveFrom` §17.13.5.22 / `w:moveTo` §17.13.5.25) carry
+                // the same id/author/date attributes and wrap runs the same
+                // way; their range markers (`w:move*RangeStart/End`) hold no
+                // content and stay unparsed.
+                let kind = match child.tag_name().name() {
+                    "ins" => "insertion",
+                    "del" => "deletion",
+                    "moveFrom" => "moveFrom",
+                    _ => "moveTo",
                 };
                 let id_raw = attr_w(child, "id");
                 let id_value = id_raw.as_deref().and_then(|value| {
@@ -9744,6 +9749,35 @@ fn extract_simple_paragraph_text(
                 {
                     for (run_text, fmt, ruby) in collect_run_node(r) {
                         push_text_run(run_text, fmt, ruby);
+                    }
+                }
+            }
+            "ins" | "moveTo" => {
+                // ECMA-376 §17.13.5.18 / §17.13.5.25 — inserted or moved-in
+                // runs are part of the document's final text. ShapeText is
+                // built at parse time with no layout variant, so the shape
+                // path fixes final-view semantics: these wrappers flatten
+                // into the paragraph while `w:del` / `w:moveFrom` content
+                // (final-state-invisible, §17.13.5.14 / §17.13.5.22) is
+                // dropped by the default arm below.
+                for inner in element_children_flat(child) {
+                    match inner.tag_name().name() {
+                        "r" => {
+                            for (run_text, fmt, ruby) in collect_run_node(inner) {
+                                push_text_run(run_text, fmt, ruby);
+                            }
+                        }
+                        "hyperlink" => {
+                            for r in inner
+                                .children()
+                                .filter(|n| n.is_element() && n.tag_name().name() == "r")
+                            {
+                                for (run_text, fmt, ruby) in collect_run_node(r) {
+                                    push_text_run(run_text, fmt, ruby);
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -27398,6 +27432,194 @@ mod streamed_body_equivalence_tests {
             .run_operation("streamed-malformed", parse_streamed)
             .unwrap_err();
         assert!(error.contains("word/document.xml"), "{error}");
+    }
+}
+
+// ===== ECMA-376 §17.13.5.22 / §17.13.5.25: <w:moveFrom> / <w:moveTo> move revisions =====
+//
+// End-to-end (zip → parse) tests for tracked-change moves: descendant runs are
+// tagged with a RunRevision (like w:ins/w:del), while every projection that
+// predates move support stays byte-stable — the flat doc.revisions list keeps
+// its ins/del-only shape, and the markdown projection keeps dropping both ends
+// of a move (before move parsing, both vanished at parse time).
+#[cfg(test)]
+mod tracked_change_move_tests {
+    use super::*;
+    use crate::types::{BodyElement, DocRun, Document};
+    use std::io::{Cursor, Write};
+    use zip::write::SimpleFileOptions;
+
+    fn build_docx(document_xml: &str) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut archive = zip::ZipWriter::new(Cursor::new(&mut bytes));
+            let options = SimpleFileOptions::default();
+            archive.start_file("word/document.xml", options).unwrap();
+            archive.write_all(document_xml.as_bytes()).unwrap();
+            archive.finish().unwrap();
+        }
+        bytes
+    }
+
+    fn parse_doc(document_xml: &str) -> Document {
+        let mut zip = open_zip(build_docx(document_xml)).expect("test package opens");
+        zip.run_operation("move-tests", parse)
+            .expect("test document parses")
+    }
+
+    fn moved_doc() -> Document {
+        parse_doc(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+              <w:p>
+                <w:r><w:t xml:space="preserve">Keep </w:t></w:r>
+                <w:ins w:id="1" w:author="Alice" w:date="2024-01-01T00:00:00Z"><w:r><w:t>added</w:t></w:r></w:ins>
+                <w:moveFrom w:id="2" w:author="Bob" w:date="2024-01-02T00:00:00Z"><w:r><w:t>moved away</w:t></w:r></w:moveFrom>
+                <w:moveTo w:id="3" w:author="Bob" w:date="2024-01-02T00:00:00Z"><w:r><w:t>moved here</w:t></w:r></w:moveTo>
+                <w:del w:id="4" w:author="Alice" w:date="2024-01-03T00:00:00Z"><w:r><w:delText>removed</w:delText></w:r></w:del>
+              </w:p>
+            </w:body></w:document>"#,
+        )
+    }
+
+    fn paragraph_text_revisions(doc: &Document) -> Vec<(String, Option<String>, Option<String>)> {
+        let BodyElement::Paragraph(p) = doc
+            .body
+            .iter()
+            .find(|el| matches!(el, BodyElement::Paragraph(_)))
+            .expect("one paragraph")
+        else {
+            unreachable!()
+        };
+        p.runs
+            .iter()
+            .filter_map(|r| match r {
+                DocRun::Text(t) => Some((
+                    t.text.clone(),
+                    t.revision.as_ref().map(|rev| rev.kind.clone()),
+                    t.revision.as_ref().and_then(|rev| rev.author.clone()),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn move_wrappers_tag_descendant_runs_with_kind_author_and_date() {
+        let doc = moved_doc();
+        assert_eq!(
+            paragraph_text_revisions(&doc),
+            vec![
+                ("Keep ".to_string(), None, None),
+                (
+                    "added".to_string(),
+                    Some("insertion".to_string()),
+                    Some("Alice".to_string()),
+                ),
+                (
+                    "moved away".to_string(),
+                    Some("moveFrom".to_string()),
+                    Some("Bob".to_string()),
+                ),
+                (
+                    "moved here".to_string(),
+                    Some("moveTo".to_string()),
+                    Some("Bob".to_string()),
+                ),
+                (
+                    "removed".to_string(),
+                    Some("deletion".to_string()),
+                    Some("Alice".to_string()),
+                ),
+            ],
+        );
+    }
+
+    #[test]
+    fn flat_revisions_list_stays_insertion_and_deletion_only() {
+        // collect_revisions is a tool-facing projection (MCP, markdown export
+        // consumers) that predates move support. Its shape is pinned: moves
+        // travel only as run-level tags.
+        let doc = moved_doc();
+        assert_eq!(
+            doc.revisions
+                .iter()
+                .map(|rev| (rev.kind.as_str(), rev.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("insertion", "added"), ("deletion", "removed")],
+        );
+    }
+
+    #[test]
+    fn markdown_projection_drops_both_ends_of_a_move() {
+        // Pre-move-parsing output for this body was "Keep addedremoved" (moves
+        // vanished at parse; deleted text was projected). Byte-stable.
+        let doc = moved_doc();
+        assert_eq!(
+            crate::markdown::render_document(&doc),
+            "Keep addedremoved\n\n",
+        );
+    }
+
+    #[test]
+    fn text_box_projections_show_final_text_and_tag_rich_runs() {
+        let xml = r#"<wps:wsp
+              xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+              xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <wps:txbx><w:txbxContent><w:p>
+                <w:ins w:id="1" w:author="Alice"><w:r><w:t>Inserted</w:t></w:r></w:ins>
+                <w:moveTo w:id="2" w:author="Bob"><w:r><w:t> and moved in</w:t></w:r></w:moveTo>
+                <w:del w:id="3" w:author="Alice"><w:r><w:delText>gone</w:delText></w:r></w:del>
+                <w:moveFrom w:id="4" w:author="Bob"><w:r><w:t>also gone</w:t></w:r></w:moveFrom>
+              </w:p></w:txbxContent></wps:txbx>
+            </wps:wsp>"#;
+        let document = roxmltree::Document::parse(xml).expect("WPS fixture");
+        let mut num_map = NumberingMap::default();
+        let body = parse_shape_text_body(
+            &StyleMap::default(),
+            &mut num_map,
+            document.root_element(),
+            &ThemeColors::default(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            DepthGuard::root(),
+        );
+
+        // Legacy ShapeText projection is built at parse time, so it fixes
+        // final-view semantics: w:ins / w:moveTo flatten in, w:del /
+        // w:moveFrom stay invisible (§17.13.5.14 / §17.13.5.22).
+        assert_eq!(
+            body.legacy_blocks
+                .iter()
+                .map(|block| block.text.as_str())
+                .collect::<Vec<_>>(),
+            ["Inserted and moved in"],
+        );
+
+        // The rich wire goes through the body paragraph parser, so its runs
+        // carry the full revision tags for variant-aware layout.
+        let TextBoxBlockWire::Body(BodyElement::Paragraph(p)) = &body.content[0] else {
+            panic!("expected a paragraph block");
+        };
+        assert_eq!(
+            p.runs
+                .iter()
+                .filter_map(|r| match r {
+                    DocRun::Text(t) => Some((
+                        t.text.as_str(),
+                        t.revision.as_ref().map(|rev| rev.kind.as_str()),
+                    )),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("Inserted", Some("insertion")),
+                (" and moved in", Some("moveTo")),
+                ("gone", Some("deletion")),
+                ("also gone", Some("moveFrom")),
+            ],
+        );
     }
 }
 

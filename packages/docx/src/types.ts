@@ -1172,10 +1172,12 @@ export interface DocxTextRun {
   /** ECMA-376 §17.3.3.25 ruby annotation (furigana). Renders above the
    *  base text in a smaller font; line height is expanded to fit it. */
   ruby?: RubyAnnotation;
-  /** ECMA-376 §17.13.5 — set when this run sits inside `<w:ins>` or
-   *  `<w:del>`. The renderer paints insertions with an author-coloured
-   *  underline and deletions with an author-coloured strikethrough so
-   *  tracked changes appear inline. */
+  /** ECMA-376 §17.13.5 — set when this run sits inside `<w:ins>`, `<w:del>`,
+   *  `<w:moveFrom>`, or `<w:moveTo>`. The default render is the final document
+   *  state (deletions and moved-away text hidden); the opt-in markup view
+   *  ({@link RenderPageOptions.showTrackedChanges}) paints insertions with an
+   *  author-coloured underline and deletions with an author-coloured
+   *  strikethrough so tracked changes appear inline. */
   revision?: RunRevision;
   /** ECMA-376 §17.3.2.30 `<w:rtl>` — complex-script / right-to-left run.
    *  `true` = RTL, `false` = explicitly LTR, absent = unspecified. The renderer
@@ -1265,8 +1267,10 @@ export interface NoteRef {
 }
 
 export interface RunRevision {
-  /** "insertion" or "deletion" */
-  kind: 'insertion' | 'deletion' | string;
+  /** "insertion" | "deletion" | "moveFrom" | "moveTo" (ECMA-376 §17.13.5.18 /
+   *  §17.13.5.14 / §17.13.5.22 / §17.13.5.25). Move revisions render like
+   *  deletion (source) / insertion (destination) in the markup view. */
+  kind: 'insertion' | 'deletion' | 'moveFrom' | 'moveTo' | string;
   /** `<w:ins w:author>` / `<w:del w:author>`. Used to colour the markup. */
   author?: string;
   /** ISO-8601 timestamp. */

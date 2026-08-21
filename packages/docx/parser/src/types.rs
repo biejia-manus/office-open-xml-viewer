@@ -2282,10 +2282,12 @@ pub struct TextRun {
     /// (half-points) inside the rubyPr.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ruby: Option<RubyAnnotation>,
-    /// ECMA-376 §17.13.5 — set when this run sits inside a `<w:ins>` or
-    /// `<w:del>` block. The renderer paints insertions with a per-author
-    /// underline and deletions with a per-author strikethrough so reviewers
-    /// can see tracked edits inline.
+    /// ECMA-376 §17.13.5 — set when this run sits inside a `<w:ins>`,
+    /// `<w:del>`, `<w:moveFrom>`, or `<w:moveTo>` block. The default render
+    /// is the final document state (deletions and moved-away text hidden);
+    /// the opt-in markup view (`showTrackedChanges`) paints insertions with a
+    /// per-author underline and deletions with a per-author strikethrough so
+    /// reviewers can see tracked edits inline.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<RunRevision>,
     /// ECMA-376 §17.3.2.30 `<w:rtl>` — complex-script / right-to-left run.
@@ -2410,7 +2412,9 @@ pub struct NoteRef {
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RunRevision {
-    /// "insertion" or "deletion".
+    /// "insertion" | "deletion" | "moveFrom" | "moveTo" (ECMA-376 §17.13.5.18
+    /// / §17.13.5.14 / §17.13.5.22 / §17.13.5.25). Move revisions render like
+    /// deletion (source) / insertion (destination) in the markup view.
     pub kind: String,
     /// `<w:ins w:author>` / `<w:del w:author>`. Used by the renderer to pick
     /// a stable per-author colour (modulo a fixed palette).
