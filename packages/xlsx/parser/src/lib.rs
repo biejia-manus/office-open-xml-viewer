@@ -3060,9 +3060,7 @@ fn parse_row_cells(
             ),
         };
         let cell_type = c_node.attribute("t").unwrap_or("");
-        let style_index: Option<u32> = c_node
-            .attribute("s")
-            .and_then(|s| s.parse().ok());
+        let style_index: Option<u32> = c_node.attribute("s").and_then(|s| s.parse().ok());
 
         // Inline string: <c t="inlineStr"><is>...</is></c>
         let is_node = c_node.children().find(|n| n.tag_name().name() == "is");
@@ -5167,7 +5165,8 @@ mod strict_namespace_cell_tests {
             other => panic!("expected shared-string reference, got {other:?}"),
         }
         assert_eq!(
-            cells[0].style_index, Some(2),
+            cells[0].style_index,
+            Some(2),
             "the `s` style index must round-trip"
         );
 
