@@ -11837,8 +11837,20 @@ function bubblePointLine(
       ...geometry,
     };
   }
+  const bubbleSize = series.bubbleSizes?.[index];
+  const automaticNegativeThreeDLine = bubbleSize != null
+    && Number.isFinite(bubbleSize)
+    && bubbleSize < 0
+    && bubblePointIsThreeD(series, point)
+    ? '000000'
+    : null;
   return {
-    color: point?.markerLine ?? series.markerLine ?? series.lineColor ?? null,
+    // Current Excel gives its generated white negative 3-D material a black
+    // outline. Direct or linked no-line returned above remains authoritative.
+    color: point?.markerLine
+      ?? series.markerLine
+      ?? series.lineColor
+      ?? automaticNegativeThreeDLine,
     paint: undefined,
     ...geometry,
   };
