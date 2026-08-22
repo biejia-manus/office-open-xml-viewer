@@ -1755,6 +1755,7 @@ function drawThreeDSeriesAxis(
   categoryBetween: boolean,
   categoryReversed: boolean,
   orientation: 'vertical' | 'horizontal',
+  barFamily: boolean,
   ptToPx: number,
 ): void {
   const spec = chart.threeD?.seriesAxis;
@@ -1815,11 +1816,29 @@ function drawThreeDSeriesAxis(
   ctx.fillStyle = spec.fontColor ? `#${spec.fontColor}` : '#595959';
   ctx.textAlign = Math.abs(normal.x) < 0.2 ? 'center' : normal.x < 0 ? 'right' : 'left';
   ctx.textBaseline = Math.abs(normal.y) < 0.2 ? 'middle' : normal.y < 0 ? 'bottom' : 'top';
+  if (barFamily && !spec.lineHidden && tickMode !== 'none') {
+    applyThreeDStroke(ctx, threeDAxisTickStroke(
+      spec.lineColor, spec.lineWidthEmu, spec.lineDash, ptToPx,
+    ));
+    const boundaryCount = chart.series.length;
+    for (let boundaryIndex = 0; boundaryIndex <= boundaryCount; boundaryIndex += markSkip) {
+      const authoredDepth = boundaryIndex / boundaryCount;
+      const depth = spec.orientation === 'maxMin' ? 1 - authoredDepth : authoredDepth;
+      const point = projection.project(seriesAxisX, seriesAxisY, depth);
+      const total = 6 * ptToPx;
+      const outer = tickMode === 'cross' ? total / 2 : tickMode === 'out' ? total : 0;
+      const inner = tickMode === 'cross' ? total / 2 : tickMode === 'in' ? total : 0;
+      ctx.beginPath();
+      ctx.moveTo(point.x + normal.x * outer, point.y + normal.y * outer);
+      ctx.lineTo(point.x - normal.x * inner, point.y - normal.y * inner);
+      ctx.stroke();
+    }
+  }
   for (let seriesIndex = 0; seriesIndex < chart.series.length; seriesIndex++) {
     const authoredDepth = projection.seriesDepth(seriesIndex, chart.series.length, false);
     const depth = spec.orientation === 'maxMin' ? 1 - authoredDepth : authoredDepth;
     const point = projection.project(seriesAxisX, seriesAxisY, depth);
-    if (!spec.lineHidden && seriesIndex % markSkip === 0 && tickMode !== 'none') {
+    if (!barFamily && !spec.lineHidden && seriesIndex % markSkip === 0 && tickMode !== 'none') {
       const total = 6 * ptToPx;
       const outer = tickMode === 'cross' ? total / 2 : tickMode === 'out' ? total : 0;
       const inner = tickMode === 'cross' ? total / 2 : tickMode === 'in' ? total : 0;
@@ -2246,6 +2265,17 @@ function threeDAxisStroke(
   // grids, data outlines, and the shared 2-D axis conversion stay unchanged.
   const width = Math.max(2, axisLineWidthPx(widthEmu, ptToPx));
   return { ...stroke, width, dash: pptxPresetDashArray(dash ?? 'solid', width) };
+}
+
+function threeDAxisTickStroke(
+  color: string | null | undefined,
+  widthEmu: number | null | undefined,
+  dash: string | null | undefined,
+  ptToPx: number,
+): ThreeDStroke {
+  // Ticks use the authored DrawingML line width. The 3-D coordinate-frame
+  // raster floor above is intentionally limited to the long axis rule.
+  return threeDStroke(color, widthEmu, dash, ptToPx, '898989', 1);
 }
 
 function applyThreeDStroke(ctx: CanvasRenderingContext2D, stroke: ThreeDStroke): void {
@@ -2739,6 +2769,7 @@ function cartesianAxisTicks(
   categoryBetween: boolean,
   categoryReversed: boolean,
   orientation: 'vertical' | 'horizontal',
+  barFamily: boolean,
   ptToPx: number,
 ): void {
   const { front } = projection;
@@ -2752,8 +2783,9 @@ function cartesianAxisTicks(
     depth,
   );
   const valueMinorTickMark = chart.valAxisMinorTickMark ?? 'none';
+  const axisTickStroke = barFamily ? threeDAxisTickStroke : threeDAxisStroke;
   if (!chart.valAxisHidden && !chart.valAxisLineHidden) {
-    applyThreeDStroke(ctx, threeDAxisStroke(
+    applyThreeDStroke(ctx, axisTickStroke(
       chart.valAxisLineColor, chart.valAxisLineWidthEmu, chart.valAxisLineDash,
       ptToPx,
     ));
@@ -2778,7 +2810,7 @@ function cartesianAxisTicks(
     }
   }
   if (!chart.catAxisHidden && !chart.catAxisLineHidden) {
-    applyThreeDStroke(ctx, threeDAxisStroke(
+    applyThreeDStroke(ctx, axisTickStroke(
       chart.catAxisLineColor, chart.catAxisLineWidthEmu, chart.catAxisLineDash,
       ptToPx,
     ));
@@ -2787,10 +2819,7 @@ function cartesianAxisTicks(
     const categoryEnd = orientation === 'vertical'
       ? geometry.horizontalEnd : geometry.verticalEnd;
     const tickSkip = Math.max(1, Math.floor(chart.catAxisTickMarkSkip ?? 1));
-    for (let categoryIndex = 0; categoryIndex < categoryCount; categoryIndex += tickSkip) {
-      const fraction = categoryPositionFraction(
-        categoryIndex, categoryCount, categoryBetween, categoryReversed,
-      );
+    const drawCategoryTick = (fraction: number): void => {
       const anchor = orientation === 'vertical'
         ? projection.project(front.x + fraction * front.w, axisY, depth)
         : projection.project(axisX, front.y + fraction * front.h, depth);
@@ -2798,6 +2827,18 @@ function cartesianAxisTicks(
         ctx, chart.catAxisMajorTickMark, anchor, categoryStart, categoryEnd,
         projectedCenter, orientation === 'vertical' ? 'vertical' : 'horizontal', 'major', ptToPx,
       );
+    };
+    if (barFamily) {
+      const boundaries = categoryGridlineFractions(categoryCount, categoryBetween);
+      for (let index = 0; index < boundaries.length; index += tickSkip) {
+        drawCategoryTick(categoryReversed ? 1 - boundaries[index] : boundaries[index]);
+      }
+    } else {
+      for (let index = 0; index < categoryCount; index += tickSkip) {
+        drawCategoryTick(categoryPositionFraction(
+          index, categoryCount, categoryBetween, categoryReversed,
+        ));
+      }
     }
     const minorUnit = chart.catAxisMinorUnit;
     if (chart.catAxisMinorTickMark && chart.catAxisMinorTickMark !== 'none'
@@ -3909,7 +3950,7 @@ function renderCartesian(
   );
   cartesianAxisTicks(
     ctx, chart, projection, axis, categoryCount, categoryBetween, categoryReversed,
-    horizontal ? 'horizontal' : 'vertical', ptToPx,
+    horizontal ? 'horizontal' : 'vertical', bars, ptToPx,
   );
   drawThreeDSeriesAxis(
     ctx,
@@ -3921,6 +3962,7 @@ function renderCartesian(
     categoryBetween,
     categoryReversed,
     horizontal ? 'horizontal' : 'vertical',
+    bars,
     ptToPx,
   );
   const resolvedAxisGeometry = threeDAxisGeometry(
