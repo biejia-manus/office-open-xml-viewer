@@ -136,7 +136,10 @@ import {
   chartStyleLineDecision,
   chartStyleLinePaint,
 } from './style-paint.js';
-import { applyPlotVisibleOnly } from './source-visibility.js';
+import {
+  applyPlotVisibleOnly,
+  EXCEL_AUTOMATIC_SCATTER_MARKERS,
+} from './source-visibility.js';
 import {
   boundDataLabelText,
   resolveDataLabelPlacement,
@@ -604,6 +607,10 @@ function drawChartDataTable(
   ctx.beginPath();
   ctx.rect(tableX, tableY, tableWidth, layout.totalHeight);
   ctx.clip();
+  if (table.fillColor) {
+    ctx.fillStyle = `#${table.fillColor}`;
+    ctx.fillRect(tableX, tableY, tableWidth, layout.totalHeight);
+  }
   ctx.fillStyle = table.fontColor ? `#${table.fontColor}` : '#000000';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -748,7 +755,7 @@ function scatterSeriesDrawsLine(
   if (chartType !== 'scatter') return false;
   const style = scatterStyle ?? 'marker';
   const styleDrawsLine =
-    style === 'line' || style === 'lineMarker' || style === 'lineNoMarker' ||
+    style === 'marker' || style === 'line' || style === 'lineMarker' || style === 'lineNoMarker' ||
     style === 'smooth' || style === 'smoothMarker' || style === 'smoothNoMarker';
   return styleDrawsLine && series.lineHidden !== true;
 }
@@ -777,7 +784,9 @@ function legendMarkerFor(
   const isScatter = family === 'scatter' || isBubble;
   if (!isLineFamily && !isScatter) return null;
   if (!seriesLegendMarkerIsVisible(chartType, scatterStyle, s, radarStyle)) return null;
-  const symbol = s.markerSymbol ?? (isStock ? 'none' : 'circle');
+  const symbol = s.markerSymbol
+    ?? s.automaticMarkerSymbol
+    ?? (isStock ? 'none' : 'circle');
   const base = chartColor(entryIndex, s); // '#RRGGBB'
   const fill = seriesMarkerFillColor(s, base.replace(/^#/, ''));
   const withLine = isBubble ? false : isScatter
@@ -7987,6 +7996,13 @@ function renderStockChart(
 
 interface SurfaceVertex extends ThreeDScenePoint { value: number }
 
+const surfaceCellTriangleIndices = (
+  values: readonly [number, number, number, number],
+): readonly [readonly [number, number, number], readonly [number, number, number]] =>
+  values[0] + values[2] > values[1] + values[3]
+    ? [[0, 1, 2], [0, 2, 3]]
+    : [[0, 1, 3], [1, 2, 3]];
+
 const MAX_SURFACE_PAINT_POLYGONS = 200_000;
 const SURFACE_SCENE_DEPTH_SCALE = 1.25;
 
@@ -8352,6 +8368,37 @@ function renderSurfaceChart(
         if (!chargeEdge(rows[row].values[column], rows[row + 1].values[column])) return;
       }
     }
+    // A wireframe Surface contains both the source row/column mesh and the
+    // contour at each value-band boundary. Charge the latter before any
+    // projection or paint allocation, using the same cell triangulation as
+    // the renderer below.
+    for (let row = 0; row < rowCount - 1; row++) {
+      for (let column = 0; column < columnCount - 1; column++) {
+        const values = [
+          rows[row].values[column],
+          rows[row].values[column + 1],
+          rows[row + 1].values[column + 1],
+          rows[row + 1].values[column],
+        ];
+        if (values.some(value => value == null || !Number.isFinite(value))) continue;
+        const finiteValues = values as [number, number, number, number];
+        for (const indices of surfaceCellTriangleIndices(finiteValues)) {
+          const triangleMin = Math.min(...indices.map(index => finiteValues[index]));
+          const triangleMax = Math.max(...indices.map(index => finiteValues[index]));
+          const firstBoundary = Math.max(
+            1,
+            Math.floor((triangleMin - surfaceMin) / step) + 1,
+          );
+          const lastBoundary = Math.min(
+            bandCount - 1,
+            Math.ceil((triangleMax - surfaceMin) / step) - 1,
+          );
+          if (lastBoundary < firstBoundary) continue;
+          wireframeSegmentCount += lastBoundary - firstBoundary + 1;
+          if (wireframeSegmentCount > MAX_SURFACE_PAINT_POLYGONS) return;
+        }
+      }
+    }
   }
   const usesBaseWireframeLine = directBandLineDecisions.some(
     decision => decision === undefined,
@@ -8496,8 +8543,64 @@ function renderSurfaceChart(
       });
     }
   };
+  const appendWireframeContours = (triangle: readonly SurfaceVertex[]): void => {
+    const triangleMin = Math.min(...triangle.map(vertex => vertex.value));
+    const triangleMax = Math.max(...triangle.map(vertex => vertex.value));
+    const firstBoundary = Math.max(
+      1,
+      Math.floor((triangleMin - surfaceMin) / step) + 1,
+    );
+    const lastBoundary = Math.min(
+      bandCount - 1,
+      Math.ceil((triangleMax - surfaceMin) / step) - 1,
+    );
+    for (let boundary = firstBoundary; boundary <= lastBoundary; boundary++) {
+      const threshold = surfaceMin + boundary * step;
+      const intersections: SurfaceVertex[] = [];
+      const addIntersection = (vertex: SurfaceVertex): void => {
+        if (intersections.some(existing =>
+          Math.abs(existing.x - vertex.x) < 1e-9
+          && Math.abs(existing.y - vertex.y) < 1e-9
+          && Math.abs(existing.depth - vertex.depth) < 1e-9
+        )) return;
+        intersections.push(vertex);
+      };
+      for (let index = 0; index < triangle.length; index++) {
+        const start = triangle[index];
+        const end = triangle[(index + 1) % triangle.length];
+        if (start.value === threshold) addIntersection(start);
+        if ((start.value < threshold && end.value > threshold)
+          || (start.value > threshold && end.value < threshold)) {
+          const fraction = (threshold - start.value) / (end.value - start.value);
+          addIntersection({
+            x: start.x + (end.x - start.x) * fraction,
+            y: start.y + (end.y - start.y) * fraction,
+            depth: start.depth + (end.depth - start.depth) * fraction,
+            value: threshold,
+          });
+        }
+      }
+      if (intersections.length !== 2) continue;
+      wireframeSegments.push({
+        points: [
+          projection.project(
+            intersections[0].x, intersections[0].y, intersections[0].depth,
+          ),
+          projection.project(
+            intersections[1].x, intersections[1].y, intersections[1].depth,
+          ),
+        ],
+        // A boundary closes the band below it. This keeps c:bandFmt indexing
+        // consistent with the lower-inclusive clipping used by filled Surface.
+        band: boundary - 1,
+      });
+    }
+  };
   const paintTriangle = (triangle: SurfaceVertex[]): void => {
-    if (chart.surfaceWireframe === true) return;
+    if (chart.surfaceWireframe === true) {
+      appendWireframeContours(triangle);
+      return;
+    }
     const triangleMin = Math.min(...triangle.map(vertex => vertex.value));
     const triangleMax = Math.max(...triangle.map(vertex => vertex.value));
     const firstBand = Math.max(0, Math.floor((triangleMin - surfaceMin) / step));
@@ -8807,14 +8910,11 @@ function renderSurfaceChart(
       // three cases: equal opposing sums retain the source-grid B-D diagonal;
       // otherwise the opposing pair with the larger value sum forms the ridge.
       // This is an application rendering rule — OOXML stores only the matrix.
-      const forwardDiagonalSum = rowColumn.value + rowNextColumnNext.value;
-      const reverseDiagonalSum = rowColumnNext.value + rowNextColumn.value;
-      if (forwardDiagonalSum > reverseDiagonalSum) {
-        paintTriangle([rowColumn, rowColumnNext, rowNextColumnNext]);
-        paintTriangle([rowColumn, rowNextColumnNext, rowNextColumn]);
-      } else {
-        paintTriangle([rowColumn, rowColumnNext, rowNextColumn]);
-        paintTriangle([rowColumnNext, rowNextColumnNext, rowNextColumn]);
+      const vertices = [
+        rowColumn, rowColumnNext, rowNextColumnNext, rowNextColumn,
+      ] as const;
+      for (const indices of surfaceCellTriangleIndices(values as [number, number, number, number])) {
+        paintTriangle(indices.map(index => vertices[index]));
       }
     }
   }
@@ -9529,13 +9629,10 @@ function renderAreaChart(
   // Draw the series area fills ON TOP of the gridlines laid down above.
   // In a stacked area chart, series order is the stacking order: series 0 is
   // adjacent to the category axis, then series 1, and so on (CT_AreaChart's
-  // ordered `ser` sequence). Plain unstacked area retains the historical
-  // back-to-front painting so the first series remains visually on top.
-  const seriesOrder = areaGroupMembers.flatMap(({ group, areaIndices }) =>
-    group.grouping === 'stacked' || group.grouping === 'percentStacked'
-      ? areaIndices
-      : [...areaIndices].reverse()
-  );
+  // ordered `ser` sequence). Standard areas use the same document paint order:
+  // a later series is painted later and therefore overlays earlier series,
+  // matching Excel's vector output at their intersections.
+  const seriesOrder = areaGroupMembers.flatMap(({ areaIndices }) => areaIndices);
   const plottedAreaValue = (areaIndex: number, categoryIndex: number): number =>
     areaTopValues[areaIndex]?.[categoryIndex] ?? 0;
   for (const areaIndex of seriesOrder) {
@@ -11907,6 +12004,31 @@ function makeScatterSeriesLayer(
   };
 }
 
+function isFilteredScatterAutomaticPointStyle(
+  chart: ChartModel,
+  series: ChartSeries,
+): boolean {
+  const accents = chart.themeAccentColors;
+  const hidden = series.sourceHidden;
+  const colors = series.dataPointColors;
+  const points = series.dataPointOverrides;
+  if (chart.chartType !== 'scatter'
+    || chart.plotVisibleOnly !== true
+    || chart.scatterStyle !== 'marker'
+    || hidden?.length !== series.values.length
+    || colors?.length !== series.values.length
+    || points?.length !== series.values.length
+    || !accents?.length) return false;
+  return hidden.every(isHidden => !isHidden)
+    && colors.every((color, index) => color === accents[index % accents.length])
+    && points.every((point, index) =>
+      point.idx === index
+      && point.markerSymbol === EXCEL_AUTOMATIC_SCATTER_MARKERS[
+        index % EXCEL_AUTOMATIC_SCATTER_MARKERS.length
+      ]
+    );
+}
+
 /** One `<c:bubbleChart>` group has one size scale: every series must therefore
  * be normalized against the same maximum bubble magnitude. */
 function bubbleSizeToDiameterScale(
@@ -11967,8 +12089,13 @@ function drawScatterSeriesLayer(
   shapeRotationDeg = 0,
   bubbleSettings?: BubbleGroupSettings,
 ): void {
-  const drawLines = style === 'line' || style === 'lineMarker' || style === 'lineNoMarker';
-  const drawSmooth = style === 'smooth' || style === 'smoothMarker' || style === 'smoothNoMarker';
+  const markerStyleHasAutomaticPointColors = style === 'marker'
+    && entries.some(({ series }) => isFilteredScatterAutomaticPointStyle(chart, series));
+  const drawLines = markerStyleHasAutomaticPointColors
+    || style === 'line' || style === 'lineMarker' || style === 'lineNoMarker';
+  const drawSmooth = ((style === 'marker' && !markerStyleHasAutomaticPointColors)
+    && !isBubble)
+    || style === 'smooth' || style === 'smoothMarker' || style === 'smoothNoMarker';
   const hideMarkersByStyle = markersSuppressedByChartStyle(
     'scatter', chart.chartType, style, chart.radarStyle,
   );
@@ -12005,29 +12132,40 @@ function drawScatterSeriesLayer(
       }
       if (pts.length >= 2) {
         ctx.save();
-        ctx.strokeStyle = s.color ? `#${s.color}` : fallbackColor;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x, pts[0].y);
-        if (drawSmooth && pts.length >= 3) {
-          for (let i = 0; i < pts.length - 1; i++) {
-            const p0 = pts[i - 1] ?? pts[i];
-            const p1 = pts[i];
-            const p2 = pts[i + 1];
-            const p3 = pts[i + 2] ?? p2;
-            ctx.bezierCurveTo(
-              p1.x + (p2.x - p0.x) / 6,
-              p1.y + (p2.y - p0.y) / 6,
-              p2.x - (p3.x - p1.x) / 6,
-              p2.y - (p3.y - p1.y) / 6,
-              p2.x,
-              p2.y,
-            );
+        if (markerStyleHasAutomaticPointColors && s.dataPointColors?.some(Boolean)) {
+          ctx.lineWidth = 1.5;
+          for (let i = 1; i < pts.length; i++) {
+            ctx.strokeStyle = `#${s.dataPointColors[i] ?? s.color ?? fallbackColor.replace(/^#/, '')}`;
+            ctx.beginPath();
+            ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
+            ctx.lineTo(pts[i].x, pts[i].y);
+            ctx.stroke();
           }
         } else {
-          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+          ctx.strokeStyle = s.color ? `#${s.color}` : fallbackColor;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          if (drawSmooth && pts.length >= 3) {
+            for (let i = 0; i < pts.length - 1; i++) {
+              const p0 = pts[i - 1] ?? pts[i];
+              const p1 = pts[i];
+              const p2 = pts[i + 1];
+              const p3 = pts[i + 2] ?? p2;
+              ctx.bezierCurveTo(
+                p1.x + (p2.x - p0.x) / 6,
+                p1.y + (p2.y - p0.y) / 6,
+                p2.x - (p3.x - p1.x) / 6,
+                p2.y - (p3.y - p1.y) / 6,
+                p2.x,
+                p2.y,
+              );
+            }
+          } else {
+            for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+          }
+          ctx.stroke();
         }
-        ctx.stroke();
         ctx.restore();
       }
     }
@@ -12044,7 +12182,8 @@ function drawScatterSeriesLayer(
         const xv = scatterXValue(cats, ci, useIndexX);
         if (xv == null) continue;
         const dpt = pointOverrides.get(ci);
-        const symbol = effectiveMarkerSymbol(s, dpt, 'circle', seriesMarkersVisible);
+        const defaultSymbol = isBubble ? 'circle' : (s.automaticMarkerSymbol ?? 'circle');
+        const symbol = effectiveMarkerSymbol(s, dpt, defaultSymbol, seriesMarkersVisible);
         if (symbol === 'none') continue;
         let sizePt = dpt?.markerSize ?? s.markerSize ?? 5;
         if (isBubble) {

@@ -888,6 +888,13 @@ impl ooxml_common::chart::ColorResolver for XlsxColorResolver<'_> {
         Some("FFFFFF".to_string())
     }
 
+    /// Excel's automatic plot-area paint is opaque white even when the chart
+    /// area itself has a different authored fill. A direct plot-area fill or
+    /// noFill remains authoritative in the shared parser.
+    fn default_plot_area_bg(&self) -> Option<String> {
+        Some("FFFFFF".to_string())
+    }
+
     fn implicit_outline_only_negative_column_style(&self) -> bool {
         true
     }
