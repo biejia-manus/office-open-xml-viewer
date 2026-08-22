@@ -607,11 +607,28 @@ function drawChartDataTable(
   ctx.beginPath();
   ctx.rect(tableX, tableY, tableWidth, layout.totalHeight);
   ctx.clip();
-  if (table.fillColor) {
-    ctx.fillStyle = `#${table.fillColor}`;
-    ctx.fillRect(tableX, tableY, tableWidth, layout.totalHeight);
-  }
-  ctx.fillStyle = table.fontColor ? `#${table.fontColor}` : '#000000';
+  const fontColor = table.fontColor ? `#${table.fontColor}` : '#000000';
+  const drawBodyText = (text: string, centerX: number, centerY: number): void => {
+    // Desktop Excel scopes a direct dTable/spPr fill to the generated body
+    // text boxes. It does not fill the table frame or the leading series-name
+    // cells. The text layout box is the measured advance by the measured line
+    // height, so this remains tied to authored typography rather than a cell-
+    // or sample-specific inset.
+    if (table.fillColor && text !== '') {
+      const width = ctx.measureText(text).width;
+      ctx.fillStyle = `#${table.fillColor}`;
+      ctx.fillRect(
+        centerX - width / 2,
+        centerY - layout.lineHeight / 2,
+        width,
+        layout.lineHeight,
+      );
+    }
+    ctx.fillStyle = fontColor;
+    ctx.textAlign = 'center';
+    ctx.fillText(text, centerX, centerY);
+  };
+  ctx.fillStyle = fontColor;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
@@ -621,7 +638,7 @@ function drawChartDataTable(
     const textBlockHeight = lines.length * layout.lineHeight;
     const firstY = tableY + (layout.headerHeight - textBlockHeight) / 2 + layout.lineHeight / 2;
     lines.forEach((line, lineIndex) => {
-      ctx.fillText(line, centerX, firstY + lineIndex * layout.lineHeight);
+      drawBodyText(line, centerX, firstY + lineIndex * layout.lineHeight);
     });
   }
 
@@ -660,14 +677,13 @@ function drawChartDataTable(
             ptToPx,
           );
         }
-        ctx.fillStyle = table.fontColor ? `#${table.fontColor}` : '#000000';
+        ctx.fillStyle = fontColor;
       }
     }
-    ctx.textAlign = 'center';
     for (let categoryIndex = 0; categoryIndex < categories.length; categoryIndex++) {
       const value = series.values[categoryIndex];
       const text = value == null ? '' : formatChartValWithCode(value, series.valFormatCode);
-      ctx.fillText(text, plotX + (categoryIndex + 0.5) * categoryWidth, rowCenter);
+      drawBodyText(text, plotX + (categoryIndex + 0.5) * categoryWidth, rowCenter);
     }
   }
 
