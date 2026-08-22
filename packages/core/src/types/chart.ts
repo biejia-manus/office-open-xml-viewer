@@ -1048,9 +1048,13 @@ export interface ChartModel {
   catAxisLineColor?: string | null;
   catAxisLineWidthEmu?: number | null;
   catAxisLineDash?: string | null;
+  /** A direct `<c:catAx><c:spPr><a:ln>` paint was authored. */
+  catAxisLinePaintAuthored?: boolean | null;
   valAxisLineColor?: string | null;
   valAxisLineWidthEmu?: number | null;
   valAxisLineDash?: string | null;
+  /** A direct `<c:valAx><c:spPr><a:ln>` paint was authored. */
+  valAxisLinePaintAuthored?: boolean | null;
   /**
    * `<c:catAx><c:numFmt@formatCode>` (or scatter X-axis valAx). When set,
    * the renderer formats X-axis tick labels with this code (e.g. dates).
@@ -1566,6 +1570,8 @@ export interface ChartThreeDSeriesAxis {
   lineColor?: string | null;
   lineWidthEmu?: number | null;
   lineDash?: string | null;
+  /** A direct `<c:serAx><c:spPr><a:ln>` paint was authored. */
+  linePaintAuthored?: boolean | null;
   lineHidden: boolean;
   titleFontSizeHpt?: number | null;
   titleFontBold?: boolean | null;
