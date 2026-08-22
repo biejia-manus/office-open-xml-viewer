@@ -14,7 +14,6 @@ import {
 } from './image-fill.js';
 import { paintChartThreeDSurfacePicture } from './three-d-surface-picture.js';
 import {
-  chartLabelBoxHasVisiblePaint,
   mergeChartLabelBoxes,
   paintChartLabelBox,
 } from './label-box.js';
@@ -2217,7 +2216,16 @@ function drawTrendlineLabel(
   ctx.fillStyle = color ? `#${color}` : '#595959';
   const maxTextWidth = Math.max(0, boxRect.w - insets.left - insets.right);
   const maxTextHeight = Math.max(0, boxRect.h - insets.top - insets.bottom);
-  const displayLines = rich ? [] : hasTextBody
+  const automaticNaturalBlockFits = placement.automatic
+    && rotated.radians === 0
+    && placement.w === rotated.w
+    && placement.h === rotated.h
+    && (tl.labelTextWrap == null || tl.labelTextWrap === 'none');
+  // When the automatic box was measured from these exact generated lines,
+  // preserve them directly. Re-fitting an exact two-line body through a
+  // floating-point height division could floor 1.999… to one line and drop
+  // the authored R² output even though the measured box had room for both.
+  const displayLines = rich ? [] : hasTextBody && !automaticNaturalBlockFits
     ? fitStyledDataLabelLines(
         lines.join('\n'), maxTextWidth, maxTextHeight, lineHeight,
         value => ctx.measureText(value).width, textStyle,
@@ -7904,7 +7912,7 @@ function renderStockChart(
       : (pw / n) * labelInterval - 4;
     const showLabels = !hasDataTable && catLabelsVisible(chart);
     const rotRad = catLabelRotationRad(chart);
-    const labelEntries = dateAxisPlan
+    const labelEntries = dateAxisPlan && dateAxisPlan.majorTicks.length > 0
       ? dateAxisPlan.majorTicks.map(tick => ({
         label: formatCategoryLabel(String(tick.serial), chart.catAxisFormatCode, chart.date1904),
         x: px0 + tick.fraction * pw,
@@ -10365,7 +10373,14 @@ function drawPieRichLabels(
   for (let index = 0; index < vals.length; index++) {
     const override = overridesByIndex.get(index);
     if (dataLabelIsDeleted(def, override)) continue;
-    if (chartLabelBoxHasVisiblePaint(mergeChartLabelBoxes(override?.labelBox, def.labelBox))) {
+    const labelBox = mergeChartLabelBoxes(override?.labelBox, def.labelBox);
+    // A border-only label shape is an outline around the ordinary radial
+    // label; it does not opt into Word's filled boxed-callout layout. Treating
+    // any visible border as a callout invented leaders for Excel bestFit pie
+    // labels even though the authored labels remain on their slices.
+    const hasVisibleCalloutFill = labelBox?.fillHidden !== true
+      && (labelBox?.fill != null || labelBox?.fillPaint != null);
+    if (hasVisibleCalloutFill) {
       calloutIndices.add(index);
     }
   }
@@ -12069,7 +12084,24 @@ function drawScatterSeriesLayer(
     }
   }
 
-  for (const { series: s, seriesIndex, cats } of layers) {
+  for (const { series: s, seriesIndex, cats, pointOverrides } of layers) {
+    const markerGapAt = (pointIndex: number): number => {
+      if (hideMarkersByStyle) return 0;
+      const seriesMarkerVisible = s.showMarker !== false && s.markerSymbol !== 'none';
+      const dpt = pointOverrides.get(pointIndex);
+      const symbol = effectiveMarkerSymbol(s, dpt, 'circle', seriesMarkerVisible);
+      if (symbol === 'none') return 0;
+      let sizePt = dpt?.markerSize ?? s.markerSize ?? 5;
+      if (isBubble) {
+        if (bubbleScale <= 0) return 0;
+        const bubbleSize = visibleBubbleSize(
+          effectiveBubbleSettings, s.bubbleSizes?.[pointIndex],
+        );
+        if (bubbleSize == null) return 0;
+        sizePt = bubbleSizeMagnitude(effectiveBubbleSettings, bubbleSize) * bubbleScale / ptToPx;
+      }
+      return Math.max(0, sizePt * ptToPx / 2);
+    };
     drawSeriesDataLabels(
       ctx,
       s,
@@ -12082,13 +12114,16 @@ function drawScatterSeriesLayer(
       chart.date1904,
       chartFontFamily(chart, chart.dataLabelFontFace, 'minor'),
       chart.dataLabelPosition ?? 'r',
-      { x: px0, y: py0, w: pw, h: ph },
+      // Office lets automatic left/right endpoint labels occupy the chart-area
+      // gutter while keeping their vertical placement constrained to the plot.
+      { x: chartRect.x, y: py0, w: chartRect.w, h: ph },
       layoutReferenceRect,
       face => chartFontFamily(chart, face, 'minor'),
       valueDisplayUnits,
       pointIndex => dataLabelLegendKey(seriesIndex, pointIndex),
       value => dataLabelWithinAxisMaximum(chart, value, valueAxisMaximum),
       shapeRotationDeg,
+      markerGapAt,
     );
   }
 
@@ -13045,6 +13080,7 @@ function drawSeriesDataLabels(
   legendKeyAt?: (pointIndex: number) => DataLabelLegendKey | undefined,
   isValueVisible?: (value: number) => boolean,
   shapeRotationDeg = 0,
+  markerGapAt?: (pointIndex: number) => number,
 ): void {
   const overrides = s.dataLabelOverrides ?? [];
   const overridesByIndex = indexPointOverrides(overrides);
@@ -13102,7 +13138,8 @@ function drawSeriesDataLabels(
       ? richFontFamilyForFace(labelFace)
       : fontFamily;
     drawDataLabelText(
-      ctx, toX(xv), toY(yv), text, pos, fontSizePx, color, bold, labelFont, 0,
+      ctx, toX(xv), toY(yv), text, pos, fontSizePx, color, bold, labelFont,
+      markerGapAt?.(i) ?? 0,
       bounds, ovr?.manualLayout,
       layoutReferenceRect,
       ovr?.richRuns,

@@ -784,7 +784,10 @@ function renderParetoLineChart(
     source.values.length,
   );
   if (rejectOversizedCanvasChart(ctx, r, pointCount)) return;
-  const layout = planParetoLayout(source, chart.categories);
+  // A standalone `paretoLine` accumulates the authored sequence. Descending
+  // frequency sorting belongs to an owner-backed Pareto chart, where columns
+  // and their cumulative line are reordered together.
+  const layout = planParetoLayout(source, chart.categories, { sortDescending: false });
   if (layout.points.length === 0) return;
   const styleIndex = chartExSeriesFormatIndex(source, 0);
   const paretoLine = resolveChartExSeriesLineStyle(
@@ -1973,6 +1976,9 @@ function renderTreemapChart(
         chart, series, node.labelIndex, node.label, node.value,
         { visible: parentMode !== 'none', showVal: false, showCatName: true },
         labelOverrides,
+        // Excel treats overlapping/banner entries as hierarchy captions. The
+        // series value flag applies to leaf data points, not aggregate parents.
+        true,
       );
       const showParent = parentLabel != null
         && (parentMode !== 'overlapping' || node.depth === 0);

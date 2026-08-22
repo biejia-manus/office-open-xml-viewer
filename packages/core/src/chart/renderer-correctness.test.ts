@@ -11534,6 +11534,46 @@ describe('CH11 — line/area/scatter data labels honor <c:dLblPos> (§21.2.2.48)
     expect(rec.texts.find(call => call.text === ' 3')?.font).toContain('11px');
   });
 
+  it('scatter: an automatic right endpoint label may use chart gutter and clears its marker', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'scatter',
+      scatterStyle: 'marker',
+      catAxisMin: 0,
+      catAxisMax: 1.4,
+      valMin: 0,
+      valMax: 1,
+      plotAreaManualLayout: {
+        layoutTarget: 'inner', xMode: 'edge', yMode: 'edge',
+        x: 0.2, y: 0.2, w: 0.6, h: 0.6,
+      },
+      series: [series({
+        categories: ['1.32'],
+        catFormatCode: '0%',
+        values: [0.5],
+        showMarker: true,
+        markerSymbol: 'circle',
+        markerSize: 10,
+        seriesDataLabels: {
+          showVal: false,
+          showCatName: true,
+          showSerName: false,
+          showPercent: false,
+        },
+      })],
+    }), RECT, 1);
+
+    const marker = rec.arcs.find(arc => Math.abs(arc.r - 5) < 1e-6);
+    const label = rec.texts.find(text => text.text === '132%');
+    expect(marker).toBeDefined();
+    expect(label).toMatchObject({ align: 'left', baseline: 'middle' });
+    expect((label as TextCall).x).toBeGreaterThan((marker?.x ?? 0) + (marker?.r ?? 0));
+    // The authored inner plot ends at 80% of chart width. Office permits this
+    // automatic endpoint label to occupy the surrounding chart-area gutter.
+    expect((label as TextCall).x + ((label as TextCall).width ?? 0))
+      .toBeGreaterThan(RECT.w * 0.8);
+  });
+
   it.each(['line', 'area', 'scatter'] as const)(
     '%s: rich label run faces resolve major/minor theme references and concrete faces',
     (chartType) => {
@@ -15125,6 +15165,24 @@ describe('CH6-follow — series trendlines (commit 3)', () => {
     }
   });
 
+  it('keeps both automatic equation and R-squared lines with an empty authored bodyPr', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, lineWithTrend({
+      values: [3, 3, 5, 6],
+      trendLines: [{
+        trendlineType: 'linear',
+        dispEq: true,
+        dispRSqr: true,
+        labelTextBodyAuthored: true,
+        labelFontSizeHpt: 800,
+        labelBox: { fill: 'FFFFFF', borderColor: '808080', borderWidthEmu: 3175 },
+      }],
+    }), RECT, 4 / 3);
+
+    expect(rec.texts.filter(text => text.text.startsWith('y = '))).toHaveLength(1);
+    expect(rec.texts.filter(text => text.text.startsWith('R² = '))).toHaveLength(1);
+  });
+
   it('honors trendline-label manual layout and text properties independently of line paint', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, lineWithTrend({
@@ -16069,6 +16127,24 @@ describe('CH13 — stock chart (high/low/close)', () => {
     expect(labels).toContain('High');
     expect(labels).toContain('Low');
     expect(labels).toContain('Close');
+  });
+
+  it('keeps cached date labels when dateAx leaves the automatic major interval omitted', () => {
+    const rec = segRecordingCtx();
+    renderChart(rec.ctx, stockModel({
+      categories: ['43851', '43852', '43853'],
+      catAxisIsDate: true,
+      catAxisBaseTimeUnit: 'days',
+      catAxisFormatCode: 'mm/dd/yyyy',
+      catAxisMajorUnit: null,
+      catAxisTickLabelPos: 'nextTo',
+    }), RECT, 1);
+
+    expect(rec.texts.map(text => text.text)).toEqual(expect.arrayContaining([
+      '01/21/2020',
+      '01/22/2020',
+      '01/23/2020',
+    ]));
   });
 
   it('honors an explicit hi-lo line color', () => {
@@ -17613,6 +17689,35 @@ function pieCalloutModel(over: Partial<ChartModel> = {}): ChartModel {
 }
 
 describe('CH14 — pie callout data labels', () => {
+  it('keeps border-only bestFit labels on their slices without inventing callout leaders', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'pie',
+      categories: ['Point 1', 'Point 2', 'Point 3', 'Point 4'],
+      series: [series({
+        values: [8, 6, 2, 2],
+        seriesDataLabels: {
+          showVal: true,
+          showCatName: false,
+          showSerName: false,
+          showPercent: false,
+          showLeaderLines: true,
+          leaderLineColor: '808080',
+          labelBox: {
+            fillHidden: true,
+            fillPaintAuthored: true,
+            borderColor: '808080',
+            borderWidthEmu: 3175,
+          },
+        },
+      })],
+    }), RECT, 1);
+
+    expect(rec.texts.map(text => text.text)).toEqual(expect.arrayContaining(['8', '6', '2']));
+    expect(rec.strokeRects.some(rect => rect.ss === '#808080')).toBe(true);
+    expect(rec.strokedPaths.filter(path => path.strokeStyle === '#808080')).toHaveLength(0);
+  });
+
   it('paints a custom rich callout from the same measured inline block', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
@@ -19671,17 +19776,14 @@ describe('CH15 — chartEx treemap', () => {
     expect(area('#5B9BD5') / area('#ED7D31')).toBeCloseTo(2, 5);
   });
 
-  it('keeps an overflowing aggregate display label finite', () => {
+  it('keeps an overflowing leaf display label finite', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
       chartType: 'treemap',
       chartexAccents: ['5B9BD5'],
       chartexTreemap: {
-        parentLabelLayout: 'overlapping',
-        rows: [
-          { path: ['Aggregate', 'A'], size: Number.MAX_VALUE },
-          { path: ['Aggregate', 'B'], size: Number.MAX_VALUE },
-        ],
+        parentLabelLayout: 'none',
+        rows: [{ path: ['Finite'], size: Number.MAX_VALUE }],
       },
       series: [series({
         seriesDataLabels: {
@@ -19693,11 +19795,46 @@ describe('CH15 — chartEx treemap', () => {
       })],
     }), RECT, 1);
 
-    const parentValues = rec.texts
-      .filter(text => text.baseline === 'top')
+    const leafValues = rec.texts
       .map(text => Number(text.text));
-    expect(parentValues).toEqual([Number.MAX_VALUE]);
-    expect(parentValues.every(Number.isFinite)).toBe(true);
+    expect(leafValues).toContain(Number.MAX_VALUE);
+    expect(leafValues.filter(Number.isFinite).every(Number.isFinite)).toBe(true);
+  });
+
+  it('keeps overlapping treemap parent captions category-only when leaf labels show values', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'treemap',
+      chartexTreemap: {
+        parentLabelLayout: 'overlapping',
+        rows: [
+          { path: ['Civilian', 'Public services'], size: 0.62 },
+          { path: ['Civilian', 'Infrastructure'], size: 0.38 },
+          { path: ['Military', 'Personnel'], size: 0.55 },
+          { path: ['Military', 'Equipment'], size: 0.45 },
+        ],
+      },
+      series: [series({
+        valFormatCode: '0%',
+        seriesDataLabels: {
+          showVal: true,
+          showCatName: true,
+          showSerName: false,
+          showPercent: false,
+          position: 'inEnd',
+          separator: '\n',
+        },
+      })],
+    }), RECT, 1);
+
+    const parentCaptions = rec.texts
+      .filter(text => text.baseline === 'top')
+      .map(text => text.text);
+    expect(parentCaptions).toEqual(expect.arrayContaining(['Civilian', 'Military']));
+    expect(parentCaptions.every(text => !text.includes('%') && !text.includes('\n'))).toBe(true);
+    expect(rec.texts.map(text => text.text)).toEqual(
+      expect.arrayContaining(['Public services', '62%']),
+    );
   });
 
   it('keeps equal-weight top-level tiles in first-seen source order', () => {
