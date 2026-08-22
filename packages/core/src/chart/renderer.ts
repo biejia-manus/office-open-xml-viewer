@@ -5026,7 +5026,7 @@ export function renderBarChart(
       series => sec && series.useSecondaryAxis === true ? toYSecondarySeries : toYPrimaryLine,
       () => primaryCatAxisY,
       (series, index) => series.values[index] == null ? null : overlayValue(series, index),
-      catGap, ptToPx, shapeRotationDeg,
+      catGap, ptToPx, shapeRotationDeg, 'background',
     );
     if (dateAxisPlan) {
       ctx.save();
@@ -5128,6 +5128,13 @@ export function renderBarChart(
         },
       );
     }
+    drawLineGroupDecorations(
+      ctx, chart, n, categoryCenterX,
+      series => sec && series.useSecondaryAxis === true ? toYSecondarySeries : toYPrimaryLine,
+      () => primaryCatAxisY,
+      (series, index) => series.values[index] == null ? null : overlayValue(series, index),
+      catGap, ptToPx, shapeRotationDeg, 'foreground',
+    );
     if (dateAxisPlan) ctx.restore();
   }
 
@@ -6473,6 +6480,7 @@ function drawLineGroupDecorations(
   slotWidth: number,
   ptToPx: number,
   shapeRotationDeg: number,
+  phase: 'background' | 'foreground',
 ): void {
   for (const decoration of chart.lineGroupDecorations ?? []) {
     let members = chart.series.filter(series => series.lineGroupIndex === decoration.groupIndex);
@@ -6484,7 +6492,7 @@ function drawLineGroupDecorations(
     }
     if (members.length === 0) continue;
 
-    if (decoration.upDownBars && members.length >= 2) {
+    if (phase === 'foreground' && decoration.upDownBars && members.length >= 2) {
       const first = members[0];
       const last = members[members.length - 1];
       const upDownBars = {
@@ -6505,6 +6513,8 @@ function drawLineGroupDecorations(
         shapeRotationDeg,
       );
     }
+
+    if (phase === 'foreground') continue;
 
     const dropLineStyle = decoration.dropLines
       ? chartStyleRoleLine(chart, decoration.dropLines, 'dropLine')
@@ -7029,7 +7039,7 @@ export function renderLineChart(
       const seriesIndex = lineSeriesIndex.get(series);
       return seriesIndex != null ? plotted(seriesIndex, index) : null;
     },
-    decorationSlotWidth, ptToPx, shapeRotationDeg,
+    decorationSlotWidth, ptToPx, shapeRotationDeg, 'background',
   );
 
   // Line width and marker size come from OOXML in points (<a:ln w=EMU> /
@@ -7224,6 +7234,16 @@ export function renderLineChart(
       },
     );
   }
+
+  drawLineGroupDecorations(
+    ctx, chart, n, toX, yMapFor,
+    categoryAxisYFor,
+    (series, index) => {
+      const seriesIndex = lineSeriesIndex.get(series);
+      return seriesIndex != null ? plotted(seriesIndex, index) : null;
+    },
+    decorationSlotWidth, ptToPx, shapeRotationDeg, 'foreground',
+  );
 
   for (const drawLabels of deferredDataLabels) drawLabels();
 
@@ -7597,31 +7617,6 @@ function renderStockChart(
     }
   }
 
-  // ── First/last-series up-down bars (§21.2.2.218/227). Shared with ordinary
-  // line-chart up/down bars so gap geometry and direct paint cannot drift.
-  if (chart.stockUpDownBars && upDownStartS && upDownEndS) {
-    const directStyle = chart.stockUpDownBarStyle ?? {
-      gapWidthPercent: 150,
-      up: {},
-      down: {},
-    };
-    const style = {
-      ...directStyle,
-      up: chartStyleRoleBarPaint(chart, directStyle.up, 'upBar'),
-      down: chartStyleRoleBarPaint(chart, directStyle.down, 'downBar'),
-    };
-    const slotWidth = dateAxisPlan
-      ? (dateAxisPlan.categoryBandFractions[0] ?? 0) * pw
-      : between ? pw / n : n > 1 ? pw / (n - 1) : pw;
-    drawUpDownBars(
-      ctx,
-      index => upDownStartS.values[index] ?? null,
-      index => upDownEndS.values[index] ?? null,
-      n, toX, toYFor(upDownStartS), toYFor(upDownEndS),
-      slotWidth, style, ptToPx, chart.stockAutomaticStyle ?? undefined, shapeRotationDeg,
-    );
-  }
-
   // ── Hi-lo lines: vertical Low↔High per category. CT_StockChart makes
   // `<c:hiLowLines>` optional, so absence must remain absence; only a present
   // element receives linked or bounded automatic paint. ──
@@ -7805,6 +7800,33 @@ function renderStockChart(
         chart, chartRect: r, plotRect: { x: px0, y: py0, w: pw, h: ph },
         shapeRotationDeg,
       },
+    );
+  }
+
+  // ── First/last-series up-down bars (§21.2.2.218/227). In DrawingML these
+  // decorations follow the line series. Excel paints their opaque bodies over
+  // both the high-low rule and the owning series lines, leaving plot geometry
+  // visible only outside each body.
+  if (chart.stockUpDownBars && upDownStartS && upDownEndS) {
+    const directStyle = chart.stockUpDownBarStyle ?? {
+      gapWidthPercent: 150,
+      up: {},
+      down: {},
+    };
+    const style = {
+      ...directStyle,
+      up: chartStyleRoleBarPaint(chart, directStyle.up, 'upBar'),
+      down: chartStyleRoleBarPaint(chart, directStyle.down, 'downBar'),
+    };
+    const slotWidth = dateAxisPlan
+      ? (dateAxisPlan.categoryBandFractions[0] ?? 0) * pw
+      : between ? pw / n : n > 1 ? pw / (n - 1) : pw;
+    drawUpDownBars(
+      ctx,
+      index => upDownStartS.values[index] ?? null,
+      index => upDownEndS.values[index] ?? null,
+      n, toX, toYFor(upDownStartS), toYFor(upDownEndS),
+      slotWidth, style, ptToPx, chart.stockAutomaticStyle ?? undefined, shapeRotationDeg,
     );
   }
 

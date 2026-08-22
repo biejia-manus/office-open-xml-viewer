@@ -1410,16 +1410,21 @@ describe('classic 3-D compatibility projection', () => {
     expect(rec.strokes.filter(stroke => stroke.ss === '#898989')).toHaveLength(0);
   });
 
-  it('keeps authored 0.25pt 3-D axes at the two-pixel Office raster floor', () => {
+  it('keeps the 3-D frame visible while using authored 0.25pt width for ticks', () => {
     const rec = strokedPolylineCtx();
     renderChart(rec.ctx, baseModel({
       chartType: 'clusteredBar',
       categories: ['A', 'B'],
+      valMin: 0,
+      valMax: 20,
+      valAxisMajorUnit: 10,
       catAxisLineColor: 'FF00FF',
       catAxisLineWidthEmu: 3_175,
+      catAxisMajorTickMark: 'out',
       catAxisMajorGridlines: false,
       valAxisLineColor: '00AA00',
       valAxisLineWidthEmu: 3_175,
+      valAxisMajorTickMark: 'out',
       valAxisMajorGridlines: false,
       threeD: {
         rotationX: 15,
@@ -1435,17 +1440,92 @@ describe('classic 3-D compatibility projection', () => {
           lineHidden: false,
           lineColor: '0000FF',
           lineWidthEmu: 3_175,
-          majorTickMark: 'none',
+          majorTickMark: 'out',
         },
       },
-      series: [series({ values: [5, 15], lineHidden: true })],
+      series: [
+        series({ values: [5, 15], lineHidden: true }),
+        series({ values: [8, 12], lineHidden: true }),
+      ],
     }), RECT, 1);
 
     for (const color of ['#FF00FF', '#00AA00', '#0000FF']) {
       const strokes = rec.strokes.filter(stroke => stroke.ss === color);
       expect(strokes.length).toBeGreaterThan(0);
-      expect(strokes.every(stroke => stroke.lw === 2)).toBe(true);
+      const length = (stroke: (typeof strokes)[number]) => Math.hypot(
+        stroke.points[1].x - stroke.points[0].x,
+        stroke.points[1].y - stroke.points[0].y,
+      );
+      const frame = strokes.reduce((longest, stroke) =>
+        length(stroke) > length(longest) ? stroke : longest);
+      const ticks = strokes.filter(stroke => stroke !== frame);
+      expect(frame.lw).toBe(2);
+      expect(ticks.length).toBeGreaterThan(0);
+      expect(ticks.every(stroke => stroke.lw === 0.25)).toBe(true);
     }
+  });
+
+  it('places standard 3-D category and series ticks on slot boundaries', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B', 'C'],
+      catAxisCrossBetween: 'between',
+      catAxisLineColor: 'FF00FF',
+      catAxisMajorTickMark: 'out',
+      catAxisMajorGridlines: false,
+      valAxisHidden: true,
+      threeD: {
+        rotationX: 15,
+        rotationY: 20,
+        depthPercent: 100,
+        perspective: 0,
+        rightAngleAxes: true,
+        barGrouping: 'standard',
+        floor: { lineHidden: true },
+        sideWall: { lineHidden: true },
+        backWall: { lineHidden: true },
+        seriesAxis: {
+          hidden: false,
+          lineHidden: false,
+          lineColor: '0000FF',
+          majorTickMark: 'out',
+        },
+      },
+      series: [
+        series({ name: 'North', values: [5, 10, 15], lineHidden: true }),
+        series({ name: 'South', values: [7, 12, 17], lineHidden: true }),
+      ],
+    }), RECT, 1);
+
+    const tickFractions = (color: string) => {
+      const strokes = rec.strokes.filter(stroke => stroke.ss === color && stroke.points.length === 2);
+      const length = (stroke: (typeof strokes)[number]) => Math.hypot(
+        stroke.points[1].x - stroke.points[0].x,
+        stroke.points[1].y - stroke.points[0].y,
+      );
+      const axis = strokes.reduce((longest, stroke) =>
+        length(stroke) > length(longest) ? stroke : longest);
+      const [start, end] = axis.points;
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const lengthSquared = dx * dx + dy * dy;
+      return strokes
+        .filter(stroke => stroke !== axis)
+        .map(stroke => {
+          const anchor = stroke.points[1];
+          return ((anchor.x - start.x) * dx + (anchor.y - start.y) * dy) / lengthSquared;
+        })
+        .sort((a, b) => a - b);
+    };
+
+    expect(tickFractions('#FF00FF')).toEqual([
+      expect.closeTo(0, 6), expect.closeTo(1 / 3, 6),
+      expect.closeTo(2 / 3, 6), expect.closeTo(1, 6),
+    ]);
+    expect(tickFractions('#0000FF')).toEqual([
+      expect.closeTo(0, 6), expect.closeTo(0.5, 6), expect.closeTo(1, 6),
+    ]);
   });
 
   it('does not turn a linked gridline style into unauthored 3-D grid geometry', () => {
@@ -15428,6 +15508,14 @@ describe('classic line-chart group decorations', () => {
     const outlines = rec.strokeRects.filter(rect => rect.ss === '#333333');
     expect(outlines).toHaveLength(5);
     expect(new Set(outlines.map(rect => rect.w.toFixed(6))).size).toBe(1);
+    const firstSeries = rec.paintEvents.findIndex(event =>
+      event.kind === 'stroke' && event.strokeStyle === '#4472C4'
+    );
+    const firstBar = rec.paintEvents.findIndex(event =>
+      event.kind === 'rect' && event.fillStyle === '#EEEEEE'
+    );
+    expect(firstSeries).toBeGreaterThanOrEqual(0);
+    expect(firstBar).toBeGreaterThan(firstSeries);
   });
 
   it('fills missing line-group decoration paint from linked Chart Style roles', () => {
@@ -16520,6 +16608,39 @@ describe('CH13 — stock chart (high/low/close)', () => {
     expect(rec.rects.filter(rect => rect.fs === '#3F3F3F')).toHaveLength(3);
     expect(rec.arcs).toHaveLength(4); // three plotted High points + one legend marker
     expect(rec.texts.map(text => text.text)).toEqual(expect.arrayContaining(['High', 'Low', 'Close']));
+  });
+
+  it('paints up/down bars over the high-low rule and owning line series', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, stockModel({
+      stockUpDownBars: true,
+      stockHiLowLineColor: '123456',
+      series: [
+        series({
+          name: 'Open', values: [40], markerSymbol: 'none',
+          lineColor: '4472C4', seriesType: 'line',
+        }),
+        series({
+          name: 'Close', values: [20], markerSymbol: 'none',
+          lineColor: 'C0504D', seriesType: 'line',
+        }),
+      ],
+      plotGroups: [plotGroup('line', 0, 2)],
+    }), RECT, 1);
+
+    const hiLowIndex = rec.paintEvents.findIndex(event =>
+      event.kind === 'stroke' && event.strokeStyle === '#123456'
+    );
+    const owningLineIndex = rec.paintEvents.findIndex(event =>
+      event.kind === 'stroke' && event.strokeStyle === '#4472C4'
+    );
+    const barIndex = rec.paintEvents.findIndex(event =>
+      event.kind === 'rect' && event.fillStyle === '#3F3F3F'
+    );
+    expect(hiLowIndex).toBeGreaterThanOrEqual(0);
+    expect(owningLineIndex).toBeGreaterThanOrEqual(0);
+    expect(barIndex).toBeGreaterThan(hiLowIndex);
+    expect(barIndex).toBeGreaterThan(owningLineIndex);
   });
 });
 
@@ -18923,6 +19044,34 @@ describe('CH15 — chartEx box-and-whisker', () => {
     const outlineSegments = rec.segs.filter(segment => segment.ss.toLowerCase() === '#404040');
     expect(outlineSegments.length).toBeGreaterThanOrEqual(5);
     expect(outlineSegments.every(segment => segment.lw === 2)).toBe(true);
+  });
+
+  it('uses the box-series outline for raw observation markers', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, boxModel({
+      catAxisHidden: true,
+      valAxisHidden: true,
+      chartexDataPointMarkerStyle: {
+        fillColors: ['FFFFFF'],
+        lineColors: ['FFFFFF'],
+        lineWidthEmu: 9525,
+      },
+      chartexBox: {
+        categories: ['A'],
+        series: [{
+          name: 'S', color: 'FFFFFF', lineColor: '000000', lineWidthEmu: 6350,
+          valuesByCategory: [[1, 2, 3]],
+          meanMarker: false, meanLine: false, showOutliers: false, showNonoutliers: true,
+          quartileMethod: 'inclusive',
+        }],
+      },
+    }), RECT, 1);
+
+    expect(rec.arcs).toHaveLength(3);
+    expect(rec.strokeDetails.some(stroke => stroke.strokeStyle.toLowerCase() === '#ffffff'))
+      .toBe(false);
+    expect(rec.strokeDetails.filter(stroke => stroke.strokeStyle.toLowerCase() === '#000000').length)
+      .toBeGreaterThanOrEqual(3);
   });
 
   it('uses the same 14pt omitted-title fallback for classic and ChartEx charts', () => {

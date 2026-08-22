@@ -1407,7 +1407,10 @@ function renderBoxWhiskerChart(
       }
 
       // Interior sample points. Excel overlays the raw non-outlier values on
-      // the box/whiskers when cx:visibility@nonoutliers is enabled.
+      // the box/whiskers when cx:visibility@nonoutliers is enabled. Their
+      // outline follows the owning box series, not the generic linked marker
+      // role (which may carry a contrasting line intended for ordinary chart
+      // markers).
       if (s.showNonoutliers) {
         const pointSymbol = chart.chartStyleMarkerSymbol ?? chart.chartexMarkerSymbol ?? 'circle';
         for (const point of stats.inner) {
@@ -1421,7 +1424,7 @@ function renderBoxWhiskerChart(
             pointSymbol,
             observationMarkerSizePt,
             markerFillPaint ? (markerFill ? `#${markerFill}` : fill) : 'transparent',
-            markerLineVisible ? (markerEdge ? `#${markerEdge}` : edge) : null,
+            markerLineVisible ? edge : null,
             ptToPx,
             ctx.lineWidth,
             markerFillPaint,
@@ -1456,7 +1459,7 @@ function renderBoxWhiskerChart(
             pointSymbol,
             observationMarkerSizePt,
             markerFillPaint ? (markerFill ? `#${markerFill}` : fill) : 'transparent',
-            markerLineVisible ? (markerEdge ? `#${markerEdge}` : edge) : null,
+            markerLineVisible ? edge : null,
             ptToPx,
             ctx.lineWidth,
             markerFillPaint,

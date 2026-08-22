@@ -9963,7 +9963,17 @@ fn collect_string_source(
         .children()
         .find(|node| node.is_element() && node.tag_name().name() == child_tag)?;
     if has_authored_reference_data(container) {
-        return Some(collect_str_cache_positional(ser_node, child_tag));
+        let authored = collect_str_cache_positional(ser_node, child_tag);
+        if !authored.is_empty() {
+            return Some(authored);
+        }
+        // A zero-point cache carries no usable snapshot. When the host can
+        // resolve the accompanying formula (notably XLSX worksheet cells),
+        // use that live source just as Office does. Keep an unresolved empty
+        // cache explicit so non-XLSX hosts never inherit unrelated data.
+        return reference_formula(container)
+            .and_then(|formula| references.resolve_strings(&formula))
+            .or(Some(authored));
     }
     reference_formula(container).and_then(|formula| references.resolve_strings(&formula))
 }
@@ -9977,7 +9987,13 @@ fn collect_number_source(
         .children()
         .find(|node| node.is_element() && node.tag_name().name() == child_tag)?;
     if has_authored_reference_data(container) {
-        return Some(collect_num_cache_positional(ser_node, child_tag));
+        let authored = collect_num_cache_positional(ser_node, child_tag);
+        if !authored.is_empty() {
+            return Some(authored);
+        }
+        return reference_formula(container)
+            .and_then(|formula| references.resolve_numbers(&formula))
+            .or(Some(authored));
     }
     reference_formula(container).and_then(|formula| references.resolve_numbers(&formula))
 }
@@ -22407,7 +22423,10 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(chart.categories, vec!["1", "2"]);
         assert_eq!(chart.series[0].categories, None);
         assert_eq!(chart.series[1].categories, Some(Vec::new()));
-        assert_eq!(chart.series[2].categories, Some(Vec::new()));
+        assert_eq!(
+            chart.series[2].categories,
+            Some(vec!["1".into(), "2".into()])
+        );
     }
 
     #[test]
