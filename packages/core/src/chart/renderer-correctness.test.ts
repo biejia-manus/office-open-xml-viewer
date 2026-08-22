@@ -10121,40 +10121,58 @@ describe('CH9 — bubble scale and numeric-X trendlines', () => {
     expect(rec.arcs.map(arc => arc.fillStyle)).toEqual(['#4472C4', '#ED7D31', '#A5A5A5']);
   });
 
-  it('resolves bubble3D as point over series over owning-group provenance', () => {
-    const rec = recordingCtx();
-    renderChart(rec.ctx, baseModel({
+  it('uses the series bubble3D value for every point as current Excel does', () => {
+    const seriesTrue = recordingCtx();
+    renderChart(seriesTrue.ctx, baseModel({
       chartType: 'bubble',
       categories: ['1', '2', '3'],
-      series: [
-        series({
-          values: [1, 2, 3], bubbleSizes: [100, 100, 100],
-          bubble3DGroupDefault: false,
-          bubble3D: true,
-          dataPointOverrides: [{ idx: 0, bubble3D: false }],
-        }),
-        series({
-          values: [1, 2, 3], bubbleSizes: [100, 100, 100],
-          bubble3DGroupDefault: true,
-          bubble3D: false,
-          dataPointOverrides: [{ idx: 2, bubble3D: true }],
-        }),
-        series({
-          values: [1, 2, 3], bubbleSizes: [100, 100, 100],
-          bubble3DGroupDefault: true,
-        }),
-      ],
+      series: [series({
+        values: [1, 2, 3], bubbleSizes: [100, 100, 100],
+        bubble3DGroupDefault: false,
+        bubble3D: true,
+        dataPointOverrides: [
+          { idx: 0, bubble3D: false },
+          { idx: 1, bubble3D: true },
+        ],
+      })],
       catAxisMin: 0,
       catAxisMax: 4,
       valMin: 0,
       valMax: 4,
     }), RECT, 1);
+    expect(seriesTrue.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(9);
 
-    const materials = rec.gradients.filter(gradient => gradient.kind === 'radial');
-    expect(materials).toHaveLength(18);
-    expect(materials.map(gradient => gradient.stops.length)).toEqual(
-      Array.from({ length: 6 }, () => [4, 5, 6]).flat(),
-    );
+    const seriesFalse = recordingCtx();
+    renderChart(seriesFalse.ctx, baseModel({
+      chartType: 'bubble',
+      categories: ['1', '2', '3'],
+      series: [series({
+        values: [1, 2, 3], bubbleSizes: [100, 100, 100],
+        bubble3DGroupDefault: true,
+        bubble3D: false,
+        dataPointOverrides: [
+          { idx: 0, bubble3D: true },
+          { idx: 2, bubble3D: false },
+        ],
+      })],
+      catAxisMin: 0,
+      catAxisMax: 4,
+      valMin: 0,
+      valMax: 4,
+    }), RECT, 1);
+    expect(seriesFalse.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(0);
+
+    const groupFallback = recordingCtx();
+    renderChart(groupFallback.ctx, baseModel({
+      chartType: 'bubble',
+      categories: ['1'],
+      series: [series({
+        values: [1], bubbleSizes: [100], bubble3DGroupDefault: true,
+        dataPointOverrides: [{ idx: 0, bubble3D: false }],
+      })],
+      catAxisMin: 0, catAxisMax: 2, valMin: 0, valMax: 2,
+    }), RECT, 1);
+    expect(groupFallback.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(3);
   });
 
   it('paints bounded independent diffuse, shade, and lower-rim material layers', () => {
@@ -10263,6 +10281,34 @@ describe('CH9 — bubble scale and numeric-X trendlines', () => {
     )).toBe(true);
     expect(rec.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(3);
     expect(rec.strokeDetails.filter(stroke => stroke.strokeStyle === '#7F6000')).toHaveLength(2);
+  });
+
+  it('uses the observed automatic black outline for a negative 3-D bubble', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'bubble', showNegativeBubbles: true, categories: ['1'],
+      series: [series({
+        values: [1], bubbleSizes: [-100], bubble3D: true,
+      })],
+      catAxisMin: 0, catAxisMax: 2, valMin: 0, valMax: 2,
+    }), RECT, 1);
+
+    expect(rec.paintEvents.some(event =>
+      event.kind === 'fill' && event.fillStyle === '#FFFFFF'
+    )).toBe(true);
+    expect(rec.gradients.filter(gradient => gradient.kind === 'radial')).toHaveLength(3);
+    expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#000000')).toBe(true);
+
+    const authoredNoLine = recordingCtx();
+    renderChart(authoredNoLine.ctx, baseModel({
+      chartType: 'bubble', showNegativeBubbles: true, categories: ['1'],
+      series: [series({
+        values: [1], bubbleSizes: [-100], bubble3D: true, lineHidden: true,
+      })],
+      catAxisMin: 0, catAxisMax: 2, valMin: 0, valMax: 2,
+    }), RECT, 1);
+    expect(authoredNoLine.strokeDetails.some(stroke => stroke.strokeStyle === '#000000'))
+      .toBe(false);
   });
 
   it('applies bubble3D to the series legend key as well as the plotted bubble', () => {
