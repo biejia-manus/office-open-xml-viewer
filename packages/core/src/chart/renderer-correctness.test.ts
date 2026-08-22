@@ -11667,6 +11667,17 @@ describe('CH11 — line/area/scatter data labels honor <c:dLblPos> (§21.2.2.48)
 });
 
 describe('CH9 — line/area smooth splines (§21.2.2.194)', () => {
+  it('uses Excel automatic smooth lines for an unformatted marker scatter', () => {
+    const rec = markerRecordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'scatter',
+      scatterStyle: 'marker',
+      categories: ['1', '2', '3', '4'],
+      series: [series({ name: 'S', values: [10, 15, 12, 22], showMarker: true })],
+    }), RECT, 1);
+    expect(rec.beziers).toBeGreaterThan(0);
+  });
+
   for (const chartType of ['line', 'area'] as const) {
     it(`${chartType}: smooth series draws a bezier spline; non-smooth draws straight segments`, () => {
       const smooth = markerRecordingCtx();
@@ -11950,6 +11961,7 @@ describe('classic chart data table (CT_DTable)', () => {
         lineColor: '445566',
         lineWidthEmu: 12700,
         lineDash: 'dash',
+        fillColor: 'FFF2CC',
       },
     }), RECT, 1);
 
@@ -11962,6 +11974,7 @@ describe('classic chart data table (CT_DTable)', () => {
     expect(text).toContain('Feb-25');
     expect(rec.strokeRects.some(rect => rect.ss === '#445566')).toBe(true);
     expect(rec.strokeRects.find(rect => rect.ss === '#445566')?.dash.length).toBeGreaterThan(0);
+    expect(rec.rects.some(rect => rect.fs === '#FFF2CC')).toBe(true);
     expect(rec.arcs.length).toBeGreaterThan(0); // line-series key marker
   });
 
@@ -16812,6 +16825,25 @@ describe('surface contour charts', () => {
     expect(wireframe).toHaveLength(4);
   });
 
+  it('adds interpolated band-boundary contours across wireframe cells', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, wireframeSurfaceModel({
+      categories: ['X1', 'X2', 'X3'],
+      valMax: 20,
+      valAxisMajorUnit: 10,
+      series: [
+        series({ name: 'Y1', values: [0, 0, 0], lineColor: 'AA0000' }),
+        series({ name: 'Y2', values: [0, 20, 0] }),
+        series({ name: 'Y3', values: [0, 0, 0] }),
+      ],
+    }), RECT, 1);
+
+    // The uniform line style keeps the 3x3 source mesh at 12 segments. Its
+    // four cells each contribute two interpolated contours at value 10.
+    expect(rec.strokeDetails.filter(stroke => stroke.strokeStyle === '#AA0000'))
+      .toHaveLength(20);
+  });
+
   it('keeps unresolved, no-fill, and compound dataPointWireframe lines fail-closed', () => {
     for (const role of [
       { linePaintAuthored: true, lineColorIndex: 0 },
@@ -16877,13 +16909,13 @@ describe('surface contour charts', () => {
       stroke.strokeStyle === '#AA0000' || stroke.strokeStyle === '#00FFFF'
     );
     expect(mesh.filter(stroke => stroke.strokeStyle === '#AA0000')).toHaveLength(3);
-    expect(mesh.filter(stroke => stroke.strokeStyle === '#00FFFF')).toHaveLength(3);
+    expect(mesh.filter(stroke => stroke.strokeStyle === '#00FFFF')).toHaveLength(5);
     expect(mesh.every(stroke => stroke.dash.length > 0)).toBe(true);
     expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#00AA00')).toBe(false);
     expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#123456')).toBe(false);
   });
 
-  it('keeps a uniform first-series wireframe as one path per source-grid line', () => {
+  it('keeps a uniform first-series wireframe on the source grid and contours', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, wireframeSurfaceModel({
       valMax: 20,
@@ -16898,7 +16930,7 @@ describe('surface contour charts', () => {
     }), RECT, 1);
 
     expect(rec.strokeDetails.filter(stroke => stroke.strokeStyle === '#AA0000'))
-      .toHaveLength(4);
+      .toHaveLength(6);
     expect(rec.strokeDetails.some(stroke => stroke.strokeStyle === '#00AA00')).toBe(false);
   });
 
@@ -16930,7 +16962,7 @@ describe('surface contour charts', () => {
     expect(rec.strokeDetails.filter(stroke => stroke.strokeStyle === '[object Object]'))
       .toHaveLength(3);
     expect(rec.strokeDetails.filter(stroke => stroke.strokeStyle === '#00FFFF'))
-      .toHaveLength(3);
+      .toHaveLength(5);
   });
 
   it('keeps first-series no-line and direct band no-line authoritative per band', () => {

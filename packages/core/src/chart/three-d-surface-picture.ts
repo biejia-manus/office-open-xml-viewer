@@ -57,15 +57,22 @@ function screenAlignedFace(
   return [top[0].scenePoint, top[1].scenePoint, bottom[1].scenePoint, bottom[0].scenePoint];
 }
 
-function surfacePictureSceneFace(
+export function chartThreeDSurfacePictureSceneFace(
   geometry: ChartThreeDSurfaceGeometry,
+  kind: ChartThreeDSurfaceKind,
   faceIndex: number,
   project: (point: ThreeDScenePoint) => SurfacePicturePoint,
 ): [ThreeDScenePoint, ThreeDScenePoint, ThreeDScenePoint, ThreeDScenePoint] | null {
   if (geometry.thickness === 0 && faceIndex === 0) {
     return [geometry.inner[3], geometry.inner[2], geometry.inner[1], geometry.inner[0]];
   }
-  return screenAlignedFace(geometry.faces[faceIndex] ?? [], project);
+  const aligned = screenAlignedFace(geometry.faces[faceIndex] ?? [], project);
+  if (!aligned || kind !== 'backWall' || faceIndex !== 4) return aligned;
+  // Office maps the back-wall slab's top joining face from its left-back
+  // scene corner, whereas the generic screen-upright ordering starts at the
+  // following corner and rotates the texture by one quadrant. Other back-wall
+  // faces and every floor/side-wall face retain the generic ordering.
+  return [aligned[1], aligned[2], aligned[3], aligned[0]];
 }
 
 /** Office plain-stack observation: derive one repetition height from the
@@ -165,7 +172,7 @@ export function paintChartThreeDSurfacePicture(
     let hasFace = false;
     for (const faceIndex of visibleFaceIndices) {
       if (!surfacePictureFaceIsEnabled(plan, faceIndex)) continue;
-      const face = surfacePictureSceneFace(geometry, faceIndex, project);
+      const face = chartThreeDSurfacePictureSceneFace(geometry, kind, faceIndex, project);
       if (!face) continue;
       const repetitions = surfacePictureFaceUsesStackedMapping(plan, faceIndex)
         ? Math.ceil(1 / stackFraction)
@@ -185,10 +192,19 @@ export function paintChartThreeDSurfacePicture(
     let hasFace = false;
     for (const faceIndex of visibleFaceIndices) {
       if (!surfacePictureFaceIsEnabled(plan, faceIndex)) continue;
-      const face = surfacePictureSceneFace(geometry, faceIndex, project);
+      const face = chartThreeDSurfacePictureSceneFace(geometry, kind, faceIndex, project);
       if (!face) continue;
-      const width = sceneMetricDistance(face[0], face[1], geometry.modelDepth);
-      const height = sceneMetricDistance(face[0], face[3], geometry.modelDepth);
+      const projected = face.map(project);
+      // A DrawingML tile's DPI-scaled natural size is a device-space measure.
+      // Back-wall tiles therefore use the projected face dimensions; using
+      // the model-space dimensions and projecting the completed tile canvas
+      // shrinks every tile a second time under perspective.
+      const width = kind === 'backWall'
+        ? Math.hypot(projected[0].x - projected[1].x, projected[0].y - projected[1].y)
+        : sceneMetricDistance(face[0], face[1], geometry.modelDepth);
+      const height = kind === 'backWall'
+        ? Math.hypot(projected[0].x - projected[3].x, projected[0].y - projected[3].y)
+        : sceneMetricDistance(face[0], face[3], geometry.modelDepth);
       if (!(width > 0) || !(height > 0)) continue;
       const origin = chartImageTileOrigin(tileMetrics, width, height);
       const firstColumn = Math.floor(-origin.x / tileMetrics.tileW);
@@ -233,10 +249,10 @@ export function paintChartThreeDSurfacePicture(
   if (plan.mode === 'stretch') {
     for (const faceIndex of visibleFaceIndices) {
       if (!surfacePictureFaceIsEnabled(plan, faceIndex)) continue;
-      const aligned = screenAlignedFace(geometry.faces[faceIndex] ?? [], project);
+      const sceneFace = chartThreeDSurfacePictureSceneFace(geometry, kind, faceIndex, project);
       const quad = geometry.thickness === 0 && faceIndex === 0
         ? fullQuad
-        : aligned?.map(project) as SurfacePictureQuad | undefined;
+        : sceneFace?.map(project) as SurfacePictureQuad | undefined;
       if (!quad) continue;
       const fillDestination = relativeRectQuad(quad, fill.fillRect);
       if (!fillDestination) continue;
@@ -261,7 +277,7 @@ export function paintChartThreeDSurfacePicture(
   } else {
     for (const faceIndex of visibleFaceIndices) {
       if (!surfacePictureFaceIsEnabled(plan, faceIndex)) continue;
-      const face = surfacePictureSceneFace(geometry, faceIndex, project);
+      const face = chartThreeDSurfacePictureSceneFace(geometry, kind, faceIndex, project);
       if (!face) continue;
       const quad = face.map(project) as SurfacePictureQuad;
       ctx.save();

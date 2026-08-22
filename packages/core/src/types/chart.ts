@@ -162,6 +162,8 @@ export interface ChartSeries {
    * showMarker is true).
    */
   markerSymbol?: string | null;
+  /** Host-resolved automatic scatter marker when no `<c:marker>` symbol is authored. */
+  automaticMarkerSymbol?: string | null;
   /**
    * `<c:marker><c:size val>` (ECMA-376 §21.2.2.34) — marker side length in
    * points. null = renderer default (~5 pt).
@@ -705,6 +707,8 @@ export interface ChartDataTable {
   fontColor?: string | null;
   fontBold?: boolean | null;
   fontItalic?: boolean | null;
+  /** Direct table-frame solid fill, painted behind all cells. */
+  fillColor?: string | null;
   lineColor?: string | null;
   lineWidthEmu?: number | null;
   lineDash?: string | null;

@@ -361,6 +361,10 @@ pub struct ChartDataTable {
     pub font_bold: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_italic: Option<bool>,
+    /// Direct `<c:dTable><c:spPr>` solid fill. The data-table frame is one
+    /// DrawingML shape, so Office paints this behind every header/value cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1482,6 +1486,11 @@ pub struct ChartSeries {
     pub cat_format_codes: Option<Vec<Option<String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marker_symbol: Option<String>,
+    /// Application automatic scatter marker when the series omits a direct
+    /// `<c:marker><c:symbol>`. Kept separate from `marker_symbol` so source
+    /// filtering can distinguish automatic style from authored formatting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_marker_symbol: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marker_size: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2527,6 +2536,13 @@ pub trait ColorResolver {
         None
     }
 
+    /// Plot-area background to use when `<c:plotArea><c:spPr>` omits a fill
+    /// choice. Excel supplies an automatic opaque-white plot-area fill while
+    /// PowerPoint/Word hosts keep their existing transparent behavior.
+    fn default_plot_area_bg(&self) -> Option<String> {
+        None
+    }
+
     /// Whether this host applies Excel's observed implicit outline-only style
     /// to a narrowly-defined, otherwise-unformatted negative column series.
     /// This is not an OOXML default: hosts opt in only after their own Office
@@ -2755,6 +2771,10 @@ impl ColorResolver for ChartMappedColorResolver<'_> {
 
     fn default_chart_bg(&self) -> Option<String> {
         self.base.default_chart_bg()
+    }
+
+    fn default_plot_area_bg(&self) -> Option<String> {
+        self.base.default_plot_area_bg()
     }
 
     fn implicit_outline_only_negative_column_style(&self) -> bool {
@@ -3766,7 +3786,11 @@ pub fn extract_axis_title_with_props_resolved(
             Some(text),
             extract_axis_title_size(axis_node),
             extract_axis_title_bold(axis_node),
-            extract_axis_title_color(axis_node, resolver),
+            // The axis `txPr` is the inherited text default for both its tick
+            // labels and an axis title whose own rich-text runs omit color.
+            // Direct title run/default properties remain more specific.
+            extract_axis_title_color(axis_node, resolver)
+                .or_else(|| extract_axis_tick_label_color(axis_node, resolver)),
         ),
     }
 }
@@ -3968,10 +3992,8 @@ pub fn extract_legend_font_color(root: Node, resolver: &dyn ColorResolver) -> Op
 /// Parse the optional classic-chart data table (`CT_DTable`). Each border/key
 /// child is a CT_Boolean: a present bare element means true, while omission
 /// means that feature is not requested. Text and line properties use the same
-/// DrawingML grammar as the surrounding chart. Office applies `spPr/a:ln` to
-/// the table grid but does not paint an authored `spPr` fill behind the cells;
-/// preserve the effective grid stroke rather than treating the table as a
-/// generic filled shape.
+/// DrawingML grammar as the surrounding chart. The table `spPr` applies both
+/// its shape fill behind the full table and its line style to the table grid.
 pub fn extract_chart_data_table(
     plot_area: Node,
     resolver: &dyn ColorResolver,
@@ -3989,6 +4011,7 @@ pub fn extract_chart_data_table(
                 .flatten()
         })
     });
+    let fill_color = child(table, "spPr").and_then(|shape| resolver.resolve_shape_fill(shape));
     let (line_color, line_width_emu, line_hidden) = extract_sp_pr_ln_style(table, resolver);
     let line_dash = child(table, "spPr")
         .and_then(|shape| child(shape, "ln"))
@@ -4006,6 +4029,7 @@ pub fn extract_chart_data_table(
         font_color,
         font_bold: text_props.and_then(|props| chart_text_bool_attr(props, "b")),
         font_italic: text_props.and_then(|props| chart_text_bool_attr(props, "i")),
+        fill_color,
         line_color,
         line_width_emu,
         line_dash,
@@ -7049,6 +7073,7 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
         use_secondary_axis: None,
         show_marker: None,
         marker_symbol: None,
+        automatic_marker_symbol: None,
         marker_size: None,
         marker_fill: None,
         marker_fill_paint: None,
@@ -10968,7 +10993,11 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         image_resolver,
         ChartImageSource::Chart,
     );
-    let plot_area_bg = plot_area_fill_style.color;
+    let plot_area_bg = if plot_area_fill_style.paint_authored == Some(true) {
+        plot_area_fill_style.color.clone()
+    } else {
+        color_resolver.default_plot_area_bg()
+    };
     let plot_area_line_style = extract_direct_shape_line(plot_area, color_resolver);
     let data_table = extract_chart_data_table(plot_area, color_resolver);
 
@@ -11915,6 +11944,12 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 (None, true) => true,
                 _ => chart_marker_default,
             };
+            let automatic_marker_symbol = (chart_type == "scatter" && marker_symbol.is_none())
+                .then(|| {
+                    const SYMBOLS: [&str; 6] =
+                        ["diamond", "square", "triangle", "x", "star", "circle"];
+                    SYMBOLS[series_idx % SYMBOLS.len()].to_string()
+                });
 
             // Series-level `<c:dLbls>` defaults + per-idx custom labels, and
             // error bars (§21.2.2.20, resolved to absolute plus/minus arrays).
@@ -12137,6 +12172,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 // markers, dLbls and errBars from the one parse path.
                 show_marker: Some(show_marker),
                 marker_symbol,
+                automatic_marker_symbol,
                 marker_size,
                 marker_fill,
                 marker_fill_paint,
@@ -13193,6 +13229,7 @@ mod tests {
                 cat_format_builtin_id: None,
                 cat_format_codes: None,
                 marker_symbol: None,
+                automatic_marker_symbol: None,
                 marker_size: None,
                 marker_fill: None,
                 marker_fill_paint: None,
@@ -14261,6 +14298,19 @@ Subtitle</a:t></a:r></a:p>
             extract_axis_title_with_props_resolved(d.root_element(), &StubResolver);
         assert_eq!(text.as_deref(), Some("Value"));
         assert_eq!(color.as_deref(), Some("accent1"));
+    }
+
+    #[test]
+    fn axis_title_inherits_the_axis_text_color_when_its_runs_omit_color() {
+        let xml = r#"<c:valAx xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+            <c:axPos val="l"/>
+            <c:title><c:tx><c:rich><a:p><a:r><a:t>Values</a:t></a:r></a:p></c:rich></c:tx></c:title>
+            <c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:defRPr></a:pPr></a:p></c:txPr>
+        </c:valAx>"#;
+        let d = root_of(xml);
+        let (_text, _size, _bold, color) =
+            extract_axis_title_with_props_resolved(d.root_element(), &StubResolver);
+        assert_eq!(color.as_deref(), Some("000000"));
     }
 
     #[test]
@@ -15489,6 +15539,10 @@ Subtitle</a:t></a:r></a:p>
         fn default_chart_bg(&self) -> Option<String> {
             Some("FFFFFF".to_string())
         }
+
+        fn default_plot_area_bg(&self) -> Option<String> {
+            Some("FFFFFF".to_string())
+        }
     }
 
     struct FormatSchemeFixtureResolver {
@@ -15624,6 +15678,38 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(parsed.chart_bg, None);
         assert_eq!(parsed.chart_fill_hidden, Some(true));
         assert_eq!(parsed.chart_fill_paint_authored, Some(true));
+    }
+
+    #[test]
+    fn plot_area_omitted_fill_uses_the_host_default_but_no_fill_remains_explicit() {
+        let chart_xml = |plot_shape_properties: &str| {
+            format!(
+                r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}">
+              <c:chart><c:plotArea>
+                <c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/>
+                  <c:cat><c:strLit><c:pt idx="0"><c:v>A</c:v></c:pt></c:strLit></c:cat>
+                  <c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val>
+                </c:ser></c:barChart>{plot_shape_properties}
+              </c:plotArea></c:chart>
+            </c:chartSpace>"#
+            )
+        };
+        let omitted = chart_xml("");
+        let parsed = parse_chart_part(
+            chart_space_of(&omitted).root_element(),
+            &WhiteChartFixtureResolver,
+        )
+        .expect("plot-area chart parses");
+        assert_eq!(parsed.plot_area_bg.as_deref(), Some("FFFFFF"));
+
+        let no_fill = chart_xml("<c:spPr><a:noFill/></c:spPr>");
+        let parsed = parse_chart_part(
+            chart_space_of(&no_fill).root_element(),
+            &WhiteChartFixtureResolver,
+        )
+        .expect("noFill plot-area chart parses");
+        assert_eq!(parsed.plot_area_bg, None);
+        assert_eq!(parsed.plot_area_fill_hidden, Some(true));
     }
 
     #[test]
@@ -16507,7 +16593,7 @@ Subtitle</a:t></a:r></a:p>
                   <c:showVertBorder val="0"/>
                   <c:showOutline val="1"/>
                   <c:showKeys val="1"/>
-                  <c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill><a:prstDash val="dash"/></a:ln></c:spPr>
+                  <c:spPr><a:solidFill><a:srgbClr val="FFF2CC"/></a:solidFill><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill><a:prstDash val="dash"/></a:ln></c:spPr>
                   <c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1000" b="1" i="1"><a:solidFill><a:srgbClr val="112233"/></a:solidFill><a:latin typeface="Aptos"/></a:defRPr></a:pPr></a:p></c:txPr>
                 </c:dTable>
               </c:plotArea></c:chart>
@@ -16525,6 +16611,7 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(table.font_color.as_deref(), Some("112233"));
         assert_eq!(table.font_bold, Some(true));
         assert_eq!(table.font_italic, Some(true));
+        assert_eq!(table.fill_color.as_deref(), Some("FFF2CC"));
         assert_eq!(table.line_color.as_deref(), Some("445566"));
         assert_eq!(table.line_width_emu, Some(12700));
         assert_eq!(table.line_dash.as_deref(), Some("dash"));
@@ -16899,6 +16986,15 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(
             m.series[1].line_hidden, None,
             "a series with a solid line must NOT set line_hidden"
+        );
+        assert_eq!(m.series[0].marker_symbol, None);
+        assert_eq!(
+            m.series[0].automatic_marker_symbol.as_deref(),
+            Some("diamond")
+        );
+        assert_eq!(
+            m.series[1].automatic_marker_symbol.as_deref(),
+            Some("square")
         );
     }
 

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ImageFill } from '../types/common.js';
-import { paintChartThreeDSurfacePicture } from './three-d-surface-picture.js';
+import {
+  chartThreeDSurfacePictureSceneFace,
+  paintChartThreeDSurfacePicture,
+} from './three-d-surface-picture.js';
 
 function paint(
   fill: ImageFill,
@@ -124,6 +127,29 @@ const imageFill = {
 };
 
 describe('CT_Surface stretch source and destination rectangles', () => {
+  it('rotates only the positive-thickness back-wall top face to Office texture order', () => {
+    const topFace = [
+      { x: 0, y: 0, depth: 0 },
+      { x: 1, y: 0, depth: 0 },
+      { x: 1, y: 1, depth: 0 },
+      { x: 0, y: 1, depth: 0 },
+    ];
+    const geometry = {
+      thickness: 1,
+      inner: topFace,
+      outer: topFace,
+      faces: [[], [], [], [], topFace, []],
+      pictureStackAspect: 1,
+      modelDepth: 1,
+    };
+    const identity = (point: { x: number; y: number }) => point;
+
+    expect(chartThreeDSurfacePictureSceneFace(geometry, 'backWall', 4, identity))
+      .toEqual([topFace[1], topFace[2], topFace[3], topFace[0]]);
+    expect(chartThreeDSurfacePictureSceneFace(geometry, 'sideWall', 4, identity))
+      .toEqual(topFace);
+  });
+
   it('maps the complete source into the authored projected fillRect', () => {
     const { draws, transforms } = paint({
       ...imageFill,
@@ -276,6 +302,27 @@ describe('CT_Surface plain stacked pictures', () => {
     const exceeded = paint(imageFill, { ...common, imageWidth: 400 * 1_365 });
     expect(exceeded.painted).toBe(false);
     expect(exceeded.draws).toHaveLength(0);
+  });
+});
+
+describe('CT_Surface DrawingML tiles', () => {
+  it('sizes back-wall tiles against the projected face instead of shrinking them twice', () => {
+    const result = paint({
+      ...imageFill,
+      stretch: false,
+      dpi: 96,
+      tile: { tx: 0, ty: 0, sx: 1, sy: 1, flip: 'none', algn: 'ctr' },
+    }, {
+      imageWidth: 100,
+      imageHeight: 100,
+      faceWidth: 100,
+      faceHeight: 100,
+      projectXScale: 0.5,
+    });
+    const projectedCanvas = result.draws
+      .map(call => call[0] as { width?: number })
+      .find(source => source && source !== result.sourceDraws[0]?.[0] && source.width != null);
+    expect(projectedCanvas?.width).toBe(50);
   });
 });
 

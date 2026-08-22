@@ -126,6 +126,8 @@ export interface ChartDataTable {
     fontColor?: string | null;
     fontBold?: boolean | null;
     fontItalic?: boolean | null;
+    /** Direct table-frame solid fill, painted behind all cells. */
+    fillColor?: string | null;
     lineColor?: string | null;
     lineWidthEmu?: number | null;
     lineDash?: string | null;
@@ -629,6 +631,8 @@ export interface ChartSeries {
     catFormatBuiltinId?: number | null;
     catFormatCodes?: (string | null)[] | null;
     markerSymbol?: string | null;
+    /** Host-resolved automatic scatter marker when no `<c:marker>` symbol is authored. */
+    automaticMarkerSymbol?: string | null;
     markerSize?: number | null;
     markerFill?: string | null;
     markerFillPaint?: Fill | null;
