@@ -1867,6 +1867,11 @@ export interface Worksheet {
         max: number;
         width: number;
     }>;
+    colStyleRanges?: Array<{
+        min: number;
+        max: number;
+        styleIndex: number;
+    }>;
     rowHeights: Record<number, number>;
     colOutlineLevels?: Record<number, number>;
     colCollapsed?: Record<number, boolean>;
