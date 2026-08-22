@@ -361,8 +361,8 @@ pub struct ChartDataTable {
     pub font_bold: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_italic: Option<bool>,
-    /// Direct `<c:dTable><c:spPr>` solid fill. The data-table frame is one
-    /// DrawingML shape, so Office paints this behind every header/value cell.
+    /// Direct `<c:dTable><c:spPr>` solid fill. Desktop Excel scopes this to
+    /// the generated category/value text boxes rather than the table frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

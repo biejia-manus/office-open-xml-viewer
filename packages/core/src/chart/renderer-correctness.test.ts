@@ -11974,7 +11974,15 @@ describe('classic chart data table (CT_DTable)', () => {
     expect(text).toContain('Feb-25');
     expect(rec.strokeRects.some(rect => rect.ss === '#445566')).toBe(true);
     expect(rec.strokeRects.find(rect => rect.ss === '#445566')?.dash.length).toBeGreaterThan(0);
-    expect(rec.rects.some(rect => rect.fs === '#FFF2CC')).toBe(true);
+    const textBackgrounds = rec.rects.filter(rect => rect.fs === '#FFF2CC');
+    expect(textBackgrounds).toHaveLength(6); // two category labels plus four values
+    expect(textBackgrounds.every(rect => rect.w < RECT.w / 4)).toBe(true);
+    expect(textBackgrounds.every(rect => rect.h === 12)).toBe(true);
+    const sales = rec.texts.find(call => call.text === 'Sales') as NonNullable<typeof rec.texts[number]>;
+    expect(textBackgrounds.some(rect =>
+      rect.x <= sales.x && rect.x + rect.w >= sales.x
+      && rect.y <= sales.y && rect.y + rect.h >= sales.y,
+    )).toBe(false);
     expect(rec.arcs.length).toBeGreaterThan(0); // line-series key marker
   });
 

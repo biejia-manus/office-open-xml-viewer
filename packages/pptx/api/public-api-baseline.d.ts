@@ -126,7 +126,7 @@ export interface ChartDataTable {
     fontColor?: string | null;
     fontBold?: boolean | null;
     fontItalic?: boolean | null;
-    /** Direct table-frame solid fill, painted behind all cells. */
+    /** Direct `<c:dTable><c:spPr>` solid fill, painted behind body text boxes. */
     fillColor?: string | null;
     lineColor?: string | null;
     lineWidthEmu?: number | null;
