@@ -3,6 +3,7 @@
 // module unless the caller imports @silurus/ooxml/chart-ex.
 
 import type {
+  ChartDataPointOverride,
   ChartModel,
   ChartRect,
   ChartSeries,
@@ -77,6 +78,68 @@ import {
   type ChartExStyle,
   type SunburstNode,
 } from './renderer.js';
+
+function chartExStyleAuthorsFill(style: ChartExStyle | null | undefined): boolean {
+  if (!style || style.fillNoStyle === true) return false;
+  return style.fillPaintAuthored === true
+    || style.fillHidden === true
+    || style.fillColors?.some(color => color != null) === true
+    || style.fillPaints?.some(paint => paint != null) === true;
+}
+
+function waterfallPointPaint(
+  chart: ChartModel,
+  point: ChartDataPointOverride | undefined,
+  series: ChartSeries | undefined,
+  semanticIndex: number,
+): Fill | null {
+  const pointAuthorsFill = point?.fillHidden === true
+    || point?.color != null
+    || chartExStyleAuthorsFill(point?.chartexStyle);
+  if (pointAuthorsFill) {
+    const pointStyle = point?.fillHidden === true
+      ? { ...point.chartexStyle, fillHidden: true, fillPaintAuthored: true }
+      : point?.chartexStyle;
+    return chartExMarkerPaint(
+      chart, semanticIndex, 3, pointStyle, point?.color,
+      // Prevent an authored-but-unresolved point paint from reviving a lower
+      // Chart Style or semantic fill.
+      { fillHidden: true, fillPaintAuthored: true },
+    );
+  }
+  if (series?.chartexStyle?.fillPaintAuthored === true) {
+    return chartExMarkerPaint(
+      chart, semanticIndex, 3, series.chartexStyle, series.color,
+      // An explicitly authored CT_Series fill choice owns unresolved/noFill;
+      // the legacy fillHidden-only public shape lacks that provenance and is
+      // intentionally handled by chartExDataPointPaint below.
+      { fillHidden: true, fillPaintAuthored: true },
+    );
+  }
+  // CT_Series.spPr formats the series carrier. ChartEx semantic data points
+  // keep their dataPoint role when that carrier has noFill, while a positive
+  // series paint still wins; chartExDataPointPaint owns that distinction.
+  return chartExDataPointPaint(
+    chart, semanticIndex, 3, series?.chartexStyle, series?.color,
+  );
+}
+
+function waterfallPointAuthorsLine(point: ChartDataPointOverride | undefined): boolean {
+  const style = point?.chartexStyle;
+  return point?.lineHidden != null
+    || point?.lineColor != null
+    || point?.lineWidthEmu != null
+    || point?.lineDash != null
+    || style?.linePaintAuthored === true
+    || style?.lineHidden != null
+    || style?.lineColors?.some(color => color != null) === true
+    || style?.linePaints?.some(paint => paint != null) === true
+    || style?.lineWidthEmu != null
+    || style?.lineDash != null
+    || style?.lineCustomDash != null
+    || style?.lineCap != null
+    || style?.lineJoin != null;
+}
 
 function renderHistogramChart(
   ctx: CanvasRenderingContext2D,
@@ -250,13 +313,14 @@ function renderWaterfallChart(
 
   const series = chart.series[0];
   const labelOverrides = indexPointOverrides(series?.dataLabelOverrides);
+  const pointOverrides = indexPointOverrides(series?.dataPointOverrides);
   const localStyle = series?.chartexStyle;
   const colorPos = `#${series?.color ?? chartExDataPointFill(chart, 0, 3, localStyle)}`;
   const colorNeg = `#${chartExDataPointFill(chart, 1, 3, localStyle)}`;
   const colorSub = `#${chartExDataPointFill(chart, 2, 3, localStyle)}`;
-  const paintPos = chartExDataPointPaint(chart, 0, 3, localStyle, series?.color);
-  const paintNeg = chartExDataPointPaint(chart, 1, 3, localStyle);
-  const paintSub = chartExDataPointPaint(chart, 2, 3, localStyle);
+  const legendPaintPos = chartExDataPointPaint(chart, 0, 3, localStyle, series?.color);
+  const legendPaintNeg = chartExDataPointPaint(chart, 1, 3, localStyle);
+  const legendPaintSub = chartExDataPointPaint(chart, 2, 3, localStyle);
   const legendChart: ChartModel = {
     ...chart,
     chartType: 'clusteredBar',
@@ -410,19 +474,23 @@ function renderWaterfallChart(
     const yBot = Math.max(yOf(bar.start), yOf(bar.end));
     const bh = Math.max(1, yBot - yTop);
 
-    const paint = bar.isSub ? paintSub : bar.isPos ? paintPos : paintNeg;
-    const fallback = bar.isSub ? colorSub : bar.isPos ? colorPos : colorNeg;
+    const accentIndex = bar.isSub ? 2 : bar.isPos ? 0 : 1;
+    const point = pointOverrides.get(i);
+    const paint = waterfallPointPaint(chart, point, series, accentIndex);
+    const fallback = point?.color
+      ? `#${point.color}`
+      : bar.isSub ? colorSub : bar.isPos ? colorPos : colorNeg;
     if (bar.paintSlot && paint) {
       ctx.fillStyle = chartExFillStyle(ctx, paint, bx, yTop, barW, bh, fallback, shapeRotationDeg);
       ctx.fillRect(bx, yTop, barW, bh);
     }
-    const accentIndex = bar.isSub ? 2 : bar.isPos ? 0 : 1;
     const lineColor = chartExStyleColor(chart, chart.chartexDataPointStyle, 'line', accentIndex, 3);
+    const lineCarrier = waterfallPointAuthorsLine(point) ? point : series;
     if (bar.paintSlot && applyChartExSeriesLineStyle(
       ctx,
       chart,
       chart.chartexDataPointStyle,
-      series,
+      lineCarrier,
       accentIndex,
       3,
       lineColor ? `#${lineColor}` : fallback,
@@ -549,7 +617,8 @@ function renderWaterfallChart(
 
   drawLegendForLayout(
     ctx, legendChart, leg, x, y, w, h, px0, py0, pw, ph,
-    titleBand.bandH + 2, ptToPx, [paintPos, paintNeg, paintSub], shapeRotationDeg,
+    titleBand.bandH + 2, ptToPx,
+    [legendPaintPos, legendPaintNeg, legendPaintSub], shapeRotationDeg,
   );
 
   ctx.restore();
@@ -715,7 +784,10 @@ function renderParetoLineChart(
     source.values.length,
   );
   if (rejectOversizedCanvasChart(ctx, r, pointCount)) return;
-  const layout = planParetoLayout(source, chart.categories);
+  // A standalone `paretoLine` accumulates the authored sequence. Descending
+  // frequency sorting belongs to an owner-backed Pareto chart, where columns
+  // and their cumulative line are reordered together.
+  const layout = planParetoLayout(source, chart.categories, { sortDescending: false });
   if (layout.points.length === 0) return;
   const styleIndex = chartExSeriesFormatIndex(source, 0);
   const paretoLine = resolveChartExSeriesLineStyle(
@@ -837,6 +909,13 @@ function renderParetoChart(
 
 // ─── chartEx: box-and-whisker (CH15, MS 2014 chartex ext) ────────────────────
 
+// Application-defined defaults: the ChartEx schema does not encode these.
+// Keep them named and local to this family so they cannot silently affect the
+// specification-defined classic value-axis planner.
+const BOX_WHISKER_AUTO_INTERVAL_TARGET = 7;
+const BOX_WHISKER_AUTO_PADDING_RATIO = 0.05;
+const BOX_WHISKER_ZERO_ANCHOR_RATIO = 1.2;
+
 /** Compact omitted-axis policy observed in three independent Office vector
  * box/whisker outputs (small, ordinary, and wide numeric ranges). OOXML does
  * not define the automatic major unit. Office consistently chooses the nearest
@@ -857,12 +936,15 @@ function automaticBoxWhiskerAxis(
   const boundedMax = explicitMax ?? dataMax;
   const span = boundedMax - boundedMin;
   if (!(span > 0) || !Number.isFinite(span)) return null;
-  const majorUnit = niceStep(span, 7);
+  const majorUnit = niceStep(span, BOX_WHISKER_AUTO_INTERVAL_TARGET);
   if (!(majorUnit > 0) || !Number.isFinite(majorUnit)) return null;
-  let paddedMin = dataMin - span * 0.05;
-  let paddedMax = dataMax + span * 0.05;
-  if (dataMin >= 0 && (dataMin === 0 || dataMax > 1.2 * dataMin)) paddedMin = 0;
-  if (dataMax <= 0 && (dataMax === 0 || Math.abs(dataMin) > 1.2 * Math.abs(dataMax))) {
+  let paddedMin = dataMin - span * BOX_WHISKER_AUTO_PADDING_RATIO;
+  let paddedMax = dataMax + span * BOX_WHISKER_AUTO_PADDING_RATIO;
+  if (dataMin >= 0
+    && (dataMin === 0 || dataMax > BOX_WHISKER_ZERO_ANCHOR_RATIO * dataMin)) paddedMin = 0;
+  if (dataMax <= 0
+    && (dataMax === 0
+      || Math.abs(dataMin) > BOX_WHISKER_ZERO_ANCHOR_RATIO * Math.abs(dataMax))) {
     paddedMax = 0;
   }
   const min = explicitMin ?? Math.floor(paddedMin / majorUnit) * majorUnit;
@@ -1338,7 +1420,10 @@ function renderBoxWhiskerChart(
       }
 
       // Interior sample points. Excel overlays the raw non-outlier values on
-      // the box/whiskers when cx:visibility@nonoutliers is enabled.
+      // the box/whiskers when cx:visibility@nonoutliers is enabled. Their
+      // outline follows the owning box series, not the generic linked marker
+      // role (which may carry a contrasting line intended for ordinary chart
+      // markers).
       if (s.showNonoutliers) {
         const pointSymbol = chart.chartStyleMarkerSymbol ?? chart.chartexMarkerSymbol ?? 'circle';
         for (const point of stats.inner) {
@@ -1352,7 +1437,7 @@ function renderBoxWhiskerChart(
             pointSymbol,
             observationMarkerSizePt,
             markerFillPaint ? (markerFill ? `#${markerFill}` : fill) : 'transparent',
-            markerLineVisible ? (markerEdge ? `#${markerEdge}` : edge) : null,
+            markerLineVisible ? edge : null,
             ptToPx,
             ctx.lineWidth,
             markerFillPaint,
@@ -1387,7 +1472,7 @@ function renderBoxWhiskerChart(
             pointSymbol,
             observationMarkerSizePt,
             markerFillPaint ? (markerFill ? `#${markerFill}` : fill) : 'transparent',
-            markerLineVisible ? (markerEdge ? `#${markerEdge}` : edge) : null,
+            markerLineVisible ? edge : null,
             ptToPx,
             ctx.lineWidth,
             markerFillPaint,
@@ -1451,6 +1536,10 @@ function renderBoxWhiskerChart(
   );
 }
 
+/** Application-defined automatic ChartEx sunburst center-hole ratio observed
+ * across the current desktop-Office vector corpus. It is intentionally local
+ * to sunburst and never reused as a generic radial-chart default. */
+const SUNBURST_AUTOMATIC_HOLE_RATIO = 0.18;
 
 /**
  * Render a chartEx sunburst (MS 2014 chartex extension — no ECMA-376 section;
@@ -1537,7 +1626,7 @@ function renderSunburstChart(
   const ringCount = maxDepth + 1;
   // Small center hole (Office draws a modest hole, ~18% of the outer radius);
   // the remaining band is split evenly across the rings.
-  const innerR = outerR * 0.18;
+  const innerR = outerR * SUNBURST_AUTOMATIC_HOLE_RATIO;
   const ringBand = (outerR - innerR) / ringCount;
 
   const branchColor = (bi: number): string => {
@@ -1901,6 +1990,9 @@ function renderTreemapChart(
         chart, series, node.labelIndex, node.label, node.value,
         { visible: parentMode !== 'none', showVal: false, showCatName: true },
         labelOverrides,
+        // Excel treats overlapping/banner entries as hierarchy captions. The
+        // series value flag applies to leaf data points, not aggregate parents.
+        true,
       );
       const showParent = parentLabel != null
         && (parentMode !== 'overlapping' || node.depth === 0);

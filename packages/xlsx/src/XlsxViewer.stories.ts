@@ -3,6 +3,7 @@ import { XlsxViewer } from './viewer';
 import { math } from '../../../src/math';
 import { threeD } from '../../../src/three-d';
 import { regionMap } from '../../../src/region-map';
+import { chartEx } from '../../../src/chart-ex';
 
 type Args = {
   scale: number;
@@ -56,6 +57,7 @@ export function buildViewerUI(
     math,
     threeD,
     regionMap,
+    chartEx,
     onReady: (names) => {
       sheetNames = names;
       status.textContent = `Loaded — ${names.length} sheet(s)`;
@@ -123,6 +125,7 @@ function renderFileUpload(args: Args, mode: 'main' | 'worker'): HTMLElement {
         math,
         threeD,
         regionMap,
+        chartEx,
         onReady: (names) => { sheetNames = names; status.textContent = `${names.length} sheet(s)`; },
         onSheetChange: (idx, total) => { status.textContent = `Sheet ${idx + 1} / ${total}: ${sheetNames[idx] ?? ''}`; },
         onError: (err) => { status.textContent = `Error: ${err.message}`; },

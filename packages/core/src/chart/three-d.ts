@@ -154,7 +154,7 @@ export interface ChartThreeDProjectionOptions {
    */
   perspectiveTangentGain?: number;
   /** Model-space scene height as a fraction of scene width when the chart has
-   * no authored hPercent. Radial solids use their actual shallow Y extent
+   * no authored hPercent. Callers use an Office-observed family boundary
    * instead of fitting an otherwise empty full-height cartesian cuboid. */
   sceneHeightScale?: number;
 }
@@ -273,10 +273,17 @@ export function planChartThreeDSurfaceGeometry(
     projection.projectUnbounded(xMax, topY, farDepth),
     projection.projectUnbounded(xMin, floorY, farDepth),
   ];
-  const stackReferenceWidth = Math.hypot(
-    stackReference[0].x - stackReference[1].x,
-    stackReference[0].y - stackReference[1].y,
+  // Office sizes one plain-stack repetition from the complete projected plot
+  // volume width, then anchors that repetition on the selected floor/wall
+  // face. The near depth edge can extend beyond the back-wall edge under
+  // perspective, so measuring only the far face makes the repeated picture
+  // too short and exposes source rows that Office clips above the wall.
+  const projectedVolumeX = [xMin, xMax].flatMap(x =>
+    [topY, floorY].flatMap(y =>
+      [nearDepth, farDepth].map(depth => projection.projectUnbounded(x, y, depth).x)
+    )
   );
+  const stackReferenceWidth = Math.max(...projectedVolumeX) - Math.min(...projectedVolumeX);
   const stackReferenceHeight = Math.hypot(
     stackReference[0].x - stackReference[2].x,
     stackReference[0].y - stackReference[2].y,
@@ -484,7 +491,8 @@ export function planChartThreeDProjection(
   const depthPercent = clamp(finiteOr(view.depthPercent, 100), 20, 2000);
   const perspective = clamp(finiteOr(view.perspective, 30), 0, 240);
   const gapDepth = clamp(finiteOr(view.gapDepthPercent, 150), 0, 500);
-  const authoredHeightPercent = view.heightPercent != null
+  const heightPercentAuthored = view.heightPercentAuthored ?? view.heightPercent != null;
+  const authoredHeightPercent = heightPercentAuthored && view.heightPercent != null
     && Number.isFinite(view.heightPercent)
     ? clamp(view.heightPercent, 5, 500)
     : null;

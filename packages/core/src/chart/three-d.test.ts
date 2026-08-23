@@ -821,6 +821,43 @@ describe('planChartThreeDProjection', () => {
     }
   });
 
+  it('keeps a parser default hPercent in Office automatic-scaling mode', () => {
+    const omitted = planChartThreeDProjection({}, PLOT);
+    const parserDefault = planChartThreeDProjection({
+      heightPercent: 100,
+      heightPercentAuthored: false,
+    }, PLOT);
+    const authored = planChartThreeDProjection({
+      heightPercent: 100,
+      heightPercentAuthored: true,
+    }, PLOT);
+    expect(parserDefault?.scene).toEqual(omitted?.scene);
+    expect((parserDefault?.scene.h ?? 0) / (parserDefault?.scene.w ?? 1))
+      .toBeCloseTo(PLOT.h / PLOT.w, 12);
+    expect((authored?.scene.h ?? 0) / (authored?.scene.w ?? 1)).toBeCloseTo(1, 12);
+  });
+
+  it('uses the observed automatic line/area height when hPercent is omitted', () => {
+    const plot = { x: 0, y: 0, w: 738, h: 439 };
+    const view = {
+      rotationX: 20,
+      rotationY: 20,
+      depthPercent: 100,
+      perspective: 30,
+    };
+    const automatic = planChartThreeDProjection(view, plot, {
+      sceneDepthScale: 0.4,
+      sceneHeightScale: 1 / 3,
+    });
+    if (!automatic) throw new Error('projection not planned');
+    const automaticAspect = planChartThreeDSurfaceGeometry(automatic, 'backWall', 0)
+      .pictureStackAspect ?? 0;
+    expect(automatic.scene.h / automatic.scene.w).toBeCloseTo(1 / 3, 12);
+    // The 2:1 source occupies two wall heights: its upper half is clipped,
+    // while the observed 8:1 control repeats twice over the same wall.
+    expect(automaticAspect / 2).toBeCloseTo(2, 2);
+  });
+
   it('keeps depthPercent linear in model space and responsive after refitting', () => {
     const defaultDepth = planChartThreeDProjection({ depthPercent: 100 }, PLOT);
     const maximumDepth = planChartThreeDProjection({ depthPercent: 2000 }, PLOT);

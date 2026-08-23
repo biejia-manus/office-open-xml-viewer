@@ -4,6 +4,43 @@ import { announcements } from './lib/announcements';
 
 const articlePage = readFileSync(new URL('./pages/announcements/[slug].astro', import.meta.url), 'utf8');
 
+describe('v0.81 ChartEx migration guide', () => {
+  const announcement = announcements.find((item) => item.slug === 'v081-chartex-opt-in');
+
+  it('makes the required migration decision explicit', () => {
+    expect(announcement).toMatchObject({
+      label: 'Upcoming release',
+      version: 'v0.81.0',
+    });
+    expect(announcement?.sections[0]).toMatchObject({ title: 'In short', kind: 'summary' });
+
+    const text = announcement?.sections.flatMap((section) => [
+      section.title,
+      ...(section.modules ?? []),
+      ...section.paragraphs,
+      ...(section.bullets ?? []),
+      ...(section.examples?.map(({ code }) => code) ?? []),
+    ]).join('\n') ?? '';
+
+    expect(text).toContain('Classic DrawingML 2-D charts require no application change');
+    expect(text).toContain("@silurus/ooxml/chart-ex");
+    expect(text).toContain('chartEx');
+    expect(text).toContain('unsupported-chart placeholder');
+  });
+
+  it('documents the main-mode size boundary and the worker trade-off', () => {
+    const text = announcement?.sections.flatMap((section) => [
+      ...section.paragraphs,
+      ...(section.bullets ?? []),
+    ]).join('\n') ?? '';
+
+    expect(text).toContain('38 KB raw');
+    expect(text).toContain('12 KB gzip');
+    expect(text).toContain('total release delta');
+    expect(text).toContain('self-contained render-worker asset');
+  });
+});
+
 describe('v0.80 worker rendering announcement', () => {
   const announcement = announcements.find((item) => item.slug === 'v080-worker-rendering');
 
