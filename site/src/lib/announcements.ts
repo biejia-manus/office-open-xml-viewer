@@ -61,7 +61,7 @@ export const announcements: readonly Announcement[] = [
         ],
       },
       {
-        title: 'Why the boundary changed',
+        title: 'The new module boundary',
         modules: ['@silurus/ooxml/chart-ex', '@silurus/ooxml-core'],
         rationale: 'Classic charts are the broadly useful default; Microsoft ChartEx is a newer extension used by a smaller set of chart families.',
         paragraphs: [
