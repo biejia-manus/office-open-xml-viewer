@@ -11661,6 +11661,107 @@ describe('CH11 — line/area/scatter data labels honor <c:dLblPos> (§21.2.2.48)
       .toBeGreaterThan(RECT.w * 0.8);
   });
 
+  it('bar-scatter combo: an automatic right label retains marker clearance at the chart edge', () => {
+    const rec = recordingCtx();
+    const values = [14.5, null, null, 11.5, 10.5, 9.5, 8.5, 7.5,
+      null, null, 4.5, 3.5, 2.5, 1.5, 0.5];
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBarH',
+      categories: [
+        'Overall', '', 'Group A',
+        'Long category item A1', 'Long category item A2',
+        'Long category item A3', 'Long category item A4',
+        'Long category item A5', '', 'Group B',
+        'Long category item B1', 'Long category item B2',
+        'Long category item B3', 'Long category item B4',
+        'Long category item B5',
+      ],
+      valMax: 1.4,
+      catAxisOrientation: 'maxMin',
+      catAxisFontSizeHpt: 1200,
+      secondaryCatAxis: {
+        min: null, max: null, title: null, hidden: true, lineHidden: true,
+        majorTickMark: 'none', formatCode: '0%',
+      },
+      secondaryValAxis: {
+        min: 0, max: 15, title: null, hidden: true, lineHidden: true,
+        majorTickMark: 'none',
+      },
+      series: [
+        series({
+          values: values.map(value => value == null ? null : 0),
+          seriesType: 'bar',
+          showMarker: false,
+        }),
+        series({
+          values,
+          seriesType: 'scatter',
+          useSecondaryAxis: true,
+          categories: ['0.15', '', '', '0.83', '0.67', '0.58', '0.58', '0.54',
+            '', '', '0.75', '0.54', '0.53', '0.52', '0.49'],
+          showMarker: true,
+          markerSymbol: 'circle',
+          markerSize: 10,
+          seriesDataLabels: {
+            showVal: false,
+            showCatName: true,
+            showSerName: false,
+            showPercent: false,
+            position: 'l',
+            fontSizeHpt: 1200,
+          },
+          catFormatCode: '0%',
+        }),
+        series({
+          values,
+          seriesType: 'scatter',
+          useSecondaryAxis: true,
+          categories: ['0.45', '', '', '1.32', '1.11', '0.99', '0.99', '0.95',
+            '', '', '1.21', '0.95', '0.94', '0.92', '0.88'],
+          showMarker: true,
+          markerSymbol: 'circle',
+          markerSize: 10,
+          seriesDataLabels: {
+            showVal: false,
+            showCatName: true,
+            showSerName: false,
+            showPercent: false,
+            fontSizeHpt: 1200,
+            textLInsEmu: 38100,
+            textRInsEmu: 38100,
+            textTInsEmu: 19050,
+            textBInsEmu: 19050,
+            textBodyAuthored: true,
+          },
+          catFormatCode: '0%',
+        }),
+        series({
+          values,
+          seriesType: 'scatter',
+          useSecondaryAxis: true,
+          categories: values.map(() => '0'),
+          showMarker: false,
+          markerSymbol: 'none',
+        }),
+      ],
+      plotGroups: [
+        plotGroup('bar', 0, 1, { grouping: 'clustered', barDirection: 'bar' }),
+        plotGroup('scatter', 1, 3, {
+          categoryAxis: 'secondary', valueAxis: 'secondary', scatterStyle: 'lineMarker',
+        }),
+      ],
+    }), { x: 0, y: 0, w: 960, h: 540 }, 4 / 3);
+
+    const label = rec.texts.find(text => text.text === '132%');
+    const marker = rec.arcs
+      .filter(arc => Math.abs(arc.y - (label?.y ?? Number.POSITIVE_INFINITY)) < 1e-6)
+      .sort((a, b) => b.x - a.x)[0];
+    expect(marker).toBeDefined();
+    expect(label).toMatchObject({ align: 'left', baseline: 'middle' });
+    expect((label as TextCall).x)
+      .toBeGreaterThanOrEqual((marker?.x ?? 0) + (marker?.r ?? 0) + 6);
+  });
+
   it.each(['line', 'area', 'scatter'] as const)(
     '%s: rich label run faces resolve major/minor theme references and concrete faces',
     (chartType) => {
