@@ -604,35 +604,11 @@ function drawChartDataTable(
     chart.radarStyle,
     chart,
   );
-  const dataTableFillPlotGroup = chart.plotGroups?.length === 1
-    ? chart.plotGroups[0]
-    : null;
-  const dataTableFillFamilyMatches = chart.plotGroups == null || (
-    dataTableFillPlotGroup != null
-    && (
-      (chart.chartType === 'clusteredBar'
-        && dataTableFillPlotGroup.kind === 'bar'
-        && dataTableFillPlotGroup.barDirection !== 'bar')
-      || (chart.chartType === 'line' && dataTableFillPlotGroup.kind === 'line')
-      || (chart.chartType === 'area' && dataTableFillPlotGroup.kind === 'area')
-    )
-  );
-  const dataTableFillSeriesFamilyMatches = chart.series.every(series => {
-    if (series.seriesType == null) return true;
-    if (chart.chartType === 'clusteredBar') return series.seriesType === 'bar';
-    if (chart.chartType === 'line') return series.seriesType === 'line';
-    if (chart.chartType === 'area') return series.seriesType === 'area';
-    return false;
-  });
-  const bodyFillColor = table.fillColor
-    && chart.plotAreaManualLayout == null
-    && (chart.chartType === 'clusteredBar' || chart.chartType === 'line' || chart.chartType === 'area')
-    && dataTableFillFamilyMatches
-    && dataTableFillSeriesFamilyMatches
-    && layout.headerLines.every(lines => lines.length === 1)
-    && chart.series.every(series => series.values.every(value => value != null))
-    ? table.fillColor
-    : null;
+  // A direct solid dTable fill belongs to each generated body-text box. That
+  // semantic is independent of the owning chart family, plot-group count,
+  // manual plot layout, line wrapping, and sparse values. Unsupported fill
+  // recipes remain present in the model but do not masquerade as a solid.
+  const bodyFillColor = table.fillColor ?? null;
   ctx.beginPath();
   ctx.rect(tableX, tableY, tableWidth, layout.totalHeight);
   ctx.clip();
@@ -12901,18 +12877,15 @@ function renderScatterChart(
   drawAxisTitles(ctx, chart, x, y, w, h, px0, py0, pw, ph, legLeftW, legBottomH, catTitlePx, valTitlePx);
 }
 
-// The fixed Office-observed material below is three bounded gradients with
-// 4 + 5 + 6 stops. Keep this exact so marker paint preflight charges every
-// component before any chart-wide work begins.
-const BUBBLE_3D_MATERIAL_COMPONENTS = 15;
+// One three-stop highlight and one three-stop edge shade. Keep the work count
+// aligned with the family-wide lighting rule so paint is bounded atomically.
+const BUBBLE_3D_MATERIAL_COMPONENTS = 6;
 
-/** Paint the bounded application-defined material observed in current Excel
- * vector output for `bubble3D`. A single radial envelope cannot independently
- * express the measured diffuse highlight, right/lower falloff, and narrow
- * lower reflected-light band, so those three fixed components are composited
- * in that order. They remain in shape-local coordinates, so a PPTX host
- * transform rotates the complete bubble without a second lighting model.
- * `source-atop` preserves the authored fill alpha on every pass. */
+/** Paint a compact application-defined material for `bubble3D`: an off-centre
+ * diffuse highlight plus an edge shade from the same upper-left light source.
+ * This family-wide rule preserves the authored fill hue/alpha without fitting
+ * reflected-light bands or stop positions to one Office output. The layers
+ * remain in shape-local coordinates so host transforms rotate them together. */
 function paintBubble3DMaterial(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -12929,47 +12902,25 @@ function paintBubble3DMaterial(
     ctx.fillRect(cx - sizePx / 2, cy - sizePx / 2, sizePx, sizePx);
   };
 
-  const diffuseX = cx - sizePx * 0.08;
-  const diffuseY = cy - sizePx * 0.17;
+  const lightX = cx - sizePx * 0.15;
+  const lightY = cy - sizePx * 0.20;
   const diffuse = ctx.createRadialGradient(
-    diffuseX, diffuseY, 0,
-    diffuseX, diffuseY, sizePx * 0.55,
+    lightX, lightY, 0,
+    lightX, lightY, sizePx * 0.70,
   );
-  diffuse.addColorStop(0, 'rgba(255,255,255,0.72)');
-  diffuse.addColorStop(0.14, 'rgba(255,255,255,0.48)');
-  diffuse.addColorStop(0.38, 'rgba(255,255,255,0.1)');
+  diffuse.addColorStop(0, 'rgba(255,255,255,0.55)');
+  diffuse.addColorStop(0.32, 'rgba(255,255,255,0.18)');
   diffuse.addColorStop(1, 'rgba(255,255,255,0)');
   paintLayer(diffuse);
 
-  const shadeX = cx - sizePx * 0.08;
-  const shadeY = cy - sizePx * 0.18;
   const shade = ctx.createRadialGradient(
-    shadeX, shadeY, 0,
-    shadeX, shadeY, sizePx * 0.78,
+    lightX, lightY, 0,
+    lightX, lightY, sizePx * 0.85,
   );
   shade.addColorStop(0, 'rgba(0,0,0,0)');
-  shade.addColorStop(0.3, 'rgba(0,0,0,0)');
-  shade.addColorStop(0.46, 'rgba(0,0,0,0.22)');
-  shade.addColorStop(0.66, 'rgba(0,0,0,0.48)');
-  shade.addColorStop(1, 'rgba(0,0,0,0.62)');
+  shade.addColorStop(0.58, 'rgba(0,0,0,0)');
+  shade.addColorStop(1, 'rgba(0,0,0,0.55)');
   paintLayer(shade);
-
-  // Put the annulus center above and to the left. Its 0.8--0.95 radius band
-  // crosses the lower-left edge and lower center while remaining clear of the
-  // dark lower-right shoulder.
-  const rimX = cx - sizePx * 0.2;
-  const rimY = cy - sizePx * 0.45;
-  const lowerRim = ctx.createRadialGradient(
-    rimX, rimY, 0,
-    rimX, rimY, sizePx,
-  );
-  lowerRim.addColorStop(0, 'rgba(255,255,255,0)');
-  lowerRim.addColorStop(0.76, 'rgba(255,255,255,0)');
-  lowerRim.addColorStop(0.82, 'rgba(255,255,255,0.05)');
-  lowerRim.addColorStop(0.87, 'rgba(255,255,255,0.12)');
-  lowerRim.addColorStop(0.95, 'rgba(255,255,255,0.28)');
-  lowerRim.addColorStop(1, 'rgba(255,255,255,0)');
-  paintLayer(lowerRim);
 
   // Recording contexts used by hosts/tests do not necessarily model a full
   // Canvas state stack, so restore the property explicitly as well.
