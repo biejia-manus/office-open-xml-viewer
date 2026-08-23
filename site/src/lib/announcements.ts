@@ -40,7 +40,7 @@ export const announcements: readonly Announcement[] = [
     date: '2026-08-22',
     label: 'Upcoming release',
     version: 'v0.81.0',
-    title: 'Migrating to v0.81.0: Microsoft ChartEx becomes opt-in',
+    title: 'Migrating to v0.81.0',
     summary: 'v0.81.0 adds Microsoft ChartEx rendering and moves it to an opt-in module. Applications that display ChartEx charts must import and enable the renderer.',
     audience: 'Applications that display waterfall, histogram, Pareto, funnel, box-and-whisker, treemap or sunburst charts. Applications that use only classic charts need no changes.',
     sections: [
