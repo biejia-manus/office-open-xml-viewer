@@ -44,7 +44,7 @@ function recordingCanvas() {
 }
 
 describe('PPTX rotated bubble3D chart', () => {
-  it('rotates the chart frame while keeping compact material layers in local coordinates', async () => {
+  it('rotates the chart frame while keeping the complete material in local coordinates', async () => {
     const chart = {
       chartType: 'bubble', categories: ['1'], showLegend: false,
       catAxisMin: 0, catAxisMax: 2, valMin: 0, valMax: 2,
@@ -64,9 +64,9 @@ describe('PPTX rotated bubble3D chart', () => {
     await renderSlide(rec.canvas, slide, 9_144_000, 6_858_000, { width: 960, dpr: 1 });
 
     expect(rec.rotations).toContain(Math.PI / 2);
-    expect(rec.radialGradients).toHaveLength(2);
-    expect(rec.radialGradients.map(gradient => gradient.stops.length)).toEqual([3, 3]);
-    expect(rec.compositeModes.filter(mode => mode === 'source-atop')).toHaveLength(2);
+    expect(rec.radialGradients).toHaveLength(3);
+    expect(rec.radialGradients.map(gradient => gradient.stops.length)).toEqual([4, 5, 6]);
+    expect(rec.compositeModes.filter(mode => mode === 'source-atop')).toHaveLength(3);
   });
 
   it('forwards the opt-in ChartEx module through the PPTX chart element boundary', async () => {
