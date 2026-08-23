@@ -596,6 +596,31 @@ export class DocxScrollViewer implements ZoomableViewer {
     return this._doc?.pageCount ?? 0;
   }
 
+  /**
+   * Whether every page has been laid out.
+   *
+   * Only ever false under {@link DocxScrollViewerOptions.progressiveLayout},
+   * between the opening pages appearing and the full layout replacing them.
+   * While false, {@link pageCount} is the pages available so far, not the
+   * document's total.
+   */
+  get layoutComplete(): boolean {
+    return this._doc?.layoutComplete ?? true;
+  }
+
+  /**
+   * Resolve once the whole document is laid out.
+   *
+   * Await this before anything that must see every page — a total page count,
+   * printing, export. {@link findText} does so internally. Resolves immediately
+   * unless progressive layout actually deferred work.
+   */
+  async whenLayoutComplete(): Promise<void> {
+    // Optional-called because an INJECTED engine (fromDocument) may predate this
+    // method; a document that cannot defer layout is already complete.
+    await this._doc?.whenLayoutComplete?.();
+  }
+
   /** CSS px width of page `i` at the current scale. */
   private _pageWidthPx(i: number): number {
     return this._doc!.pageSize(i).widthPt * PT_TO_PX * this._scale;

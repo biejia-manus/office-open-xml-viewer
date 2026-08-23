@@ -95,6 +95,20 @@ describe('DocxScrollViewer — growing page count', () => {
     viewer.destroy();
   });
 
+  it('reports a borrowed engine as fully laid out', async () => {
+    // fromDocument borrows an already-loaded document, and an engine injected by
+    // an integrator may predate these members entirely; neither may throw.
+    installDom();
+    const engine = new FakeDocxEngine(3, PAGE);
+    const viewer = DocxScrollViewer.fromDocument(
+      makeContainer(700, 500) as unknown as HTMLElement,
+      engine.asDoc(),
+    );
+    expect(viewer.layoutComplete).toBe(true);
+    await expect(viewer.whenLayoutComplete()).resolves.toBeUndefined();
+    viewer.destroy();
+  });
+
   it('does not mount the whole document just because it grew', () => {
     installDom();
     const container = makeContainer(700, 500);
