@@ -81,6 +81,55 @@ export function deepFreezePlainData<T>(
   return Object.freeze(value) as DeepReadonly<T>;
 }
 
+/**
+ * Deep-copy and freeze in ONE traversal.
+ *
+ * The previous `deepFreezePlainData(structuredClone(value))` walked the graph
+ * twice — once inside the structured-clone serialize/deserialize round trip,
+ * then again to freeze the result — and left a whole intermediate unfrozen copy
+ * for the collector in between. Pagination snapshots every accepted block, on
+ * every convergence pass, so that second walk and its garbage are a hot-path
+ * cost rather than a one-off.
+ *
+ * Semantics match `structuredClone` on the plain-data subset this module
+ * admits: the `seen` map preserves internal aliasing (an object referenced
+ * twice yields the same clone twice) and terminates on cycles, exactly as the
+ * structured-clone algorithm does.
+ */
+function cloneAndFreezePlainData<T>(value: T, seen: Map<object, unknown>): DeepReadonly<T> {
+  if (value === null || typeof value !== 'object') {
+    // structuredClone rejected these outright; keep that backstop so a genuine
+    // violation is still reported when validation is off, rather than silently
+    // smuggling a non-plain value into the retained graph.
+    if (typeof value === 'function' || typeof value === 'symbol') {
+      throw new TypeError('value must be structured-clone-safe plain data');
+    }
+    return value as DeepReadonly<T>;
+  }
+  const prior = seen.get(value);
+  if (prior !== undefined) return prior as DeepReadonly<T>;
+  if (Array.isArray(value)) {
+    const copy = new Array(value.length);
+    seen.set(value, copy);
+    for (let index = 0; index < value.length; index += 1) {
+      copy[index] = cloneAndFreezePlainData(value[index], seen);
+    }
+    return Object.freeze(copy) as DeepReadonly<T>;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError('value must be structured-clone-safe plain data');
+  }
+  const copy: Record<string, unknown> = {};
+  seen.set(value, copy);
+  for (const key in value) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      copy[key] = cloneAndFreezePlainData((value as Record<string, unknown>)[key], seen);
+    }
+  }
+  return Object.freeze(copy) as DeepReadonly<T>;
+}
+
 export function snapshotPlainData<T>(value: T, label: string): DeepReadonly<T> {
   // Contract check on engine-produced data — see validation-policy.ts. The
   // structured clone below still rejects genuinely non-cloneable graphs, so a
@@ -88,7 +137,7 @@ export function snapshotPlainData<T>(value: T, label: string): DeepReadonly<T> {
   // development-only.
   if (documentLayoutValidationEnabled()) assertPlainData(value, label);
   try {
-    return deepFreezePlainData(structuredClone(value));
+    return cloneAndFreezePlainData(value, new Map<object, unknown>());
   } catch {
     throw new TypeError(`${label} must be structured-clone-safe plain data`);
   }
