@@ -1065,6 +1065,24 @@ describe('chart-space background', () => {
     expect(rec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#0055AA' });
   });
 
+  it('keeps the application-defined rounded radius in points and clamps tiny frames', () => {
+    const scaled = recordingCtx();
+    renderChart(scaled.ctx, baseModel({
+      roundedCorners: true,
+      chartBg: 'F2F2F2',
+    }), { x: 0, y: 0, w: 200, h: 100 }, 2);
+    // The first corner ends at y = 5pt × 2px/pt.
+    expect(scaled.quadratics[0]?.y).toBe(10);
+
+    const tiny = recordingCtx();
+    renderChart(tiny.ctx, baseModel({
+      roundedCorners: true,
+      chartBg: 'F2F2F2',
+    }), { x: 0, y: 0, w: 8, h: 6 }, 2);
+    // Geometry, not a sample-specific threshold, bounds the radius to h/2.
+    expect(tiny.quadratics[0]?.y).toBe(3);
+  });
+
   it('keeps both compound rails inside the rounded chart-space clip', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
@@ -19479,6 +19497,17 @@ describe('CH15 — chartEx sunburst', () => {
       ],
     };
     expect(chartLabelPaintWorkCount(sparse, undefined)).toBe(4096);
+  });
+
+  it.each([
+    { x: 0, y: 0, w: 640, h: 360 },
+    { x: 0, y: 0, w: 360, h: 640 },
+    { x: 0, y: 0, w: 900, h: 240 },
+  ])('keeps the Office-observed automatic hole ratio local to sunburst (%o)', (rect) => {
+    const rec = ringRecordingCtx();
+    renderChart(rec.ctx, sunburstModel(), rect, 1);
+    const radii = rec.arcs.map(arc => arc.r).filter(radius => radius > 0);
+    expect(Math.min(...radii) / Math.max(...radii)).toBeCloseTo(0.18, 5);
   });
 
   it('draws three concentric rings (Branch / Stem / Leaf) with distinct radii', () => {
