@@ -7744,15 +7744,6 @@ function renderStockChart(
       ctx.stroke();
     }
   };
-  drawStockTick(openS, openIdx, 'left');
-  if (highS?.markerSymbol != null || (highS && hasVisiblePointMarkerOverride(highS))) {
-    drawStockTick(highS, highIdx, 'both');
-  }
-  if (lowS?.markerSymbol != null || (lowS && hasVisiblePointMarkerOverride(lowS))) {
-    drawStockTick(lowS, lowIdx, 'both');
-  }
-  drawStockTick(closeS, closeIdx, 'right');
-
   // Office accepts a line group after a stock group. Stock decorations retain
   // ownership of the stock slice; the later line group is a normal category
   // line overlay on its resolved value axis rather than becoming a fifth stock
@@ -7845,7 +7836,8 @@ function renderStockChart(
   // ── First/last-series up-down bars (§21.2.2.218/227). In DrawingML these
   // decorations follow the line series. Excel paints their opaque bodies over
   // both the high-low rule and the owning series lines, leaving plot geometry
-  // visible only outside each body.
+  // visible only outside each body. Explicit stock marker glyphs are replayed
+  // after the bodies below, so a marker at a bar endpoint remains fully visible.
   if (chart.stockUpDownBars && upDownStartS && upDownEndS) {
     const directStyle = chart.stockUpDownBarStyle ?? {
       gapWidthPercent: 150,
@@ -7868,6 +7860,18 @@ function renderStockChart(
       slotWidth, style, ptToPx, chart.stockAutomaticStyle ?? undefined, shapeRotationDeg,
     );
   }
+
+  // Marker/tick glyphs are the foreground annotation of a stock datum. Desktop
+  // Excel paints them after up/down-bar bodies; otherwise a circular High/Low
+  // marker intersecting the body is clipped to a semicircle.
+  drawStockTick(openS, openIdx, 'left');
+  if (highS?.markerSymbol != null || (highS && hasVisiblePointMarkerOverride(highS))) {
+    drawStockTick(highS, highIdx, 'both');
+  }
+  if (lowS?.markerSymbol != null || (lowS && hasVisiblePointMarkerOverride(lowS))) {
+    drawStockTick(lowS, lowIdx, 'both');
+  }
+  drawStockTick(closeS, closeIdx, 'right');
 
   // CT_LineSer error bars remain attached to their authored stock series.
   // Stock uses a category X axis, so only Y-direction bars have data-unit
@@ -9100,6 +9104,52 @@ function renderSurfaceChart(
   }
   ctx.restore();
 
+  const sceneCenter = projection.project(
+    front.x + front.w / 2,
+    front.y + front.h / 2,
+    0.5,
+  );
+  const drawSurfaceAxisTick = (
+    mode: string | null | undefined,
+    point: { x: number; y: number },
+    axisStart: { x: number; y: number },
+    axisEnd: { x: number; y: number },
+    color: string,
+    lineWidth: number,
+    lineHidden: boolean,
+    level: 'major' | 'minor',
+    dash?: string | null,
+  ): void => {
+    if (lineHidden || mode == null || mode === 'none') return;
+    const dx = axisEnd.x - axisStart.x;
+    const dy = axisEnd.y - axisStart.y;
+    const axisLength = Math.hypot(dx, dy);
+    if (!(axisLength > 1e-6)) return;
+    let normalX = -dy / axisLength;
+    let normalY = dx / axisLength;
+    const midpointX = (axisStart.x + axisEnd.x) / 2;
+    const midpointY = (axisStart.y + axisEnd.y) / 2;
+    if ((midpointX - sceneCenter.x) * normalX
+      + (midpointY - sceneCenter.y) * normalY < 0) {
+      normalX = -normalX;
+      normalY = -normalY;
+    }
+    const length = axisTickLengthPx(level, lineWidth, ptToPx);
+    const sideLength = mode === 'cross' ? length / 2 : length;
+    const outer = mode === 'out' || mode === 'cross' ? sideLength : 0;
+    const inner = mode === 'in' || mode === 'cross' ? sideLength : 0;
+    strokeAxisSegment(
+      ctx,
+      point.x + normalX * outer,
+      point.y + normalY * outer,
+      point.x - normalX * inner,
+      point.y - normalY * inner,
+      color,
+      lineWidth,
+      dash,
+    );
+  };
+
   const categoryAxisStart = projection.project(front.x, floorY, nearDepth);
   const categoryAxisEnd = projection.project(front.x + front.w, floorY, nearDepth);
   const surfaceCatLineWidth = chart.catAxisLineWidthEmu != null
@@ -9115,6 +9165,42 @@ function renderSurfaceChart(
     surfaceCatLineWidth,
     chart.catAxisLineDash,
   );
+  const categoryAxisColor = chart.catAxisLineColor
+    ? `#${chart.catAxisLineColor}` : '#000000';
+  const categoryAxisSuppressed = chart.catAxisHidden || chart.catAxisLineHidden === true;
+  const categoryTickSkip = Math.max(1, Math.floor(chart.catAxisTickMarkSkip ?? 1));
+  for (let column = 0; column < columnCount; column += categoryTickSkip) {
+    drawSurfaceAxisTick(
+      chart.catAxisMajorTickMark,
+      projection.project(toX(column), floorY, nearDepth),
+      categoryAxisStart,
+      categoryAxisEnd,
+      categoryAxisColor,
+      surfaceCatLineWidth,
+      categoryAxisSuppressed,
+      'major',
+      chart.catAxisLineDash,
+    );
+  }
+  if (chart.catAxisMinorTickMark != null && chart.catAxisMinorTickMark !== 'none') {
+    for (let column = 0; column < columnCount - 1; column++) {
+      const fraction = (
+        categoryPositionFraction(column, columnCount, categoryBetween, categoryReversed)
+        + categoryPositionFraction(column + 1, columnCount, categoryBetween, categoryReversed)
+      ) / 2;
+      drawSurfaceAxisTick(
+        chart.catAxisMinorTickMark,
+        projection.project(front.x + fraction * front.w, floorY, nearDepth),
+        categoryAxisStart,
+        categoryAxisEnd,
+        categoryAxisColor,
+        surfaceCatLineWidth,
+        categoryAxisSuppressed,
+        'minor',
+        chart.catAxisLineDash,
+      );
+    }
+  }
   ctx.font = chartFontCss(
     catFontPx,
     chartFontFamily(chart, chart.catAxisFontFace, 'minor'),
@@ -9155,6 +9241,37 @@ function renderSurfaceChart(
       seriesAxis?.lineColor ? `#${seriesAxis.lineColor}` : '#000000',
       seriesAxisWidth, seriesAxis?.lineDash,
     );
+    const seriesAxisColor = seriesAxis?.lineColor
+      ? `#${seriesAxis.lineColor}` : '#000000';
+    const seriesTickSkip = Math.max(1, Math.floor(seriesAxis?.tickMarkSkip ?? 1));
+    for (let row = 0; row < rowCount; row += seriesTickSkip) {
+      drawSurfaceAxisTick(
+        seriesAxis?.majorTickMark,
+        projection.project(seriesAxisX, floorY, toDepth(row)),
+        seriesStart,
+        seriesEnd,
+        seriesAxisColor,
+        seriesAxisWidth,
+        seriesAxis?.lineHidden === true,
+        'major',
+        seriesAxis?.lineDash,
+      );
+    }
+    if (seriesAxis?.minorTickMark != null && seriesAxis.minorTickMark !== 'none') {
+      for (let row = 0; row < rowCount - 1; row++) {
+        drawSurfaceAxisTick(
+          seriesAxis.minorTickMark,
+          projection.project(seriesAxisX, floorY, (toDepth(row) + toDepth(row + 1)) / 2),
+          seriesStart,
+          seriesEnd,
+          seriesAxisColor,
+          seriesAxisWidth,
+          seriesAxis.lineHidden === true,
+          'minor',
+          seriesAxis.lineDash,
+        );
+      }
+    }
     ctx.font = chartFontCss(
       seriesFontPx,
       chartFontFamily(chart, seriesAxis?.fontFace, 'minor'),
@@ -12877,15 +12994,18 @@ function renderScatterChart(
   drawAxisTitles(ctx, chart, x, y, w, h, px0, py0, pw, ph, legLeftW, legBottomH, catTitlePx, valTitlePx);
 }
 
-// One three-stop highlight and one three-stop edge shade. Keep the work count
-// aligned with the family-wide lighting rule so paint is bounded atomically.
-const BUBBLE_3D_MATERIAL_COMPONENTS = 6;
+// Three fixed gradients with 4 + 5 + 6 stops. Keep the work count aligned
+// with the complete material so a bubble is admitted or rejected atomically.
+const BUBBLE_3D_MATERIAL_COMPONENTS = 15;
 
-/** Paint a compact application-defined material for `bubble3D`: an off-centre
- * diffuse highlight plus an edge shade from the same upper-left light source.
- * This family-wide rule preserves the authored fill hue/alpha without fitting
- * reflected-light bands or stop positions to one Office output. The layers
- * remain in shape-local coordinates so host transforms rotate them together. */
+/** ECMA-376 §21.2.2.21 only enables `bubble3D`; it does not define a lighting
+ * material. Paint the bounded application-defined material observed in desktop
+ * Excel vector output. A single radial envelope cannot independently
+ * express the diffuse highlight, right/lower falloff, and narrow lower
+ * reflected-light band, so those three components are composited in order.
+ * The recipe is normalized to bubble-local coordinates and is therefore shared
+ * by every colour, size, and host transform rather than fitted per sample.
+ * `source-atop` preserves the authored fill alpha on every pass. */
 function paintBubble3DMaterial(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -12902,25 +13022,47 @@ function paintBubble3DMaterial(
     ctx.fillRect(cx - sizePx / 2, cy - sizePx / 2, sizePx, sizePx);
   };
 
-  const lightX = cx - sizePx * 0.15;
-  const lightY = cy - sizePx * 0.20;
+  const diffuseX = cx - sizePx * 0.08;
+  const diffuseY = cy - sizePx * 0.17;
   const diffuse = ctx.createRadialGradient(
-    lightX, lightY, 0,
-    lightX, lightY, sizePx * 0.70,
+    diffuseX, diffuseY, 0,
+    diffuseX, diffuseY, sizePx * 0.55,
   );
-  diffuse.addColorStop(0, 'rgba(255,255,255,0.55)');
-  diffuse.addColorStop(0.32, 'rgba(255,255,255,0.18)');
+  diffuse.addColorStop(0, 'rgba(255,255,255,0.72)');
+  diffuse.addColorStop(0.14, 'rgba(255,255,255,0.48)');
+  diffuse.addColorStop(0.38, 'rgba(255,255,255,0.1)');
   diffuse.addColorStop(1, 'rgba(255,255,255,0)');
   paintLayer(diffuse);
 
+  const shadeX = cx - sizePx * 0.08;
+  const shadeY = cy - sizePx * 0.18;
   const shade = ctx.createRadialGradient(
-    lightX, lightY, 0,
-    lightX, lightY, sizePx * 0.85,
+    shadeX, shadeY, 0,
+    shadeX, shadeY, sizePx * 0.78,
   );
   shade.addColorStop(0, 'rgba(0,0,0,0)');
-  shade.addColorStop(0.58, 'rgba(0,0,0,0)');
-  shade.addColorStop(1, 'rgba(0,0,0,0.55)');
+  shade.addColorStop(0.3, 'rgba(0,0,0,0)');
+  shade.addColorStop(0.46, 'rgba(0,0,0,0.22)');
+  shade.addColorStop(0.66, 'rgba(0,0,0,0.48)');
+  shade.addColorStop(1, 'rgba(0,0,0,0.62)');
   paintLayer(shade);
+
+  // The annulus centre is above-left. Its narrow 0.8--0.95 radius band
+  // crosses the lower-left/lower-centre rim while staying clear of the dark
+  // lower-right shoulder, matching the material boundary observed in Excel.
+  const rimX = cx - sizePx * 0.2;
+  const rimY = cy - sizePx * 0.45;
+  const lowerRim = ctx.createRadialGradient(
+    rimX, rimY, 0,
+    rimX, rimY, sizePx,
+  );
+  lowerRim.addColorStop(0, 'rgba(255,255,255,0)');
+  lowerRim.addColorStop(0.76, 'rgba(255,255,255,0)');
+  lowerRim.addColorStop(0.82, 'rgba(255,255,255,0.05)');
+  lowerRim.addColorStop(0.87, 'rgba(255,255,255,0.12)');
+  lowerRim.addColorStop(0.95, 'rgba(255,255,255,0.28)');
+  lowerRim.addColorStop(1, 'rgba(255,255,255,0)');
+  paintLayer(lowerRim);
 
   // Recording contexts used by hosts/tests do not necessarily model a full
   // Canvas state stack, so restore the property explicitly as well.
