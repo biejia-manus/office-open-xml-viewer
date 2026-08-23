@@ -960,9 +960,14 @@ export class DocxScrollViewer implements ZoomableViewer {
     // zoomed wider than the viewport the centre would go negative, so the floor
     // pins it at `padL` and the overflow scrolls right. Formula deliberately
     // duplicated per viewer (one line; not hoisted to core).
+    // §17.13.4 — the comment gutter hangs off the page's RIGHT edge, so it is
+    // part of the centred unit: centre page + gutter together (the page shifts
+    // left, the balloons stay inside the viewport). Centring the page alone
+    // would leave dead space on the left and clip the gutter on the right.
     const { left: padL } = this._padH();
     const cw = this._scrollHost.clientWidth;
-    slot.wrapper.style.left = `${Math.max(padL, (cw - wpx) / 2)}px`;
+    const gutterW = this._showComments ? this._commentsGutterWidth() : 0;
+    slot.wrapper.style.left = `${Math.max(padL, (cw - wpx - gutterW) / 2)}px`;
   }
 
   /** Device-pixel ratio for a render (opts override → window → 1). */

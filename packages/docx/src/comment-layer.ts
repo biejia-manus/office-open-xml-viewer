@@ -15,6 +15,13 @@
  *   affordance (`pointer-events` stays `none` on the layer, `auto` on each
  *   balloon, so page interactions under the gutter are unaffected).
  *
+ * Selecting a thread — by clicking its balloon OR its tinted range on the
+ * page — expands the balloon (the pure model raises the selected cap to the
+ * page's line capacity) and makes its body scrollable for anything still cut
+ * off. The tinted-range click is a HIT-TEST on the page wrapper (one shared
+ * listener; the tint boxes themselves keep `pointer-events:none`), so text
+ * selection and other page interactions over commented ranges are unaffected.
+ *
  * All geometry inputs come from the pure comment-margin model; this module
  * only materializes DOM. Range → run joining uses
  * (`source.path`, `sourceRunIndex`), which both render modes ship.
@@ -113,6 +120,68 @@ function clearLayer(layer: HTMLElement): void {
   layer.innerHTML = '';
 }
 
+// ── Tinted-range click-to-select ────────────────────────────────────────────
+
+/** One clickable commented-range box, in the page's CSS-px space. */
+interface TintHitRegion {
+  readonly commentId: string;
+  readonly x: number;
+  readonly y: number;
+  readonly w: number;
+  readonly h: number;
+}
+
+interface TintHitState {
+  readonly regions: readonly TintHitRegion[];
+  readonly cssWidth: number;
+  readonly cssHeight: number;
+  readonly selectedCommentId: string | null;
+  readonly onSelect: (commentId: string | null) => void;
+  /** The live tint layer — its bounding box is the hit-test's denominator, so
+   *  external CSS scaling of the page keeps clicks on the glyphs. A detached
+   *  layer (comments toggled off / slot recycled) reports a zero box, which
+   *  disables the stale state without unhooking the wrapper listener. */
+  readonly tintLayer: HTMLDivElement;
+}
+
+const TINT_HIT_STATE = '__docxCommentTintHits';
+
+type TintHitHost = HTMLElement & { [TINT_HIT_STATE]?: TintHitState };
+
+/** Install (once per wrapper) a click hit-test that selects the thread whose
+ *  tinted range was clicked. Rebuilds only swap the state object, so the
+ *  wrapper never accumulates listeners; the tint boxes stay
+ *  `pointer-events:none` so text selection over commented text still works. */
+function installTintHitTest(
+  tintLayer: HTMLDivElement,
+  regions: readonly TintHitRegion[],
+  cssWidth: number,
+  cssHeight: number,
+  selectedCommentId: string | null,
+  onSelect: (commentId: string | null) => void,
+): void {
+  const host = tintLayer.parentElement as TintHitHost | null;
+  if (!host) return;
+  const installed = host[TINT_HIT_STATE] !== undefined;
+  host[TINT_HIT_STATE] = { regions, cssWidth, cssHeight, selectedCommentId, onSelect, tintLayer };
+  if (installed) return;
+  host.addEventListener('click', (event: MouseEvent) => {
+    const state = host[TINT_HIT_STATE];
+    if (!state || state.regions.length === 0) return;
+    if (state.cssWidth <= 0 || state.cssHeight <= 0) return;
+    const box = state.tintLayer.getBoundingClientRect();
+    if (!(box.width > 0) || !(box.height > 0)) return;
+    const x = ((event.clientX - box.left) / box.width) * state.cssWidth;
+    const y = ((event.clientY - box.top) / box.height) * state.cssHeight;
+    const hit = state.regions.find(
+      (region) => x >= region.x && x <= region.x + region.w
+        && y >= region.y && y <= region.y + region.h,
+    );
+    if (!hit) return;
+    state.onSelect(state.selectedCommentId === hit.commentId ? null : hit.commentId);
+  });
+}
+
 function div(host: HTMLElement, cssText: string): HTMLDivElement {
   const el = host.ownerDocument
     ? host.ownerDocument.createElement('div')
@@ -145,7 +214,16 @@ export function buildDocxCommentLayer(
   clearLayer(tintLayer);
   clearLayer(gutterLayer);
   const { cssWidth, cssHeight, gutterWidthPx } = geometry;
-  if (cssWidth <= 0 || cssHeight <= 0 || model.threads.length === 0) return;
+  // The hit-test state is (re)installed on EVERY build — including the empty
+  // ones below — so a rebuild for a new page/document never leaves a previous
+  // build's clickable regions behind.
+  const hitRegions: TintHitRegion[] = [];
+  const commitHitRegions = (): void =>
+    installTintHitTest(tintLayer, hitRegions, cssWidth, cssHeight, selectedCommentId, onSelect);
+  if (cssWidth <= 0 || cssHeight <= 0 || model.threads.length === 0) {
+    commitHitRegions();
+    return;
+  }
 
   const runsByParagraph = new Map<string, DocxTextRunInfo[]>();
   for (const run of runs) {
@@ -181,6 +259,7 @@ export function buildDocxCommentLayer(
         box.style.transform = run.transform;
         box.style.transformOrigin = 'top left';
       }
+      hitRegions.push({ commentId: range.commentId, x: run.x, y: run.y, w: run.w, h: run.h });
       const current = anchors.get(range.commentId);
       if (!current
         || run.y < current.run.y
@@ -189,6 +268,7 @@ export function buildDocxCommentLayer(
       }
     }
   }
+  commitHitRegions();
   if (anchors.size === 0) return;
 
   const charsPerLine = Math.max(
@@ -256,7 +336,11 @@ export function buildDocxCommentLayer(
       + `top:${placement.yPx}px;`
       + `width:${Math.max(0, gutterWidthPx - 2 * BALLOON_SIDE_INSET_PX)}px;`
       + `height:${placement.heightPx}px;`
-      + 'box-sizing:border-box;overflow:hidden;'
+      // The SELECTED balloon scrolls: its cap already expanded to a page-full
+      // (comment-margin-layout), and anything past the placed height — a very
+      // long thread, or the estimate under-counting wrapped lines — stays
+      // reachable by scrolling instead of being cut off.
+      + `box-sizing:border-box;${selected ? 'overflow-y:auto;overflow-x:hidden;' : 'overflow:hidden;'}`
       + `padding:2px ${BALLOON_PAD_PX}px;`
       + 'background:#fffdf5;'
       + `border:1px solid ${selected ? '#b8860b' : '#d8c48a'};`
