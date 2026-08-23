@@ -909,6 +909,13 @@ function renderParetoChart(
 
 // ─── chartEx: box-and-whisker (CH15, MS 2014 chartex ext) ────────────────────
 
+// Application-defined defaults: the ChartEx schema does not encode these.
+// Keep them named and local to this family so they cannot silently affect the
+// specification-defined classic value-axis planner.
+const BOX_WHISKER_AUTO_INTERVAL_TARGET = 7;
+const BOX_WHISKER_AUTO_PADDING_RATIO = 0.05;
+const BOX_WHISKER_ZERO_ANCHOR_RATIO = 1.2;
+
 /** Compact omitted-axis policy observed in three independent Office vector
  * box/whisker outputs (small, ordinary, and wide numeric ranges). OOXML does
  * not define the automatic major unit. Office consistently chooses the nearest
@@ -929,12 +936,15 @@ function automaticBoxWhiskerAxis(
   const boundedMax = explicitMax ?? dataMax;
   const span = boundedMax - boundedMin;
   if (!(span > 0) || !Number.isFinite(span)) return null;
-  const majorUnit = niceStep(span, 7);
+  const majorUnit = niceStep(span, BOX_WHISKER_AUTO_INTERVAL_TARGET);
   if (!(majorUnit > 0) || !Number.isFinite(majorUnit)) return null;
-  let paddedMin = dataMin - span * 0.05;
-  let paddedMax = dataMax + span * 0.05;
-  if (dataMin >= 0 && (dataMin === 0 || dataMax > 1.2 * dataMin)) paddedMin = 0;
-  if (dataMax <= 0 && (dataMax === 0 || Math.abs(dataMin) > 1.2 * Math.abs(dataMax))) {
+  let paddedMin = dataMin - span * BOX_WHISKER_AUTO_PADDING_RATIO;
+  let paddedMax = dataMax + span * BOX_WHISKER_AUTO_PADDING_RATIO;
+  if (dataMin >= 0
+    && (dataMin === 0 || dataMax > BOX_WHISKER_ZERO_ANCHOR_RATIO * dataMin)) paddedMin = 0;
+  if (dataMax <= 0
+    && (dataMax === 0
+      || Math.abs(dataMin) > BOX_WHISKER_ZERO_ANCHOR_RATIO * Math.abs(dataMax))) {
     paddedMax = 0;
   }
   const min = explicitMin ?? Math.floor(paddedMin / majorUnit) * majorUnit;
@@ -1526,6 +1536,10 @@ function renderBoxWhiskerChart(
   );
 }
 
+/** Application-defined automatic ChartEx sunburst center-hole ratio observed
+ * across the current desktop-Office vector corpus. It is intentionally local
+ * to sunburst and never reused as a generic radial-chart default. */
+const SUNBURST_AUTOMATIC_HOLE_RATIO = 0.18;
 
 /**
  * Render a chartEx sunburst (MS 2014 chartex extension — no ECMA-376 section;
@@ -1612,7 +1626,7 @@ function renderSunburstChart(
   const ringCount = maxDepth + 1;
   // Small center hole (Office draws a modest hole, ~18% of the outer radius);
   // the remaining band is split evenly across the rings.
-  const innerR = outerR * 0.18;
+  const innerR = outerR * SUNBURST_AUTOMATIC_HOLE_RATIO;
   const ringBand = (outerR - innerR) / ringCount;
 
   const branchColor = (bi: number): string => {

@@ -1065,6 +1065,33 @@ describe('chart-space background', () => {
     expect(rec.paintEvents).toContainEqual({ kind: 'stroke', strokeStyle: '#0055AA' });
   });
 
+  it('keeps the application-defined rounded radius in points and clamps tiny frames', () => {
+    for (const [w, h] of [[390, 315], [570, 240], [285, 420]]) {
+      const aspect = recordingCtx();
+      renderChart(aspect.ctx, baseModel({
+        roundedCorners: true,
+        chartBg: 'F2F2F2',
+      }), { x: 0, y: 0, w, h }, 1);
+      expect(aspect.quadratics[0]?.y).toBe(10);
+    }
+
+    const scaled = recordingCtx();
+    renderChart(scaled.ctx, baseModel({
+      roundedCorners: true,
+      chartBg: 'F2F2F2',
+    }), { x: 0, y: 0, w: 200, h: 100 }, 2);
+    // Desktop Excel vector output fixes the radius at 10pt across aspect ratios.
+    expect(scaled.quadratics[0]?.y).toBe(20);
+
+    const tiny = recordingCtx();
+    renderChart(tiny.ctx, baseModel({
+      roundedCorners: true,
+      chartBg: 'F2F2F2',
+    }), { x: 0, y: 0, w: 8, h: 6 }, 2);
+    // Geometry, not a sample-specific threshold, bounds the radius to h/2.
+    expect(tiny.quadratics[0]?.y).toBe(3);
+  });
+
   it('keeps both compound rails inside the rounded chart-space clip', () => {
     const rec = recordingCtx();
     renderChart(rec.ctx, baseModel({
@@ -5447,6 +5474,22 @@ describe('bar chart authored layout and fills', () => {
     ]);
     expect(linked.strokeRects.find(rect => rect.ss === '#445566')?.dash)
       .toEqual([0.9375, 0.5625]);
+
+    const automaticHostFallback = recordingCtx();
+    renderChart(automaticHostFallback.ctx, {
+      ...chart,
+      plotAreaBg: 'FFFFFF',
+      plotAreaFillAutomatic: true,
+    }, RECT, 1, 30);
+    expect(automaticHostFallback.gradients).toHaveLength(1);
+    expect(automaticHostFallback.gradients[0]?.stops).toEqual([
+      { position: 0, color: 'rgba(17,34,51,1)' },
+      { position: 1, color: 'rgba(221,238,255,1)' },
+    ]);
+
+    const compatibilityDirect = recordingCtx();
+    renderChart(compatibilityDirect.ctx, { ...chart, plotAreaBg: 'FFFFFF' }, RECT, 1, 30);
+    expect(compatibilityDirect.gradients).toHaveLength(0);
 
     const directEmptyDash = recordingCtx();
     renderChart(directEmptyDash.ctx, { ...chart, plotAreaLineCustomDash: [] }, RECT, 1, 30);
@@ -12026,9 +12069,7 @@ describe('classic chart data table (CT_DTable)', () => {
     expect(rec.strokeRects.some(rect => rect.ss === '#445566')).toBe(true);
     expect(rec.strokeRects.find(rect => rect.ss === '#445566')?.dash.length).toBeGreaterThan(0);
     const textBackgrounds = rec.rects.filter(rect => rect.fs === '#FFF2CC');
-    expect(textBackgrounds).toHaveLength(6); // two category labels plus four values
-    expect(textBackgrounds.every(rect => rect.w < RECT.w / 4)).toBe(true);
-    expect(textBackgrounds.every(rect => rect.h === 12)).toBe(true);
+    expect(textBackgrounds).toHaveLength(0); // combo extent has no desktop-Excel evidence
     const sales = rec.texts.find(call => call.text === 'Sales') as NonNullable<typeof rec.texts[number]>;
     expect(textBackgrounds.some(rect =>
       rect.x <= sales.x && rect.x + rect.w >= sales.x
@@ -12072,6 +12113,76 @@ describe('classic chart data table (CT_DTable)', () => {
       showOutline: true,
       lineHidden: true,
     })).toEqual({ lineStrokes: 0, outlines: 0 });
+  });
+
+  it('limits the observed text-background compatibility rule to its Excel evidence', () => {
+    const renderFillRects = (over: Partial<ChartModel>) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'line',
+        categories: ['Q1', 'Q2'],
+        series: [series({ name: 'North', values: [10, 15], seriesType: 'line' })],
+        dataTable: {
+          showHorizontalBorder: true,
+          showVerticalBorder: true,
+          showOutline: true,
+          showKeys: false,
+          fillColor: 'FFF2CC',
+        },
+        ...over,
+      }), RECT, 1);
+      return rec.rects.filter(rect => rect.fs === '#FFF2CC');
+    };
+
+    expect(renderFillRects({}).length).toBeGreaterThan(0);
+    expect(renderFillRects({
+      plotGroups: [{
+        kind: 'line',
+        seriesStart: 0,
+        seriesCount: 1,
+        categoryAxis: 'primary',
+        valueAxis: 'primary',
+        seriesAxis: 'none',
+      }],
+    }).length).toBeGreaterThan(0);
+    expect(renderFillRects({
+      plotGroups: [
+        {
+          kind: 'line',
+          seriesStart: 0,
+          seriesCount: 1,
+          categoryAxis: 'primary',
+          valueAxis: 'primary',
+          seriesAxis: 'none',
+        },
+        {
+          kind: 'bar',
+          seriesStart: 1,
+          seriesCount: 1,
+          categoryAxis: 'primary',
+          valueAxis: 'primary',
+          seriesAxis: 'none',
+          barDirection: 'col',
+        },
+      ],
+    })).toHaveLength(0);
+    expect(renderFillRects({
+      series: [
+        series({ name: 'North', values: [10, 15], seriesType: 'line' }),
+        series({ name: 'South', values: [8, 12], seriesType: 'bar' }),
+      ],
+    })).toHaveLength(0);
+    expect(renderFillRects({ chartType: 'clusteredBarH' })).toHaveLength(0);
+    expect(renderFillRects({ chartType: 'stock' })).toHaveLength(0);
+    expect(renderFillRects({ plotAreaManualLayout: { x: 0.2, y: 0.2 } })).toHaveLength(0);
+    expect(renderFillRects({ categories: [
+      ['First quarter with wrapped text repeated', 'until it exceeds the category column'].join(' '),
+      'Q2',
+    ] }))
+      .toHaveLength(0);
+    expect(renderFillRects({
+      series: [series({ name: 'North', values: [10, null], seriesType: 'line' })],
+    })).toHaveLength(0);
   });
 
   it('uses the linked dataTable line role only for omitted grid properties', () => {
@@ -19430,6 +19541,17 @@ describe('CH15 — chartEx sunburst', () => {
       ],
     };
     expect(chartLabelPaintWorkCount(sparse, undefined)).toBe(4096);
+  });
+
+  it.each([
+    { x: 0, y: 0, w: 640, h: 360 },
+    { x: 0, y: 0, w: 360, h: 640 },
+    { x: 0, y: 0, w: 900, h: 240 },
+  ])('keeps the Office-observed automatic hole ratio local to sunburst (%o)', (rect) => {
+    const rec = ringRecordingCtx();
+    renderChart(rec.ctx, sunburstModel(), rect, 1);
+    const radii = rec.arcs.map(arc => arc.r).filter(radius => radius > 0);
+    expect(Math.min(...radii) / Math.max(...radii)).toBeCloseTo(0.18, 5);
   });
 
   it('draws three concentric rings (Branch / Stem / Leaf) with distinct radii', () => {

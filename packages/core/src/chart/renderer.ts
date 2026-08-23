@@ -604,6 +604,35 @@ function drawChartDataTable(
     chart.radarStyle,
     chart,
   );
+  const dataTableFillPlotGroup = chart.plotGroups?.length === 1
+    ? chart.plotGroups[0]
+    : null;
+  const dataTableFillFamilyMatches = chart.plotGroups == null || (
+    dataTableFillPlotGroup != null
+    && (
+      (chart.chartType === 'clusteredBar'
+        && dataTableFillPlotGroup.kind === 'bar'
+        && dataTableFillPlotGroup.barDirection !== 'bar')
+      || (chart.chartType === 'line' && dataTableFillPlotGroup.kind === 'line')
+      || (chart.chartType === 'area' && dataTableFillPlotGroup.kind === 'area')
+    )
+  );
+  const dataTableFillSeriesFamilyMatches = chart.series.every(series => {
+    if (series.seriesType == null) return true;
+    if (chart.chartType === 'clusteredBar') return series.seriesType === 'bar';
+    if (chart.chartType === 'line') return series.seriesType === 'line';
+    if (chart.chartType === 'area') return series.seriesType === 'area';
+    return false;
+  });
+  const bodyFillColor = table.fillColor
+    && chart.plotAreaManualLayout == null
+    && (chart.chartType === 'clusteredBar' || chart.chartType === 'line' || chart.chartType === 'area')
+    && dataTableFillFamilyMatches
+    && dataTableFillSeriesFamilyMatches
+    && layout.headerLines.every(lines => lines.length === 1)
+    && chart.series.every(series => series.values.every(value => value != null))
+    ? table.fillColor
+    : null;
   ctx.beginPath();
   ctx.rect(tableX, tableY, tableWidth, layout.totalHeight);
   ctx.clip();
@@ -614,9 +643,9 @@ function drawChartDataTable(
     // cells. The text layout box is the measured advance by the measured line
     // height, so this remains tied to authored typography rather than a cell-
     // or sample-specific inset.
-    if (table.fillColor && text !== '') {
+    if (bodyFillColor && text !== '') {
       const width = ctx.measureText(text).width;
-      ctx.fillStyle = `#${table.fillColor}`;
+      ctx.fillStyle = `#${bodyFillColor}`;
       ctx.fillRect(
         centerX - width / 2,
         centerY - layout.lineHeight / 2,
@@ -6066,7 +6095,8 @@ function chartStyleRolePlotArea(chart: ChartModel): ChartModel {
   let plotAreaBg = chart.plotAreaBg;
   let plotAreaFillHidden = chart.plotAreaFillHidden;
   const directPaint = chart.plotAreaFillPaintAuthored === true
-    || plotAreaFill != null || plotAreaBg != null || plotAreaFillHidden === true;
+    || ((plotAreaFill != null || plotAreaBg != null) && chart.plotAreaFillAutomatic !== true)
+    || plotAreaFillHidden === true;
   if (!directPaint && linked.fillNoStyle !== true) {
     if (linked.fillHidden === true) {
       plotAreaFillHidden = true;
@@ -15152,11 +15182,10 @@ function drawChartTextBoxes(
 // ─── Background frame + dispatcher ──────────────────────────────────────────
 
 /** ECMA-376 §21.2.2.159 defines only whether chart-space corners are rounded,
- * not the application geometry. Keep the compatibility policy isolated: a
- * fixed 5pt radius is transform-stable, independent of chart aspect ratio, and
- * can be replaced without touching fill/border/clip semantics if a future
- * Office vector boundary establishes a different radius. */
-const CHART_SPACE_CORNER_RADIUS_PT = 5;
+ * not the application geometry. Desktop Excel vector output uses a fixed 10pt
+ * radius across square, wide, and tall chart frames; keep that observed Office
+ * policy isolated from fill, border, and clipping semantics. */
+const CHART_SPACE_CORNER_RADIUS_PT = 10;
 
 function chartSpaceRoundedPath(
   ctx: CanvasRenderingContext2D,

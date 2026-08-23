@@ -237,8 +237,16 @@ export interface ChartDataTable {
     fontColor?: string | null;
     fontBold?: boolean | null;
     fontItalic?: boolean | null;
-    /** Direct `<c:dTable><c:spPr>` solid fill, painted behind body text boxes. */
+    /** Resolved solid compatibility projection of `<c:dTable><c:spPr>`. */
     fillColor?: string | null;
+    /** Direct DrawingML fill recipe. Preserved even where Office's application-
+     * defined data-table paint extent has not been established for that recipe. */
+    fill?: SolidFill | GradientFill | PatternFill | null;
+    /** Explicit `<a:noFill>` on the data-table shape properties. */
+    fillHidden?: boolean | null;
+    /** True when `spPr` authored any DrawingML fill child, including one whose
+     * paint recipe this implementation cannot resolve. */
+    fillPaintAuthored?: boolean | null;
     lineColor?: string | null;
     lineWidthEmu?: number | null;
     lineDash?: string | null;
@@ -457,6 +465,7 @@ export interface ChartModel {
     plotAreaFill?: Fill | null;
     plotAreaFillHidden?: boolean | null;
     plotAreaFillPaintAuthored?: boolean | null;
+    plotAreaFillAutomatic?: boolean | null;
     plotAreaLineColor?: string | null;
     plotAreaLineFill?: SolidFill | GradientFill | PatternFill | null;
     plotAreaLineWidthEmu?: number | null;
