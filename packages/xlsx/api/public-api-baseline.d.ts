@@ -566,9 +566,13 @@ export interface ChartModel {
     catAxisLineColor?: string | null;
     catAxisLineWidthEmu?: number | null;
     catAxisLineDash?: string | null;
+    /** A direct `<c:catAx><c:spPr><a:ln>` paint was authored. */
+    catAxisLinePaintAuthored?: boolean | null;
     valAxisLineColor?: string | null;
     valAxisLineWidthEmu?: number | null;
     valAxisLineDash?: string | null;
+    /** A direct `<c:valAx><c:spPr><a:ln>` paint was authored. */
+    valAxisLinePaintAuthored?: boolean | null;
     catAxisFormatCode?: string | null;
     catAxisMin?: number | null;
     catAxisMax?: number | null;
@@ -894,6 +898,8 @@ export interface ChartThreeDSeriesAxis {
     lineColor?: string | null;
     lineWidthEmu?: number | null;
     lineDash?: string | null;
+    /** A direct `<c:serAx><c:spPr><a:ln>` paint was authored. */
+    linePaintAuthored?: boolean | null;
     lineHidden: boolean;
     titleFontSizeHpt?: number | null;
     titleFontBold?: boolean | null;
