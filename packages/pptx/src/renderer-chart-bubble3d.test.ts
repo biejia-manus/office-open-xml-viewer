@@ -73,7 +73,7 @@ describe('PPTX rotated bubble3D chart', () => {
     const chart = {
       chartType: 'boxWhisker', categories: [], series: [], showLegend: false,
       chartexBox: { categories: [], series: [] },
-    } as ChartModel;
+    } as unknown as ChartModel;
     const slide = {
       index: 0, slideNumber: 1, background: null,
       elements: [{
@@ -82,7 +82,7 @@ describe('PPTX rotated bubble3D chart', () => {
       }],
     } as Slide;
     const rec = recordingCanvas();
-    const render = vi.fn(() => true);
+    const render = vi.fn<ChartExRenderer['render']>(() => true);
     const chartEx = { render } as ChartExRenderer;
 
     await renderSlide(rec.canvas, slide, 9_144_000, 6_858_000, {

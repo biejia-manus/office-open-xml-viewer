@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chartEx } from '../../../src/chart-ex.js';
-import { loadWorkerRenderers, workerRendererDescriptors } from '@silurus/ooxml-core/worker';
+import { loadWorkerRenderers } from '@silurus/ooxml-core/worker';
 import type { RenderWorkerRequest } from './worker-protocol.js';
 
 describe('DOCX worker optional renderer wire', () => {
@@ -11,7 +10,12 @@ describe('DOCX worker optional renderer wire', () => {
       data: new ArrayBuffer(0),
       resourcePolicy: {} as never,
       defaultCurrentDateMs: 0,
-      renderers: workerRendererDescriptors({ chartEx }),
+      renderers: {
+        chartEx: {
+          protocol: 'ooxml-worker-renderer-module/v1',
+          builtin: 'chartEx',
+        },
+      },
     } satisfies Extract<RenderWorkerRequest, { type: 'parse' }>;
 
     const cloned = structuredClone(request);

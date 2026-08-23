@@ -12130,7 +12130,7 @@ describe('classic chart data table (CT_DTable)', () => {
     expect(renderFillRects({}).length).toBeGreaterThan(0);
     expect(renderFillRects({ chartType: 'clusteredBarH' })).toHaveLength(0);
     expect(renderFillRects({ chartType: 'stock' })).toHaveLength(0);
-    expect(renderFillRects({ plotAreaManualLayout: { x: 0.2 } })).toHaveLength(0);
+    expect(renderFillRects({ plotAreaManualLayout: { x: 0.2, y: 0.2 } })).toHaveLength(0);
     expect(renderFillRects({ categories: [
       ['First quarter with wrapped text repeated', 'until it exceeds the category column'].join(' '),
       'Q2',
