@@ -70,6 +70,9 @@ import {
   isDocumentPullResponse,
   materializeDocumentPullAdapterSession,
 } from './document-pull-client.js';
+import { layoutDocumentInputAsync } from './layout/document.js';
+import { layoutDocumentProgressively } from './layout/progressive.js';
+import { normalizeLayoutOptions } from './layout/options.js';
 
 /** Options for {@link DocxDocument.load}. Extends the shared load-options type
  *  from `@silurus/ooxml-core` (`useGoogleFonts`, `resourceLimits`, and the
@@ -92,6 +95,63 @@ export interface LoadOptions extends CoreLoadOptions {
    * renderer objects use their documented fallback in worker mode.
    */
   mode?: 'main' | 'worker';
+  /**
+   * Lay the document out in slices instead of one blocking call, releasing the
+   * thread between body entries.
+   *
+   * Layout is unchanged — this only spreads it over event-loop turns — so the
+   * document that eventually loads is byte-identical either way. What changes is
+   * that the thread doing the work (the main thread in `mode: 'main'`, the
+   * render worker in `mode: 'worker'`) stays responsive while a large document
+   * paginates. `load()` still resolves only once layout is complete.
+   *
+   * Off by default: for small documents the slicing is pure overhead, and
+   * existing callers should not silently change scheduling behaviour.
+   */
+  sliceLayout?: boolean;
+  /**
+   * Called as layout progresses, with the number of pages committed so far.
+   *
+   * Monotonic within a pagination pass, but NOT across passes: pagination
+   * restarts from page zero for each convergence pass (header/footer reserve
+   * measurement, PAGE/NUMPAGES feedback), so this can go down. Treat a decrease
+   * as "layout is re-deriving pages you were already told about" — it is
+   * progress reporting, not a page count.
+   *
+   * Implies {@link sliceLayout} in main mode, since a blocking layout cannot
+   * deliver progress the UI could act on.
+   */
+  onLayoutProgress?: (progress: Readonly<{ committedPages: number }>) => void;
+  /**
+   * Resolve `load()` as soon as the document's opening pages are ready, and
+   * finish laying the rest out in the background.
+   *
+   * A large document otherwise shows nothing at all until every page has been
+   * paginated. With this on, the first pages are laid out on their own — a real
+   * layout of a short document, produced by the ordinary pagination path — and
+   * handed over immediately, so the viewer can paint while the full layout is
+   * still running. {@link DocxDocument.pageCount} therefore starts small and
+   * grows, the way Word's page count settles during background repagination.
+   *
+   * The pages published early are the same pages the finished layout will show,
+   * except in documents whose headers or footers carry PAGE/NUMPAGES fields,
+   * where the displayed totals cannot be known before the last page is laid out.
+   * The finished layout is byte-identical to a blocking load either way.
+   *
+   * Await {@link DocxDocument.whenLayoutComplete} before anything that needs the
+   * whole document: page-count-sensitive UI, text search, bookmark navigation,
+   * printing or export.
+   *
+   * Off by default: `load()` resolving before the document is fully laid out is
+   * a behaviour change existing callers should opt into. Requires `mode: 'main'`.
+   */
+  progressiveLayout?: boolean;
+  /**
+   * Called once the full layout has replaced the provisional one, or with the
+   * failure if background layout threw. Only fires when
+   * {@link progressiveLayout} actually deferred work.
+   */
+  onLayoutComplete?: (error?: unknown) => void;
 }
 
 /** Options for {@link DocxDocument.collectPageRuns}. */
@@ -114,6 +174,13 @@ export class DocxDocument {
   private _document: DocxDocumentModel | null = null;
   private _source: LayoutSourceStore | null = null;
   private _meta: DocumentMeta | null = null;
+  /** Progressive layout only: false while the authoritative layout is still
+   *  being built in the background. Always true for an ordinary load. */
+  private _layoutComplete = true;
+  /** Settles when background layout finishes; never rejects (the failure is
+   *  retained in `_layoutError` and re-thrown by `whenLayoutComplete`). */
+  private _layoutCompletion: Promise<void> | null = null;
+  private _layoutError: unknown = undefined;
   /** Lazily-built `bookmarkName → 0-based page index` map for internal hyperlink
    *  anchors (IX-nav). Built on first {@link getBookmarkPage} from the paginated
    *  pages (main) or the worker meta's `bookmarkPages` (worker). Nulled by
@@ -325,7 +392,72 @@ export class DocxDocument {
         );
         // Worker mode must build this layout to return parsedMeta. Main mode does
         // the same work here so layout failures reject load() in both modes.
-        retained.layoutVariants.defaultLayout;
+        //
+        // Sliced when asked: the same pagination generator, drained across
+        // event-loop turns instead of in one blocking call, then deposited in
+        // the variant store so every later synchronous render selects it
+        // normally. The layout is identical either way.
+        // A fatally-unparseable document is served a synthetic error page by the
+        // variant store's builder rather than being paginated at all; neither
+        // slicing nor previewing may route around that substitution.
+        const deferrable = doc._source.fatalParse === null;
+        const scheduler = {
+          onProgress: opts.onLayoutProgress
+            ? (committedPages: number) => opts.onLayoutProgress?.({ committedPages })
+            : undefined,
+        };
+        if (deferrable && opts.progressiveLayout) {
+          const layoutOptions = normalizeLayoutOptions(undefined, runtime.defaultCurrentDateMs);
+          const store = retained.layoutVariants;
+          // Narrowed once: the closures below outlive this block's control flow.
+          const progressiveDocument = doc;
+          let published = false;
+          const full = layoutDocumentProgressively(
+            doc._source.bodyLayoutInput,
+            services,
+            layoutOptions,
+            {
+              hasPaginationFields: doc._source.hasPaginationFields,
+              scheduler,
+              onPreview: (preview) => {
+                store.prime(layoutOptions, preview.layout);
+                progressiveDocument._layoutComplete = false;
+                published = true;
+              },
+            },
+          ).then((layout) => {
+            // Replaces the provisional prefix. Anything already painted from it
+            // is now stale by design; the viewer relays out on completion.
+            store.prime(layoutOptions, layout, true);
+            progressiveDocument._layoutComplete = true;
+            opts.onLayoutComplete?.();
+          });
+          // Nothing was published, so there is nothing to show early and no
+          // reason to resolve load() before the layout that would have been
+          // built anyway. Failures still reject load() on this path.
+          if (!published) await full;
+          else {
+            // load() is about to resolve, so a later failure can no longer
+            // reject it. Retain it for whenLayoutComplete() and report it once,
+            // rather than surfacing as an unhandled rejection.
+            progressiveDocument._layoutCompletion = full.catch((error: unknown) => {
+              progressiveDocument._layoutError = error;
+              progressiveDocument._layoutComplete = true;
+              opts.onLayoutComplete?.(error);
+            });
+          }
+        } else if (deferrable && (opts.sliceLayout || opts.onLayoutProgress)) {
+          const layoutOptions = normalizeLayoutOptions(undefined, runtime.defaultCurrentDateMs);
+          const layout = await layoutDocumentInputAsync(
+            doc._source.bodyLayoutInput,
+            services,
+            layoutOptions,
+            scheduler,
+          );
+          retained.layoutVariants.prime(layoutOptions, layout);
+        } else {
+          retained.layoutVariants.defaultLayout;
+        }
       }
       // This final snapshot includes eager embedded-font extraction performed
       // after the parse response. Telemetry is strictly best-effort: a worker
@@ -515,6 +647,31 @@ export class DocxDocument {
     if (this._meta) return this._meta.pageCount;
     if (!this._document) return 0;
     return this._getLayout()?.pages.length ?? 0;
+  }
+
+  /**
+   * Whether every page has been laid out.
+   *
+   * Only ever false under `progressiveLayout`, between `load()` resolving on the
+   * document's opening pages and the full layout replacing them. While false,
+   * {@link pageCount} reports the pages available so far, not the document's
+   * total.
+   */
+  get layoutComplete(): boolean {
+    return this._layoutComplete;
+  }
+
+  /**
+   * Resolve once the whole document is laid out.
+   *
+   * Await this before anything that must see every page — text search, bookmark
+   * navigation, page-count UI, print or export. Resolves immediately for an
+   * ordinary load. Re-throws a background layout failure, which cannot reject
+   * `load()` because that already resolved.
+   */
+  async whenLayoutComplete(): Promise<void> {
+    if (this._layoutCompletion) await this._layoutCompletion;
+    if (this._layoutError !== undefined) throw this._layoutError;
   }
 
   /** The render mode this engine was loaded with ('main' | 'worker'). A fact for

@@ -334,6 +334,12 @@ export class FakeDocxEngine {
     private _mode: 'main' | 'worker' = 'main',
     private deferred = false,
   ) {}
+  /** Grow (or shrink) the document, as progressive layout does when the
+   *  authoritative layout replaces the provisional prefix. */
+  setPageCount(pageCount: number): void {
+    this._pageCount = pageCount;
+  }
+
   get pageCount(): number {
     return this._pageCount;
   }

@@ -88,6 +88,43 @@ export class LayoutVariantStore {
     });
   }
 
+  /**
+   * Deposit a layout built outside this store (by the asynchronous, sliced
+   * builder) under its options key, so every later synchronous `select` — the
+   * render path included — hits it instead of rebuilding.
+   *
+   * Retention follows the same one-non-default-variant policy as `select`, so
+   * priming cannot grow the cache beyond what building normally would.
+   */
+  prime(
+    options: LayoutOptions,
+    layout: DocumentLayout,
+    replace = false,
+  ): DeepReadonly<DocumentLayout> {
+    const normalized = Object.isFrozen(options) ? options : Object.freeze({ ...options });
+    const key = layoutOptionsKey(normalized, this.#services);
+    const existing = this.#variants.get(key);
+    // `replace` exists for progressive layout, where a provisional prefix is
+    // deliberately superseded by the authoritative layout of the same options.
+    // Every other caller must not be able to silently swap a cached layout a
+    // consumer may already be painting from.
+    if (existing && !replace) return existing;
+    const frozen = deepFreezeDocumentLayout(layout);
+    if (key !== this.#defaultKey) {
+      if (this.#activeNonDefaultKey !== null && this.#activeNonDefaultKey !== key) {
+        this.#variants.delete(this.#activeNonDefaultKey);
+      }
+      this.#activeNonDefaultKey = key;
+    }
+    this.#variants.set(key, frozen);
+    return frozen;
+  }
+
+  /** Whether a layout for these options is already available synchronously. */
+  hasLayoutFor(options: LayoutOptions): boolean {
+    return this.#variants.has(layoutOptionsKey(options, this.#services));
+  }
+
   isDefault(options: LayoutOptions): boolean {
     return layoutOptionsKey(options, this.#services) === this.#defaultKey;
   }

@@ -92,6 +92,29 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
   paddingRight?: number;
   /** Pages kept mounted beyond the viewport on each side. Default 1. */
   overscan?: number;
+  /**
+   * Paint the document's opening pages as soon as they are laid out, instead of
+   * waiting for the whole document.
+   *
+   * A large document otherwise shows nothing until every page has been
+   * paginated. With this on, the viewer mounts the first pages within a few
+   * hundred milliseconds regardless of document length, the scrollbar grows as
+   * the rest of the layout arrives, and the viewer relays out once it lands.
+   * The pages shown early are the ones the finished layout will show, except in
+   * documents whose headers or footers carry PAGE/NUMPAGES fields, where the
+   * displayed totals settle when layout completes.
+   *
+   * `pageCount` therefore starts small and grows; {@link findText} waits for the
+   * full layout internally. Ignored by `fromDocument`, whose document is already
+   * loaded. Requires `mode: 'main'`.
+   */
+  progressiveLayout?: boolean;
+  /**
+   * Lay the document out in slices, keeping the thread responsive while a large
+   * document paginates. `load()` still resolves only once layout is complete —
+   * use {@link progressiveLayout} to paint before then.
+   */
+  sliceLayout?: boolean;
   /** Per-page transparent text-selection overlay. IX6 — works in BOTH render
    *  modes: in worker mode the per-run geometry is collected off-thread and
    *  shipped back beside the page bitmap, so the overlay is populated identically
@@ -519,6 +542,21 @@ export class DocxScrollViewer implements ZoomableViewer {
         regionMap: this._opts.regionMap,
         chartEx: this._opts.chartEx,
         mode: this._mode,
+        ...(this._opts.progressiveLayout ? { progressiveLayout: true } : {}),
+        ...(this._opts.sliceLayout ? { sliceLayout: true } : {}),
+        // Relaying out when the authoritative layout lands is what turns a
+        // provisional prefix into the real document on screen: page count grows,
+        // the spacer follows, and the mounted slots repaint.
+        onLayoutComplete: (error?: unknown) => {
+          if (error !== undefined) {
+            this._opts.onError?.(error instanceof Error ? error : new Error(String(error)));
+            return;
+          }
+          if (this._destroyed) return;
+          this._find.invalidate();
+          this._invalidateRenderedSlots();
+          this.relayout();
+        },
       }), (ownedDocument) => {
         this._invalidateElementContext(false);
         elementInvalidated = true;
@@ -763,6 +801,26 @@ export class DocxScrollViewer implements ZoomableViewer {
   }
 
   /** Mount/recycle slots for the current visible window. */
+  /**
+   * Force every mounted slot to repaint on the next mount pass.
+   *
+   * `_renderSlot` short-circuits when a slot already holds the page it is being
+   * asked for, which is what stops scrolling from repainting unchanged pages.
+   * When the underlying layout is REPLACED — progressive layout swapping its
+   * provisional prefix for the authoritative one — that guard is exactly wrong:
+   * the page index is unchanged but its content may not be (a footer's
+   * PAGE/NUMPAGES total is only knowable once the last page exists). Clearing
+   * the slot identities makes the next `_mountVisible` re-render in place,
+   * without unmounting and re-creating the slots, so nothing blanks.
+   */
+  private _invalidateRenderedSlots(): void {
+    this._renderEpoch++;
+    for (const slot of this._slots.values()) {
+      slot.renderedPage = -1;
+      slot.renderedScale = -1;
+    }
+  }
+
   private _mountVisible(initialRenders?: Promise<void>[]): void {
     if (!this._doc || this._doc.pageCount === 0) return;
     const r = this._range();
@@ -784,7 +842,15 @@ export class DocxScrollViewer implements ZoomableViewer {
         if (initialRenders && render) initialRenders.push(render);
       } else {
         // Re-position (offsets shift after a spacer/height change).
-        this._positionSlot(this._slots.get(i)!, i, r);
+        const slot = this._slots.get(i)!;
+        this._positionSlot(slot, i, r);
+        // Repaint only if this slot's identity was cleared — `_renderSlot`
+        // returns null when the slot already holds page `i`, so ordinary
+        // scrolling and resizing still never re-render a mounted page. The one
+        // caller that clears it is `_invalidateRenderedSlots`, for a layout
+        // replaced underneath the pages on screen.
+        const render = this._renderSlot(i, slot, initialRenders === undefined);
+        if (initialRenders && render) initialRenders.push(render);
       }
     }
     // onVisiblePageChange fires ONLY when the top visible page actually changes
@@ -1805,6 +1871,16 @@ export class DocxScrollViewer implements ZoomableViewer {
     opts: FindMatchesOptions = {},
   ): Promise<FindMatch<DocxMatchLocation>[]> {
     if (!this._doc) return [];
+    // Search spans every page, so a progressively-loaded document has to finish
+    // laying out first — otherwise the search silently covers only the pages
+    // that happen to exist yet. Guarded on the document actually being
+    // incomplete so that an ordinary document still starts its find
+    // synchronously: `findText()` followed immediately by `clearFind()` must
+    // cancel the find, which it cannot do if the find has not begun.
+    if (this._doc.layoutComplete === false) {
+      await this._doc.whenLayoutComplete();
+      if (this._destroyed || !this._doc) return [];
+    }
     this._findActive = query.length > 0;
     const matches = await this._find.find(query, opts);
     this._redrawHighlights();
