@@ -5367,23 +5367,30 @@ function renderCharts(
     ctx.rect(clipX, scrollAreaY, scrollAreaW, scrollAreaH);
     ctx.clip();
 
-    // XLSX natural rendering is device-px at 96 DPI where 1pt = 4/3 px. Scale
-    // that by `cs` so OOXML-specified font sizes (title/axes) scale with zoom.
-    const ptToPx = PT_TO_PX * cs;
+    // Render the chart in its natural 96-DPI coordinate space, then let Canvas
+    // scale the complete paint by the worksheet zoom. Passing a smaller rect
+    // and only shrinking `ptToPx` leaves renderer-owned gaps/padding at fixed
+    // screen pixels; that can repack or entirely suppress a manual legend at a
+    // zoom step even though Excel scales the chart as one proportional object.
+    ctx.save();
+    if (cs !== 1) ctx.scale(cs, cs);
     // `anchor.chart` is already the canonical ChartModel emitted by the Rust
     // parser (`ooxml_common::chart::ChartModel`) — the former `adaptChartData`
     // default/mapping logic now lives in the parser's `From<ChartData>`.
     renderChart(
       ctx,
       anchor.chart,
-      { x: cx, y: cy, w: cw, h: ch },
-      ptToPx,
+      cs === 1
+        ? { x: cx, y: cy, w: cw, h: ch }
+        : { x: cx / cs, y: cy / cs, w: cw / cs, h: ch / cs },
+      PT_TO_PX,
       0,
       threeD,
       regionMap,
       fill => loadedImages?.get(chartImageFillKey(fill)),
       chartEx,
     );
+    ctx.restore();
     ctx.restore();
   }
 }
