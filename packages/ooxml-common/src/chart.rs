@@ -361,10 +361,17 @@ pub struct ChartDataTable {
     pub font_bold: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_italic: Option<bool>,
-    /// Direct `<c:dTable><c:spPr>` solid fill. Desktop Excel scopes this to
-    /// the generated category/value text boxes rather than the table frame.
+    /// Resolved solid compatibility projection of `<c:dTable><c:spPr>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_color: Option<String>,
+    /// Direct DrawingML fill recipe. It is preserved even when the Office-
+    /// defined visual extent for this data-table paint is not yet rendered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<ChartStyleFill>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_hidden: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_paint_authored: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -455,6 +462,10 @@ pub struct ChartModel {
     /// A direct plot-area fill paint was authored, even when unresolved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_area_fill_paint_authored: Option<bool>,
+    /// The resolved plot-area color is a host automatic fallback rather than
+    /// direct formatting. Linked chart-style paint therefore has precedence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_area_fill_automatic: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_area_line_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3992,8 +4003,10 @@ pub fn extract_legend_font_color(root: Node, resolver: &dyn ColorResolver) -> Op
 /// Parse the optional classic-chart data table (`CT_DTable`). Each border/key
 /// child is a CT_Boolean: a present bare element means true, while omission
 /// means that feature is not requested. Text and line properties use the same
-/// DrawingML grammar as the surrounding chart. The table `spPr` applies both
-/// its shape fill behind the full table and its line style to the table grid.
+/// DrawingML grammar as the surrounding chart. The direct resolvable solid
+/// fill is retained separately from the table-grid line style; its observed
+/// Excel paint extent is an application compatibility behavior, not defined by
+/// `CT_DTable` itself.
 pub fn extract_chart_data_table(
     plot_area: Node,
     resolver: &dyn ColorResolver,
@@ -4011,7 +4024,7 @@ pub fn extract_chart_data_table(
                 .flatten()
         })
     });
-    let fill_color = child(table, "spPr").and_then(|shape| resolver.resolve_shape_fill(shape));
+    let direct_fill = extract_direct_shape_fill(child(table, "spPr"), resolver);
     let (line_color, line_width_emu, line_hidden) = extract_sp_pr_ln_style(table, resolver);
     let line_dash = child(table, "spPr")
         .and_then(|shape| child(shape, "ln"))
@@ -4029,7 +4042,10 @@ pub fn extract_chart_data_table(
         font_color,
         font_bold: text_props.and_then(|props| chart_text_bool_attr(props, "b")),
         font_italic: text_props.and_then(|props| chart_text_bool_attr(props, "i")),
-        fill_color,
+        fill_color: direct_fill.color,
+        fill: direct_fill.fill,
+        fill_hidden: direct_fill.hidden,
+        fill_paint_authored: direct_fill.paint_authored,
         line_color,
         line_width_emu,
         line_dash,
@@ -7504,6 +7520,7 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
         plot_area_fill: None,
         plot_area_fill_hidden: None,
         plot_area_fill_paint_authored: None,
+        plot_area_fill_automatic: None,
         plot_area_line_color: None,
         plot_area_line_fill: None,
         plot_area_line_width_emu: None,
@@ -10998,6 +11015,9 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
     } else {
         color_resolver.default_plot_area_bg()
     };
+    let plot_area_fill_automatic = (plot_area_fill_style.paint_authored != Some(true)
+        && plot_area_bg.is_some())
+    .then_some(true);
     let plot_area_line_style = extract_direct_shape_line(plot_area, color_resolver);
     let data_table = extract_chart_data_table(plot_area, color_resolver);
 
@@ -12893,6 +12913,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         plot_area_fill: plot_area_fill_style.fill,
         plot_area_fill_hidden: plot_area_fill_style.hidden,
         plot_area_fill_paint_authored: plot_area_fill_style.paint_authored,
+        plot_area_fill_automatic,
         plot_area_line_color: plot_area_line_style.color,
         plot_area_line_fill: plot_area_line_style.fill,
         plot_area_line_width_emu: plot_area_line_style.width_emu,
@@ -13263,6 +13284,7 @@ mod tests {
             plot_area_fill: None,
             plot_area_fill_hidden: None,
             plot_area_fill_paint_authored: None,
+            plot_area_fill_automatic: None,
             plot_area_line_color: None,
             plot_area_line_fill: None,
             plot_area_line_width_emu: None,
@@ -15701,6 +15723,7 @@ Subtitle</a:t></a:r></a:p>
         )
         .expect("plot-area chart parses");
         assert_eq!(parsed.plot_area_bg.as_deref(), Some("FFFFFF"));
+        assert_eq!(parsed.plot_area_fill_automatic, Some(true));
 
         let no_fill = chart_xml("<c:spPr><a:noFill/></c:spPr>");
         let parsed = parse_chart_part(
@@ -15710,6 +15733,7 @@ Subtitle</a:t></a:r></a:p>
         .expect("noFill plot-area chart parses");
         assert_eq!(parsed.plot_area_bg, None);
         assert_eq!(parsed.plot_area_fill_hidden, Some(true));
+        assert_eq!(parsed.plot_area_fill_automatic, None);
     }
 
     #[test]
@@ -16612,9 +16636,59 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(table.font_bold, Some(true));
         assert_eq!(table.font_italic, Some(true));
         assert_eq!(table.fill_color.as_deref(), Some("FFF2CC"));
+        assert!(matches!(
+            table.fill,
+            Some(ChartStyleFill::Solid { ref color }) if color == "FFF2CC"
+        ));
+        assert_eq!(table.fill_hidden, None);
+        assert_eq!(table.fill_paint_authored, Some(true));
         assert_eq!(table.line_color.as_deref(), Some("445566"));
         assert_eq!(table.line_width_emu, Some(12700));
         assert_eq!(table.line_dash.as_deref(), Some("dash"));
+    }
+
+    /// DrawingML `spPr` is not a solid-color-only grammar. Preserve the
+    /// authored recipe/noFill provenance in the common model even though the
+    /// desktop-Excel text-box extent is currently rendered only for the
+    /// separately verified solid subset.
+    #[test]
+    fn parse_chart_data_table_preserves_non_solid_fill_provenance() {
+        let parse_table = |shape: &str| {
+            let xml = format!(
+                r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}">
+                  <c:chart><c:plotArea>
+                    <c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/>
+                      <c:cat><c:strCache><c:pt idx="0"><c:v>A</c:v></c:pt></c:strCache></c:cat>
+                      <c:val><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:val>
+                    </c:ser></c:barChart>
+                    <c:dTable><c:spPr>{shape}</c:spPr></c:dTable>
+                  </c:plotArea></c:chart>
+                </c:chartSpace>"#
+            );
+            parse_chart_part(chart_space_of(&xml).root_element(), &FixtureResolver)
+                .expect("data-table chart parses")
+                .data_table
+                .expect("c:dTable preserved")
+        };
+
+        let gradient = parse_table(
+            r#"<a:gradFill><a:gsLst>
+              <a:gs pos="0"><a:srgbClr val="112233"/></a:gs>
+              <a:gs pos="100000"><a:srgbClr val="AABBCC"/></a:gs>
+            </a:gsLst><a:lin ang="5400000"/></a:gradFill>"#,
+        );
+        assert!(matches!(
+            gradient.fill,
+            Some(ChartStyleFill::Gradient { .. })
+        ));
+        assert_eq!(gradient.fill_hidden, None);
+        assert_eq!(gradient.fill_paint_authored, Some(true));
+
+        let no_fill = parse_table("<a:noFill/>");
+        assert_eq!(no_fill.fill, None);
+        assert_eq!(no_fill.fill_color, None);
+        assert_eq!(no_fill.fill_hidden, Some(true));
+        assert_eq!(no_fill.fill_paint_authored, Some(true));
     }
 
     /// `c:invertIfNegative` and the Office 2010 alternate fill extension are

@@ -5397,6 +5397,22 @@ describe('bar chart authored layout and fills', () => {
     expect(linked.strokeRects.find(rect => rect.ss === '#445566')?.dash)
       .toEqual([0.9375, 0.5625]);
 
+    const automaticHostFallback = recordingCtx();
+    renderChart(automaticHostFallback.ctx, {
+      ...chart,
+      plotAreaBg: 'FFFFFF',
+      plotAreaFillAutomatic: true,
+    }, RECT, 1, 30);
+    expect(automaticHostFallback.gradients).toHaveLength(1);
+    expect(automaticHostFallback.gradients[0]?.stops).toEqual([
+      { position: 0, color: 'rgba(17,34,51,1)' },
+      { position: 1, color: 'rgba(221,238,255,1)' },
+    ]);
+
+    const compatibilityDirect = recordingCtx();
+    renderChart(compatibilityDirect.ctx, { ...chart, plotAreaBg: 'FFFFFF' }, RECT, 1, 30);
+    expect(compatibilityDirect.gradients).toHaveLength(0);
+
     const directEmptyDash = recordingCtx();
     renderChart(directEmptyDash.ctx, { ...chart, plotAreaLineCustomDash: [] }, RECT, 1, 30);
     expect(directEmptyDash.strokeRects.find(rect => rect.ss === '#445566')?.dash)
@@ -12021,6 +12037,39 @@ describe('classic chart data table (CT_DTable)', () => {
       showOutline: true,
       lineHidden: true,
     })).toEqual({ lineStrokes: 0, outlines: 0 });
+  });
+
+  it('limits the observed text-background compatibility rule to its Excel evidence', () => {
+    const renderFillRects = (over: Partial<ChartModel>) => {
+      const rec = recordingCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'line',
+        categories: ['Q1', 'Q2'],
+        series: [series({ name: 'North', values: [10, 15], seriesType: 'line' })],
+        dataTable: {
+          showHorizontalBorder: true,
+          showVerticalBorder: true,
+          showOutline: true,
+          showKeys: false,
+          fillColor: 'FFF2CC',
+        },
+        ...over,
+      }), RECT, 1);
+      return rec.rects.filter(rect => rect.fs === '#FFF2CC');
+    };
+
+    expect(renderFillRects({}).length).toBeGreaterThan(0);
+    expect(renderFillRects({ chartType: 'clusteredBarH' })).toHaveLength(0);
+    expect(renderFillRects({ chartType: 'stock' })).toHaveLength(0);
+    expect(renderFillRects({ plotAreaManualLayout: { x: 0.2 } })).toHaveLength(0);
+    expect(renderFillRects({ categories: [
+      ['First quarter with wrapped text repeated', 'until it exceeds the category column'].join(' '),
+      'Q2',
+    ] }))
+      .toHaveLength(0);
+    expect(renderFillRects({
+      series: [series({ name: 'North', values: [10, null], seriesType: 'line' })],
+    })).toHaveLength(0);
   });
 
   it('uses the linked dataTable line role only for omitted grid properties', () => {

@@ -604,6 +604,13 @@ function drawChartDataTable(
     chart.radarStyle,
     chart,
   );
+  const bodyFillColor = table.fillColor
+    && chart.plotAreaManualLayout == null
+    && (chart.chartType === 'clusteredBar' || chart.chartType === 'line' || chart.chartType === 'area')
+    && layout.headerLines.every(lines => lines.length === 1)
+    && chart.series.every(series => series.values.every(value => value != null))
+    ? table.fillColor
+    : null;
   ctx.beginPath();
   ctx.rect(tableX, tableY, tableWidth, layout.totalHeight);
   ctx.clip();
@@ -614,9 +621,9 @@ function drawChartDataTable(
     // cells. The text layout box is the measured advance by the measured line
     // height, so this remains tied to authored typography rather than a cell-
     // or sample-specific inset.
-    if (table.fillColor && text !== '') {
+    if (bodyFillColor && text !== '') {
       const width = ctx.measureText(text).width;
-      ctx.fillStyle = `#${table.fillColor}`;
+      ctx.fillStyle = `#${bodyFillColor}`;
       ctx.fillRect(
         centerX - width / 2,
         centerY - layout.lineHeight / 2,
@@ -6066,7 +6073,8 @@ function chartStyleRolePlotArea(chart: ChartModel): ChartModel {
   let plotAreaBg = chart.plotAreaBg;
   let plotAreaFillHidden = chart.plotAreaFillHidden;
   const directPaint = chart.plotAreaFillPaintAuthored === true
-    || plotAreaFill != null || plotAreaBg != null || plotAreaFillHidden === true;
+    || ((plotAreaFill != null || plotAreaBg != null) && chart.plotAreaFillAutomatic !== true)
+    || plotAreaFillHidden === true;
   if (!directPaint && linked.fillNoStyle !== true) {
     if (linked.fillHidden === true) {
       plotAreaFillHidden = true;
