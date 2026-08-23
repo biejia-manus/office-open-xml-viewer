@@ -5152,12 +5152,12 @@ fn chart_style_paint_component_count(container: Node) -> Option<usize> {
     if let Some(gradient) = child(container, "gradFill") {
         return Some(
             child(gradient, "gsLst")
-            .map(|list| {
-                list.children()
-                    .filter(|node| node.is_element() && node.tag_name().name() == "gs")
-                    .count()
-            })
-            .unwrap_or(0),
+                .map(|list| {
+                    list.children()
+                        .filter(|node| node.is_element() && node.tag_name().name() == "gs")
+                        .count()
+                })
+                .unwrap_or(0),
         );
     }
     if child(container, "blipFill").is_some() || child(container, "pattFill").is_some() {
@@ -11061,9 +11061,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         && plot_area_bg.is_some())
     .then_some(true);
     let plot_area_line_style = extract_direct_shape_line(plot_area, color_resolver);
-    if child(plot_area, "dTable")
-        .is_some_and(|table| !chart_data_table_paint_within_limit(table))
-    {
+    if child(plot_area, "dTable").is_some_and(|table| !chart_data_table_paint_within_limit(table)) {
         return None;
     }
     let data_table = extract_chart_data_table(plot_area, color_resolver);
@@ -16766,11 +16764,7 @@ Subtitle</a:t></a:r></a:p>
     fn parse_chart_data_table_bounds_gradient_before_expansion() {
         let chart = |stop_count: usize, trailing_fill: &str| {
             let stops = (0..stop_count)
-                .map(|index| {
-                    format!(
-                        r#"<a:gs pos="{index}"><a:srgbClr val="112233"/></a:gs>"#,
-                    )
-                })
+                .map(|index| format!(r#"<a:gs pos="{index}"><a:srgbClr val="112233"/></a:gs>"#,))
                 .collect::<String>();
             format!(
                 r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}">
@@ -16786,26 +16780,16 @@ Subtitle</a:t></a:r></a:p>
         };
 
         let exact_xml = chart(MAX_CHART_PAINT_RECIPE_COMPONENTS, "");
-        let exact = parse_chart_part(
-            chart_space_of(&exact_xml).root_element(),
-            &FixtureResolver,
-        )
-        .expect("paint recipe at the shared ceiling parses");
+        let exact = parse_chart_part(chart_space_of(&exact_xml).root_element(), &FixtureResolver)
+            .expect("paint recipe at the shared ceiling parses");
         assert!(matches!(
             exact.data_table.and_then(|table| table.fill),
             Some(ChartStyleFill::Gradient { ref stops, .. })
                 if stops.len() == MAX_CHART_PAINT_RECIPE_COMPONENTS
         ));
 
-        for trailing_fill in [
-            "",
-            r#"<a:pattFill prst="diagCross"/>"#,
-            "<a:blipFill/>",
-        ] {
-            let oversized_xml = chart(
-                MAX_CHART_PAINT_RECIPE_COMPONENTS + 1,
-                trailing_fill,
-            );
+        for trailing_fill in ["", r#"<a:pattFill prst="diagCross"/>"#, "<a:blipFill/>"] {
+            let oversized_xml = chart(MAX_CHART_PAINT_RECIPE_COMPONENTS + 1, trailing_fill);
             assert!(parse_chart_part(
                 chart_space_of(&oversized_xml).root_element(),
                 &FixtureResolver,
