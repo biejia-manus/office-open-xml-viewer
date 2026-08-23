@@ -1066,13 +1066,22 @@ describe('chart-space background', () => {
   });
 
   it('keeps the application-defined rounded radius in points and clamps tiny frames', () => {
+    for (const [w, h] of [[390, 315], [570, 240], [285, 420]]) {
+      const aspect = recordingCtx();
+      renderChart(aspect.ctx, baseModel({
+        roundedCorners: true,
+        chartBg: 'F2F2F2',
+      }), { x: 0, y: 0, w, h }, 1);
+      expect(aspect.quadratics[0]?.y).toBe(10);
+    }
+
     const scaled = recordingCtx();
     renderChart(scaled.ctx, baseModel({
       roundedCorners: true,
       chartBg: 'F2F2F2',
     }), { x: 0, y: 0, w: 200, h: 100 }, 2);
-    // The first corner ends at y = 5pt × 2px/pt.
-    expect(scaled.quadratics[0]?.y).toBe(10);
+    // Desktop Excel vector output fixes the radius at 10pt across aspect ratios.
+    expect(scaled.quadratics[0]?.y).toBe(20);
 
     const tiny = recordingCtx();
     renderChart(tiny.ctx, baseModel({
@@ -12060,9 +12069,7 @@ describe('classic chart data table (CT_DTable)', () => {
     expect(rec.strokeRects.some(rect => rect.ss === '#445566')).toBe(true);
     expect(rec.strokeRects.find(rect => rect.ss === '#445566')?.dash.length).toBeGreaterThan(0);
     const textBackgrounds = rec.rects.filter(rect => rect.fs === '#FFF2CC');
-    expect(textBackgrounds).toHaveLength(6); // two category labels plus four values
-    expect(textBackgrounds.every(rect => rect.w < RECT.w / 4)).toBe(true);
-    expect(textBackgrounds.every(rect => rect.h === 12)).toBe(true);
+    expect(textBackgrounds).toHaveLength(0); // combo extent has no desktop-Excel evidence
     const sales = rec.texts.find(call => call.text === 'Sales') as NonNullable<typeof rec.texts[number]>;
     expect(textBackgrounds.some(rect =>
       rect.x <= sales.x && rect.x + rect.w >= sales.x
@@ -12128,6 +12135,43 @@ describe('classic chart data table (CT_DTable)', () => {
     };
 
     expect(renderFillRects({}).length).toBeGreaterThan(0);
+    expect(renderFillRects({
+      plotGroups: [{
+        kind: 'line',
+        seriesStart: 0,
+        seriesCount: 1,
+        categoryAxis: 'primary',
+        valueAxis: 'primary',
+        seriesAxis: 'none',
+      }],
+    }).length).toBeGreaterThan(0);
+    expect(renderFillRects({
+      plotGroups: [
+        {
+          kind: 'line',
+          seriesStart: 0,
+          seriesCount: 1,
+          categoryAxis: 'primary',
+          valueAxis: 'primary',
+          seriesAxis: 'none',
+        },
+        {
+          kind: 'bar',
+          seriesStart: 1,
+          seriesCount: 1,
+          categoryAxis: 'primary',
+          valueAxis: 'primary',
+          seriesAxis: 'none',
+          barDirection: 'col',
+        },
+      ],
+    })).toHaveLength(0);
+    expect(renderFillRects({
+      series: [
+        series({ name: 'North', values: [10, 15], seriesType: 'line' }),
+        series({ name: 'South', values: [8, 12], seriesType: 'bar' }),
+      ],
+    })).toHaveLength(0);
     expect(renderFillRects({ chartType: 'clusteredBarH' })).toHaveLength(0);
     expect(renderFillRects({ chartType: 'stock' })).toHaveLength(0);
     expect(renderFillRects({ plotAreaManualLayout: { x: 0.2, y: 0.2 } })).toHaveLength(0);

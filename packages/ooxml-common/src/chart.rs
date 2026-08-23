@@ -4018,6 +4018,9 @@ pub fn extract_chart_data_table(
     resolver: &dyn ColorResolver,
 ) -> Option<ChartDataTable> {
     let table = child(plot_area, "dTable")?;
+    if !chart_data_table_paint_within_limit(table) {
+        return None;
+    }
     let txpr = child(table, "txPr");
     let text_props = txpr.and_then(|body| {
         body.descendants()
@@ -4057,6 +4060,16 @@ pub fn extract_chart_data_table(
         line_dash,
         line_hidden: line_hidden.then_some(true),
     })
+}
+
+/// Preflight the direct data-table fill before gradient-stop expansion and
+/// sorting. CT_DTable reuses DrawingML shape properties, so it shares the same
+/// per-recipe ceiling as every other retained chart paint.
+fn chart_data_table_paint_within_limit(table: Node) -> bool {
+    child(table, "spPr")
+        .and_then(chart_style_paint_component_count)
+        .unwrap_or(0)
+        <= MAX_CHART_PAINT_RECIPE_COMPONENTS
 }
 
 #[derive(Default)]
@@ -11045,6 +11058,11 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         && plot_area_bg.is_some())
     .then_some(true);
     let plot_area_line_style = extract_direct_shape_line(plot_area, color_resolver);
+    if child(plot_area, "dTable")
+        .is_some_and(|table| !chart_data_table_paint_within_limit(table))
+    {
+        return None;
+    }
     let data_table = extract_chart_data_table(plot_area, color_resolver);
 
     let classic_group_kind = |name: &str| -> Option<&'static str> {
@@ -16739,6 +16757,49 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(no_fill.fill_color, None);
         assert_eq!(no_fill.fill_hidden, Some(true));
         assert_eq!(no_fill.fill_paint_authored, Some(true));
+    }
+
+    #[test]
+    fn parse_chart_data_table_bounds_gradient_before_expansion() {
+        let chart = |stop_count: usize| {
+            let stops = (0..stop_count)
+                .map(|index| {
+                    format!(
+                        r#"<a:gs pos="{index}"><a:srgbClr val="112233"/></a:gs>"#,
+                    )
+                })
+                .collect::<String>();
+            format!(
+                r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}">
+                  <c:chart><c:plotArea>
+                    <c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/>
+                      <c:cat><c:strCache><c:pt idx="0"><c:v>A</c:v></c:pt></c:strCache></c:cat>
+                      <c:val><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:val>
+                    </c:ser></c:barChart>
+                    <c:dTable><c:spPr><a:gradFill><a:gsLst>{stops}</a:gsLst></a:gradFill></c:spPr></c:dTable>
+                  </c:plotArea></c:chart>
+                </c:chartSpace>"#,
+            )
+        };
+
+        let exact_xml = chart(MAX_CHART_PAINT_RECIPE_COMPONENTS);
+        let exact = parse_chart_part(
+            chart_space_of(&exact_xml).root_element(),
+            &FixtureResolver,
+        )
+        .expect("paint recipe at the shared ceiling parses");
+        assert!(matches!(
+            exact.data_table.and_then(|table| table.fill),
+            Some(ChartStyleFill::Gradient { ref stops, .. })
+                if stops.len() == MAX_CHART_PAINT_RECIPE_COMPONENTS
+        ));
+
+        let oversized_xml = chart(MAX_CHART_PAINT_RECIPE_COMPONENTS + 1);
+        assert!(parse_chart_part(
+            chart_space_of(&oversized_xml).root_element(),
+            &FixtureResolver,
+        )
+        .is_none());
     }
 
     /// `c:invertIfNegative` and the Office 2010 alternate fill extension are
