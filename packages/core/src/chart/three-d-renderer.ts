@@ -108,7 +108,6 @@ import {
   chartStyleLineDecision,
 } from './style-paint.js';
 import { drawingmlLineDashArray } from '../draw/dash.js';
-import { axisLineWidthPx } from './axis-style.js';
 import {
   MAX_CHART_PAINT_COMPONENTS,
   MAX_CHART_PAINT_RECIPE_COMPONENTS,
@@ -2258,12 +2257,13 @@ function threeDAxisStroke(
 ): ThreeDStroke {
   const stroke = threeDStroke(color, widthEmu, dash, ptToPx, '898989', 1);
   if (widthEmu == null || !Number.isFinite(widthEmu) || widthEmu < 0) return stroke;
-  // Excel rasterizes an authored 0.25pt classic 3-D axis as a two-pixel
-  // coordinate-frame rule. A projected Canvas hairline loses coverage on both
-  // the sloped category rule and the value rule, especially beside the 1pt bar
-  // outlines, so retain that measured raster floor only for 3-D axes. Walls,
-  // grids, data outlines, and the shared 2-D axis conversion stay unchanged.
-  const width = Math.max(2, axisLineWidthPx(widthEmu, ptToPx));
+  // `<c:*Ax><c:spPr><a:ln@w>` owns the coordinate-rule width. Keep it in the
+  // same projected point scale as the chart instead of applying a device-pixel
+  // floor; otherwise zoom changes and a thin authored axis can become thicker
+  // than the surrounding CT_Surface rules.
+  const authoredWidth = widthEmu / EMU_PER_PT * ptToPx;
+  if (!(authoredWidth > 0)) return stroke;
+  const width = authoredWidth;
   return { ...stroke, width, dash: pptxPresetDashArray(dash ?? 'solid', width) };
 }
 
@@ -2273,8 +2273,9 @@ function threeDAxisTickStroke(
   dash: string | null | undefined,
   ptToPx: number,
 ): ThreeDStroke {
-  // Ticks use the authored DrawingML line width. The 3-D coordinate-frame
-  // raster floor above is intentionally limited to the long axis rule.
+  // Tick rules use the same authored DrawingML point scale as the coordinate
+  // axes; they are kept separate here because their projected geometry and
+  // default visibility are resolved independently.
   return threeDStroke(color, widthEmu, dash, ptToPx, '898989', 1);
 }
 
@@ -2292,6 +2293,7 @@ function walls(
   orientation: 'vertical' | 'horizontal',
   categoryCount: number,
   categoryBetween: boolean,
+  categoryReversed: boolean,
   ptToPx: number,
 ): void {
   const { front } = projection;
@@ -2301,6 +2303,49 @@ function walls(
   const {
     sideX: farX, floorY, oppositeFloorY, nearDepth, farDepth,
   } = geometry;
+  const axisGeometry = threeDAxisGeometry(
+    chart, projection, axis, categoryCount, categoryBetween, categoryReversed, orientation,
+  );
+  const axisOwnedEdges: Array<readonly [Point, Point]> = [];
+  // Linked chart styles may resolve the same color/width fields without a
+  // direct axis line. Only a direct `<c:*Ax><c:spPr><a:ln>` owns a coincident
+  // CT_Surface perimeter; style-derived axes retain the complete wall frame.
+  const categoryAxisPaintAuthored = chart.catAxisLinePaintAuthored === true;
+  const valueAxisPaintAuthored = chart.valAxisLinePaintAuthored === true;
+  const horizontalAxisVisible = orientation === 'vertical'
+    ? categoryAxisPaintAuthored && !chart.catAxisHidden && !chart.catAxisLineHidden
+    : valueAxisPaintAuthored && !chart.valAxisHidden && !chart.valAxisLineHidden;
+  const verticalAxisVisible = orientation === 'vertical'
+    ? valueAxisPaintAuthored && !chart.valAxisHidden && !chart.valAxisLineHidden
+    : categoryAxisPaintAuthored && !chart.catAxisHidden && !chart.catAxisLineHidden;
+  if (horizontalAxisVisible) {
+    axisOwnedEdges.push([axisGeometry.horizontalStart, axisGeometry.horizontalEnd]);
+  }
+  if (verticalAxisVisible) {
+    axisOwnedEdges.push([axisGeometry.verticalStart, axisGeometry.verticalEnd]);
+  }
+  const seriesAxis = chart.threeD?.seriesAxis;
+  const seriesAxisPaintAuthored = seriesAxis?.linePaintAuthored === true;
+  if (seriesAxis && !seriesAxis.hidden && !seriesAxis.lineHidden
+    && seriesAxisPaintAuthored
+    && chart.threeD?.barGrouping === 'standard' && chart.series.length > 0) {
+    const seriesAxisX = orientation === 'vertical' ? geometry.seriesAxisX : axisGeometry.axisX;
+    const seriesAxisY = orientation === 'horizontal'
+      ? (floorY === projection.front.y
+        ? projection.front.y + projection.front.h : projection.front.y)
+      : floorY;
+    axisOwnedEdges.push([
+      projection.project(seriesAxisX, seriesAxisY, nearDepth),
+      projection.project(seriesAxisX, seriesAxisY, farDepth),
+    ]);
+  }
+  const samePoint = (left: Point, right: Point): boolean =>
+    Math.hypot(left.x - right.x, left.y - right.y) <= 1e-6;
+  const axisOwnsEdge = (start: Point, end: Point): boolean =>
+    axisOwnedEdges.some(([axisStart, axisEnd]) =>
+      (samePoint(start, axisStart) && samePoint(end, axisEnd))
+      || (samePoint(start, axisEnd) && samePoint(end, axisStart))
+    );
   const projectedSurfaceFaces = (
     kind: 'floor' | 'sideWall' | 'backWall',
     surface: NonNullable<ChartModel['threeD']>['floor'],
@@ -2538,6 +2583,25 @@ function walls(
       ? effective.lineJoin : 'miter';
     for (const face of faces) {
       if (face.points.length < 2) continue;
+      const edges = face.points.map((point, index) => ({
+        start: point,
+        end: face.points[(index + 1) % face.points.length],
+      }));
+      if (edges.some(edge => axisOwnsEdge(edge.start, edge.end))) {
+        // A visible axis and a CT_Surface perimeter can describe the same
+        // projected cuboid edge with different authored paints. Office gives
+        // the coordinate axis visual ownership; painting both produces the
+        // gray halo seen around a thinner black axis. Retain every independent
+        // surface edge and omit only the exactly coincident segment.
+        for (const edge of edges) {
+          if (axisOwnsEdge(edge.start, edge.end)) continue;
+          ctx.beginPath();
+          ctx.moveTo(edge.start.x, edge.start.y);
+          ctx.lineTo(edge.end.x, edge.end.y);
+          ctx.stroke();
+        }
+        continue;
+      }
       ctx.beginPath();
       ctx.moveTo(face.points[0].x, face.points[0].y);
       for (let index = 1; index < face.points.length; index++) {
@@ -3019,7 +3083,7 @@ function renderCartesian(
   if (!bars) {
     walls(
       ctx, chart, projection, axis, horizontal ? 'horizontal' : 'vertical',
-      categoryCount, categoryBetween, ptToPx,
+      categoryCount, categoryBetween, categoryReversed, ptToPx,
     );
   }
   const { front } = projection;
@@ -3245,7 +3309,7 @@ function renderCartesian(
     }
     walls(
       ctx, chart, projection, axis, horizontal ? 'horizontal' : 'vertical',
-      categoryCount, categoryBetween, ptToPx,
+      categoryCount, categoryBetween, categoryReversed, ptToPx,
     );
     // Build one scene list and sort every visible face by camera-space depth.
     // A logical series index is not a view depth after rotation, and painting

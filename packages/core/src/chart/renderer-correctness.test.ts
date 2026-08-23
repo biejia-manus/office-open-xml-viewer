@@ -1410,7 +1410,7 @@ describe('classic 3-D compatibility projection', () => {
     expect(rec.strokes.filter(stroke => stroke.ss === '#898989')).toHaveLength(0);
   });
 
-  it('keeps the 3-D frame visible while using authored 0.25pt width for ticks', () => {
+  it('uses the authored 0.25pt width for 3-D axis rules and ticks', () => {
     const rec = strokedPolylineCtx();
     renderChart(rec.ctx, baseModel({
       chartType: 'clusteredBar',
@@ -1459,10 +1459,58 @@ describe('classic 3-D compatibility projection', () => {
       const frame = strokes.reduce((longest, stroke) =>
         length(stroke) > length(longest) ? stroke : longest);
       const ticks = strokes.filter(stroke => stroke !== frame);
-      expect(frame.lw).toBe(2);
+      expect(frame.lw).toBe(0.25);
       expect(ticks.length).toBeGreaterThan(0);
       expect(ticks.every(stroke => stroke.lw === 0.25)).toBe(true);
     }
+  });
+
+  it('gives visible axes ownership of coincident 3-D surface edges', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'clusteredBar',
+      categories: ['A', 'B'],
+      valMin: 0,
+      valMax: 20,
+      valAxisMajorGridlines: false,
+      catAxisLineColor: 'FF00FF',
+      catAxisLineWidthEmu: 3_175,
+      catAxisLinePaintAuthored: true,
+      valAxisLineColor: '00AA00',
+      valAxisLineWidthEmu: 3_175,
+      valAxisLinePaintAuthored: true,
+      threeD: {
+        rotationX: 15,
+        rotationY: 20,
+        depthPercent: 100,
+        perspective: 30,
+        floor: { lineColor: 'FF0000', lineWidthEmu: 12_700 },
+        sideWall: { lineColor: '0000FF', lineWidthEmu: 12_700 },
+        backWall: { lineColor: '808080', lineWidthEmu: 12_700 },
+      },
+      series: [series({ values: [5, 15], lineHidden: true })],
+    }), RECT, 1);
+
+    const samePoint = (
+      left: { x: number; y: number }, right: { x: number; y: number },
+    ) => Math.hypot(left.x - right.x, left.y - right.y) < 1e-6;
+    const ownsEdge = (
+      axis: (typeof rec.strokes)[number], surface: (typeof rec.strokes)[number],
+    ) => surface.points.some((point, index) => {
+      const next = surface.points[(index + 1) % surface.points.length];
+      return (samePoint(axis.points[0], point) && samePoint(axis.points[1], next))
+        || (samePoint(axis.points[0], next) && samePoint(axis.points[1], point));
+    });
+    const axes = rec.strokes.filter(stroke =>
+      (stroke.ss === '#FF00FF' || stroke.ss === '#00AA00')
+      && stroke.points.length === 2
+    );
+    const surfaces = rec.strokes.filter(stroke =>
+      ['#FF0000', '#0000FF', '#808080'].includes(stroke.ss)
+    );
+
+    expect(axes.length).toBeGreaterThanOrEqual(2);
+    expect(axes.every(axis => surfaces.every(surface => !ownsEdge(axis, surface)))).toBe(true);
   });
 
   it('places standard 3-D category and series ticks on slot boundaries', () => {
@@ -1555,8 +1603,8 @@ describe('classic 3-D compatibility projection', () => {
 
     expect(rec.strokes.filter(stroke => stroke.ss === '#FF00FF')).toHaveLength(0);
     const wallStrokes = rec.strokes.filter(stroke => stroke.ss === '#808080');
-    expect(wallStrokes).toHaveLength(3);
-    expect(wallStrokes.every(stroke => stroke.points.length >= 4)).toBe(true);
+    expect(wallStrokes.length).toBeGreaterThanOrEqual(3);
+    expect(wallStrokes.every(stroke => stroke.points.length >= 2)).toBe(true);
   });
 
   it('draws 6pt major and 4pt minor value ticks as horizontal screen annotations', () => {
@@ -2713,17 +2761,20 @@ describe('classic 3-D compatibility projection', () => {
         series({ name: 'Three', values: [3, 3, 5, 6] }),
       ],
     }), RECT, 1);
-    const floor = rec.strokes.find(stroke => stroke.ss === '#000000' && stroke.points.length === 5);
-    const side = rec.strokes.find(stroke => stroke.ss === '#FF0000' && stroke.points.length === 5);
-    const back = rec.strokes.find(stroke => stroke.ss === '#00FF00' && stroke.points.length === 5);
-    expect(floor).toBeDefined();
-    expect(side).toBeDefined();
-    expect(back).toBeDefined();
-    expect(side?.dash.length).toBeGreaterThan(0);
+    const floor = rec.strokes.filter(stroke => stroke.ss === '#000000');
+    const side = rec.strokes.filter(stroke => stroke.ss === '#FF0000');
+    const back = rec.strokes.filter(stroke => stroke.ss === '#00FF00');
+    expect(floor.length).toBeGreaterThan(0);
+    expect(side.length).toBeGreaterThan(0);
+    expect(back.length).toBeGreaterThan(0);
+    expect(side.every(stroke => stroke.dash.length > 0)).toBe(true);
     const length = (a: { x: number; y: number }, b: { x: number; y: number }) =>
       Math.hypot(a.x - b.x, a.y - b.y);
-    const projectedDepth = length(side!.points[0], side!.points[1]);
-    const projectedHeight = length(side!.points[1], side!.points[2]);
+    const sideEdgeLengths = side.flatMap(stroke =>
+      stroke.points.slice(1).map((point, index) => length(stroke.points[index], point))
+    ).filter(edgeLength => edgeLength > 1e-6).sort((left, right) => left - right);
+    const projectedDepth = sideEdgeLengths[0];
+    const projectedHeight = sideEdgeLengths.at(-1) as number;
     // Office's measured default standard-Bar axes are 8.1:8.1:2.6. Keep the
     // final projected depth/height ratio close to 0.321 without applying this
     // compatibility calibration to clustered/stacked bars.

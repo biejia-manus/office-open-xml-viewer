@@ -650,11 +650,15 @@ pub struct ChartModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cat_axis_line_dash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cat_axis_line_paint_authored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub val_axis_line_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub val_axis_line_width_emu: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub val_axis_line_dash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub val_axis_line_paint_authored: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cat_axis_format_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1199,6 +1203,8 @@ pub struct ChartThreeDSeriesAxis {
     pub line_width_emu: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_dash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_paint_authored: Option<bool>,
     pub line_hidden: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_font_size_hpt: Option<i32>,
@@ -7388,10 +7394,24 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
         .map(|axis| extract_axis_line_style(axis, resolver))
         .unwrap_or((None, None, false));
     let cat_axis_line_dash = cat_axis.and_then(extract_axis_line_dash);
+    let cat_axis_line_paint_authored = cat_axis
+        .is_some_and(|axis| {
+            child(axis, "spPr")
+                .and_then(|shape| child(shape, "ln"))
+                .is_some()
+        })
+        .then_some(true);
     let (mut val_axis_line_color, mut val_axis_line_width_emu, mut val_axis_line_hidden) = val_axis
         .map(|axis| extract_axis_line_style(axis, resolver))
         .unwrap_or((None, None, false));
     let mut val_axis_line_dash = val_axis.and_then(extract_axis_line_dash);
+    let val_axis_line_paint_authored = val_axis
+        .is_some_and(|axis| {
+            child(axis, "spPr")
+                .and_then(|shape| child(shape, "ln"))
+                .is_some()
+        })
+        .then_some(true);
     if val_axis_line_color.is_none() && val_axis_line_width_emu.is_none() && !val_axis_line_hidden {
         if let Some(style_axis) = style_element("valueAxis") {
             (
@@ -7553,10 +7573,12 @@ pub fn parse_chartex_part_with_references_style_parts_and_images(
         cat_axis_line_color,
         cat_axis_line_width_emu,
         cat_axis_line_dash,
+        cat_axis_line_paint_authored,
         cat_axis_line_hidden,
         val_axis_line_color,
         val_axis_line_width_emu,
         val_axis_line_dash,
+        val_axis_line_paint_authored,
         val_axis_line_hidden,
         data_label_font_size_hpt,
         legend_pos,
@@ -10608,6 +10630,10 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 line_color,
                 line_width_emu,
                 line_dash,
+                line_paint_authored: child(axis, "spPr")
+                    .and_then(|shape| child(shape, "ln"))
+                    .is_some()
+                    .then_some(true),
                 line_hidden,
                 title_font_size_hpt,
                 title_font_bold,
@@ -12405,10 +12431,24 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         .map(|n| extract_axis_line_style(n, color_resolver))
         .unwrap_or((None, None, false));
     let cat_axis_line_dash = cat_ax.and_then(extract_axis_line_dash);
+    let cat_axis_line_paint_authored = cat_ax
+        .is_some_and(|axis| {
+            child(axis, "spPr")
+                .and_then(|shape| child(shape, "ln"))
+                .is_some()
+        })
+        .then_some(true);
     let (mut val_axis_line_color, mut val_axis_line_width_emu, val_axis_line_hidden) = val_ax
         .map(|n| extract_axis_line_style(n, color_resolver))
         .unwrap_or((None, None, false));
     let val_axis_line_dash = val_ax.and_then(extract_axis_line_dash);
+    let val_axis_line_paint_authored = val_ax
+        .is_some_and(|axis| {
+            child(axis, "spPr")
+                .and_then(|shape| child(shape, "ln"))
+                .is_some()
+        })
+        .then_some(true);
     if legacy_chart_style == Some(2) {
         let cat_needs_theme_width = cat_ax.is_some_and(|axis| {
             !cat_axis_line_hidden
@@ -12946,10 +12986,12 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
         cat_axis_line_color,
         cat_axis_line_width_emu,
         cat_axis_line_dash,
+        cat_axis_line_paint_authored,
         cat_axis_line_hidden,
         val_axis_line_color,
         val_axis_line_width_emu,
         val_axis_line_dash,
+        val_axis_line_paint_authored,
         val_axis_line_hidden,
         data_label_font_size_hpt,
         legend_pos,
@@ -13370,9 +13412,11 @@ mod tests {
             cat_axis_line_color: None,
             cat_axis_line_width_emu: None,
             cat_axis_line_dash: None,
+            cat_axis_line_paint_authored: None,
             val_axis_line_color: None,
             val_axis_line_width_emu: None,
             val_axis_line_dash: None,
+            val_axis_line_paint_authored: None,
             cat_axis_format_code: None,
             cat_axis_min: None,
             cat_axis_max: None,
@@ -15926,9 +15970,11 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(m.cat_axis_gridline_width_emu, None);
         assert_eq!(m.cat_axis_line_color.as_deref(), Some("808080"));
         assert_eq!(m.cat_axis_line_dash.as_deref(), Some("dash"));
+        assert_eq!(m.cat_axis_line_paint_authored, Some(true));
         assert_eq!(m.val_axis_line_color.as_deref(), Some("404040"));
         assert_eq!(m.val_axis_line_width_emu, Some(12700));
         assert_eq!(m.val_axis_line_dash.as_deref(), Some("dot"));
+        assert_eq!(m.val_axis_line_paint_authored, Some(true));
         // The chartSpace border is theme-aware: scheme tx1 resolves through
         // the same color resolver as other DrawingML lines.
         assert_eq!(m.chart_border_color.as_deref(), Some("000000"));
@@ -16086,6 +16132,8 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(m.val_axis_line_color.as_deref(), Some("000000"));
         assert_eq!(m.cat_axis_line_width_emu, Some(9525));
         assert_eq!(m.val_axis_line_width_emu, Some(9525));
+        assert_eq!(m.cat_axis_line_paint_authored, None);
+        assert_eq!(m.val_axis_line_paint_authored, None);
         assert_eq!(m.val_axis_gridline_color.as_deref(), Some("000000"));
         assert_eq!(m.val_axis_gridline_width_emu, Some(9525));
 
@@ -16184,6 +16232,8 @@ Subtitle</a:t></a:r></a:p>
             assert_eq!(unresolved.val_axis_line_color, None);
             assert_eq!(unresolved.cat_axis_line_width_emu, None);
             assert_eq!(unresolved.val_axis_line_width_emu, None);
+            assert_eq!(unresolved.cat_axis_line_paint_authored, Some(true));
+            assert_eq!(unresolved.val_axis_line_paint_authored, Some(true));
         }
     }
 
@@ -20993,6 +21043,7 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(series_axis.font_size_hpt, Some(900));
         assert_eq!(series_axis.line_color.as_deref(), Some("445566"));
         assert_eq!(series_axis.line_width_emu, Some(12_700));
+        assert_eq!(series_axis.line_paint_authored, Some(true));
         assert_eq!(series_axis.title_font_size_hpt, Some(800));
         assert_eq!(series_axis.title_font_bold, Some(true));
         assert_eq!(series_axis.title_font_italic, Some(true));
