@@ -976,7 +976,7 @@ export function planLine(input: PlanLineInput): LineLayout {
             widthPt + ownedTrailingSlackPt - decorationTerminalAdvancePt,
           );
       // The physical end of a bidi line is not the logical run tail. Keep this
-      // Office-observed compatibility rule scoped to horizontal LTR text.
+      // compatibility path scoped to horizontal LTR text.
       if (direction === 'ltr' && terminalDecorationTrimPt > 0) {
         terminalDecorationTrims.set(placements.length, terminalDecorationTrimPt);
       }
