@@ -5146,21 +5146,24 @@ fn chart_style_paint_component_count(container: Node) -> Option<usize> {
     if child(container, "noFill").is_some() {
         return Some(0);
     }
-    if child(container, "solidFill").is_some()
-        || child(container, "pattFill").is_some()
-        || child(container, "blipFill").is_some()
-    {
+    if child(container, "solidFill").is_some() {
         return Some(1);
     }
-    child(container, "gradFill").map(|gradient| {
-        child(gradient, "gsLst")
+    if let Some(gradient) = child(container, "gradFill") {
+        return Some(
+            child(gradient, "gsLst")
             .map(|list| {
                 list.children()
                     .filter(|node| node.is_element() && node.tag_name().name() == "gs")
                     .count()
             })
-            .unwrap_or(0)
-    })
+            .unwrap_or(0),
+        );
+    }
+    if child(container, "blipFill").is_some() || child(container, "pattFill").is_some() {
+        return Some(1);
+    }
+    None
 }
 
 /// Parse one classic 3-D series shape only after its direct fill and outline
@@ -16761,7 +16764,7 @@ Subtitle</a:t></a:r></a:p>
 
     #[test]
     fn parse_chart_data_table_bounds_gradient_before_expansion() {
-        let chart = |stop_count: usize| {
+        let chart = |stop_count: usize, trailing_fill: &str| {
             let stops = (0..stop_count)
                 .map(|index| {
                     format!(
@@ -16776,13 +16779,13 @@ Subtitle</a:t></a:r></a:p>
                       <c:cat><c:strCache><c:pt idx="0"><c:v>A</c:v></c:pt></c:strCache></c:cat>
                       <c:val><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:val>
                     </c:ser></c:barChart>
-                    <c:dTable><c:spPr><a:gradFill><a:gsLst>{stops}</a:gsLst></a:gradFill></c:spPr></c:dTable>
+                    <c:dTable><c:spPr><a:gradFill><a:gsLst>{stops}</a:gsLst></a:gradFill>{trailing_fill}</c:spPr></c:dTable>
                   </c:plotArea></c:chart>
                 </c:chartSpace>"#,
             )
         };
 
-        let exact_xml = chart(MAX_CHART_PAINT_RECIPE_COMPONENTS);
+        let exact_xml = chart(MAX_CHART_PAINT_RECIPE_COMPONENTS, "");
         let exact = parse_chart_part(
             chart_space_of(&exact_xml).root_element(),
             &FixtureResolver,
@@ -16794,12 +16797,21 @@ Subtitle</a:t></a:r></a:p>
                 if stops.len() == MAX_CHART_PAINT_RECIPE_COMPONENTS
         ));
 
-        let oversized_xml = chart(MAX_CHART_PAINT_RECIPE_COMPONENTS + 1);
-        assert!(parse_chart_part(
-            chart_space_of(&oversized_xml).root_element(),
-            &FixtureResolver,
-        )
-        .is_none());
+        for trailing_fill in [
+            "",
+            r#"<a:pattFill prst="diagCross"/>"#,
+            "<a:blipFill/>",
+        ] {
+            let oversized_xml = chart(
+                MAX_CHART_PAINT_RECIPE_COMPONENTS + 1,
+                trailing_fill,
+            );
+            assert!(parse_chart_part(
+                chart_space_of(&oversized_xml).root_element(),
+                &FixtureResolver,
+            )
+            .is_none());
+        }
     }
 
     /// `c:invertIfNegative` and the Office 2010 alternate fill extension are
