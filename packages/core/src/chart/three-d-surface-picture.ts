@@ -194,17 +194,12 @@ export function paintChartThreeDSurfacePicture(
       if (!surfacePictureFaceIsEnabled(plan, faceIndex)) continue;
       const face = chartThreeDSurfacePictureSceneFace(geometry, kind, faceIndex, project);
       if (!face) continue;
-      const projected = face.map(project);
-      // A DrawingML tile's DPI-scaled natural size is a device-space measure.
-      // Back-wall tiles therefore use the projected face dimensions; using
-      // the model-space dimensions and projecting the completed tile canvas
-      // shrinks every tile a second time under perspective.
-      const width = kind === 'backWall'
-        ? Math.hypot(projected[0].x - projected[1].x, projected[0].y - projected[1].y)
-        : sceneMetricDistance(face[0], face[1], geometry.modelDepth);
-      const height = kind === 'backWall'
-        ? Math.hypot(projected[0].x - projected[3].x, projected[0].y - projected[3].y)
-        : sceneMetricDistance(face[0], face[3], geometry.modelDepth);
+      // ECMA-376 §20.1.8.58 defines the tile grid but not its ordering relative
+      // to a 3-D chart-surface projection. Desktop Excel output shows that the
+      // grid is foreshortened with the wall; keeping back-wall tiles in device
+      // space makes them too large when the authored projection is below 1×.
+      const width = sceneMetricDistance(face[0], face[1], geometry.modelDepth);
+      const height = sceneMetricDistance(face[0], face[3], geometry.modelDepth);
       if (!(width > 0) || !(height > 0)) continue;
       const origin = chartImageTileOrigin(tileMetrics, width, height);
       const firstColumn = Math.floor(-origin.x / tileMetrics.tileW);
