@@ -230,8 +230,10 @@ describe('computeCommentBalloonLayout', () => {
     const selected = placed.find((p) => p.commentId === 'sel')!;
     expect(selected.selected).toBe(true);
     expect(selected.collapsed).toBe(false);
-    expect(selected.heightPx).toBe(GEOM.headerHeightPx + 10 * GEOM.lineHeightPx);
-    expect(selected.visibleLines).toBe(10);
+    // Selection raises the cap to the page's line capacity:
+    // floor((150 − 20) / 10) = 13 lines (> the shared maxLines 10).
+    expect(selected.heightPx).toBe(GEOM.headerHeightPx + 13 * GEOM.lineHeightPx);
+    expect(selected.visibleLines).toBe(13);
     // Layout stays deterministic and ordered.
     expect(placed.map((p) => p.commentId)).toEqual(['a', 'sel', 'c']);
     for (let index = 1; index < placed.length; index += 1) {
@@ -239,6 +241,31 @@ describe('computeCommentBalloonLayout', () => {
         placed[index - 1]!.yPx + placed[index - 1]!.heightPx + GEOM.gapPx,
       );
     }
+  });
+
+  it('selection expands past maxLines but never past the page line capacity', () => {
+    // 40 content lines: unselected would cap at 10; selected shows all 40
+    // (page capacity floor((1000 − 20)/10) = 98 is not the binding cap here).
+    const grown = computeCommentBalloonLayout({
+      ...GEOM,
+      balloons: [balloon('sel', 100, 40, true)],
+    });
+    expect(grown[0]!.heightPx).toBe(GEOM.headerHeightPx + 40 * GEOM.lineHeightPx);
+    expect(grown[0]!.visibleLines).toBe(40);
+    // 200 content lines clamp at the page capacity (98 lines fills the page
+    // exactly: 20 + 98×10 = 1000); the DOM layer scrolls the rest.
+    const clamped = computeCommentBalloonLayout({
+      ...GEOM,
+      balloons: [balloon('sel', 0, 200, true)],
+    });
+    expect(clamped[0]!.heightPx).toBe(GEOM.pageHeightPx);
+    expect(clamped[0]!.visibleLines).toBe(98);
+    // An UNSELECTED balloon with the same content keeps the shared cap.
+    const unselected = computeCommentBalloonLayout({
+      ...GEOM,
+      balloons: [balloon('plain', 100, 40)],
+    });
+    expect(unselected[0]!.visibleLines).toBe(10);
   });
 
   it('is deterministic for identical input', () => {
