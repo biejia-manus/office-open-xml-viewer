@@ -306,23 +306,26 @@ describe('CT_Surface plain stacked pictures', () => {
 });
 
 describe('CT_Surface DrawingML tiles', () => {
-  it('sizes back-wall tiles against the projected face instead of shrinking them twice', () => {
+  it('projects the back-wall tile grid with the surface instead of keeping device-space tiles', () => {
     const result = paint({
       ...imageFill,
       stretch: false,
       dpi: 96,
       tile: { tx: 0, ty: 0, sx: 1, sy: 1, flip: 'none', algn: 'ctr' },
     }, {
-      imageWidth: 100,
-      imageHeight: 100,
-      faceWidth: 100,
-      faceHeight: 100,
-      projectXScale: 0.5,
+      imageWidth: 80,
+      imageHeight: 40,
+      faceWidth: 1_080,
+      faceHeight: 40,
+      projectXScale: 0.4,
     });
     const projectedCanvas = result.draws
       .map(call => call[0] as { width?: number })
       .find(source => source && source !== result.sourceDraws[0]?.[0] && source.width != null);
-    expect(projectedCanvas?.width).toBe(50);
+    expect(projectedCanvas?.width).toBe(1_080);
+    // 1,080 / 80 = 13.5 tiles: the final half tile leaves 27 visible
+    // half-width colour blocks after the complete grid is projected.
+    expect(result.sourceDraws).toHaveLength(14);
   });
 });
 
