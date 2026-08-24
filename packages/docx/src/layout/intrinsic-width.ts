@@ -49,8 +49,8 @@ export interface TableCellIntrinsicWidthDependencies {
 }
 
 export interface ParagraphIntrinsicWidthOptions {
-  /** Word table AutoFit keeps a retained whitespace-only paragraph run as
-   * content even though ordinary line layout trims paragraph-final spaces. */
+  /** Include retained whitespace-only runs in the intrinsic content interval.
+   * Ordinary line layout may still trim paragraph-final spaces. */
   readonly preserveWhitespaceOnlyContent?: boolean;
 }
 
