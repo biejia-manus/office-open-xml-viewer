@@ -7,7 +7,7 @@
 
 import type {
   ViewerCommentCardBaseContext,
-  ViewerCommentCardContext,
+  ViewerSelectableCommentCardContext,
   ViewerCommentCardMount,
   ViewerCommentMessage,
   ViewerCommentThread,
@@ -17,8 +17,8 @@ import type { ViewerDomMountHandle } from '../dom-mount.js';
 export const READ_ONLY_COMMENT_MARGIN_WIDTH_PX = 280;
 
 export type ReadOnlyCommentThread = ViewerCommentThread;
-export type ReadOnlyCommentCardContext = ViewerCommentCardContext;
-export type ReadOnlyCommentCardMount<Context extends ViewerCommentCardBaseContext = ViewerCommentCardContext> =
+export type ReadOnlyCommentCardContext = ViewerSelectableCommentCardContext;
+export type ReadOnlyCommentCardMount<Context extends ViewerCommentCardBaseContext = ViewerSelectableCommentCardContext> =
   ViewerCommentCardMount<Context>;
 
 interface MountedCard {
@@ -46,7 +46,7 @@ export interface ReadOnlyCommentMarginOptions<Context extends ViewerCommentCardB
   readonly contextFor?: (
     thread: ReadOnlyCommentThread,
     common: ViewerCommentCardBaseContext,
-    selection: Pick<ViewerCommentCardContext, 'active' | 'setActive'>,
+    selection: Pick<ViewerSelectableCommentCardContext, 'active' | 'setActive'>,
   ) => Context;
   readonly registerInteractiveRoot?: (root: Node) => () => void;
   /** Called when mounted card geometry or the margin scroll position changes. */
@@ -179,8 +179,8 @@ function appendCommentBody(host: HTMLElement, comment: ViewerCommentMessage, rep
 
 function mountDefaultCard(
   host: HTMLElement,
-  initialContext: ViewerCommentCardContext,
-): ViewerDomMountHandle<ViewerCommentCardContext> {
+  initialContext: ViewerSelectableCommentCardContext,
+): ViewerDomMountHandle<ViewerSelectableCommentCardContext> {
   const card = host.ownerDocument.createElement('button');
   card.type = 'button';
   let context = initialContext;
@@ -227,7 +227,7 @@ function mountDefaultCard(
   };
 }
 
-const defaultCardMount: ViewerCommentCardMount = mountDefaultCard;
+const defaultCardMount: ViewerCommentCardMount<ViewerSelectableCommentCardContext> = mountDefaultCard;
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return (typeof value === 'object' || typeof value === 'function') && value !== null &&

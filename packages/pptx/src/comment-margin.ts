@@ -2,7 +2,7 @@ import {
   EMU_PER_PX,
   overlayPercent,
   type PptxCommentDecorationContext,
-  type ViewerCommentCardContext,
+  type ViewerSelectableCommentCardContext,
   type ViewerCommentCardMount,
   type ViewerCommentMessage,
   type ViewerCommentRect,
@@ -17,7 +17,7 @@ import {
 import { relativeElementRect } from '@silurus/ooxml-core/internal/dom-geometry';
 import type { PptxComment, PptxCommentReply } from './types.js';
 
-export interface PptxCommentCardContext extends ViewerCommentCardContext {
+export interface PptxCommentCardContext extends ViewerSelectableCommentCardContext {
   readonly comment: Readonly<PptxComment>;
   readonly replies: readonly Readonly<PptxCommentReply>[];
 }
@@ -35,9 +35,11 @@ function commentId(comment: Readonly<PptxComment>, index: number, slideIndex: nu
 
 function toReplyCard(
   reply: Readonly<PptxCommentReply>,
+  occurrenceKey: string,
+  index: number,
 ): ViewerCommentMessage {
   return {
-    messageKey: reply.id,
+    messageKey: `${occurrenceKey}:reply:${reply.id ?? index}`,
     sourceId: reply.id,
     author: reply.author,
     date: reply.date,
@@ -102,14 +104,14 @@ export function buildPptxCommentMargin(
   const cardThreads: ReadOnlyCommentThread[] = visible.map(({ comment, id }) => ({
     occurrenceKey: id,
     root: {
-      messageKey: comment.id,
+      messageKey: `${id}:root`,
       sourceId: comment.id,
       author: comment.author,
       date: comment.date,
       text: comment.text,
       status: comment.status,
     },
-    replies: comment.replies?.map(toReplyCard) ?? [],
+    replies: comment.replies?.map((reply, index) => toReplyCard(reply, id, index)) ?? [],
   }));
   const byId = new Map(visible.map((entry) => [entry.id, entry.comment]));
   const cardHosts = buildReadOnlyCommentMargin(margin, cardThreads, {

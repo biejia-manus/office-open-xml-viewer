@@ -701,6 +701,19 @@ export class DocxScrollViewer implements ZoomableViewer {
     this._recomputeHeights();
     this._syncSpacer();
     this._mountVisible(initialRenders);
+    // A progressive publication may grow page count without changing the
+    // current top slot. Republish logical/decoration state even when the page's
+    // pixels and collected runs are already exact, so layoutComplete and card
+    // geometry cannot remain latched to an earlier prefix.
+    for (const [page, slot] of this._slots) {
+      // A newly mounted slot is stamped with `renderedPage` before its async
+      // paint completes.  Its comment runs are not authoritative until that
+      // paint commits and records `renderedScale`; the render completion path
+      // publishes them.  Relayout only republishes already-painted slots.
+      if (slot.renderedPage === page && slot.renderedScale >= 0) {
+        this._redrawSlotComments(page, slot);
+      }
+    }
   }
 
   private _recomputeHeights(): void {

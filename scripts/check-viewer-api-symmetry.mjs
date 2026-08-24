@@ -285,7 +285,6 @@ for (const format of formats) {
     'ViewerCommentMessage',
     'ViewerCommentThread',
     'ViewerCommentCardBaseContext',
-    'ViewerCommentCardContext',
     'ViewerCommentUiOptions',
   ]) {
     if (!api.interfaces.has(commonType)) fail(`${format.label} does not expose ${commonType}`);
@@ -299,6 +298,8 @@ for (const format of formats) {
     }
   } else if (!contextMembers.has('active') || !contextMembers.has('setActive')) {
     fail(`${format.label} margin cards must expose idempotent active selection`);
+  } else if (!api.interfaces.has('ViewerSelectableCommentCardContext')) {
+    fail(`${format.label} does not expose ViewerSelectableCommentCardContext`);
   }
 
   if (format.label === 'XLSX' && classMembers(api, format.engine).has('renderSheet')) {

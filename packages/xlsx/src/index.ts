@@ -17,7 +17,6 @@ export type {
 export type { XlsxCommentCardContext, XlsxCommentUiOptions } from './comment-card.js';
 export type {
   ViewerCommentCardBaseContext,
-  ViewerCommentCardContext,
   ViewerCommentCardMount,
   ViewerCommentMessage,
   ViewerCommentThread,

@@ -1056,7 +1056,7 @@ export interface DocTableRow {
     isHeader: boolean;
     cantSplit?: boolean;
 }
-export interface DocxCommentCardContext extends ViewerCommentCardContext {
+export interface DocxCommentCardContext extends ViewerSelectableCommentCardContext {
     readonly comment: Readonly<DocComment>;
     readonly replies: readonly Readonly<DocComment>[];
 }
@@ -1840,10 +1840,6 @@ export interface PatternFill {
     bg: string;
     preset: string;
 }
-export interface PptxCommentDecorationContext extends ViewerCommentDecorationBaseContext {
-    readonly format: 'pptx';
-    readonly slideIndex: number;
-}
 export interface PTabRun {
     alignment: 'left' | 'center' | 'right';
     relativeTo: 'margin' | 'indent';
@@ -2175,11 +2171,7 @@ export interface ViewerCommentCardBaseContext {
     readonly signal: AbortSignal;
     readonly registerInteractiveRoot: (root: Node) => () => void;
 }
-export interface ViewerCommentCardContext extends ViewerCommentCardBaseContext {
-    readonly active: boolean;
-    readonly setActive: (active: boolean) => void;
-}
-export type ViewerCommentCardMount<Context extends ViewerCommentCardBaseContext = ViewerCommentCardContext> = ViewerDomMount<Context>;
+export type ViewerCommentCardMount<Context extends ViewerCommentCardBaseContext = ViewerCommentCardBaseContext> = ViewerDomMount<Context>;
 export interface ViewerCommentDecorationBaseContext {
     readonly layoutGeneration: number;
     readonly geometryRevision: number;
@@ -2189,10 +2181,9 @@ export interface ViewerCommentDecorationBaseContext {
     readonly threads: readonly ViewerCommentThreadGeometry[];
     readonly signal: AbortSignal;
 }
-export type ViewerCommentDecorationContext = DocxCommentDecorationContext | PptxCommentDecorationContext;
-export type ViewerCommentDecorationMount<Context extends ViewerCommentDecorationContext = ViewerCommentDecorationContext> = ViewerDomMount<Context>;
+export type ViewerCommentDecorationMount<Context extends ViewerCommentDecorationBaseContext = ViewerCommentDecorationBaseContext> = ViewerDomMount<Context>;
 export interface ViewerCommentMessage {
-    readonly messageKey?: string;
+    readonly messageKey: string;
     readonly sourceId?: string;
     readonly author?: string;
     readonly date?: string;
@@ -2216,7 +2207,7 @@ export interface ViewerCommentThreadGeometry {
     readonly anchorRects: readonly ViewerCommentRect[];
     readonly cardRect?: ViewerCommentRect;
 }
-export interface ViewerCommentUiOptions<Context extends ViewerCommentCardBaseContext = ViewerCommentCardContext> {
+export interface ViewerCommentUiOptions<Context extends ViewerCommentCardBaseContext = ViewerCommentCardBaseContext> {
     readonly includeResolved?: boolean;
     readonly mountCard?: ViewerCommentCardMount<Context>;
 }
@@ -2228,6 +2219,10 @@ export type ViewerDomMount<Context> = (host: HTMLElement, initialContext: Contex
 export interface ViewerDomMountHandle<Context> {
     update(context: Context): void;
     destroy(): void;
+}
+export interface ViewerSelectableCommentCardContext extends ViewerCommentCardBaseContext {
+    readonly active: boolean;
+    readonly setActive: (active: boolean) => void;
 }
 export interface ZoomableViewer {
     getScale(): number;

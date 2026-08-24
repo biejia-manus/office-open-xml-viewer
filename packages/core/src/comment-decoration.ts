@@ -53,5 +53,5 @@ export type ViewerCommentDecorationContext =
 
 /** Mount connector lines or other transparent page-relative comment decoration. */
 export type ViewerCommentDecorationMount<
-  Context extends ViewerCommentDecorationContext = ViewerCommentDecorationContext,
+  Context extends ViewerCommentDecorationBaseContext = ViewerCommentDecorationBaseContext,
 > = ViewerDomMount<Context>;

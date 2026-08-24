@@ -206,6 +206,8 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     const margin = slide.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
     expect(margin.style.background).toBe('');
     expect(lastContext?.replies.map((reply) => reply.text)).toEqual(['Done']);
+    expect(lastContext?.thread.root.messageKey).toBe('slide:0:modern-1:root');
+    expect(lastContext?.thread.replies[0]?.messageKey).toBe('slide:0:modern-1:reply:reply-1');
     expect(lastContext?.thread.root.text).toBe('Review this');
     expect(lastContext?.zoom).toBeCloseTo(viewer.getScale());
     expect(decorationMounts).toBe(1);

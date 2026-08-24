@@ -3,7 +3,7 @@ import type { ViewerDomMount } from './dom-mount.js';
 /** Format-neutral view model for one read-only OOXML comment message. */
 export interface ViewerCommentMessage {
   /** Stable authored identity when the OOXML format provides one. */
-  readonly messageKey?: string;
+  readonly messageKey: string;
   /** Unmodified source identity, when different from `messageKey`. */
   readonly sourceId?: string;
   readonly author?: string;
@@ -32,12 +32,12 @@ export interface ViewerCommentCardBaseContext {
 }
 
 /** Selection interaction used by DOCX and PPTX side-margin cards. */
-export interface ViewerCommentCardContext extends ViewerCommentCardBaseContext {
+export interface ViewerSelectableCommentCardContext extends ViewerCommentCardBaseContext {
   readonly active: boolean;
   /** Idempotently select or clear this thread. */
   readonly setActive: (active: boolean) => void;
 }
 
 /** DOM framework adapter hook. The host stays stable until `destroy()`. */
-export type ViewerCommentCardMount<Context extends ViewerCommentCardBaseContext = ViewerCommentCardContext> =
+export type ViewerCommentCardMount<Context extends ViewerCommentCardBaseContext = ViewerCommentCardBaseContext> =
   ViewerDomMount<Context>;

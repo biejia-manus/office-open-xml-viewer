@@ -1,7 +1,7 @@
 import {
   overlayPercent,
   type DocxCommentDecorationContext,
-  type ViewerCommentCardContext,
+  type ViewerSelectableCommentCardContext,
   type ViewerCommentCardMount,
   type ViewerCommentMessage,
   type ViewerCommentRect,
@@ -33,7 +33,7 @@ export interface DocxCommentMarginModel {
 
 /** Context supplied when a consumer replaces the built-in comment card.
  * ScrollViewer still owns placement, virtualization, activation, and cleanup. */
-export interface DocxCommentCardContext extends ViewerCommentCardContext {
+export interface DocxCommentCardContext extends ViewerSelectableCommentCardContext {
   readonly comment: Readonly<DocComment>;
   readonly replies: readonly Readonly<DocComment>[];
 }
@@ -71,9 +71,11 @@ function commentThreads(comments: readonly DocComment[], includeResolved: boolea
     .map((root) => ({ root, replies: Object.freeze(replies.get(root.id) ?? []) }));
 }
 
-function toMessage(comment: DocComment): ViewerCommentMessage {
+function toMessage(comment: DocComment, occurrenceKey: string, index: number): ViewerCommentMessage {
   return {
-    messageKey: comment.id,
+    messageKey: index === 0
+      ? `${occurrenceKey}:root`
+      : `${occurrenceKey}:reply:${comment.id || index - 1}`,
     sourceId: comment.id,
     author: comment.author,
     date: comment.date,
@@ -173,8 +175,8 @@ export function buildDocxCommentMargin(
     visibleThreads.set(thread.root.id, thread);
     return [{
       occurrenceKey: thread.root.id,
-      root: toMessage(thread.root),
-      replies: thread.replies.map(toMessage),
+      root: toMessage(thread.root, thread.root.id, 0),
+      replies: thread.replies.map((reply, index) => toMessage(reply, thread.root.id, index + 1)),
     }];
   });
   const cardHosts = buildReadOnlyCommentMargin(margin, cardThreads, {

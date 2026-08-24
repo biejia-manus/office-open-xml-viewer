@@ -103,7 +103,7 @@ export type {
   ViewerCommentMessage,
   ViewerCommentThread,
   ViewerCommentCardBaseContext,
-  ViewerCommentCardContext,
+  ViewerSelectableCommentCardContext,
   ViewerCommentCardMount,
 } from './comment-card';
 export type { ViewerCommentUiOptions } from './comment-ui';

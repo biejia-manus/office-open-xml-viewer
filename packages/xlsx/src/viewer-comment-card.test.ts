@@ -71,7 +71,9 @@ describe('XlsxViewer comment UI contract', () => {
     expect(mounts).toBe(1);
     expect(updates).toBe(1);
     expect(latest?.thread.occurrenceKey).toBe('sheet:0:{root}:B2');
+    expect(latest?.thread.root.messageKey).toBe('sheet:0:{root}:B2:root');
     expect(latest?.thread.root.text).toBe('Review');
+    expect(latest?.thread.replies[0]?.messageKey).toBe('sheet:0:{root}:B2:reply:{reply}');
     expect(latest?.thread.replies.map((reply) => reply.text)).toEqual(['Done']);
     expect(latest?.sheetName).toBe('Sheet 1');
     expect(latest?.cellRef).toBe('B2');

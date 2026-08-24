@@ -233,6 +233,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
             return {
               update(next) {
                 decorationUpdates++;
+                decorationComplete = next.layoutComplete;
                 expect(next.geometryRevision).toBeGreaterThan(context.geometryRevision);
               },
               destroy() {
@@ -247,12 +248,16 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
     expect(mounts).toBe(1);
     expect(decorationMounts).toBe(1);
     expect(decorationComplete).toBe(false);
+    (engine as unknown as { layoutComplete: boolean }).layoutComplete = true;
+    viewer.relayout();
+    await vi.waitFor(() => expect(decorationComplete).toBe(true));
 
     const scrollHost = container.children[0]!.children[0]!;
     const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
     const margin = page.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
     expect(margin.style.background).toBe('');
     expect(lastContext?.replies).toEqual([]);
+    expect(lastContext?.thread.root.messageKey).toBe('7:root');
     expect(lastContext?.thread.root.text).toBe('Review this');
     expect(lastContext?.zoom).toBeCloseTo(viewer.getScale());
 

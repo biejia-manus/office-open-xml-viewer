@@ -46,9 +46,12 @@ the sheet viewport itself owns cell hit testing and scrolling.
 ## Stable data and transient geometry
 
 A comment thread has a viewer-stable `occurrenceKey` for the lifetime of one
-loaded document or presentation. Format-specific OOXML identifiers remain
-available in the format-specific mount context. An occurrence key is not a
-persistent storage identifier.
+loaded document, workbook, or presentation. Every root message and reply also
+has a required `messageKey`, stable within that occurrence even when the source
+format omits an authored message identifier. Format-specific OOXML identifiers
+remain available as `sourceId` and in the format-specific mount context. These
+viewer keys support keyed framework updates and later card virtualization; they
+are not persistent storage identifiers.
 
 Page geometry is an immutable snapshot. Each snapshot carries a monotonically
 increasing geometry revision and a layout generation. Consumers must replace

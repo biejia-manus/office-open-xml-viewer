@@ -21,9 +21,12 @@ export interface XlsxCommentCardContext extends ViewerCommentCardBaseContext {
  * shared card/visibility contract applies but page-to-margin decoration does not. */
 export type XlsxCommentUiOptions = ViewerCommentUiOptions<XlsxCommentCardContext>;
 
-function message(comment: Readonly<XlsxComment | XlsxCommentReply>): ViewerCommentMessage {
+function message(
+  comment: Readonly<XlsxComment | XlsxCommentReply>,
+  messageKey: string,
+): ViewerCommentMessage {
   return Object.freeze({
-    messageKey: comment.id,
+    messageKey,
     sourceId: comment.id,
     author: comment.author,
     date: comment.date,
@@ -37,9 +40,11 @@ export function xlsxCommentThread(
   sheetIndex: number,
 ): ViewerCommentThread {
   const source = comment.id ?? comment.kind ?? 'note';
+  const occurrenceKey = `sheet:${sheetIndex}:${source}:${comment.cellRef}`;
   return Object.freeze({
-    occurrenceKey: `sheet:${sheetIndex}:${source}:${comment.cellRef}`,
-    root: message(comment),
-    replies: Object.freeze((comment.replies ?? []).map(message)),
+    occurrenceKey,
+    root: message(comment, `${occurrenceKey}:root`),
+    replies: Object.freeze((comment.replies ?? []).map((reply, index) =>
+      message(reply, `${occurrenceKey}:reply:${reply.id || index}`))),
   });
 }

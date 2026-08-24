@@ -1855,13 +1855,9 @@ export interface ViewerCommentCardBaseContext {
     readonly signal: AbortSignal;
     readonly registerInteractiveRoot: (root: Node) => () => void;
 }
-export interface ViewerCommentCardContext extends ViewerCommentCardBaseContext {
-    readonly active: boolean;
-    readonly setActive: (active: boolean) => void;
-}
-export type ViewerCommentCardMount<Context extends ViewerCommentCardBaseContext = ViewerCommentCardContext> = ViewerDomMount<Context>;
+export type ViewerCommentCardMount<Context extends ViewerCommentCardBaseContext = ViewerCommentCardBaseContext> = ViewerDomMount<Context>;
 export interface ViewerCommentMessage {
-    readonly messageKey?: string;
+    readonly messageKey: string;
     readonly sourceId?: string;
     readonly author?: string;
     readonly date?: string;
@@ -1873,7 +1869,7 @@ export interface ViewerCommentThread {
     readonly root: ViewerCommentMessage;
     readonly replies: readonly ViewerCommentMessage[];
 }
-export interface ViewerCommentUiOptions<Context extends ViewerCommentCardBaseContext = ViewerCommentCardContext> {
+export interface ViewerCommentUiOptions<Context extends ViewerCommentCardBaseContext = ViewerCommentCardBaseContext> {
     readonly includeResolved?: boolean;
     readonly mountCard?: ViewerCommentCardMount<Context>;
 }
