@@ -2,29 +2,115 @@
  *
  * OOXML defines comment data and anchors but not this UI. Format packages own
  * anchor projection (DOCX text ranges, PPTX slide coordinates); this module
- * owns only the accessible card list. Cards stay in authored order and the
- * margin scrolls independently, avoiding text-length or line-count estimates.
+ * owns only the accessible card list and its mount lifecycle.
  */
 
 import type {
-  ViewerCommentCard,
-  ViewerCommentCardRenderContext,
-  ViewerCommentCardRenderer,
+  ViewerCommentCardBaseContext,
+  ViewerCommentCardContext,
+  ViewerCommentCardMount,
+  ViewerCommentMessage,
+  ViewerCommentThread,
 } from '../comment-card.js';
+import type { ViewerDomMountHandle } from '../dom-mount.js';
 
 export const READ_ONLY_COMMENT_MARGIN_WIDTH_PX = 280;
 
-export type ReadOnlyCommentCard = ViewerCommentCard;
-export type ReadOnlyCommentCardRenderContext = ViewerCommentCardRenderContext;
-export type ReadOnlyCommentCardRenderer = ViewerCommentCardRenderer;
+export type ReadOnlyCommentThread = ViewerCommentThread;
+export type ReadOnlyCommentCardContext = ViewerCommentCardContext;
+export type ReadOnlyCommentCardMount<Context extends ViewerCommentCardBaseContext = ViewerCommentCardContext> =
+  ViewerCommentCardMount<Context>;
 
-const cleanupByMargin = new WeakMap<HTMLDivElement, readonly (() => void)[]>();
+interface MountedCard {
+  readonly item: HTMLDivElement;
+  readonly host: HTMLDivElement;
+  readonly abort: AbortController;
+  readonly unregisterRoots: Set<() => void>;
+  readonly mount: unknown;
+  readonly handle: ViewerDomMountHandle<ViewerCommentCardBaseContext>;
+}
+
+interface MarginState {
+  readonly cards: Map<string, MountedCard>;
+  readonly onScroll: () => void;
+  resizeObserver?: ResizeObserver;
+  onGeometryChange?: () => void;
+  onError?: (error: Error) => void;
+}
+
+export interface ReadOnlyCommentMarginOptions<Context extends ViewerCommentCardBaseContext> {
+  readonly activeId: string | null;
+  readonly zoom: number;
+  readonly onSetActive: (id: string, active: boolean) => void;
+  readonly mountCard?: ReadOnlyCommentCardMount<Context>;
+  readonly contextFor?: (
+    thread: ReadOnlyCommentThread,
+    common: ViewerCommentCardBaseContext,
+    selection: Pick<ViewerCommentCardContext, 'active' | 'setActive'>,
+  ) => Context;
+  readonly registerInteractiveRoot?: (root: Node) => () => void;
+  /** Called when mounted card geometry or the margin scroll position changes. */
+  readonly onGeometryChange?: () => void;
+  readonly onError?: (error: Error) => void;
+}
+
+const stateByMargin = new WeakMap<HTMLDivElement, MarginState>();
+
+function asError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
+
+function reportErrors(errors: readonly unknown[], onError?: (error: Error) => void): void {
+  if (errors.length === 0) return;
+  const normalized = errors.map(asError);
+  const error = normalized.length === 1
+    ? normalized[0] as Error
+    : new AggregateError(normalized, 'Multiple comment card lifecycle operations failed');
+  if (onError) {
+    try {
+      onError(error);
+    } catch (callbackError) {
+      console.error('[ooxml] comment UI error handler failed:', callbackError);
+    }
+    return;
+  }
+  throw error;
+}
+
+function destroyMountedCard(card: MountedCard, observer?: ResizeObserver): unknown[] {
+  const errors: unknown[] = [];
+  if (observer && typeof observer.unobserve === 'function') observer.unobserve(card.host);
+  card.abort.abort();
+  for (const unregister of [...card.unregisterRoots]) {
+    card.unregisterRoots.delete(unregister);
+    try {
+      unregister();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  try {
+    card.handle.destroy();
+  } catch (error) {
+    errors.push(error);
+  }
+  card.item.remove();
+  return errors;
+}
 
 /** Release consumer-owned card resources before a virtualized margin is pooled. */
 export function disposeReadOnlyCommentMargin(margin: HTMLDivElement): void {
-  for (const cleanup of cleanupByMargin.get(margin) ?? []) cleanup();
-  cleanupByMargin.delete(margin);
+  const state = stateByMargin.get(margin);
+  stateByMargin.delete(margin);
+  const errors: unknown[] = [];
+  for (const card of state?.cards.values() ?? []) {
+    errors.push(...destroyMountedCard(card, state?.resizeObserver));
+  }
+  state?.cards.clear();
+  if (state) margin.removeEventListener('scroll', state.onScroll);
+  state?.resizeObserver?.disconnect();
   margin.replaceChildren();
+  reportErrors(errors, state?.onError);
 }
 
 function createDiv(owner: Document, cssText: string): HTMLDivElement {
@@ -43,7 +129,7 @@ function displayDate(value: string | undefined): string | undefined {
   }).format(instant);
 }
 
-function appendCommentBody(host: HTMLElement, comment: ReadOnlyCommentCard, reply: boolean): void {
+function appendCommentBody(host: HTMLElement, comment: ViewerCommentMessage, reply: boolean): void {
   const owner = host.ownerDocument;
   const block = createDiv(
     owner,
@@ -91,61 +177,231 @@ function appendCommentBody(host: HTMLElement, comment: ReadOnlyCommentCard, repl
   host.appendChild(block);
 }
 
-/** Rebuild one read-only margin. The returned buttons use normal document flow,
- * so their heights come from the browser and arbitrary comment text never needs
- * an estimated line count. */
-export function buildReadOnlyCommentMargin(
-  margin: HTMLDivElement,
-  comments: readonly ReadOnlyCommentCard[],
-  activeId: string | null,
-  onActivate: (id: string | null) => void,
-  renderCard?: ReadOnlyCommentCardRenderer,
-): void {
-  disposeReadOnlyCommentMargin(margin);
-  margin.setAttribute('role', 'list');
-  if (comments.length === 0) return;
+function mountDefaultCard(
+  host: HTMLElement,
+  initialContext: ViewerCommentCardContext,
+): ViewerDomMountHandle<ViewerCommentCardContext> {
+  const card = host.ownerDocument.createElement('button');
+  card.type = 'button';
+  let context = initialContext;
+  let focused = false;
 
-  const cleanups: (() => void)[] = [];
-  for (const comment of comments) {
-    const active = activeId === comment.id;
-    const item = createDiv(margin.ownerDocument, 'margin:0;padding:0;');
-    item.setAttribute('role', 'listitem');
-    if (renderCard) {
-      const host = createDiv(margin.ownerDocument, 'display:block;width:100%;box-sizing:border-box;');
-      host.dataset.ooxmlCommentId = comment.id;
-      const cleanup = renderCard(host, {
-        view: comment,
-        active,
-        zoom: Number(margin.dataset.ooxmlCommentZoom ?? '1'),
-        activate: () => onActivate(active ? null : comment.id),
-      });
-      if (typeof cleanup === 'function') cleanups.push(cleanup);
-      item.appendChild(host);
-      margin.appendChild(item);
-      continue;
-    }
-    const card = margin.ownerDocument.createElement('button');
-    card.type = 'button';
-    card.dataset.ooxmlCommentId = comment.id;
-    card.setAttribute('aria-pressed', String(active));
+  const activeShadow = 'inset 0 0 0 .12em rgba(37,99,235,.42)';
+  const inactiveShadow = '0 .08em .16em rgba(15,23,42,.12)';
+  const paint = (): void => {
+    card.dataset.ooxmlCommentId = context.thread.occurrenceKey;
+    card.setAttribute('aria-pressed', String(context.active));
     card.style.cssText =
       'display:block;width:100%;box-sizing:border-box;margin:0 0 .62em;padding:.78em .92em;' +
       'border:0;border-radius:.62em;text-align:left;cursor:pointer;font:inherit;outline:none;' +
-      `background:${active ? 'var(--ooxml-comment-card-active-background,#dbeafe)' : 'var(--ooxml-comment-card-background,#fff)'};` +
-      `box-shadow:${active ? 'inset 0 0 0 .12em rgba(37,99,235,.42)' : '0 .08em .16em rgba(15,23,42,.12)'};`;
-    card.addEventListener('click', () => onActivate(active ? null : comment.id));
-    card.addEventListener('focus', () => {
-      card.style.boxShadow = 'inset 0 0 0 .12em rgba(37,99,235,.42)';
-    });
-    card.addEventListener('blur', () => {
-      card.style.boxShadow = active
-        ? 'inset 0 0 0 .12em rgba(37,99,235,.42)'
-        : '0 .08em .16em rgba(15,23,42,.12)';
-    });
-    appendCommentBody(card, comment, false);
-    for (const reply of comment.replies ?? []) appendCommentBody(card, reply, true);
-    item.appendChild(card);
-    margin.appendChild(item);
+      `background:${context.active ? 'var(--ooxml-comment-card-active-background,#dbeafe)' : 'var(--ooxml-comment-card-background,#fff)'};` +
+      `box-shadow:${focused || context.active ? activeShadow : inactiveShadow};`;
+    card.replaceChildren();
+    appendCommentBody(card, context.thread.root, false);
+    for (const reply of context.thread.replies) appendCommentBody(card, reply, true);
+  };
+  const onClick = (): void => context.setActive(!context.active);
+  const onFocus = (): void => {
+    focused = true;
+    card.style.boxShadow = activeShadow;
+  };
+  const onBlur = (): void => {
+    focused = false;
+    card.style.boxShadow = context.active ? activeShadow : inactiveShadow;
+  };
+  card.addEventListener('click', onClick);
+  card.addEventListener('focus', onFocus);
+  card.addEventListener('blur', onBlur);
+  host.appendChild(card);
+  paint();
+  return {
+    update(next) {
+      context = next;
+      paint();
+    },
+    destroy() {
+      card.removeEventListener('click', onClick);
+      card.removeEventListener('focus', onFocus);
+      card.removeEventListener('blur', onBlur);
+    },
+  };
+}
+
+const defaultCardMount: ViewerCommentCardMount = mountDefaultCard;
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (typeof value === 'object' || typeof value === 'function') && value !== null &&
+    'then' in value && typeof (value as { then?: unknown }).then === 'function';
+}
+
+function isMountHandle<Context>(value: unknown): value is ViewerDomMountHandle<Context> {
+  return typeof value === 'object' && value !== null &&
+    typeof (value as { update?: unknown }).update === 'function' &&
+    typeof (value as { destroy?: unknown }).destroy === 'function';
+}
+
+function registerRoot(
+  root: Node,
+  unregisterRoots: Set<() => void>,
+  registerInteractiveRoot?: (root: Node) => () => void,
+): () => void {
+  const unregister = registerInteractiveRoot?.(root) ?? (() => {});
+  let registered = true;
+  const dispose = (): void => {
+    if (!registered) return;
+    registered = false;
+    unregisterRoots.delete(dispose);
+    unregister();
+  };
+  unregisterRoots.add(dispose);
+  return dispose;
+}
+
+/** Reconcile one read-only margin by occurrence key. Card hosts and framework
+ * roots remain stable across active-state, zoom, and geometry updates. */
+export function buildReadOnlyCommentMargin<Context extends ViewerCommentCardBaseContext>(
+  margin: HTMLDivElement,
+  threads: readonly ReadOnlyCommentThread[],
+  options: ReadOnlyCommentMarginOptions<Context>,
+): ReadonlyMap<string, HTMLElement> {
+  margin.setAttribute('role', 'list');
+  margin.dataset.ooxmlCommentZoom = String(options.zoom);
+  let state = stateByMargin.get(margin);
+  if (!state) {
+    const created: MarginState = {
+      cards: new Map<string, MountedCard>(),
+      onScroll: () => created.onGeometryChange?.(),
+      onGeometryChange: options.onGeometryChange,
+    };
+    const ResizeObserverClass = margin.ownerDocument.defaultView?.ResizeObserver ??
+      globalThis.ResizeObserver;
+    if (ResizeObserverClass) {
+      created.resizeObserver = new ResizeObserverClass(() => created.onGeometryChange?.());
+    }
+    margin.addEventListener('scroll', created.onScroll, { passive: true });
+    state = created;
   }
-  if (cleanups.length > 0) cleanupByMargin.set(margin, Object.freeze(cleanups));
+  state.onGeometryChange = options.onGeometryChange;
+  state.onError = options.onError;
+  stateByMargin.set(margin, state);
+
+  const desired = new Set<string>();
+  for (const thread of threads) {
+    if (desired.has(thread.occurrenceKey)) {
+      const cleanupErrors: unknown[] = [];
+      for (const mounted of state.cards.values()) {
+        cleanupErrors.push(...destroyMountedCard(mounted, state.resizeObserver));
+      }
+      state.cards.clear();
+      margin.replaceChildren();
+      reportErrors([
+        new Error(`Duplicate comment occurrence key: ${thread.occurrenceKey}`),
+        ...cleanupErrors,
+      ], options.onError);
+      return new Map();
+    }
+    desired.add(thread.occurrenceKey);
+  }
+
+  const errors: unknown[] = [];
+  for (const [id, mounted] of [...state.cards]) {
+    const expectedMount = options.mountCard ?? defaultCardMount;
+    if (!desired.has(id) || mounted.mount !== expectedMount) {
+      state.cards.delete(id);
+      errors.push(...destroyMountedCard(mounted, state.resizeObserver));
+    }
+  }
+
+  for (const thread of threads) {
+    let mounted = state.cards.get(thread.occurrenceKey);
+    const mount = (options.mountCard ?? defaultCardMount) as ViewerCommentCardMount<Context>;
+    if (!mounted) {
+      const item = createDiv(margin.ownerDocument, 'margin:0;padding:0;');
+      item.setAttribute('role', 'listitem');
+      const host = createDiv(margin.ownerDocument, 'display:block;width:100%;box-sizing:border-box;');
+      host.dataset.ooxmlCommentId = thread.occurrenceKey;
+      item.appendChild(host);
+      // Frameworks may require a connected host during mount. Insert before
+      // invoking consumer code and roll the item back if mounting fails.
+      margin.appendChild(item);
+      const abort = new AbortController();
+      const unregisterRoots = new Set<() => void>();
+      const common: ViewerCommentCardBaseContext = {
+        thread,
+        zoom: options.zoom,
+        signal: abort.signal,
+        registerInteractiveRoot: (root) =>
+          registerRoot(root, unregisterRoots, options.registerInteractiveRoot),
+      };
+      let result: unknown;
+      try {
+        const selection = {
+          active: options.activeId === thread.occurrenceKey,
+          setActive: (active: boolean) => options.onSetActive(thread.occurrenceKey, active),
+        };
+        const context = options.contextFor?.(thread, common, selection) ??
+          { ...common, ...selection } as unknown as Context;
+        result = mount(host, context);
+        if (isPromiseLike(result)) {
+          throw new TypeError(
+            'commentUi.mountCard must return synchronously; start async work from the supplied AbortSignal',
+          );
+        }
+        if (!isMountHandle<Context>(result)) {
+          throw new TypeError('commentUi.mountCard must return an object with update() and destroy()');
+        }
+      } catch (error) {
+        abort.abort();
+        for (const unregister of [...unregisterRoots]) {
+          unregisterRoots.delete(unregister);
+          try {
+            unregister();
+          } catch (cleanupError) {
+            errors.push(cleanupError);
+          }
+        }
+        item.remove();
+        errors.push(error);
+        continue;
+      }
+      mounted = {
+        item,
+        host,
+        abort,
+        unregisterRoots,
+        mount,
+        handle: result as unknown as ViewerDomMountHandle<ViewerCommentCardBaseContext>,
+      };
+      state.cards.set(thread.occurrenceKey, mounted);
+      state.resizeObserver?.observe(host);
+    } else {
+      const existing = mounted;
+      const common: ViewerCommentCardBaseContext = {
+        thread,
+        zoom: options.zoom,
+        signal: existing.abort.signal,
+        registerInteractiveRoot: (root) =>
+          registerRoot(root, existing.unregisterRoots, options.registerInteractiveRoot),
+      };
+      try {
+        const selection = {
+          active: options.activeId === thread.occurrenceKey,
+          setActive: (active: boolean) => options.onSetActive(thread.occurrenceKey, active),
+        };
+        const context = options.contextFor?.(thread, common, selection) ??
+          { ...common, ...selection } as unknown as Context;
+        existing.handle.update(context);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    margin.appendChild(mounted.item);
+  }
+  reportErrors(errors, options.onError);
+  return new Map(
+    threads.flatMap((thread) => {
+      const mounted = state.cards.get(thread.occurrenceKey);
+      return mounted ? [[thread.occurrenceKey, mounted.host] as const] : [];
+    }),
+  );
 }

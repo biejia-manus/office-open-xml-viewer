@@ -1,23 +1,43 @@
-/** Format-neutral view model for one read-only OOXML comment thread. */
-export interface ViewerCommentCard {
-  readonly id: string;
+import type { ViewerDomMount } from './dom-mount.js';
+
+/** Format-neutral view model for one read-only OOXML comment message. */
+export interface ViewerCommentMessage {
+  /** Stable authored identity when the OOXML format provides one. */
+  readonly messageKey?: string;
+  /** Unmodified source identity, when different from `messageKey`. */
+  readonly sourceId?: string;
   readonly author?: string;
   readonly date?: string;
   readonly text: string;
-  readonly replies?: readonly ViewerCommentCard[];
+  readonly status?: 'active' | 'resolved' | 'closed';
 }
 
-/** Common context accepted by a card renderer shared between DOCX and PPTX. */
-export interface ViewerCommentCardRenderContext {
-  readonly view: ViewerCommentCard;
-  readonly active: boolean;
+/** Format-neutral view model for one read-only OOXML comment thread. */
+export interface ViewerCommentThread {
+  /** Viewer-stable key for this occurrence in one loaded file generation. */
+  readonly occurrenceKey: string;
+  readonly root: ViewerCommentMessage;
+  readonly replies: readonly ViewerCommentMessage[];
+}
+
+/** Format-neutral card data and lifecycle shared by every viewer. */
+export interface ViewerCommentCardBaseContext {
+  readonly thread: ViewerCommentThread;
   /** Absolute viewer zoom (`1` is the document's natural CSS size). */
   readonly zoom: number;
-  readonly activate: () => void;
+  /** Aborted before the card host is recycled or the Viewer is destroyed. */
+  readonly signal: AbortSignal;
+  /** Keep a Portal, Teleport, or Shadow-root surface inside this card's interaction boundary. */
+  readonly registerInteractiveRoot: (root: Node) => () => void;
 }
 
-/** Framework-neutral mount hook. Return a cleanup callback when needed. */
-export type ViewerCommentCardRenderer = (
-  host: HTMLElement,
-  context: ViewerCommentCardRenderContext,
-) => void | (() => void);
+/** Selection interaction used by DOCX and PPTX side-margin cards. */
+export interface ViewerCommentCardContext extends ViewerCommentCardBaseContext {
+  readonly active: boolean;
+  /** Idempotently select or clear this thread. */
+  readonly setActive: (active: boolean) => void;
+}
+
+/** DOM framework adapter hook. The host stays stable until `destroy()`. */
+export type ViewerCommentCardMount<Context extends ViewerCommentCardBaseContext = ViewerCommentCardContext> =
+  ViewerDomMount<Context>;

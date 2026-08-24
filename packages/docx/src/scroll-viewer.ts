@@ -11,6 +11,11 @@ import {
   disposeReadOnlyCommentMargin,
   READ_ONLY_COMMENT_MARGIN_WIDTH_PX,
 } from '@silurus/ooxml-core/internal/read-only-comment-margin';
+import { DomInteractionBoundary } from '@silurus/ooxml-core/internal/dom-interaction-boundary';
+import {
+  buildReadOnlyCommentDecoration,
+  disposeReadOnlyCommentDecoration,
+} from '@silurus/ooxml-core/internal/read-only-comment-decoration';
 import { DocxDocument } from './document';
 import type { LoadOptions } from './document';
 import type { DocxTextRunInfo } from './renderer';
@@ -30,7 +35,7 @@ import {
 } from './element-context';
 import {
   buildDocxCommentMargin,
-  type DocxCommentCardRenderer,
+  type DocxCommentUiOptions,
 } from './comment-margin';
 
 /**
@@ -107,9 +112,8 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
   enableTextSelection?: boolean;
   /** Show a read-only comment margin beside each mounted page. Default false. */
   showComments?: boolean;
-  /** Replace the built-in card contents while ScrollViewer retains placement,
-   * virtualization, active state, and lifecycle cleanup. */
-  renderCommentCard?: DocxCommentCardRenderer;
+  /** Advanced card and decoration customization. */
+  commentUi?: DocxCommentUiOptions;
   /**
    * Enable read-only selection of mounted pictures, charts, and shapes. The
    * selected object exposes element context and receives a non-editable outline.
@@ -211,6 +215,7 @@ interface PageSlot {
   elementLayer: HTMLDivElement | null;
   commentTintLayer: HTMLDivElement | null;
   commentMargin: HTMLDivElement | null;
+  commentDecorationLayer: HTMLDivElement | null;
   commentRuns: readonly Readonly<DocxTextRunInfo>[];
   /** page index this slot is currently rendering / has rendered, or -1 when free. */
   renderedPage: number;
@@ -273,8 +278,13 @@ export class DocxScrollViewer implements ZoomableViewer {
   private _elementClickListener: ((event: MouseEvent) => void) | null = null;
   private _contextMenuListener: ((event: MouseEvent) => void) | null = null;
   private _commentOutsidePointerListener: ((event: PointerEvent) => void) | null = null;
+  private readonly _commentInteractionBoundary = new DomInteractionBoundary();
   private _elementContext: DocxElementContext | null = null;
   private _activeCommentId: string | null = null;
+  private _reviewLayoutGeneration = 1;
+  private _reviewGeometryRevision = 0;
+  private _commentGeometryScheduled = false;
+  private readonly _pendingCommentGeometry = new Map<number, PageSlot>();
   private _elementHitGeneration = 0;
   /** Set by `destroy()`. Async render callbacks (main + worker) check it before
    *  reporting an error so a rejection that lands after teardown is swallowed
@@ -431,11 +441,7 @@ export class DocxScrollViewer implements ZoomableViewer {
 
     if (opts.showComments) {
       this._commentOutsidePointerListener = (event) => {
-        let node = event.target as HTMLElement | null;
-        while (node) {
-          if (node.dataset?.ooxmlCommentId) return;
-          node = node.parentElement;
-        }
+        if (this._commentInteractionBoundary.contains(event, 'ooxmlCommentId')) return;
         if (this._activeCommentId === null) return;
         this._activeCommentId = null;
         for (const [page, slot] of this._slots) this._redrawSlotComments(page, slot);
@@ -536,6 +542,7 @@ export class DocxScrollViewer implements ZoomableViewer {
       });
       if (!doc) return;
       if (this._destroyed) throw new Error('DocxScrollViewer is destroyed');
+      this._reviewLayoutGeneration++;
       this._find.invalidate();
       this._findActive = false;
       this._activeCommentId = null;
@@ -869,6 +876,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     wrapper.appendChild(highlightLayer);
     let commentTintLayer: HTMLDivElement | null = null;
     let commentMargin: HTMLDivElement | null = null;
+    let commentDecorationLayer: HTMLDivElement | null = null;
     if (this._opts.showComments) {
       commentTintLayer = document.createElement('div');
       commentTintLayer.style.cssText =
@@ -879,6 +887,12 @@ export class DocxScrollViewer implements ZoomableViewer {
         'position:absolute;top:0;height:100%;box-sizing:border-box;' +
         'overflow-x:hidden;overflow-y:auto;pointer-events:auto;';
       this._syncCommentMarginGeometry(commentMargin);
+      if (this._opts.commentUi?.mountDecoration) {
+        commentDecorationLayer = document.createElement('div');
+        commentDecorationLayer.style.cssText =
+          'position:absolute;top:0;left:0;overflow:visible;pointer-events:none;';
+        wrapper.appendChild(commentDecorationLayer);
+      }
       wrapper.appendChild(commentMargin);
     }
     const elementLayer = createCanvasElementOutlineLayer(
@@ -894,6 +908,7 @@ export class DocxScrollViewer implements ZoomableViewer {
       elementLayer,
       commentTintLayer,
       commentMargin,
+      commentDecorationLayer,
       commentRuns: Object.freeze([]),
       renderedPage: -1,
       renderedScale: -1,
@@ -929,6 +944,12 @@ export class DocxScrollViewer implements ZoomableViewer {
       slot.commentTintLayer.style.visibility = '';
     }
     if (slot.commentMargin) disposeReadOnlyCommentMargin(slot.commentMargin);
+    if (slot.commentDecorationLayer) {
+      disposeReadOnlyCommentDecoration(
+        slot.commentDecorationLayer,
+        (error) => this._reportCommentUiError(error),
+      );
+    }
     slot.commentRuns = Object.freeze([]);
     renderCanvasElementOutline(slot.elementLayer, null);
     slot.renderedPage = -1;
@@ -944,6 +965,10 @@ export class DocxScrollViewer implements ZoomableViewer {
     slot.wrapper.style.width = `${wpx}px`;
     slot.wrapper.style.height = `${hpx}px`;
     this._syncCommentMarginGeometry(slot.commentMargin);
+    if (slot.commentDecorationLayer) {
+      slot.commentDecorationLayer.style.width = `${wpx + this._commentMarginExtent()}px`;
+      slot.commentDecorationLayer.style.height = `${hpx}px`;
+    }
     this._redrawElementOutlineForSlot(i, slot);
     // Horizontal placement (replaces the old CSS `left:0;right:0;margin:0 auto`
     // auto-centering, which cannot honour a left gutter). Centre the page in the
@@ -1141,6 +1166,13 @@ export class DocxScrollViewer implements ZoomableViewer {
     const e = err instanceof Error ? err : new Error(String(err));
     if (this._opts.onError) this._opts.onError(e);
     else console.error('[ooxml] DocxScrollViewer render failed:', e);
+  }
+
+  /** Report synchronous consumer-owned comment UI lifecycle failures, including
+   * cleanup performed during Viewer destruction. */
+  private _reportCommentUiError(err: Error): void {
+    if (this._opts.onError) this._opts.onError(err);
+    else console.error('[ooxml] DocxScrollViewer comment UI failed:', err);
   }
 
   /**
@@ -1570,7 +1602,9 @@ export class DocxScrollViewer implements ZoomableViewer {
         slot.commentTintLayer.style.visibility = 'hidden';
       }
     }
-    if (this._opts.renderCommentCard) this._redrawSlotComments(i, slot);
+    if (this._opts.commentUi?.mountCard || this._opts.commentUi?.mountDecoration) {
+      this._redrawSlotComments(i, slot);
+    }
   }
 
   /** (Re)schedule the debounced settle re-render (design §7 mechanism 2). Resets
@@ -1821,7 +1855,7 @@ export class DocxScrollViewer implements ZoomableViewer {
 
   private _redrawSlotComments(page: number, slot: PageSlot): void {
     if (!this._doc || !slot.commentTintLayer || !slot.commentMargin) return;
-    buildDocxCommentMargin(
+    const threads = buildDocxCommentMargin(
       slot.commentTintLayer,
       slot.commentMargin,
       slot.commentRuns,
@@ -1829,15 +1863,72 @@ export class DocxScrollViewer implements ZoomableViewer {
       this._pageWidthPx(page),
       this._pageHeightPx(page),
       this._activeCommentId,
-      (id) => {
-        this._activeCommentId = id;
+      (id, active) => {
+        const next = active ? id : this._activeCommentId === id ? null : this._activeCommentId;
+        if (next === this._activeCommentId) return;
+        this._activeCommentId = next;
         for (const [mountedPage, mountedSlot] of this._slots) {
           this._redrawSlotComments(mountedPage, mountedSlot);
         }
       },
       this._commentUiZoom(),
-      this._opts.renderCommentCard,
+      this._opts.commentUi?.mountCard,
+      this._opts.commentUi?.includeResolved === true,
+      (root) => this._commentInteractionBoundary.register(root),
+      () => this._scheduleCommentGeometry(page, slot),
+      (error) => this._reportCommentUiError(error),
     );
+    if (slot.commentDecorationLayer) {
+      const width = this._pageWidthPx(page);
+      const height = this._pageHeightPx(page);
+      buildReadOnlyCommentDecoration(
+        slot.commentDecorationLayer,
+        Object.freeze({
+          format: 'docx' as const,
+          pageIndex: page,
+          layoutGeneration: this._reviewLayoutGeneration,
+          geometryRevision: ++this._reviewGeometryRevision,
+          layoutComplete: this._commentLayoutComplete(),
+          zoom: this._commentUiZoom(),
+          surfaceBounds: Object.freeze({
+            x: 0, y: 0, width: width + this._commentMarginExtent(), height,
+          }),
+          contentBounds: Object.freeze({ x: 0, y: 0, width, height }),
+          threads,
+        }),
+        this._opts.commentUi?.mountDecoration,
+        (error) => this._reportCommentUiError(error),
+      );
+    }
+  }
+
+  /** Progressive layout implementations may publish an exact prefix before
+   * final pagination. Current eager documents omit the flag and are complete. */
+  private _commentLayoutComplete(): boolean {
+    return (this._doc as (DocxDocument & { readonly layoutComplete?: boolean }) | null)
+      ?.layoutComplete ?? true;
+  }
+
+  /** Coalesce framework card commits and margin scrolling into one geometry
+   * publication per animation frame. */
+  private _scheduleCommentGeometry(page: number, slot: PageSlot): void {
+    this._pendingCommentGeometry.set(page, slot);
+    if (this._commentGeometryScheduled) return;
+    this._commentGeometryScheduled = true;
+    const flush = (): void => {
+      this._commentGeometryScheduled = false;
+      const pending = [...this._pendingCommentGeometry];
+      this._pendingCommentGeometry.clear();
+      if (this._destroyed) return;
+      for (const [pendingPage, pendingSlot] of pending) {
+        if (this._slots.get(pendingPage) === pendingSlot) {
+          this._redrawSlotComments(pendingPage, pendingSlot);
+        }
+      }
+    };
+    const ownerWindow = this._wrapper.ownerDocument.defaultView;
+    if (ownerWindow?.requestAnimationFrame) ownerWindow.requestAnimationFrame(flush);
+    else queueMicrotask(flush);
   }
 
   private _redrawSlotHighlights(page: number, slot: PageSlot): void {
@@ -2156,6 +2247,7 @@ export class DocxScrollViewer implements ZoomableViewer {
       );
       this._commentOutsidePointerListener = null;
     }
+    this._commentInteractionBoundary.clear();
     this._elementContext = null;
     if (this._scrollListener) {
       this._scrollHost.removeEventListener('scroll', this._scrollListener);

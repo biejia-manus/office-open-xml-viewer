@@ -1056,17 +1056,23 @@ export interface DocTableRow {
     isHeader: boolean;
     cantSplit?: boolean;
 }
-export interface DocxCommentCardRenderContext {
+export interface DocxCommentCardContext extends ViewerCommentCardContext {
     readonly comment: Readonly<DocComment>;
     readonly replies: readonly Readonly<DocComment>[];
-    readonly active: boolean;
-    readonly activate: () => void;
 }
-export type DocxCommentCardRenderer = (host: HTMLElement, context: DocxCommentCardRenderContext) => void | (() => void);
+export type DocxCommentCardMount = ViewerCommentCardMount<DocxCommentCardContext>;
+export interface DocxCommentDecorationContext extends ViewerCommentDecorationBaseContext {
+    readonly format: 'docx';
+    readonly pageIndex: number;
+    readonly layoutComplete: boolean;
+}
 export interface DocxCommentMark {
     id: string;
     kind: 'rangeStart' | 'rangeEnd' | 'reference' | string;
     runIndex: number;
+}
+export interface DocxCommentUiOptions extends ViewerCommentUiOptions<DocxCommentCardContext> {
+    readonly mountDecoration?: ViewerCommentDecorationMount<DocxCommentDecorationContext>;
 }
 export class DocxDocument {
     static load(source: string | ArrayBuffer, opts?: LoadOptions): Promise<DocxDocument>;
@@ -1190,7 +1196,7 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
     overscan?: number;
     enableTextSelection?: boolean;
     showComments?: boolean;
-    renderCommentCard?: DocxCommentCardRenderer;
+    commentUi?: DocxCommentUiOptions;
     enableElementSelection?: boolean;
     onSelectionContextChange?: (context: DocxSelectionContext | null) => void;
     onContextMenu?: (event: ViewerContextMenuEvent<DocxSelectionContext>) => void;
@@ -1834,6 +1840,10 @@ export interface PatternFill {
     bg: string;
     preset: string;
 }
+export interface PptxCommentDecorationContext extends ViewerCommentDecorationBaseContext {
+    readonly format: 'pptx';
+    readonly slideIndex: number;
+}
 export interface PTabRun {
     alignment: 'left' | 'center' | 'right';
     relativeTo: 'margin' | 'indent';
@@ -2159,9 +2169,65 @@ export interface TileInfo {
     flip?: string;
     algn?: string;
 }
+export interface ViewerCommentCardBaseContext {
+    readonly thread: ViewerCommentThread;
+    readonly zoom: number;
+    readonly signal: AbortSignal;
+    readonly registerInteractiveRoot: (root: Node) => () => void;
+}
+export interface ViewerCommentCardContext extends ViewerCommentCardBaseContext {
+    readonly active: boolean;
+    readonly setActive: (active: boolean) => void;
+}
+export type ViewerCommentCardMount<Context extends ViewerCommentCardBaseContext = ViewerCommentCardContext> = ViewerDomMount<Context>;
+export interface ViewerCommentDecorationBaseContext {
+    readonly layoutGeneration: number;
+    readonly geometryRevision: number;
+    readonly zoom: number;
+    readonly surfaceBounds: ViewerCommentRect;
+    readonly contentBounds: ViewerCommentRect;
+    readonly threads: readonly ViewerCommentThreadGeometry[];
+    readonly signal: AbortSignal;
+}
+export type ViewerCommentDecorationContext = DocxCommentDecorationContext | PptxCommentDecorationContext;
+export type ViewerCommentDecorationMount<Context extends ViewerCommentDecorationContext = ViewerCommentDecorationContext> = ViewerDomMount<Context>;
+export interface ViewerCommentMessage {
+    readonly messageKey?: string;
+    readonly sourceId?: string;
+    readonly author?: string;
+    readonly date?: string;
+    readonly text: string;
+    readonly status?: 'active' | 'resolved' | 'closed';
+}
+export interface ViewerCommentRect {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+}
+export interface ViewerCommentThread {
+    readonly occurrenceKey: string;
+    readonly root: ViewerCommentMessage;
+    readonly replies: readonly ViewerCommentMessage[];
+}
+export interface ViewerCommentThreadGeometry {
+    readonly occurrenceKey: string;
+    readonly active: boolean;
+    readonly anchorRects: readonly ViewerCommentRect[];
+    readonly cardRect?: ViewerCommentRect;
+}
+export interface ViewerCommentUiOptions<Context extends ViewerCommentCardBaseContext = ViewerCommentCardContext> {
+    readonly includeResolved?: boolean;
+    readonly mountCard?: ViewerCommentCardMount<Context>;
+}
 export interface ViewerContextMenuEvent<TContext> {
     readonly originalEvent: MouseEvent;
     getContext(): Promise<TContext | null>;
+}
+export type ViewerDomMount<Context> = (host: HTMLElement, initialContext: Context) => ViewerDomMountHandle<Context>;
+export interface ViewerDomMountHandle<Context> {
+    update(context: Context): void;
+    destroy(): void;
 }
 export interface ZoomableViewer {
     getScale(): number;

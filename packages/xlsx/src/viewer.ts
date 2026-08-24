@@ -13,6 +13,7 @@ import {
   resolveCanvasViewerMode,
   type CanvasViewerRenderMode,
 } from '@silurus/ooxml-core/internal/canvas-viewer-mechanics';
+import { DomInteractionBoundary } from '@silurus/ooxml-core/internal/dom-interaction-boundary';
 import {
   HEADER_W,
   HEADER_H,
@@ -54,6 +55,15 @@ import {
 export type { CellAddress } from './selection.js';
 import { XlsxFindController, type FindCell, type XlsxMatchLocation } from './find.js';
 import { computeCommentPopupPosition } from './comment-popup.js';
+import {
+  xlsxCommentThread,
+  type XlsxCommentCardContext,
+  type XlsxCommentUiOptions,
+} from './comment-card.js';
+import {
+  buildReadOnlyCommentMargin,
+  disposeReadOnlyCommentMargin,
+} from '@silurus/ooxml-core/internal/read-only-comment-margin';
 import {
   computeValidationPanelPosition,
   type ResolvedList,
@@ -281,6 +291,10 @@ export interface XlsxSheetViewerOptions extends LoadOptions {
   selectionColor?: string;
   /** CSS backgrounds for ordinary and active in-document search matches. */
   findHighlightColors?: FindHighlightColors;
+  /** Show authored cell notes and threaded comments. Default true. */
+  showComments?: boolean;
+  /** Advanced comment-card customization shared with DOCX and PPTX viewers. */
+  commentUi?: XlsxCommentUiOptions;
   /**
    * `'main'` (default): parse in a worker, render on the main thread. `'worker'`:
    * parse AND render entirely inside the worker and paint the returned
@@ -778,9 +792,9 @@ class XlsxViewerEngine implements ZoomableViewer {
   private selectionAutoScrollLastTime: number | null = null;
 
   // ─── Comment hover popup (Excel-style note) ───────────────────────────────
-  /** DOM overlay element that shows the hovered cell's comment. Lives in
-   *  canvasArea above the scrollHost; `pointer-events:none` so it never blocks
-   *  cell interaction. */
+  /** DOM overlay element that shows the hovered cell's comment. The built-in
+   * note remains non-interactive; a consumer-mounted card becomes an explicit
+   * interaction surface without changing worksheet hit-testing. */
   private commentPopup: HTMLDivElement;
   /** `"row:col"` → comment for the current sheet, rebuilt on every showSheet. */
   private commentMap = new Map<string, XlsxComment>();
@@ -794,6 +808,10 @@ class XlsxViewerEngine implements ZoomableViewer {
   private commentPopupKey: string | null = null;
   /** Pending show timer (see {@link COMMENT_POPUP_DELAY_MS}). */
   private commentPopupTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly commentInteractionBoundary = new DomInteractionBoundary();
+  private commentPopupCell: CellAddress | null = null;
+  private commentPopupPositionScheduled = false;
+  private commentPopupResizeObserver: ResizeObserver | null = null;
 
   // ─── List data-validation dropdown panel (display-only) ───────────────────
   /** DOM overlay listing a list-validated cell's allowed values. Lives in
@@ -894,6 +912,27 @@ class XlsxViewerEngine implements ZoomableViewer {
     this.selectionOverlay = this.overlayHost.selection;
     this.findOverlay = this.overlayHost.find;
     this.commentPopup = this.overlayHost.comment;
+    if (this.opts.commentUi?.mountCard) {
+      this.commentPopup.style.padding = '0';
+      this.commentPopup.style.background = 'transparent';
+      this.commentPopup.style.border = '0';
+      this.commentPopup.style.boxShadow = 'none';
+      this.commentPopup.style.whiteSpace = 'normal';
+      this.commentPopup.style.pointerEvents = 'auto';
+      const ResizeObserverClass = this.hostDocument.defaultView?.ResizeObserver ??
+        globalThis.ResizeObserver;
+      if (ResizeObserverClass) {
+        this.commentPopupResizeObserver = new ResizeObserverClass(() => {
+          this.scheduleCommentPopupPosition();
+        });
+        this.commentPopupResizeObserver.observe(this.commentPopup);
+      }
+      this.commentPopup.addEventListener('pointerleave', (event) => {
+        const next = event.relatedTarget as Node | null;
+        if (next && (this.scrollHost.contains(next) || this.commentInteractionBoundary.containsNode(next))) return;
+        this.hideCommentPopup();
+      });
+    }
     this.validationPanel = this.overlayHost.validation;
     // Inject the shared viewer stylesheet once per module (idempotent). Both
     // mounts use it; the composite footer also hides its tab-strip scrollbar.
@@ -1187,7 +1226,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     try {
       if (!await this.ensureHostFonts(workbook)) return;
       const source = await workbook.getWorksheet(index);
-      worksheet = this.sheetViews.get(index) ?? createSheetViewModel(source);
+      worksheet = this.sheetViews.get(index) ?? this.createVisibleSheetView(source);
       const prepareRowHeights = workbook[prepareXlsxViewerRowHeights];
       if (typeof prepareRowHeights === 'function') {
         const measureCanvas = this.hostDocument.createElement('canvas');
@@ -1210,6 +1249,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     this.viewportTop = 0;
     this.selectionController.reset();
     this.emitSelectionChange();
+    this.disposeCommentPopupUi();
     this.hideCommentPopup();
     this.hideValidationPanel();
     this.updateSelectionOverlay();
@@ -3318,6 +3358,27 @@ class XlsxViewerEngine implements ZoomableViewer {
     }
   }
 
+  private createVisibleSheetView(source: Worksheet): Worksheet {
+    const worksheet = createSheetViewModel(source);
+    if (this.opts.showComments === false) {
+      return { ...worksheet, commentRefs: [], comments: [] };
+    }
+    // Keep the pre-customization behavior: XLSX historically exposed resolved
+    // threaded comments. Consumers may explicitly hide them.
+    if (this.opts.commentUi?.includeResolved !== false) return worksheet;
+    const resolved = new Set(
+      (worksheet.comments ?? [])
+        .filter((comment) => comment.resolved === true)
+        .map((comment) => comment.cellRef),
+    );
+    if (resolved.size === 0) return worksheet;
+    return {
+      ...worksheet,
+      commentRefs: worksheet.commentRefs?.filter((ref) => !resolved.has(ref)),
+      comments: worksheet.comments?.filter((comment) => !resolved.has(comment.cellRef)),
+    };
+  }
+
   /** IX1 — index the current sheet's hyperlinks by `"row:col"` (1-based, first
    *  cell of the `ref` range) so a clicked/hovered cell resolves in O(1). Keys
    *  match the renderer's `hyperlinkMap` exactly (`${hl.row}:${hl.col}`). */
@@ -3419,31 +3480,80 @@ class XlsxViewerEngine implements ZoomableViewer {
   /** Immediately render the popup for `comment` anchored to `cell` (used by the
    *  hover-dwell timer and by touch selection, which has no hover). */
   private renderCommentPopup(cell: CellAddress, comment: XlsxComment): void {
-    const rect = this.getCellRect(cell.row, cell.col);
-    if (!rect) return;
+    if (!this.getCellRect(cell.row, cell.col)) return;
+    this.commentPopupCell = cell;
 
-    // Author on its own bold line (when present), then the body text with
-    // newlines preserved. textContent escapes everything — no HTML injection
-    // from comment text.
-    this.commentPopup.textContent = '';
-    if (comment.author) {
-      const authorEl = this.hostDocument.createElement('div');
-      authorEl.style.cssText = 'font-weight:bold;margin-bottom:2px;';
-      authorEl.textContent = comment.author;
-      this.commentPopup.appendChild(authorEl);
+    const customMount = this.opts.commentUi?.mountCard;
+    if (customMount) {
+      const thread = xlsxCommentThread(comment, this.currentSheet);
+      buildReadOnlyCommentMargin(this.commentPopup, [thread], {
+        activeId: thread.occurrenceKey,
+        zoom: this.viewport.scale,
+        onSetActive: (_id, active) => {
+          if (!active) this.hideCommentPopup();
+        },
+        mountCard: customMount,
+        registerInteractiveRoot: (root) => this.registerCommentInteractiveRoot(root),
+        onError: (error) => this._reportCommentUiError(error),
+        contextFor: (_thread, common): XlsxCommentCardContext => ({
+          ...common,
+          comment,
+          replies: comment.replies ?? [],
+          sheetIndex: this.currentSheet,
+          sheetName: this.sheetNames[this.currentSheet] ?? '',
+          cellRef: comment.cellRef,
+          dismiss: () => this.hideCommentPopup(),
+        }),
+      });
+    } else {
+      // Author on its own bold line (when present), then the body text with
+      // newlines preserved. textContent escapes everything — no HTML injection.
+      this.commentPopup.textContent = '';
+      if (comment.author) {
+        const authorEl = this.hostDocument.createElement('div');
+        authorEl.style.cssText = 'font-weight:bold;margin-bottom:2px;';
+        authorEl.textContent = comment.author;
+        this.commentPopup.appendChild(authorEl);
+      }
+      const bodyEl = this.hostDocument.createElement('div');
+      bodyEl.textContent = comment.rootText ?? comment.text;
+      this.commentPopup.appendChild(bodyEl);
+      for (const reply of comment.replies ?? []) {
+        const replyEl = this.hostDocument.createElement('div');
+        replyEl.style.cssText = 'margin-top:6px;padding-top:6px;border-top:1px solid #b8b8a0;';
+        replyEl.textContent = `${reply.author ? `${reply.author}: ` : ''}${reply.text}`;
+        this.commentPopup.appendChild(replyEl);
+      }
     }
-    const bodyEl = this.hostDocument.createElement('div');
-    bodyEl.textContent = comment.text;
-    this.commentPopup.appendChild(bodyEl);
 
     // Anchor to the cell's *screen* rect (RTL already mirrored by screenX), then
     // run the pure position calc against the popup's measured size. Make it
     // visible (off-screen) first so offsetWidth/Height reflect the wrapped text.
-    const screenLeft = this.screenX(rect.x, rect.w);
     this.commentPopup.style.left = '-9999px';
     this.commentPopup.style.top = '-9999px';
     this.commentPopup.style.display = 'block';
+    this.positionCommentPopup();
+    this.scheduleCommentPopupPosition();
+  }
 
+  private scheduleCommentPopupPosition(): void {
+    if (this.commentPopupPositionScheduled || !this.commentPopupCell) return;
+    this.commentPopupPositionScheduled = true;
+    const position = (): void => {
+      this.commentPopupPositionScheduled = false;
+      this.positionCommentPopup();
+    };
+    const ownerWindow = this.hostDocument.defaultView;
+    if (ownerWindow?.requestAnimationFrame) ownerWindow.requestAnimationFrame(position);
+    else queueMicrotask(position);
+  }
+
+  private positionCommentPopup(): void {
+    const cell = this.commentPopupCell;
+    if (!cell || this.commentPopup.style.display === 'none') return;
+    const rect = this.getCellRect(cell.row, cell.col);
+    if (!rect) return;
+    const screenLeft = this.screenX(rect.x, rect.w);
     const pos = computeCommentPopupPosition({
       cell: { x: screenLeft, y: rect.y, w: rect.w, h: rect.h },
       popup: { w: this.commentPopup.offsetWidth, h: this.commentPopup.offsetHeight },
@@ -3461,7 +3571,40 @@ class XlsxViewerEngine implements ZoomableViewer {
       this.commentPopupTimer = null;
     }
     this.commentPopupKey = null;
+    this.commentPopupCell = null;
     this.overlayHost.hideComment();
+    this.disposeCommentPopupUi();
+  }
+
+  private registerCommentInteractiveRoot(root: Node): () => void {
+    const unregisterBoundary = this.commentInteractionBoundary.register(root);
+    const onPointerLeave = (event: Event): void => {
+      const next = (event as PointerEvent).relatedTarget as Node | null;
+      if (next && (
+        this.commentPopup.contains(next) ||
+        this.scrollHost.contains(next) ||
+        this.commentInteractionBoundary.containsNode(next)
+      )) return;
+      this.hideCommentPopup();
+    };
+    root.addEventListener('pointerleave', onPointerLeave);
+    let registered = true;
+    return () => {
+      if (!registered) return;
+      registered = false;
+      root.removeEventListener('pointerleave', onPointerLeave);
+      unregisterBoundary();
+    };
+  }
+
+  private disposeCommentPopupUi(): void {
+    if (!this.opts.commentUi?.mountCard) return;
+    disposeReadOnlyCommentMargin(this.commentPopup);
+  }
+
+  private _reportCommentUiError(error: Error): void {
+    if (this.opts.onError) this.opts.onError(error);
+    else console.error('[ooxml] XlsxViewer comment UI failed:', error);
   }
 
   private applyPointerSelection(
@@ -4056,8 +4199,16 @@ class XlsxViewerEngine implements ZoomableViewer {
       { passive: false },
     );
 
-    // Hide the comment popup when the cursor leaves the grid entirely.
-    this.surface.on('pointerleave', () => this.hideCommentPopup());
+    // A custom card is an interactive sibling of the grid. Crossing from the
+    // worksheet to that stable host must not tear its framework root down.
+    this.surface.on('pointerleave', (event: PointerEvent) => {
+      const next = event.relatedTarget as Node | null;
+      if (next && (
+        this.commentPopup.contains(next) ||
+        this.commentInteractionBoundary.containsNode(next)
+      )) return;
+      this.hideCommentPopup();
+    });
 
     this.keydownHandler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
@@ -4668,9 +4819,13 @@ class XlsxViewerEngine implements ZoomableViewer {
     this.stopSelectionAutoScroll();
     this.sheetRequestGeneration++;
     this.resizeObserver?.disconnect();
+    this.commentPopupResizeObserver?.disconnect();
+    this.commentPopupResizeObserver = null;
     this.renderDispatcher.destroy();
     this.surface.destroy();
+    this.disposeCommentPopupUi();
     this.hideCommentPopup();
+    this.commentInteractionBoundary.clear();
     this.hideValidationPanel();
     // IX2 — drop the find state (matches + cursor) so a stale
     // findNext()/findPrev() after teardown returns null instead of a match

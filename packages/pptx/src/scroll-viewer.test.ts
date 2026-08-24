@@ -3,7 +3,7 @@ import { PptxScrollViewer } from './scroll-viewer.js';
 import { PptxPresentation } from './presentation.js';
 import { installDom, makeContainer, makeEl, makeBorrowedPptxScrollViewer, FakePptxEngine, type FakeEl } from './scroll-viewer-test-dom.js';
 import * as pptxIndex from './index.js';
-import type { PptxCommentCardRenderContext } from './comment-margin.js';
+import type { PptxCommentCardContext } from './comment-margin.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -163,17 +163,40 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
       replies: [{ id: 'reply-1', author: 'Linus', text: 'Done' }],
     }]];
     const cleanups: string[] = [];
-    let lastContext: PptxCommentCardRenderContext | undefined;
+    let decorationMounts = 0;
+    let decorationDestroys = 0;
+    let lastContext: PptxCommentCardContext | undefined;
     const container = makeContainer();
     const viewer = PptxScrollViewer.fromPresentation(
       container as unknown as HTMLElement,
       engine.asPres(),
       {
         showComments: true,
-        renderCommentCard(host, context) {
-          lastContext = context;
-          host.textContent = context.comment.text;
-          return () => cleanups.push(context.comment.id ?? 'classic');
+        commentUi: {
+          mountCard(host, context) {
+            lastContext = context;
+            host.textContent = context.comment.text;
+            return {
+              update(next) {
+                lastContext = next;
+                host.textContent = next.comment.text;
+              },
+              destroy() {
+                cleanups.push(context.comment.id ?? 'classic');
+              },
+            };
+          },
+          mountDecoration(_host, context) {
+            decorationMounts++;
+            expect(context.format).toBe('pptx');
+            expect(context.threads[0]?.occurrenceKey).toBe('slide:0:modern-1');
+            return {
+              update() {},
+              destroy() {
+                decorationDestroys++;
+              },
+            };
+          },
         },
       },
     );
@@ -183,19 +206,21 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     const margin = slide.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
     expect(margin.style.background).toBe('');
     expect(lastContext?.replies.map((reply) => reply.text)).toEqual(['Done']);
-    expect(lastContext?.view.text).toBe('Review this');
+    expect(lastContext?.thread.root.text).toBe('Review this');
     expect(lastContext?.zoom).toBeCloseTo(viewer.getScale());
-    lastContext?.activate();
-    expect(cleanups).toEqual(['modern-1']);
+    expect(decorationMounts).toBe(1);
+    lastContext?.setActive(true);
+    expect(cleanups).toEqual([]);
     expect(lastContext?.active).toBe(true);
     const customHost = margin.children[0]!.children[0]!;
     dom.dispatchDocument('pointerdown', { target: customHost });
     expect(lastContext?.active).toBe(true);
     dom.dispatchDocument('pointerdown', { target: container });
     expect(lastContext?.active).toBe(false);
-    expect(cleanups).toEqual(['modern-1', 'modern-1']);
+    expect(cleanups).toEqual([]);
     viewer.destroy();
-    expect(cleanups).toEqual(['modern-1', 'modern-1', 'modern-1']);
+    expect(cleanups).toEqual(['modern-1']);
+    expect(decorationDestroys).toBe(1);
   });
 
   it('scales default cards and authored markers with viewer zoom', () => {
@@ -223,6 +248,34 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     expect(margin.style.width).toBe(`${280 / 13}em`);
     expect(parseFloat(margin.style.fontSize)).toBeCloseTo(13 * baseScale * 1.5);
     expect(parseFloat(markerLayer.children[0]?.style.width ?? '0')).toBeCloseTo(22 * baseScale * 1.5);
+    viewer.destroy();
+  });
+
+  it('uses slide-scoped occurrence keys when source comment ids repeat', () => {
+    installDom();
+    const engine = new FakePptxEngine(2, SLIDE_W_EMU, SLIDE_H_EMU);
+    engine.commentsBySlide = [0, 1].map(() => [{
+      id: 'same-source-id', author: 'Grace', text: 'Review this',
+      x: SLIDE_W_EMU / 2, y: SLIDE_H_EMU / 2,
+    }]);
+    const keys: string[] = [];
+    const viewer = PptxScrollViewer.fromPresentation(
+      makeContainer(200, 400) as unknown as HTMLElement,
+      engine.asPres(),
+      {
+        showComments: true,
+        commentUi: {
+          mountCard(_host, context) {
+            keys.push(context.thread.occurrenceKey);
+            return { update() {}, destroy() {} };
+          },
+        },
+      },
+    );
+    expect(new Set(keys)).toEqual(new Set([
+      'slide:0:same-source-id',
+      'slide:1:same-source-id',
+    ]));
     viewer.destroy();
   });
 });

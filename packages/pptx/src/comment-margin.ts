@@ -1,31 +1,48 @@
-import { overlayPercent, type ViewerCommentCardRenderContext } from '@silurus/ooxml-core';
+import {
+  EMU_PER_PX,
+  overlayPercent,
+  type PptxCommentDecorationContext,
+  type ViewerCommentCardContext,
+  type ViewerCommentCardMount,
+  type ViewerCommentMessage,
+  type ViewerCommentRect,
+  type ViewerCommentThreadGeometry,
+  type ViewerCommentDecorationMount,
+  type ViewerCommentUiOptions,
+} from '@silurus/ooxml-core';
 import {
   buildReadOnlyCommentMargin,
-  type ReadOnlyCommentCard,
-  type ReadOnlyCommentCardRenderer,
+  type ReadOnlyCommentThread,
 } from '@silurus/ooxml-core/internal/read-only-comment-margin';
+import { relativeElementRect } from '@silurus/ooxml-core/internal/dom-geometry';
 import type { PptxComment, PptxCommentReply } from './types.js';
 
-export interface PptxCommentCardRenderContext extends ViewerCommentCardRenderContext {
+export interface PptxCommentCardContext extends ViewerCommentCardContext {
   readonly comment: Readonly<PptxComment>;
   readonly replies: readonly Readonly<PptxCommentReply>[];
 }
 
-export type PptxCommentCardRenderer = (
-  host: HTMLElement,
-  context: PptxCommentCardRenderContext,
-) => void | (() => void);
-
-function commentId(comment: Readonly<PptxComment>, index: number): string {
-  return comment.id ?? `classic:${comment.authorId ?? 'unknown'}:${comment.index ?? index}`;
+export type PptxCommentCardMount = ViewerCommentCardMount<PptxCommentCardContext>;
+export interface PptxCommentUiOptions extends ViewerCommentUiOptions<PptxCommentCardContext> {
+  /** Mount connector lines or other transparent slide-to-margin decoration. */
+  readonly mountDecoration?: ViewerCommentDecorationMount<PptxCommentDecorationContext>;
 }
 
-function toReplyCard(reply: Readonly<PptxCommentReply>, index: number): ReadOnlyCommentCard {
+function commentId(comment: Readonly<PptxComment>, index: number, slideIndex: number): string {
+  const source = comment.id ?? `classic:${comment.authorId ?? 'unknown'}:${comment.index ?? index}`;
+  return `slide:${slideIndex}:${source}`;
+}
+
+function toReplyCard(
+  reply: Readonly<PptxCommentReply>,
+): ViewerCommentMessage {
   return {
-    id: reply.id ?? `reply:${index}`,
+    messageKey: reply.id,
+    sourceId: reply.id,
     author: reply.author,
     date: reply.date,
     text: reply.text,
+    status: reply.status,
   };
 }
 
@@ -33,18 +50,26 @@ export function buildPptxCommentMargin(
   markerLayer: HTMLDivElement,
   margin: HTMLDivElement,
   comments: readonly Readonly<PptxComment>[],
+  slideIndex: number,
   slideWidthEmu: number,
   slideHeightEmu: number,
   activeId: string | null,
-  onActivate: (id: string | null) => void,
+  onSetActive: (id: string, active: boolean) => void,
   zoom: number,
-  renderCard?: PptxCommentCardRenderer,
-): void {
+  mountCard?: PptxCommentCardMount,
+  includeResolved = false,
+  registerInteractiveRoot?: (root: Node) => () => void,
+  onGeometryChange?: () => void,
+  onError?: (error: Error) => void,
+): readonly ViewerCommentThreadGeometry[] {
   margin.dataset.ooxmlCommentZoom = String(zoom);
   markerLayer.replaceChildren();
   const visible = comments
-    .map((comment, index) => ({ comment, index, id: commentId(comment, index) }))
-    .filter(({ comment }) => comment.status !== 'resolved' && comment.status !== 'closed');
+    .map((comment, index) => ({ comment, index, id: commentId(comment, index, slideIndex) }))
+    .filter(({ comment }) => includeResolved ||
+      (comment.status !== 'resolved' && comment.status !== 'closed'));
+  const anchorRects = new Map<string, ViewerCommentRect>();
+  const surface = markerLayer.parentElement;
 
   for (const [visibleIndex, entry] of visible.entries()) {
     const { comment, id } = entry;
@@ -64,31 +89,54 @@ export function buildPptxCommentMargin(
       `left:${overlayPercent(left, slideWidthEmu)};top:${overlayPercent(top, slideHeightEmu)};` +
       `box-shadow:${activeId === id ? `0 0 0 ${3 * zoom}px rgba(37,99,235,.35)` : `0 ${zoom}px ${3 * zoom}px rgba(15,23,42,.28)`};`;
     marker.textContent = String(visibleIndex + 1);
-    marker.addEventListener('click', () => onActivate(activeId === id ? null : id));
+    marker.addEventListener('click', () => onSetActive(id, activeId !== id));
     markerLayer.appendChild(marker);
+    anchorRects.set(id, Object.freeze({
+      x: left / EMU_PER_PX * zoom - 11 * zoom,
+      y: top / EMU_PER_PX * zoom - 11 * zoom,
+      width: 22 * zoom,
+      height: 22 * zoom,
+    }));
   }
 
-  const cards: ReadOnlyCommentCard[] = visible.map(({ comment, id }) => ({
-    id,
-    author: comment.author,
-    date: comment.date,
-    text: comment.text,
-    replies: comment.replies?.map(toReplyCard),
+  const cardThreads: ReadOnlyCommentThread[] = visible.map(({ comment, id }) => ({
+    occurrenceKey: id,
+    root: {
+      messageKey: comment.id,
+      sourceId: comment.id,
+      author: comment.author,
+      date: comment.date,
+      text: comment.text,
+      status: comment.status,
+    },
+    replies: comment.replies?.map(toReplyCard) ?? [],
   }));
   const byId = new Map(visible.map((entry) => [entry.id, entry.comment]));
-  const sharedRenderer: ReadOnlyCommentCardRenderer | undefined = renderCard
-    ? (host, context) => {
-        const comment = byId.get(context.view.id);
-        if (!comment) return;
-        return renderCard(host, {
-          view: context.view,
-          comment,
-          replies: comment.replies ?? [],
-          active: context.active,
-          zoom: context.zoom,
-          activate: context.activate,
-        });
+  const cardHosts = buildReadOnlyCommentMargin(margin, cardThreads, {
+    activeId,
+    zoom,
+    onSetActive,
+    mountCard,
+    registerInteractiveRoot,
+    onGeometryChange,
+    onError,
+    contextFor(thread, common, selection) {
+      const comment = byId.get(thread.occurrenceKey);
+      if (!comment) {
+        throw new Error(`Missing PPTX comment thread for ${thread.occurrenceKey}`);
       }
-    : undefined;
-  buildReadOnlyCommentMargin(margin, cards, activeId, onActivate, sharedRenderer);
+      return { ...common, ...selection, comment, replies: comment.replies ?? [] };
+    },
+  });
+  return Object.freeze(cardThreads.map((thread): ViewerCommentThreadGeometry => {
+    const cardHost = cardHosts.get(thread.occurrenceKey);
+    const cardRect = cardHost && surface ? relativeElementRect(cardHost, surface) : undefined;
+    const anchorRect = anchorRects.get(thread.occurrenceKey);
+    return Object.freeze({
+      occurrenceKey: thread.occurrenceKey,
+      active: activeId === thread.occurrenceKey,
+      anchorRects: Object.freeze(anchorRect ? [anchorRect] : []),
+      ...(cardRect ? { cardRect } : {}),
+    });
+  }));
 }

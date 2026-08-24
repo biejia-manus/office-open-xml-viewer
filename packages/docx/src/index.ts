@@ -6,11 +6,27 @@ export {
 } from './document';
 export { DocxViewer, type DocxViewerOptions } from './viewer';
 export { DocxScrollViewer, type DocxScrollViewerOptions } from './scroll-viewer';
-export type { DocxCommentCardRenderContext, DocxCommentCardRenderer } from './comment-margin';
 export type {
-  ViewerCommentCard,
-  ViewerCommentCardRenderContext,
-  ViewerCommentCardRenderer,
+  DocxCommentCardContext,
+  DocxCommentCardMount,
+  DocxCommentUiOptions,
+} from './comment-margin';
+export type {
+  ViewerCommentMessage,
+  ViewerCommentThread,
+  ViewerCommentCardBaseContext,
+  ViewerCommentCardContext,
+  ViewerCommentCardMount,
+  ViewerCommentDecorationBaseContext,
+  DocxCommentDecorationContext,
+  PptxCommentDecorationContext,
+  ViewerCommentDecorationContext,
+  ViewerCommentDecorationMount,
+  ViewerCommentRect,
+  ViewerCommentThreadGeometry,
+  ViewerCommentUiOptions,
+  ViewerDomMount,
+  ViewerDomMountHandle,
 } from '@silurus/ooxml-core';
 export { buildDocxTextLayer } from './text-layer';
 export {

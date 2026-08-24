@@ -2,6 +2,7 @@
 import FormatPage from '../layouts/FormatPage.astro';
 import DemoBlock from '../components/DemoBlock.astro';
 import ApiReference from '../components/ApiReference.astro';
+import ReviewDemo from '../components/ReviewDemo.astro';
 import { docxSnippets } from '../lib/demo-snippets';
 ---
 <FormatPage format="docx" name="DOCX" ext=".docx">
@@ -29,5 +30,6 @@ import { docxSnippets } from '../lib/demo-snippets';
     description="Combine both: a DocxDocument for the thumbnail rail and a DocxViewer for the detail pane. Click a thumbnail to jump the preview with goToPage()."
     code={docxSnippets.masterdetail}
   />
+  <ReviewDemo />
   <ApiReference format="docx" />
 </FormatPage>

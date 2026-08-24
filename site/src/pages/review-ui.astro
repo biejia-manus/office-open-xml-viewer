@@ -29,13 +29,24 @@ await viewer.load(source);`;
 
 const customCardExample = `const viewer = new DocxScrollViewer(container, {
   showComments: true,
-  renderCommentCard(host, { view, active, activate }) {
-    const card = document.createElement('button');
-    card.className = active ? 'comment is-active' : 'comment';
-    card.textContent = (view.author ?? 'Comment') + ': ' + view.text;
-    card.addEventListener('click', activate);
-    host.append(card);
-    return () => card.removeEventListener('click', activate);
+  commentUi: {
+    mountCard(host, initial) {
+      const card = document.createElement('button');
+      let context = initial;
+      const paint = () => {
+        card.className = context.active ? 'comment is-active' : 'comment';
+        card.textContent =
+          (context.thread.root.author ?? 'Comment') + ': ' + context.thread.root.text;
+      };
+      const activate = () => context.setActive(!context.active);
+      card.addEventListener('click', activate);
+      host.append(card);
+      paint();
+      return {
+        update(next) { context = next; paint(); },
+        destroy() { card.removeEventListener('click', activate); },
+      };
+    },
   },
 });`;
 
@@ -110,7 +121,6 @@ showReviewMargin({ canvas, anchoredComments });
         <h3>Default appearance</h3>
         <p>The document keeps its page surface; the right margin contains only neutral cards, without a background band.</p>
         <BuiltInCommentViewer />
-        <p><a href="/review-ui/default">Open the default UI in a full-height preview →</a></p>
       </div>
     </section>
 

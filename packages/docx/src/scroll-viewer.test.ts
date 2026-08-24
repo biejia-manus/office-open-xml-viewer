@@ -4,7 +4,7 @@ import { DocxDocument } from './document.js';
 import { installDom, makeContainer, makeEl, makeBorrowedDocxScrollViewer, FakeDocxEngine, type FakeEl } from './scroll-viewer-test-dom.js';
 import * as docxIndex from './index.js';
 import type { DocxElementContext } from './selection-context.js';
-import type { DocxCommentCardRenderContext } from './comment-margin.js';
+import type { DocxCommentCardContext } from './comment-margin.js';
 import type { CommentAnchorRange } from './comments.js';
 
 afterEach(() => {
@@ -176,6 +176,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
   it('renders transparent margin cards and cleans up a consumer card renderer', async () => {
     const dom = installDom();
     const engine = new FakeDocxEngine(1, [{ widthPt: 612, heightPt: 792 }]);
+    (engine as unknown as { layoutComplete: boolean }).layoutComplete = false;
     const source = { story: 'body', storyInstance: 'body', path: [0] } as const;
     engine.comments = [{ id: '7', author: 'Ada', text: 'Review this' }];
     engine.commentAnchors = [{
@@ -190,41 +191,139 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
       x: 20, y: 30, w: 80, h: 14, fontSize: 12, font: '12px sans-serif',
     }];
     const cleanups: string[] = [];
-    let lastContext: DocxCommentCardRenderContext | undefined;
+    const signals: AbortSignal[] = [];
+    let mounts = 0;
+    let updates = 0;
+    let decorationMounts = 0;
+    let decorationUpdates = 0;
+    let decorationDestroys = 0;
+    let decorationComplete: boolean | undefined;
+    let decorationSignal: AbortSignal | undefined;
+    let lastContext: DocxCommentCardContext | undefined;
     const container = makeContainer();
     const viewer = DocxScrollViewer.fromDocument(
       container as unknown as HTMLElement,
       engine.asDoc(),
       {
         showComments: true,
-        renderCommentCard(host, context) {
-          lastContext = context;
-          host.textContent = context.comment.text;
-          return () => cleanups.push(context.comment.id);
+        commentUi: {
+          mountCard(host, context) {
+            mounts++;
+            expect(host.parentElement?.parentElement).not.toBeNull();
+            signals.push(context.signal);
+            lastContext = context;
+            host.textContent = context.comment.text;
+            return {
+              update(next) {
+                updates++;
+                lastContext = next;
+                host.textContent = next.comment.text;
+              },
+              destroy() {
+                cleanups.push(context.comment.id);
+              },
+            };
+          },
+          mountDecoration(_host, context) {
+            decorationMounts++;
+            decorationSignal = context.signal;
+            decorationComplete = context.layoutComplete;
+            expect(context.format).toBe('docx');
+            expect(context.threads[0]?.occurrenceKey).toBe('7');
+            return {
+              update(next) {
+                decorationUpdates++;
+                expect(next.geometryRevision).toBeGreaterThan(context.geometryRevision);
+              },
+              destroy() {
+                decorationDestroys++;
+              },
+            };
+          },
         },
       },
     );
     await vi.waitFor(() => expect(lastContext?.comment.id).toBe('7'));
+    expect(mounts).toBe(1);
+    expect(decorationMounts).toBe(1);
+    expect(decorationComplete).toBe(false);
 
     const scrollHost = container.children[0]!.children[0]!;
     const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
     const margin = page.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
     expect(margin.style.background).toBe('');
     expect(lastContext?.replies).toEqual([]);
-    expect(lastContext?.view.text).toBe('Review this');
+    expect(lastContext?.thread.root.text).toBe('Review this');
     expect(lastContext?.zoom).toBeCloseTo(viewer.getScale());
 
-    lastContext?.activate();
-    expect(cleanups).toEqual(['7']);
+    lastContext?.setActive(true);
+    expect(cleanups).toEqual([]);
     expect(lastContext?.active).toBe(true);
+    expect(updates).toBeGreaterThan(0);
+    expect(decorationUpdates).toBeGreaterThan(0);
+    const updatesBeforeResize = decorationUpdates;
+    dom.resizeCb()?.();
+    await vi.waitFor(() => expect(decorationUpdates).toBeGreaterThan(updatesBeforeResize));
     const customHost = margin.children[0]!.children[0]!;
     dom.dispatchDocument('pointerdown', { target: customHost });
     expect(lastContext?.active).toBe(true);
+    const portalRoot = makeEl('div');
+    const portalChild = makeEl('button');
+    portalRoot.appendChild(portalChild);
+    const unregisterPortal = lastContext?.registerInteractiveRoot(
+      portalRoot as unknown as Node,
+    );
+    dom.dispatchDocument('pointerdown', {
+      target: portalChild,
+      composedPath: () => [portalChild, portalRoot],
+    });
+    expect(lastContext?.active).toBe(true);
+    unregisterPortal?.();
     dom.dispatchDocument('pointerdown', { target: container });
     expect(lastContext?.active).toBe(false);
-    expect(cleanups).toEqual(['7', '7']);
+    expect(cleanups).toEqual([]);
     viewer.destroy();
-    expect(cleanups).toEqual(['7', '7', '7']);
+    expect(cleanups).toEqual(['7']);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(decorationDestroys).toBe(1);
+    expect(decorationSignal?.aborted).toBe(true);
+  });
+
+  it('rolls back a failed card mount and reports the lifecycle error', async () => {
+    installDom();
+    const engine = new FakeDocxEngine(1, [{ widthPt: 612, heightPt: 792 }]);
+    const source = { story: 'body', storyInstance: 'body', path: [0] } as const;
+    engine.comments = [{ id: 'failed', text: 'Cannot mount' }];
+    engine.commentAnchors = [{
+      commentId: 'failed', source, startRunIndex: 0, endRunIndex: 1,
+      reference: { source, runIndex: 1, affinity: 'preceding' },
+    }] as CommentAnchorRange[];
+    engine.feedTextRuns = [{
+      text: 'anchor', source, sourceRunIndex: 0,
+      x: 20, y: 30, w: 50, h: 14, fontSize: 12, font: '12px sans-serif',
+    }];
+    const errors: Error[] = [];
+    let signal: AbortSignal | undefined;
+    const viewer = DocxScrollViewer.fromDocument(
+      makeContainer() as unknown as HTMLElement,
+      engine.asDoc(),
+      {
+        showComments: true,
+        onError: (error) => errors.push(error),
+        commentUi: {
+          mountCard(_host, context) {
+            signal = context.signal;
+            context.registerInteractiveRoot(makeEl('div') as unknown as Node);
+            throw new Error('mount failed');
+          },
+        },
+      },
+    );
+    await vi.waitFor(() => expect(errors).toHaveLength(1));
+    expect(errors[0]?.message).toContain('mount failed');
+    expect(signal?.aborted).toBe(true);
+    viewer.destroy();
   });
 
   it('scales default cards with viewer zoom and hides stale anchor geometry during preview', async () => {
@@ -254,7 +353,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
     const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
     const margin = page.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
     const tint = page.children.find((child) => child.style.cssText.includes('inset:0'))!;
-    const card = margin.children[0]!.children[0]!;
+    const card = margin.children[0]!.children[0]!.children[0]!;
     const comment = card.children[0]!;
     const avatar = comment.children[0]!;
     const content = comment.children[1]!;

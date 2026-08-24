@@ -186,6 +186,17 @@ function forbidOption(api, interfaceName, optionName) {
   }
 }
 
+function requireOption(api, interfaceName, optionName, expectedType) {
+  const member = interfaceMembers(api, interfaceName).get(optionName);
+  if (!member || !ts.isPropertySignature(member)) {
+    fail(`${interfaceName}.${optionName} is missing`);
+  }
+  const actual = member.type?.getText(api.file);
+  if (actual !== expectedType) {
+    fail(`${interfaceName}.${optionName} is ${actual ?? 'untyped'}, expected ${expectedType}`);
+  }
+}
+
 function requireBorrowedFactory(api, className, factoryName, targetType, engineType, optionsType) {
   const member = classMembers(api, className).get(factoryName);
   if (!member || !ts.isMethodDeclaration(member)) fail(`${className}.${factoryName}() is missing`);
@@ -257,6 +268,38 @@ for (const format of formats) {
   );
   forbidOption(api, format.canvasOptions, format.borrowedOption);
   forbidOption(api, format.containerOptions, format.borrowedOption);
+
+  const commentUiType = `${format.label[0]}${format.label.slice(1).toLowerCase()}CommentUiOptions`;
+  if (format.label === 'XLSX') {
+    for (const options of [format.canvasOptions, format.containerOptions]) {
+      requireOption(api, options, 'showComments', 'boolean');
+      requireOption(api, options, 'commentUi', commentUiType);
+    }
+  } else {
+    forbidOption(api, format.canvasOptions, 'showComments');
+    forbidOption(api, format.canvasOptions, 'commentUi');
+    requireOption(api, format.containerOptions, 'showComments', 'boolean');
+    requireOption(api, format.containerOptions, 'commentUi', commentUiType);
+  }
+  for (const commonType of [
+    'ViewerCommentMessage',
+    'ViewerCommentThread',
+    'ViewerCommentCardBaseContext',
+    'ViewerCommentCardContext',
+    'ViewerCommentUiOptions',
+  ]) {
+    if (!api.interfaces.has(commonType)) fail(`${format.label} does not expose ${commonType}`);
+  }
+  const formatContext = `${format.label[0]}${format.label.slice(1).toLowerCase()}CommentCardContext`;
+  const contextMembers = interfaceMembers(api, formatContext);
+  if (format.label === 'XLSX') {
+    if (!contextMembers.has('dismiss')) fail('XLSX comment cards must expose dismiss()');
+    if (contextMembers.has('active') || contextMembers.has('setActive')) {
+      fail('XLSX hover cards must not masquerade as selected margin cards');
+    }
+  } else if (!contextMembers.has('active') || !contextMembers.has('setActive')) {
+    fail(`${format.label} margin cards must expose idempotent active selection`);
+  }
 
   if (format.label === 'XLSX' && classMembers(api, format.engine).has('renderSheet')) {
     fail('XlsxWorkbook.renderSheet() must not imply that an unbounded worksheet is one finite canvas unit');

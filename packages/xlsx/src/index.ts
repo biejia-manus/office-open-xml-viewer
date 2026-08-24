@@ -14,6 +14,17 @@ export type {
   HiddenSheetMode,
   XlsxCopyResult,
 } from './viewer.js';
+export type { XlsxCommentCardContext, XlsxCommentUiOptions } from './comment-card.js';
+export type {
+  ViewerCommentCardBaseContext,
+  ViewerCommentCardContext,
+  ViewerCommentCardMount,
+  ViewerCommentMessage,
+  ViewerCommentThread,
+  ViewerCommentUiOptions,
+  ViewerDomMount,
+  ViewerDomMountHandle,
+} from '@silurus/ooxml-core';
 export type {
   CellAddress,
   XlsxSelectionArea,
@@ -187,6 +198,7 @@ export type {
   Hyperlink,
   // Cell comments / notes (reachable via Worksheet.comments).
   XlsxComment,
+  XlsxCommentReply,
   // Data validation rules (reachable via Worksheet.dataValidations).
   DataValidation,
   // Excel tables (reachable via Worksheet.tables).

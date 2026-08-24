@@ -19,6 +19,8 @@ export const sitemapPaths = [
   '/bundle-size/',
   '/errors/',
   '/selection-context/',
+  '/review-ui/',
+  '/review-ui/source/',
 ] as const;
 
 export function GET(): Response {

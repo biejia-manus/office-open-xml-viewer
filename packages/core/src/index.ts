@@ -89,11 +89,24 @@ export type {
   OoxmlResourcePolicySnapshot,
 } from './types/resource-metrics';
 export type { TextSelectionContextOptions, ViewerContextMenuEvent } from './selection-context';
+export type { ViewerDomMount, ViewerDomMountHandle } from './dom-mount';
 export type {
-  ViewerCommentCard,
-  ViewerCommentCardRenderContext,
-  ViewerCommentCardRenderer,
+  ViewerCommentDecorationBaseContext,
+  DocxCommentDecorationContext,
+  PptxCommentDecorationContext,
+  ViewerCommentDecorationContext,
+  ViewerCommentDecorationMount,
+  ViewerCommentRect,
+  ViewerCommentThreadGeometry,
+} from './comment-decoration';
+export type {
+  ViewerCommentMessage,
+  ViewerCommentThread,
+  ViewerCommentCardBaseContext,
+  ViewerCommentCardContext,
+  ViewerCommentCardMount,
 } from './comment-card';
+export type { ViewerCommentUiOptions } from './comment-ui';
 // Typed load-time error (PD4 seed): the `load()` factories throw this with a
 // stable `code` for container-level failures detected on the main thread.
 export {
