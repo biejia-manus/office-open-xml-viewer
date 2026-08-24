@@ -118,7 +118,7 @@ fn render_runs(runs: &[DocRun], revisions: &[Option<crate::types::RunRevision>])
         let revision = revisions
             .get(run_index)
             .and_then(Option::as_ref)
-            .or_else(|| match run {
+            .or(match run {
                 DocRun::Text(text) => text.revision.as_ref(),
                 _ => None,
             });

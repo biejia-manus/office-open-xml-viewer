@@ -1700,7 +1700,7 @@ const W15_NS: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
 
 fn collapse_xml_schema_whitespace(value: &str) -> String {
     value
-        .split(|character| matches!(character, '\u{9}' | '\u{a}' | '\u{d}' | ' '))
+        .split(['\u{9}', '\u{a}', '\u{d}', ' '])
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ")

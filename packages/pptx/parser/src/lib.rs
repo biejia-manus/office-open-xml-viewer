@@ -2917,7 +2917,7 @@ fn produce_slide_unit_with_journal(
                     modern_comment_authors_path.as_deref(),
                     authors,
                     cache_usage,
-                    journal.as_deref_mut(),
+                    journal,
                 )?;
             }
         }
