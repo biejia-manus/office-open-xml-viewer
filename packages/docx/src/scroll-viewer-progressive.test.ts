@@ -109,6 +109,59 @@ describe('DocxScrollViewer — growing page count', () => {
     viewer.destroy();
   });
 
+  it('re-fires onVisiblePageChange when the total grows without the index moving', () => {
+    installDom();
+    const fires: Array<[number, number, boolean]> = [];
+    const engine = new FakeDocxEngine(2, PAGE);
+    const viewer = DocxScrollViewer.fromDocument(
+      makeContainer(700, 500) as unknown as HTMLElement,
+      engine.asDoc(),
+      { onVisiblePageChange: (top, total, complete) => { fires.push([top, total, complete]); } },
+    );
+    expect(fires).toEqual([[0, 2, true]]);
+
+    // The user has not scrolled — topIndex is still 0 — but the document grew.
+    // An index-only latch would strand the indicator on the preview count.
+    engine.setPageCount(80);
+    viewer.relayout();
+    expect(fires).toEqual([[0, 2, true], [0, 80, true]]);
+    viewer.destroy();
+  });
+
+  it('does not fire when neither the index nor the total changed', () => {
+    installDom();
+    const fires: Array<[number, number]> = [];
+    const engine = new FakeDocxEngine(4, PAGE);
+    const viewer = DocxScrollViewer.fromDocument(
+      makeContainer(700, 500) as unknown as HTMLElement,
+      engine.asDoc(),
+      { onVisiblePageChange: (top, total) => { fires.push([top, total]); } },
+    );
+    const initial = fires.length;
+    viewer.relayout();
+    viewer.relayout();
+    expect(fires.length).toBe(initial);
+    viewer.destroy();
+  });
+
+  it('re-fires when the document shrinks', () => {
+    // A tracked-changes view can have FEWER pages than the final view, so the
+    // count moves down as well as up.
+    installDom();
+    const fires: Array<[number, number]> = [];
+    const engine = new FakeDocxEngine(40, PAGE);
+    const viewer = DocxScrollViewer.fromDocument(
+      makeContainer(700, 500) as unknown as HTMLElement,
+      engine.asDoc(),
+      { onVisiblePageChange: (top, total) => { fires.push([top, total]); } },
+    );
+    fires.length = 0;
+    engine.setPageCount(3);
+    viewer.relayout();
+    expect(fires).toEqual([[0, 3]]);
+    viewer.destroy();
+  });
+
   it('does not mount the whole document just because it grew', () => {
     installDom();
     const container = makeContainer(700, 500);

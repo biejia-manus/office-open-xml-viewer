@@ -172,10 +172,21 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
    *   here rather than two competing options.
    */
   pageShadow?: string | false;
-  /** Fires when the top-most visible page changes. `topIndex` from
-   *  `computeVisibleRange` (the first page intersecting the viewport top,
-   *  EXCLUDING overscan). */
-  onVisiblePageChange?: (topIndex: number, total: number) => void;
+  /** Fires when the top-most visible page OR the document's page count changes.
+   *  `topIndex` from `computeVisibleRange` (the first page intersecting the
+   *  viewport top, EXCLUDING overscan).
+   *
+   *  `layoutComplete` is false while progressive layout is still running, and
+   *  `total` is then the pages laid out SO FAR, not the document's total — a
+   *  "page X of Y" indicator should mark it provisional (Word shows an
+   *  unsettled count the same way during background repagination). The count
+   *  is watched as well as the index precisely so that indicator updates when
+   *  the rest of the document arrives without the user scrolling. */
+  onVisiblePageChange?: (
+    topIndex: number,
+    total: number,
+    layoutComplete: boolean,
+  ) => void;
   /** IX9 — fires whenever the zoom factor actually changes (`1` = 100% = a page
    *  at its natural pt→px size): from {@link DocxScrollViewer.setScale},
    *  `zoomIn`/`zoomOut`, `fitWidth`/`fitPage`, a Ctrl/⌘+wheel gesture, or a
@@ -293,6 +304,9 @@ export class DocxScrollViewer implements ZoomableViewer {
   private _heights: number[] = [];
   private _lastRange: VisibleRange | null = null;
   private _lastTopIndex = -1;
+  /** Second half of the visible-page latch: a document that grows under the
+   *  viewport changes `total` without changing `topIndex`. */
+  private _lastReportedTotal = -1;
   private _scrollListener: (() => void) | null = null;
   private _selectionChangeListener: (() => void) | null = null;
   private _selectionContextKey = 'null';
@@ -567,6 +581,7 @@ export class DocxScrollViewer implements ZoomableViewer {
           // dispatcher then becomes stale before its expected rejection lands.
           for (const [idx, slot] of [...this._slots]) this._recycleSlot(idx, slot);
           this._lastTopIndex = -1;
+          this._lastReportedTotal = -1;
         }
       });
       if (!doc) return;
@@ -878,14 +893,26 @@ export class DocxScrollViewer implements ZoomableViewer {
         if (initialRenders && render) initialRenders.push(render);
       }
     }
-    // onVisiblePageChange fires ONLY when the top visible page actually changes
-    // (change-only latch; `_lastTopIndex` starts at -1 so the first layout fires
-    // once for page 0). Every mount path — scroll, zoom, resize re-fit, and
-    // scrollToPage — funnels through here, so navigation never double-fires.
-    if (r.topIndex !== this._lastTopIndex) {
-      this._lastTopIndex = r.topIndex;
-      this._opts.onVisiblePageChange?.(r.topIndex, this._doc.pageCount);
-    }
+    this._emitVisiblePageChange(r);
+  }
+
+  /**
+   * Fire `onVisiblePageChange`, but only on an actual change.
+   *
+   * The latch is the (topIndex, total) PAIR. Watching the index alone was
+   * enough while a document's page count was fixed at load; under progressive
+   * layout the count grows while the user sits at the top of page 1, and an
+   * index-only latch leaves a "page 1 of 2" indicator stranded at the preview
+   * count until they happen to scroll. Both emit paths — mount and zoom
+   * preview — funnel through here so navigation still never double-fires.
+   */
+  private _emitVisiblePageChange(r: VisibleRange): void {
+    if (!this._doc) return;
+    const total = this._doc.pageCount;
+    if (r.topIndex === this._lastTopIndex && total === this._lastReportedTotal) return;
+    this._lastTopIndex = r.topIndex;
+    this._lastReportedTotal = total;
+    this._opts.onVisiblePageChange?.(r.topIndex, total, this.layoutComplete);
   }
 
   /** Apply the resolved page-canvas shadow (design: recipe drop shadow by
@@ -1640,11 +1667,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         this._previewSlot(existing, i, r);
       }
     }
-    // Fire onVisiblePageChange only when the top page actually changed.
-    if (r.topIndex !== this._lastTopIndex) {
-      this._lastTopIndex = r.topIndex;
-      this._opts.onVisiblePageChange?.(r.topIndex, this._doc.pageCount);
-    }
+    this._emitVisiblePageChange(r);
   }
 
   /**

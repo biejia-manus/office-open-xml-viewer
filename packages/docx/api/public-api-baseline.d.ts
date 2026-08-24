@@ -1227,7 +1227,7 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
     refitOnResize?: boolean;
     background?: string;
     pageShadow?: string | false;
-    onVisiblePageChange?: (topIndex: number, total: number) => void;
+    onVisiblePageChange?: (topIndex: number, total: number, layoutComplete: boolean) => void;
     onScaleChange?: (scale: number) => void;
     onHyperlinkClick?: (target: HyperlinkTarget) => void;
     enableHyperlinks?: boolean;

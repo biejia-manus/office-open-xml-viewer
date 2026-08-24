@@ -153,8 +153,10 @@ export const ScrollViewer: LayoutStory = {
       overscan: 1,
       enableTextSelection: true,
       background: '#f5f5f5', // light desk behind/between pages (matches the ScrollView recipe)
-      onVisiblePageChange: (top, total) => {
-        status.textContent = `Page ${top + 1} / ${total}`;
+      onVisiblePageChange: (top, total, complete) => {
+        // The ellipsis marks a provisional total: under progressive layout the
+        // count grows until the whole document has been laid out.
+        status.textContent = `Page ${top + 1} / ${total}${complete ? '' : '…'}`;
       },
       onError: (e) => {
         status.textContent = `Error: ${e.message}`;
