@@ -307,6 +307,9 @@ export class DocxScrollViewer implements ZoomableViewer {
   /** Second half of the visible-page latch: a document that grows under the
    *  viewport changes `total` without changing `topIndex`. */
   private _lastReportedTotal = -1;
+  /** Bumped on every `load()`. Background-layout callbacks capture it so a
+   *  previous document's completion cannot relayout the current one. */
+  private _loadGeneration = 0;
   private _scrollListener: (() => void) | null = null;
   private _selectionChangeListener: (() => void) | null = null;
   private _selectionContextKey = 'null';
@@ -542,6 +545,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     // frees an engine we created.)
     let elementInvalidated = false;
     try {
+      const generation = ++this._loadGeneration;
       const doc = await this._documentOwner.replace(() => DocxDocument.load(source, {
         password: this._opts.password,
         useGoogleFonts: this._opts.useGoogleFonts,
@@ -565,15 +569,27 @@ export class DocxScrollViewer implements ZoomableViewer {
           : { currentDate: this._opts.currentDate }),
         ...(this._opts.progressiveLayout ? { progressiveLayout: true } : {}),
         ...(this._opts.sliceLayout ? { sliceLayout: true } : {}),
+        // Each publication extends the document: more pages exist, so the
+        // spacer grows and the newly-reachable slots mount. Pages already on
+        // screen are only repainted when their content can still change —
+        // for an exact publication they are provably final already.
+        onLayoutPartial: ({ exact }) => {
+          if (this._destroyed || generation !== this._loadGeneration) return;
+          this._find.invalidate();
+          if (!exact) this._invalidateRenderedSlots();
+          this.relayout();
+        },
         // Relaying out when the authoritative layout lands is what turns a
         // provisional prefix into the real document on screen: page count grows,
         // the spacer follows, and the mounted slots repaint.
         onLayoutComplete: (error?: unknown) => {
+          // A superseded load's document may still finish in the background;
+          // it must not touch the document that replaced it.
+          if (this._destroyed || generation !== this._loadGeneration) return;
           if (error !== undefined) {
             this._opts.onError?.(error instanceof Error ? error : new Error(String(error)));
             return;
           }
-          if (this._destroyed) return;
           this._find.invalidate();
           this._invalidateRenderedSlots();
           this.relayout();

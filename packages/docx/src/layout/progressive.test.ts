@@ -9,6 +9,7 @@ import {
 import { paginateBody } from './body-paginator.js';
 import { layoutFingerprint } from './invariants.js';
 import { normalizeLayoutOptions } from './options.js';
+import { PaginationAbortError } from './pagination-scheduler.js';
 import {
   layoutDocumentProgressively,
   type ProgressiveLayoutPreview,
@@ -87,8 +88,10 @@ describe('progressive layout returns the authoritative layout', () => {
 
 describe('preview pages match the final layout', () => {
   it('publishes opening pages identical to the real ones (plain)', async () => {
+    // Long enough that intermediate chain steps are worth doing: a short
+    // document deliberately skips them, since the finished layout is imminent.
     const previews: ProgressiveLayoutPreview[] = [];
-    const testCase = open('plain', 200);
+    const testCase = open('plain', 600);
     const final = await layoutDocumentProgressively(
       testCase.source.bodyLayoutInput,
       testCase.services,
@@ -99,17 +102,23 @@ describe('preview pages match the final layout', () => {
       },
     );
 
-    expect(previews).toHaveLength(1);
-    const preview = previews[0]!;
-    expect(preview.layout.pages.length).toBeGreaterThan(0);
-    expect(preview.exact).toBe(true);
-    // The preview must be a genuine head start, not the whole document.
-    expect(preview.layout.pages.length).toBeLessThan(final.pages.length);
+    // The chain publishes repeatedly, each step covering more of the document.
+    expect(previews.length).toBeGreaterThan(1);
+    const counts = previews.map((preview) => preview.layout.pages.length);
+    expect(counts).toEqual([...counts].sort((left, right) => left - right));
+    expect(new Set(counts).size).toBe(counts.length);
+    // Every publication is a genuine head start, not the whole document.
+    expect(counts.at(-1)!).toBeLessThan(final.pages.length);
 
-    preview.layout.pages.forEach((page, index) => {
-      expect(pageFingerprint(page as LayoutPage))
-        .toBe(pageFingerprint(final.pages[index] as LayoutPage));
-    });
+    // Every page of every publication must equal the page the finished layout
+    // puts at that index — otherwise content would visibly move as it arrives.
+    for (const preview of previews) {
+      expect(preview.exact).toBe(true);
+      preview.layout.pages.forEach((page, index) => {
+        expect(pageFingerprint(page as LayoutPage))
+          .toBe(pageFingerprint(final.pages[index] as LayoutPage));
+      });
+    }
   }, 300_000);
 
   it('publishes opening pages identical to the real ones (header-footer)', async () => {
@@ -127,13 +136,14 @@ describe('preview pages match the final layout', () => {
       },
     );
 
-    expect(previews).toHaveLength(1);
-    const preview = previews[0]!;
-    expect(preview.exact).toBe(true);
-    preview.layout.pages.forEach((page, index) => {
-      expect(pageFingerprint(page as LayoutPage))
-        .toBe(pageFingerprint(final.pages[index] as LayoutPage));
-    });
+    expect(previews.length).toBeGreaterThan(0);
+    for (const preview of previews) {
+      expect(preview.exact).toBe(true);
+      preview.layout.pages.forEach((page, index) => {
+        expect(pageFingerprint(page as LayoutPage))
+          .toBe(pageFingerprint(final.pages[index] as LayoutPage));
+      });
+    }
   }, 300_000);
 
   it('marks a PAGE/NUMPAGES document inexact', async () => {
@@ -149,8 +159,56 @@ describe('preview pages match the final layout', () => {
         onPreview: (preview) => { previews.push(preview); },
       },
     );
-    expect(previews).toHaveLength(1);
-    expect(previews[0]!.exact).toBe(false);
+    expect(previews.length).toBeGreaterThan(0);
+    for (const preview of previews) expect(preview.exact).toBe(false);
+  }, 300_000);
+
+  it('stops the chain when the drain is aborted', async () => {
+    // Destroying the viewer mid-load must stop the work, not merely ignore it:
+    // the remaining pagination would otherwise keep consuming main-thread
+    // slices for a document nobody can see.
+    const previews: ProgressiveLayoutPreview[] = [];
+    const controller = new AbortController();
+    const testCase = open('plain', 400);
+    await expect(layoutDocumentProgressively(
+      testCase.source.bodyLayoutInput,
+      testCase.services,
+      testCase.options,
+      {
+        hasPaginationFields: testCase.source.hasPaginationFields,
+        onPreview: (preview) => { previews.push(preview); },
+        scheduler: {
+          now: () => Number.MAX_SAFE_INTEGER,
+          sliceMs: 0,
+          // Abort at the first opportunity the chain releases the thread.
+          yieldToHost: () => { controller.abort(); return Promise.resolve(); },
+          signal: controller.signal,
+        },
+      },
+    )).rejects.toBeInstanceOf(PaginationAbortError);
+    // The synchronous opening preview had already been published; nothing
+    // further may be.
+    expect(previews.length).toBeLessThanOrEqual(1);
+  }, 300_000);
+
+  it('matches a blocking markup-view layout for a tracked-changes document', async () => {
+    // The variant most affected by the tracked-changes fix must still converge
+    // to exactly the blocking result.
+    const markupOptions = normalizeLayoutOptions(undefined, CURRENT_DATE_MS, true);
+    const blockingCase = open('tracked', 120);
+    const blocking = paginateBody(
+      blockingCase.source.bodyLayoutInput,
+      blockingCase.services,
+      markupOptions,
+    );
+    const progressiveCase = open('tracked', 120);
+    const progressive = await layoutDocumentProgressively(
+      progressiveCase.source.bodyLayoutInput,
+      progressiveCase.services,
+      markupOptions,
+      { hasPaginationFields: progressiveCase.source.hasPaginationFields },
+    );
+    expect(layoutFingerprint(progressive)).toBe(layoutFingerprint(blocking));
   }, 300_000);
 
   it('skips previewing a document short enough not to need it', async () => {

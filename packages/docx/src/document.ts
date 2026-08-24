@@ -72,6 +72,7 @@ import {
 } from './document-pull-client.js';
 import { layoutDocumentInputAsync } from './layout/document.js';
 import { layoutDocumentProgressively } from './layout/progressive.js';
+import { PaginationAbortError } from './layout/pagination-scheduler.js';
 import { normalizeLayoutOptions } from './layout/options.js';
 
 /** Options for {@link DocxDocument.load}. Extends the shared load-options type
@@ -153,6 +154,16 @@ export interface LoadOptions extends CoreLoadOptions {
    */
   onLayoutComplete?: (error?: unknown) => void;
   /**
+   * Called each time progressive layout publishes more pages, before the
+   * authoritative layout replaces them.
+   *
+   * `pageCount` is the pages available so far. `exact` is false when the
+   * document's headers or footers carry PAGE/NUMPAGES, whose totals cannot be
+   * known until the last page exists — those pages are shown but their numbering
+   * still settles.
+   */
+  onLayoutPartial?: (progress: Readonly<{ pageCount: number; exact: boolean }>) => void;
+  /**
    * Lay the document out for the tracked-change markup view (ECMA-376
    * §17.13.5) rather than its final state.
    *
@@ -201,6 +212,8 @@ export class DocxDocument {
    *  retained in `_layoutError` and re-thrown by `whenLayoutComplete`). */
   private _layoutCompletion: Promise<void> | null = null;
   private _layoutError: unknown = undefined;
+  /** Cancels background layout when the document is destroyed or replaced. */
+  private _layoutAbort: AbortController | null = null;
   /** Lazily-built `bookmarkName → 0-based page index` map for internal hyperlink
    *  anchors (IX-nav). Built on first {@link getBookmarkPage} from the paginated
    *  pages (main) or the worker meta's `bookmarkPages` (worker). Nulled by
@@ -440,6 +453,8 @@ export class DocxDocument {
           const store = retained.layoutVariants;
           // Narrowed once: the closures below outlive this block's control flow.
           const progressiveDocument = doc;
+          const abort = new AbortController();
+          progressiveDocument._layoutAbort = abort;
           let published = false;
           const full = layoutDocumentProgressively(
             doc._source.bodyLayoutInput,
@@ -447,12 +462,20 @@ export class DocxDocument {
             layoutOptions,
             {
               hasPaginationFields: doc._source.hasPaginationFields,
-              scheduler,
+              scheduler: { ...scheduler, signal: abort.signal },
               onPreview: (preview) => {
-                store.prime(layoutOptions, preview.layout);
+                store.prime(layoutOptions, preview.layout, published);
                 progressiveDocument._bookmarkPages = null;
-                progressiveDocument._layoutComplete = false;
-                published = true;
+                if (published) {
+                  // A later step of the chain: more pages are now available.
+                  opts.onLayoutPartial?.({
+                    pageCount: preview.layout.pages.length,
+                    exact: preview.exact,
+                  });
+                } else {
+                  progressiveDocument._layoutComplete = false;
+                  published = true;
+                }
               },
             },
           ).then((layout) => {
@@ -473,6 +496,13 @@ export class DocxDocument {
             // reject it. Retain it for whenLayoutComplete() and report it once,
             // rather than surfacing as an unhandled rejection.
             progressiveDocument._layoutCompletion = full.catch((error: unknown) => {
+              // An aborted drain means the document was destroyed or replaced,
+              // not that layout failed. Settle quietly: there is nobody left to
+              // tell, and `whenLayoutComplete` must not reject for it.
+              if (error instanceof PaginationAbortError) {
+                progressiveDocument._layoutComplete = true;
+                return;
+              }
               progressiveDocument._layoutError = error;
               progressiveDocument._layoutComplete = true;
               opts.onLayoutComplete?.(error);
@@ -562,6 +592,11 @@ export class DocxDocument {
   }
 
   destroy(): void {
+    // Stop background layout first: without this, a destroyed document's
+    // remaining pagination kept consuming main-thread slices to completion for
+    // a viewer that no longer exists.
+    this._layoutAbort?.abort();
+    this._layoutAbort = null;
     this._bridge.terminate();
     this._document = null;
     this._source = null;

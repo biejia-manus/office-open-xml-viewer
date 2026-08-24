@@ -32,15 +32,32 @@
  * such feedback are reported as inexact rather than presented as settled, so a
  * viewer can decide whether to show them at all.
  *
+ * ## Why a chain, and not one preview
+ *
+ * A single preview followed by one monolithic pass means the reader sees the
+ * opening pages and then nothing at all until the whole document lands. So the
+ * prefix grows: each step lays out four times as many body entries as the last
+ * and publishes what it can trust, until the untruncated layout finishes. Pages
+ * therefore keep arriving, and the scrollbar keeps growing, rather than the
+ * document appearing in two jumps.
+ *
+ * Re-laying-out a growing prefix repeats work, but a ratio-4 geometric series
+ * bounds it: the steps below the full document sum to under a third of one
+ * layout. That is the price of the document being useful while it loads.
+ *
  * ## What is guaranteed
  *
  * The final layout is produced by the ordinary full `paginateBody`, so it is
- * byte-identical to a blocking load. The preview only affects what is on screen
+ * byte-identical to a blocking load. Publications only affect what is on screen
  * BEFORE that finishes.
  */
 import type { BodyLayoutInput } from './body-layout-input.js';
 import { paginateBody, paginateBodySteps } from './body-paginator.js';
-import { drainPaginationAsync, type PaginationSchedulerOptions } from './pagination-scheduler.js';
+import {
+  drainPaginationAsync,
+  PaginationAbortError,
+  type PaginationSchedulerOptions,
+} from './pagination-scheduler.js';
 import type { LayoutOptions } from './options.js';
 import type { DocumentLayout, LayoutServices } from './types.js';
 
@@ -63,11 +80,22 @@ const PREVIEW_GROWTH = 4;
  *  would have spent laying out. */
 const MAX_PREVIEW_ATTEMPTS = 3;
 
+/** Ceiling on intermediate chain steps, independent of the growth ratio. Bounds
+ *  the repeated work for a document long enough that ×4 takes many steps. */
+const MAX_CHAIN_STEPS = 6;
+
 export interface ProgressiveLayoutOptions {
   /** Pages the preview should try to publish. Default 2 — enough to fill a
    *  first viewport at typical zoom. */
   readonly previewPages?: number;
-  /** Receives the provisional prefix layout, if one could be produced. */
+  /**
+   * Receives each provisional prefix layout, in growing order.
+   *
+   * Called zero or more times before the returned promise settles. The first
+   * call is the synchronous opening preview a caller can resolve `load()` on;
+   * later calls extend it as the chain progresses. Never called with fewer
+   * pages than the previous call.
+   */
   readonly onPreview?: (preview: ProgressiveLayoutPreview) => void;
   /** Scheduling for the full layout that follows the preview. */
   readonly scheduler?: PaginationSchedulerOptions;
@@ -148,39 +176,71 @@ export async function layoutDocumentProgressively(
   progressive: ProgressiveLayoutOptions = {},
 ): Promise<DocumentLayout> {
   const previewPages = Math.max(1, progressive.previewPages ?? 2);
-  const { onPreview } = progressive;
-  if (onPreview) {
-    emitPreview(
-      input,
-      services,
-      options,
-      previewPages,
-      onPreview,
-      progressive.hasPaginationFields,
-    );
+  const { onPreview, scheduler } = progressive;
+  const exact = previewIsExact(progressive.hasPaginationFields);
+  const total = input.sequence.length;
+
+  let covered = onPreview
+    ? emitPreview(input, services, options, previewPages, onPreview, exact)
+    : 0;
+
+  if (onPreview && covered > 0) {
+    let published = previewPages;
+    for (let step = 0; step < MAX_CHAIN_STEPS; step += 1) {
+      const next = covered * PREVIEW_GROWTH;
+      // Stop short of the whole document. A step covering most of the body
+      // costs nearly a full layout to produce pages the authoritative pass is
+      // about to produce anyway, delaying the finished document more than it
+      // advances the visible one. Half the body is the cutoff: with ×4 growth
+      // the repeated work stays a fraction of one layout, and — the useful
+      // property — that fraction SHRINKS as documents get longer, which is
+      // exactly where the progressive arrival matters most.
+      if (next * 2 > total) break;
+      let layout: DocumentLayout;
+      try {
+        layout = await drainPaginationAsync(
+          paginateBodySteps(truncateBodyInput(input, next), services, options),
+          scheduler,
+        );
+      } catch (error) {
+        // An aborted drain means the document is gone; stop rather than
+        // continuing to lay out for a viewer that no longer exists. Any other
+        // failure is a prefix the engine could not lay out, which costs only
+        // the head start — the authoritative pass still runs.
+        if (error instanceof PaginationAbortError) throw error;
+        break;
+      }
+      covered = next;
+      const publication = withoutTrailingPage(layout);
+      // A step that added no pages is not worth a relayout, and a shrinking
+      // spacer would jump the viewport under the reader.
+      if (publication.pages.length <= published) continue;
+      published = publication.pages.length;
+      onPreview(Object.freeze({ layout: publication, exact, coveredEntries: next }));
+    }
   }
-  return drainPaginationAsync(
-    paginateBodySteps(input, services, options),
-    progressive.scheduler,
-  );
+
+  return drainPaginationAsync(paginateBodySteps(input, services, options), scheduler);
 }
 
+/** Publish the opening pages. Returns the body entries covered, or 0 if no
+ *  useful preview could be produced. */
 function emitPreview(
   input: BodyLayoutInput,
   services: LayoutServices,
   options: LayoutOptions,
   previewPages: number,
   onPreview: (preview: ProgressiveLayoutPreview) => void,
-  hasPaginationFields: boolean | undefined,
-): void {
+  exact: boolean,
+): number {
   const total = input.sequence.length;
   let entries = INITIAL_PREVIEW_ENTRIES;
   // A document that fits inside the first preview window is not worth
   // previewing: the full layout is about to arrive just as fast.
-  if (total <= entries) return;
+  if (total <= entries) return 0;
   for (let attempt = 0; attempt < MAX_PREVIEW_ATTEMPTS; attempt += 1) {
     const covered = Math.min(entries, total);
-    if (covered >= total) return;
+    if (covered >= total) return 0;
     let layout: DocumentLayout;
     try {
       layout = paginateBody(truncateBodyInput(input, covered), services, options);
@@ -189,7 +249,7 @@ function emitPreview(
       // a cut can land anywhere, including places the real sequence never
       // presents. Never let that failure reach the caller: the authoritative
       // layout is still coming, and losing the preview only costs latency.
-      return;
+      return 0;
     }
     // Two pages is the minimum useful result: the trailing one is discarded as
     // untrustworthy, leaving one real page to paint.
@@ -201,14 +261,11 @@ function emitPreview(
       // viewport needs, and handing those to the viewer would mean painting
       // pages that the imminent full layout is about to replace anyway.
       const published = capPages(withoutTrailingPage(layout), previewPages);
-      if (published.pages.length === 0) return;
-      onPreview(Object.freeze({
-        layout: published,
-        exact: previewIsExact(hasPaginationFields),
-        coveredEntries: covered,
-      }));
-      return;
+      if (published.pages.length === 0) return 0;
+      onPreview(Object.freeze({ layout: published, exact, coveredEntries: covered }));
+      return covered;
     }
     entries = covered * PREVIEW_GROWTH;
   }
+  return 0;
 }
