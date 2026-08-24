@@ -24,9 +24,9 @@ must opt in to the new module; classic charts remain built in.
 - **host integration:** apply the shared chart behavior consistently in DOCX,
   XLSX, and PPTX main and worker rendering, while keeping ChartEx outside the
   default main-mode import closure.
-- **Word AutoFit:** exclude truly empty unnumbered cell paragraphs from
-  intrinsic content width while retaining authored spaces, non-breaking spaces,
-  visible text, numbering, and cell margins.
+- **Word layout:** exclude truly empty unnumbered cell paragraphs from AutoFit
+  content width while retaining authored spaces and non-breaking spaces, and
+  end horizontal snap-grid underlines at the terminal glyph ink.
 - **documentation:** add the ChartEx migration announcement and maintain current
   bundle-size measurements on the independent bundle-size page.
 
