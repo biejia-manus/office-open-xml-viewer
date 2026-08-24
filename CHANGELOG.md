@@ -5,6 +5,19 @@ semantic versioning. While the major version is zero, minor releases may contain
 explicitly documented breaking changes; patch releases remain compatible with
 the corresponding minor release.
 
+## 0.80.3 — 2026-08-25
+
+Patch release improving Word list resilience and production worker compatibility
+without changing the 0.80 public integration contract.
+
+- **Word numbering resilience:** keep list bodies at the authored paragraph
+  start when `nothing` or `space` suffixes remain inside a hanging-indent region,
+  avoiding a non-negative layout invariant failure. (#1366)
+- **production worker compatibility:** resolve the optional MathJax asset in the
+  main realm so emitted render-worker assets contain no inner `import.meta`,
+  including when rebundled by Next.js 14 and webpack. (#1367)
+- **compatibility:** no application or API migration is required from 0.80.2.
+
 ## 0.80.2 — 2026-08-18
 
 Compatible patch release improving Office document fidelity and navigation
