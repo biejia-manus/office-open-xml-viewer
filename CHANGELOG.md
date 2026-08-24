@@ -30,10 +30,14 @@ the corresponding minor release.
   margin balloons to the right of the page: commented ranges tinted,
   connector lines, threaded replies nested in the parent balloon, resolved
   threads hidden, balloons capped at ten lines with anchor-ordered stacking,
-  truncation toward the next balloon, and click-to-select expansion. Comment
-  data also grows `DocComment.parentId` / `resolved` / `paragraphs` and
-  `DocxDocument.commentAnchorRanges()`; both features work in main and
-  worker render modes.
+  and truncation toward the next balloon. Selecting a thread — by clicking
+  its balloon or its tinted range on the page — expands the balloon up to a
+  page-full of lines and makes its body scrollable beyond that. The scroll
+  viewer centres page + comment gutter as one unit, so toggling comments
+  shifts the page left and keeps the balloons inside the viewport instead of
+  clipping them. Comment data also grows `DocComment.parentId` / `resolved`
+  / `paragraphs` and `DocxDocument.commentAnchorRanges()`; both features
+  work in main and worker render modes.
 
 ## 0.80.2 — 2026-08-18
 

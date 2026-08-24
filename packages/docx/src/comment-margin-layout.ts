@@ -17,7 +17,9 @@
  *    margin gutter: anchor-ordered, non-overlapping (monotonic push-down),
  *    capped at `maxLines`, truncated back toward each next balloon's anchor,
  *    collapsed to header stubs under page-height pressure, and always giving
- *    the selected balloon its full capped height.
+ *    the selected balloon its full capped height — where selection RAISES the
+ *    cap to the page's own line capacity, so a selected thread expands (the
+ *    DOM layer makes anything still cut off scrollable).
  */
 
 import type { BodyElement, DocComment, DocParagraph, DocxCommentMark } from './types.js';
@@ -216,7 +218,9 @@ export interface CommentBalloonLayoutInput {
   readonly lineHeightPx: number;
   readonly headerHeightPx: number;
   readonly gapPx: number;
-  /** Hard cap on visible content lines per balloon (default 10). */
+  /** Hard cap on visible content lines per balloon (default 10). The SELECTED
+   *  balloon's cap expands to the page's line capacity instead (never below
+   *  this value), so selection reveals the thread up to a page-full. */
   readonly maxLines?: number;
 }
 
@@ -230,18 +234,28 @@ const DEFAULT_MAX_LINES = 10;
  *   next comment"), never by reordering;
  * - when the stack still overflows the page, trailing unselected balloons
  *   collapse to header-only stubs;
- * - the selected balloon always keeps its full capped height. */
+ * - the selected balloon always keeps its full capped height, and its cap
+ *   expands from `maxLines` to the page's line capacity (never below
+ *   `maxLines`), so selecting a long thread reveals it up to a page-full —
+ *   content beyond that is the DOM layer's job (scrollable balloon body). */
 export function computeCommentBalloonLayout(
   input: CommentBalloonLayoutInput,
 ): CommentBalloonPlacement[] {
   const maxLines = input.maxLines ?? DEFAULT_MAX_LINES;
   const { lineHeightPx, headerHeightPx, gapPx } = input;
+  const selectedMaxLines = Math.max(
+    maxLines,
+    Math.floor((input.pageHeightPx - headerHeightPx) / lineHeightPx),
+  );
   const ordered = [...input.balloons]
     .map((balloon, index) => ({ balloon, index }))
     .sort((a, b) => a.balloon.anchorYPx - b.balloon.anchorYPx || a.index - b.index)
     .map(({ balloon }) => balloon);
   const cappedLines = (balloon: CommentBalloonRequest): number =>
-    Math.min(Math.max(balloon.contentLines, 1), maxLines);
+    Math.min(
+      Math.max(balloon.contentLines, 1),
+      balloon.selected === true ? selectedMaxLines : maxLines,
+    );
   const state = ordered.map((balloon) => ({
     balloon,
     heightPx: headerHeightPx + cappedLines(balloon) * lineHeightPx,

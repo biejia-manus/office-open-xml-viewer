@@ -137,6 +137,43 @@ describe('DocxViewer — showComments option', () => {
     v.destroy();
   });
 
+  it('clicking the tinted range selects the thread; clicking it again deselects', async () => {
+    const { v, internals } = await mountViewer({ showComments: true });
+    // The wrapper carries ONE shared hit-test listener; give the tint layer a
+    // laid-out box (the fake's getBoundingClientRect reads client sizes) that
+    // matches the page CSS box, so hit coordinates map 1:1.
+    const tint = internals._commentTintLayer!;
+    tint.clientWidth = 595;
+    tint.clientHeight = 842;
+    // The commented run covers x 40–130, y 60–74. A click outside it is a no-op.
+    internals._wrapper.dispatch('click', { clientX: 300, clientY: 65 });
+    expect(internals._selectedCommentId).toBeNull();
+    // A click ON the tinted range selects the thread…
+    internals._wrapper.dispatch('click', { clientX: 60, clientY: 65 });
+    expect(internals._selectedCommentId).toBe('1');
+    // …and a second click on it toggles the selection off again.
+    internals._wrapper.dispatch('click', { clientX: 60, clientY: 65 });
+    expect(internals._selectedCommentId).toBeNull();
+    v.destroy();
+  });
+
+  it('the selected balloon becomes scrollable; unselected balloons stay clipped', async () => {
+    const { v, internals } = await mountViewer({ showComments: true });
+    const before = balloons(internals._commentGutterLayer)[0]!;
+    expect(before.style.overflow).toBe('hidden');
+    before.dispatch('click', { preventDefault() {} });
+    expect(internals._selectedCommentId).toBe('1');
+    // The rebuild replaced the balloon; the selected one scrolls its body.
+    const selected = balloons(internals._commentGutterLayer)[0]!;
+    expect(selected.style['overflow-y']).toBe('auto');
+    expect(selected.style.overflow).toBe('');
+    // Deselect: back to the clipped form.
+    selected.dispatch('click', { preventDefault() {} });
+    const after = balloons(internals._commentGutterLayer)[0]!;
+    expect(after.style.overflow).toBe('hidden');
+    v.destroy();
+  });
+
   it('setShowComments toggles the margin and comment DOM at runtime', async () => {
     const { v, internals } = await mountViewer();
     await v.setShowComments(true);
