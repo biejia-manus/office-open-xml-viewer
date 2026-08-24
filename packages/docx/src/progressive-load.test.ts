@@ -8,6 +8,7 @@ import {
   type SyntheticDocumentShape,
 } from './testing/synthetic-document.js';
 import { paginateBody } from './layout/body-paginator.js';
+import { attachDocumentLayoutRuntime, documentLayoutRuntimeOf } from './layout/runtime-state.js';
 import { layoutFingerprint } from './layout/invariants.js';
 import { normalizeLayoutOptions } from './layout/options.js';
 import { layoutDocumentProgressively } from './layout/progressive.js';
@@ -118,6 +119,37 @@ describe('progressive layout handover', () => {
       expect(full.pages[index]!.geometry.widthPt).toBe(geometry.widthPt);
       expect(full.pages[index]!.geometry.heightPt).toBe(geometry.heightPt);
     });
+  }, 300_000);
+
+  it('geometry follows the active variant, not the default one', async () => {
+    // A tracked-changes viewer paints the markup layout; its scrollbar, page
+    // heights and mount window must be measured against that same layout. The
+    // two variants genuinely differ, so reading the default here would size the
+    // viewport for a document the user is not looking at.
+    const source = layoutSourceStore(syntheticDocxModel('tracked', { paragraphs: 160 }));
+    const services = createLayoutServices(source);
+    const retained = retainRenderWorkerDocumentLayout(source, services, DEFAULT_CURRENT_DATE_MS);
+    const store = retained.layoutVariants;
+
+    const markupOptions = normalizeLayoutOptions(undefined, DEFAULT_CURRENT_DATE_MS, true);
+    const markup = await layoutDocumentProgressively(
+      source.bodyLayoutInput,
+      services,
+      markupOptions,
+      { hasPaginationFields: source.hasPaginationFields },
+    );
+    store.prime(markupOptions, markup, true);
+
+    const finalOptions = normalizeLayoutOptions(undefined, DEFAULT_CURRENT_DATE_MS, false);
+    expect(store.layoutFor(finalOptions).pages.length).not.toBe(markup.pages.length);
+
+    // A host object standing in for DocxDocument's runtime-state wiring.
+    const owner = {};
+    attachDocumentLayoutRuntime(owner, DEFAULT_CURRENT_DATE_MS);
+    const runtime = documentLayoutRuntimeOf(owner);
+    expect(runtime.activeLayoutOptions).toBeNull();
+    runtime.activeLayoutOptions = markupOptions;
+    expect(store.layoutFor(runtime.activeLayoutOptions).pages.length).toBe(markup.pages.length);
   }, 300_000);
 
   it('replace is required to supersede a primed layout', () => {
