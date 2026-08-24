@@ -832,6 +832,8 @@ export interface ChartThreeDSeriesAxis {
     tickLabelSkip?: number | null;
     tickMarkSkip?: number | null;
     majorTickMark: string;
+    /** `<c:serAx><c:minorTickMark>`; omission means no minor tick marks. */
+    minorTickMark?: string | null;
     fontColor?: string | null;
     fontSizeHpt?: number | null;
     fontBold?: boolean | null;

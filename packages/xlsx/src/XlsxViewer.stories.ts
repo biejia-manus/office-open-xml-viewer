@@ -14,6 +14,7 @@ type Args = {
 const meta: Meta<Args> = {
   title: 'XlsxViewer',
   excludeStories: ['buildViewerUI'],
+  parameters: { layout: 'fullscreen' },
   argTypes: {
     scale: {
       control: { type: 'range', min: 0.25, max: 2, step: 0.05 },
@@ -40,15 +41,9 @@ export function buildViewerUI(
   const root = document.createElement('div');
   root.style.cssText = 'width:100%;height:100vh;display:flex;flex-direction:column;overflow:hidden;font-family:sans-serif;box-sizing:border-box;';
 
-  const status = document.createElement('div');
-  status.style.cssText = 'padding:4px 8px;color:#666;font-size:12px;height:24px;flex-shrink:0;display:flex;align-items:center;';
-  root.appendChild(status);
-
   const viewerContainer = document.createElement('div');
   viewerContainer.style.cssText = 'position:relative;flex:1;min-height:0;';
   root.appendChild(viewerContainer);
-
-  let sheetNames: string[] = [];
 
   const viewer = new XlsxViewer(viewerContainer, {
     cellScale: args.scale,
@@ -58,14 +53,6 @@ export function buildViewerUI(
     threeD,
     regionMap,
     chartEx,
-    onReady: (names) => {
-      sheetNames = names;
-      status.textContent = `Loaded — ${names.length} sheet(s)`;
-    },
-    onSheetChange: (idx, total) => {
-      status.textContent = `Sheet ${idx + 1} / ${total}: ${sheetNames[idx] ?? ''}`;
-    },
-    onError: (err) => { status.textContent = `Error: ${err.message}`; },
     ...extra,
   });
 
@@ -76,10 +63,12 @@ export function buildViewerUI(
   viewerContainer.appendChild(spinner);
 
   if (autoLoadUrl) {
-    status.textContent = 'Loading…';
     viewer.load(autoLoadUrl)
       .then(() => { spinner.remove(); })
-      .catch((err) => { status.textContent = `Failed: ${err.message}`; spinner.remove(); });
+      .catch((err) => {
+        spinner.remove();
+        viewerContainer.textContent = `Failed: ${err.message}`;
+      });
   } else {
     spinner.remove();
   }
@@ -112,8 +101,6 @@ function renderFileUpload(args: Args, mode: 'main' | 'worker'): HTMLElement {
     root.appendChild(viewerContainer);
 
     let viewer: XlsxViewer | null = null;
-    let sheetNames: string[] = [];
-
     async function loadBuffer(buf: ArrayBuffer) {
       viewer?.destroy();
       viewerContainer.innerHTML = '';
@@ -126,8 +113,7 @@ function renderFileUpload(args: Args, mode: 'main' | 'worker'): HTMLElement {
         threeD,
         regionMap,
         chartEx,
-        onReady: (names) => { sheetNames = names; status.textContent = `${names.length} sheet(s)`; },
-        onSheetChange: (idx, total) => { status.textContent = `Sheet ${idx + 1} / ${total}: ${sheetNames[idx] ?? ''}`; },
+        onReady: () => { status.textContent = ''; },
         onError: (err) => { status.textContent = `Error: ${err.message}`; },
       });
       await viewer.load(buf);

@@ -40,84 +40,32 @@ export const announcements: readonly Announcement[] = [
     date: '2026-08-22',
     label: 'Upcoming release',
     version: 'v0.81.0',
-    title: 'Migrating to v0.81.0: Microsoft ChartEx becomes opt-in',
-    summary: 'v0.81.0 moves the Microsoft ChartEx family renderer to a separate entry. Classic DrawingML charts need no application change; applications that display ChartEx charts must import and inject the renderer.',
-    audience: 'Applications that display Microsoft ChartEx families such as waterfall, histogram, Pareto, funnel, box-and-whisker, treemap or sunburst charts. Applications that use only classic DrawingML 2-D charts can upgrade without changing their viewer setup.',
+    title: 'Migrating to v0.81.0',
+    summary: 'v0.81.0 adds Microsoft ChartEx rendering and moves it to an opt-in module. Applications that display ChartEx charts must import and enable the renderer.',
+    audience: 'Applications that display waterfall, histogram, Pareto, funnel, box-and-whisker, treemap or sunburst charts. Applications that use only classic charts need no changes.',
     sections: [
       {
-        title: 'In short',
+        title: 'ChartEx support',
         kind: 'summary',
-        modules: ['@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx', '@silurus/ooxml/chart-ex'],
-        rationale: 'Keep the Microsoft extension renderer out of the default main-mode graph while retaining classic charts as the useful baseline for every Office format.',
         paragraphs: [
-          'Classic DrawingML 2-D charts require no application change. Starting with v0.81.0, Microsoft ChartEx families render only when the chartEx renderer is supplied explicitly.',
-          'If your application displayed ChartEx charts with v0.80.x, add the separate import and pass chartEx once when you create the viewer or load the headless document model. Without it, those families show the standard unsupported-chart placeholder instead of silently selecting another chart family.',
-        ],
-        bullets: [
-          'No option is removed or renamed, and classic DrawingML 2-D chart rendering remains built in.',
-          'Import chartEx only in applications that need Microsoft ChartEx families.',
-          'The same built-in renderer object works with DOCX, XLSX and PPTX, in main and worker modes.',
-          'The threeD and regionMap options remain separate decisions and are not enabled by chartEx.',
+          'v0.81.0 adds rendering for Microsoft ChartEx chart families, including waterfall, histogram, Pareto, funnel, box-and-whisker, treemap and sunburst charts.',
+          'Classic charts remain built in and require no application changes.',
         ],
       },
       {
-        title: 'Why the boundary changed',
-        modules: ['@silurus/ooxml/chart-ex', '@silurus/ooxml-core'],
-        rationale: 'Classic charts are the broadly useful default; Microsoft ChartEx is a newer extension used by a smaller set of chart families.',
+        title: 'Migration',
         paragraphs: [
-          'The format entries still include classic DrawingML chart parsing, layout and Canvas paint. The newer Microsoft ChartEx dialect now crosses a small renderer contract into a separate package entry, so an application can decide whether that implementation belongs in its main-mode graph.',
-          'The parser continues to preserve ChartEx data and formatting in the shared chart model. Only the family-specific painter is optional, which keeps parsing, style precedence, resource limits and host integration shared across DOCX, XLSX and PPTX instead of duplicating them in each viewer.',
-        ],
-      },
-      {
-        title: 'Update applications that display ChartEx',
-        modules: ['@silurus/ooxml/xlsx', '@silurus/ooxml/chart-ex'],
-        rationale: 'One explicit import makes the capability and its code-size cost visible at the application boundary.',
-        paragraphs: [
-          'Pass chartEx in the same options object used for math, threeD or regionMap. The example uses XlsxViewer, but DocxViewer and PptxViewer accept the same option. Headless DocxDocument, XlsxWorkbook and PptxPresentation loads use the corresponding load options.',
+          'ChartEx is now provided by the separate @silurus/ooxml/chart-ex module. Import chartEx and pass it to any DOCX, XLSX or PPTX viewer that needs these chart families.',
         ],
         examples: [
           {
-            title: 'Before: ChartEx was part of the format renderer',
-            code: `import { XlsxViewer } from '@silurus/ooxml/xlsx';
-
-const viewer = new XlsxViewer(container);
-await viewer.load(source);`,
-          },
-          {
-            title: 'After: inject the optional ChartEx renderer',
+            title: 'Enable ChartEx',
             code: `import { XlsxViewer } from '@silurus/ooxml/xlsx';
 import { chartEx } from '@silurus/ooxml/chart-ex';
 
 const viewer = new XlsxViewer(container, { chartEx });
 await viewer.load(source);`,
           },
-          {
-            title: 'Worker mode uses the same public option',
-            code: `const viewer = new XlsxViewer(container, {
-  mode: 'worker',
-  chartEx,
-});`,
-          },
-        ],
-      },
-      {
-        title: 'Bundle-size and loading trade-offs',
-        modules: ['@silurus/ooxml/xlsx', '@silurus/ooxml/chart-ex'],
-        rationale: 'Main mode can exclude optional renderer code; worker mode prioritizes a portable, self-contained worker asset.',
-        paragraphs: [
-          'In the current production build, enabling chartEx adds approximately 38 KB raw or 12 KB gzip to an already loaded format graph. Omitting it keeps the ChartEx family implementation out of the ordinary synchronous main-mode dependency closure; only the small renderer contract and option plumbing remain.',
-          'Against v0.80.2, the current XLSX synchronous main-mode graph is approximately 116 KiB raw or 31 KiB gzip larger. That is the total release delta from all chart fidelity, parser and safety work, not the cost of ChartEx: the separated ChartEx implementation is not present in that minimum graph.',
-          'Worker mode deliberately fetches a self-contained render-worker asset containing the first-party renderer implementations. This avoids leaving split worker chunks behind when a consumer bundler copies an opaque Worker URL, but it means omitting chartEx does not shrink that separately loaded worker asset. Main mode remains the default and is the relevant boundary when minimizing the application graph.',
-        ],
-      },
-      {
-        title: 'Migration checklist',
-        paragraphs: [
-          'Inventory the chart families your documents use. If they are all classic DrawingML 2-D charts, upgrade normally and do not import @silurus/ooxml/chart-ex.',
-          'If documents use Microsoft ChartEx, add the chartEx import and option to every DOCX, XLSX or PPTX construction path that must display those charts. Include worker-mode construction paths as well as main mode.',
-          'Keep custom ChartEx renderer objects in main mode. JavaScript renderer functions cannot cross the Worker structured-clone boundary; worker mode reconstructs only the built-in renderer exported by @silurus/ooxml/chart-ex.',
-          'Test one representative ChartEx document after upgrading. A missing opt-in is intentionally visible as the unsupported-chart placeholder, making an incomplete migration easier to detect.',
         ],
       },
     ],

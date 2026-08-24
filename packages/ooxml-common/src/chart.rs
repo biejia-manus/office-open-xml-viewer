@@ -1189,6 +1189,8 @@ pub struct ChartThreeDSeriesAxis {
     pub tick_mark_skip: Option<u32>,
     pub major_tick_mark: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minor_tick_mark: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_hpt: Option<i32>,
@@ -10638,6 +10640,7 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                 tick_label_skip: positive_u32("tickLblSkip"),
                 tick_mark_skip: positive_u32("tickMarkSkip"),
                 major_tick_mark: extract_axis_tick_mark_or_default(axis, "majorTickMark"),
+                minor_tick_mark: extract_axis_tick_mark(axis, "minorTickMark"),
                 font_color: extract_axis_tick_label_color(axis, color_resolver),
                 font_size_hpt: extract_axis_tick_label_size(axis),
                 font_bold: extract_axis_tick_label_bold(axis),
@@ -21074,7 +21077,7 @@ Subtitle</a:t></a:r></a:p>
                   <a:solidFill><a:srgbClr val="112233"/></a:solidFill><a:latin typeface="Arial"/>
                 </a:defRPr></a:pPr><a:r><a:t>Series Axis</a:t></a:r></a:p></c:rich></c:tx>
               </c:title>
-              <c:majorTickMark val="cross"/><c:tickLblPos val="low"/>
+              <c:majorTickMark val="cross"/><c:minorTickMark val="cross"/><c:tickLblPos val="low"/>
               <c:tickLblSkip val="2"/><c:tickMarkSkip val="3"/>
               <c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/></a:solidFill></a:ln></c:spPr>
               <c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz="900" b="0">
@@ -21096,6 +21099,7 @@ Subtitle</a:t></a:r></a:p>
         assert_eq!(series_axis.tick_label_skip, Some(2));
         assert_eq!(series_axis.tick_mark_skip, Some(3));
         assert_eq!(series_axis.major_tick_mark, "cross");
+        assert_eq!(series_axis.minor_tick_mark.as_deref(), Some("cross"));
         assert_eq!(series_axis.font_color.as_deref(), Some("778899"));
         assert_eq!(series_axis.font_size_hpt, Some(900));
         assert_eq!(series_axis.line_color.as_deref(), Some("445566"));
