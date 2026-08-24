@@ -340,6 +340,15 @@ export class FakeDocxEngine {
     this._pageCount = pageCount;
   }
 
+  /** Recorded {@link setLayoutView} calls — the viewer must move the document's
+   *  active layout variant when the markup view is toggled, or geometry keeps
+   *  describing the variant nobody is looking at. */
+  layoutViews: Array<{ showTrackedChanges?: boolean; currentDate?: Date | number }> = [];
+
+  setLayoutView(view: { showTrackedChanges?: boolean; currentDate?: Date | number }): void {
+    this.layoutViews.push(view);
+  }
+
   get pageCount(): number {
     return this._pageCount;
   }

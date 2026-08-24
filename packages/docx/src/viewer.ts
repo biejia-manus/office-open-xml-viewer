@@ -272,6 +272,12 @@ export class DocxViewer implements ZoomableViewer {
         regionMap: this._opts.regionMap,
         chartEx: this._opts.chartEx,
         mode: this._mode,
+        // The variant this viewer renders, so load builds that one rather than
+        // paying for a second full pagination on the first render.
+        ...(this._opts.showTrackedChanges === true ? { showTrackedChanges: true } : {}),
+        ...(this._opts.currentDate === undefined
+          ? {}
+          : { currentDate: this._opts.currentDate }),
       }), () => {
         // Invalidate operations owned by the old document before its worker is
         // terminated, so their expected rejection cannot surface as a reload
@@ -809,6 +815,14 @@ export class DocxViewer implements ZoomableViewer {
     if ((this._opts.showTrackedChanges === true) === value) return;
     this._opts = { ...this._opts, showTrackedChanges: value };
     this._find.invalidate();
+    // The markup view paginates differently, so the document's geometry
+    // accessors must follow it — and the current page may no longer exist:
+    // hiding deletions can shorten the document past where the reader is.
+    this._doc?.setLayoutView?.({
+      showTrackedChanges: value,
+      currentDate: this._opts.currentDate,
+    });
+    this._currentPage = Math.max(0, Math.min(this._currentPage, this.pageCount - 1));
     await this._render();
   }
 

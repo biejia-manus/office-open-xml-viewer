@@ -556,6 +556,13 @@ export class DocxScrollViewer implements ZoomableViewer {
         regionMap: this._opts.regionMap,
         chartEx: this._opts.chartEx,
         mode: this._mode,
+        // The variant the viewer will render. Without these, load builds the
+        // final view while every render asks for the markup view, and the first
+        // paint pays a full synchronous repagination.
+        ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
+        ...(this._opts.currentDate === undefined
+          ? {}
+          : { currentDate: this._opts.currentDate }),
         ...(this._opts.progressiveLayout ? { progressiveLayout: true } : {}),
         ...(this._opts.sliceLayout ? { sliceLayout: true } : {}),
         // Relaying out when the authoritative layout lands is what turns a
@@ -1840,13 +1847,19 @@ export class DocxScrollViewer implements ZoomableViewer {
     if (this._showTrackedChanges === value) return;
     this._showTrackedChanges = value;
     this._find.invalidate();
-    // Force a fresh render of every mounted slot at the new variant: bump the
-    // epoch so in-flight resolutions go stale, reset each slot's page identity
-    // so _renderSlot re-dispatches, and remount the window.
-    this._renderEpoch++;
-    for (const slot of this._slots.values()) slot.renderedPage = -1;
-    const remount = [...this._slots.entries()];
-    for (const [page, slot] of remount) this._renderSlot(page, slot);
+    // The markup view is a different retained layout with its own pagination,
+    // so move the document's active variant before reading any geometry from
+    // it — page count and page heights are about to change.
+    this._doc?.setLayoutView?.({
+      showTrackedChanges: value,
+      currentDate: this._opts.currentDate,
+    });
+    // Re-render every mounted slot at the new variant, and relayout: heights,
+    // spacer and mount window all follow the new page count, and a shrinking
+    // document must recycle slots that are now out of range rather than ask for
+    // pages that no longer exist.
+    this._invalidateRenderedSlots();
+    this.relayout();
   }
 
   /** §17.13.4 — toggle the comment margin at runtime. The gutter participates
