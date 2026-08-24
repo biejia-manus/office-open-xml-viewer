@@ -12115,7 +12115,9 @@ pub fn parse_chart_part_with_references_style_parts_and_images(
                     .map(|format| extract_sp_pr_ln_style(format, color_resolver))
                     .unwrap_or((None, None, false));
             let inverted_line_authored = inverted_format.map(|_| {
-                inverted_shape.and_then(|shape| child(shape, "ln")).is_some()
+                inverted_shape
+                    .and_then(|shape| child(shape, "ln"))
+                    .is_some()
             });
 
             // Excel's implicit classic-chart style gives an entirely-negative,

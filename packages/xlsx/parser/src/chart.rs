@@ -4,9 +4,7 @@ use crate::worksheet_reference::{
     parse_a1_range, resolve_worksheet_reference_with_visibility, resolve_worksheet_visibility,
     split_sheet_ref, ReferencedCellValue, ResolvedWorksheetReference, WorksheetReferenceSession,
 };
-use crate::{
-    parse_rels_map, resolve_fill_color, resolve_sheet_path, resolve_zip_path,
-};
+use crate::{parse_rels_map, resolve_fill_color, resolve_sheet_path, resolve_zip_path};
 use ooxml_common::depth::parse_guarded;
 use ooxml_common::ns::{is_c_ns, is_r_ns, is_x_ns, is_xdr_ns};
 use std::collections::{BTreeMap, HashMap};
@@ -380,10 +378,7 @@ struct ChartRelatedParts {
     image_relationships: ooxml_common::chart::ChartImageRelationships,
 }
 
-fn load_chart_related_parts(
-    archive: &mut crate::XlsxZip,
-    chart_path: &str,
-) -> ChartRelatedParts {
+fn load_chart_related_parts(archive: &mut crate::XlsxZip, chart_path: &str) -> ChartRelatedParts {
     let mut result = ChartRelatedParts {
         style_xml: None,
         color_style_xml: None,
@@ -400,10 +395,15 @@ fn load_chart_related_parts(
         &relationships,
     );
     let base_dir = chart_path.rsplit_once('/').map_or("", |(dir, _)| dir);
-    let internal_target = |suffix: &str| relationships.values().find(|relationship| {
-        relationship.mode == ooxml_common::rels::TargetMode::Internal
-            && relationship.relationship_type.as_deref().is_some_and(|kind| kind.ends_with(suffix))
-    });
+    let internal_target = |suffix: &str| {
+        relationships.values().find(|relationship| {
+            relationship.mode == ooxml_common::rels::TargetMode::Internal
+                && relationship
+                    .relationship_type
+                    .as_deref()
+                    .is_some_and(|kind| kind.ends_with(suffix))
+        })
+    };
     if let Some(style_relationship) =
         internal_target(ooxml_common::chart::CHART_STYLE_REL_TYPE_SUFFIX)
     {
@@ -1963,7 +1963,12 @@ mod chartex_tests {
     fn chart_related_parts_support_root_nested_and_root_absolute_targets() {
         for (chart_path, style_target, expected_style_path, expected_image_path) in [
             ("chart1.xml", "style1.xml", "style1.xml", "media/marker.png"),
-            ("chart2.xml", "/style2.xml", "style2.xml", "media/marker.png"),
+            (
+                "chart2.xml",
+                "/style2.xml",
+                "style2.xml",
+                "media/marker.png",
+            ),
             (
                 "xl/charts/chart3.xml",
                 "style3.xml",
@@ -1971,8 +1976,7 @@ mod chartex_tests {
                 "xl/media/marker.png",
             ),
         ] {
-            let style_rels_path =
-                ooxml_common::rels::relationship_part_path(expected_style_path);
+            let style_rels_path = ooxml_common::rels::relationship_part_path(expected_style_path);
             let chart_rels_path = ooxml_common::rels::relationship_part_path(chart_path);
             let image_target = if chart_path.contains('/') {
                 "../media/marker.png"
