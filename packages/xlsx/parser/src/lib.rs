@@ -2425,14 +2425,18 @@ fn load_sheet_comments(archive: &mut XlsxZip, sheet_path: &str) -> Vec<XlsxComme
         }
     }
 
-    let mut threaded_comments = Vec::new();
-    if let Some(target) = threaded_target {
+    let threaded_comments = if let Some(target) = threaded_target {
         let tc_path = resolve_zip_path(&format!("xl/{}", sheet_dir), &target);
-        if let Ok(tc_xml) = read_zip_string(archive, &tc_path) {
+        let comments = if let Ok(tc_xml) = read_zip_string(archive, &tc_path) {
             let persons = load_persons(archive);
-            threaded_comments = parse_threaded_comments_xml(&tc_xml, &persons);
-        }
-    }
+            parse_threaded_comments_xml(&tc_xml, &persons)
+        } else {
+            Vec::new()
+        };
+        Some(comments)
+    } else {
+        None
+    };
 
     let mut classic_comments = Vec::new();
     if let Some(target) = classic_target {
@@ -2447,11 +2451,16 @@ fn load_sheet_comments(archive: &mut XlsxZip, sheet_path: &str) -> Vec<XlsxComme
 
 /// Reconcile modern threads with the legacy placeholders required by MS-XLSX
 /// §2.3.7.3/.3.1, while retaining unrelated ECMA-376 §18.7 notes. A recognized
-/// placeholder is metadata for a thread, not a second user-visible note.
-fn merge_sheet_comments(threaded: Vec<XlsxComment>, classic: Vec<XlsxComment>) -> Vec<XlsxComment> {
-    if threaded.is_empty() {
+/// placeholder is metadata for a thread, not a second user-visible note. `None`
+/// means the worksheet has no threaded-comment relationship; `Some(empty)`
+/// preserves the fact that a declared part yielded no valid thread records.
+fn merge_sheet_comments(
+    threaded_part: Option<Vec<XlsxComment>>,
+    classic: Vec<XlsxComment>,
+) -> Vec<XlsxComment> {
+    let Some(threaded) = threaded_part else {
         return classic;
-    }
+    };
 
     fn guid_key(value: &str) -> Option<String> {
         let value = value.trim().trim_start_matches('{').trim_end_matches('}');
@@ -5052,7 +5061,7 @@ mod threaded_comment_tests {
             r#"<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x15ac="http://schemas.microsoft.com/office/spreadsheetml/2010/11/ac"><authors><author>tc={ID}</author><author>Legacy</author></authors><commentList><comment ref="A1" authorId="0" x15ac:uid="{ID}"><text><t>compatibility copy</t></text></comment><comment ref="B2" authorId="1"><text><t>real note</t></text></comment></commentList></comments>"#
         );
         let comments = merge_sheet_comments(
-            parse_threaded_comments_xml(&threaded_xml, &persons()),
+            Some(parse_threaded_comments_xml(&threaded_xml, &persons())),
             parse_comments_xml(&classic_xml),
         );
         assert_eq!(comments.len(), 2);
@@ -5074,16 +5083,67 @@ mod threaded_comment_tests {
         );
 
         let comments = merge_sheet_comments(
-            parse_threaded_comments_xml(&threaded_xml, &persons()),
+            Some(parse_threaded_comments_xml(&threaded_xml, &persons())),
             parse_comments_xml(&classic_xml),
         );
         assert_eq!(
-            comments.iter().map(|comment| comment.cell_ref.as_str()).collect::<Vec<_>>(),
+            comments
+                .iter()
+                .map(|comment| comment.cell_ref.as_str())
+                .collect::<Vec<_>>(),
             vec!["A1", "C3", "E5"]
         );
         assert!(matches!(comments[0].kind, XlsxCommentKind::Thread));
         assert!(matches!(comments[1].kind, XlsxCommentKind::Thread));
         assert!(matches!(comments[2].kind, XlsxCommentKind::Note));
+    }
+
+    #[test]
+    fn empty_threaded_part_hides_only_compatibility_placeholders() {
+        const ORPHAN: &str = "{11111111-2222-3333-4444-555555555555}";
+        let classic_xml = format!(
+            r#"<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x15ac="http://schemas.microsoft.com/office/spreadsheetml/2010/11/ac"><authors><author>tc={ORPHAN}</author><author>ordinary</author></authors><commentList><comment ref="A1" authorId="0" x15ac:uid="{ORPHAN}"><text><t>orphan compatibility record</t></text></comment><comment ref="B2" authorId="1"><text><t>real note</t></text></comment></commentList></comments>"#
+        );
+
+        let comments = merge_sheet_comments(Some(Vec::new()), parse_comments_xml(&classic_xml));
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].cell_ref, "B2");
+        assert_eq!(comments[0].text, "real note");
+    }
+
+    #[test]
+    fn invalid_threaded_records_still_hide_compatibility_placeholders() {
+        const ORPHAN: &str = "{11111111-2222-3333-4444-555555555555}";
+        let threaded_xml = format!(
+            r#"<ThreadedComments xmlns="{TC_NS}"><threadedComment ref="A1" personId="{{p1}}"><text>missing identity</text></threadedComment></ThreadedComments>"#
+        );
+        let classic_xml = format!(
+            r#"<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x15ac="http://schemas.microsoft.com/office/spreadsheetml/2010/11/ac"><authors><author>tc={ORPHAN}</author><author>ordinary</author></authors><commentList><comment ref="A1" authorId="0" x15ac:uid="{ORPHAN}"><text><t>orphan compatibility record</t></text></comment><comment ref="B2" authorId="1"><text><t>real note</t></text></comment></commentList></comments>"#
+        );
+
+        let parsed = parse_threaded_comments_xml(&threaded_xml, &persons());
+        assert!(parsed.is_empty());
+        let comments = merge_sheet_comments(Some(parsed), parse_comments_xml(&classic_xml));
+        assert_eq!(
+            comments
+                .iter()
+                .map(|comment| comment.cell_ref.as_str())
+                .collect::<Vec<_>>(),
+            vec!["B2"]
+        );
+    }
+
+    #[test]
+    fn classic_only_sheet_does_not_apply_threaded_placeholder_rules() {
+        const ID: &str = "{01234567-89AB-CDEF-0123-456789ABCDEF}";
+        let classic_xml = format!(
+            r#"<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x15ac="http://schemas.microsoft.com/office/spreadsheetml/2010/11/ac"><authors><author>tc={ID}</author></authors><commentList><comment ref="A1" authorId="0" x15ac:uid="{ID}"><text><t>classic-only authored record</t></text></comment></commentList></comments>"#
+        );
+
+        let comments = merge_sheet_comments(None, parse_comments_xml(&classic_xml));
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].cell_ref, "A1");
+        assert_eq!(comments[0].text, "classic-only authored record");
     }
 }
 
