@@ -22,6 +22,14 @@
  *                      an extra line-breaking pass per cell paragraph.
  * - `long-paragraphs`— few, very long single-script paragraphs, where cluster
  *                      geometry's per-grapheme prefix measurement dominates.
+ * - `tracked`        — a mix of ordinary and deleted (`w:del`) runs. The two
+ *                      `showTrackedChanges` views paginate DIFFERENTLY: the
+ *                      final view hides deletions, the markup view keeps them
+ *                      visible, so this is the fixture for anything that must
+ *                      distinguish layout variants.
+ * - `tracked-fields` — the same, plus the PAGE/NUMPAGES footer, i.e. a document
+ *                      that is both variant-sensitive and inexact under a
+ *                      prefix preview (the shape of a real reviewed contract).
  *
  * Everything here is derived from a fixed seed: the same `shape` and
  * `paragraphs` always produce byte-identical models, so a benchmark or an
@@ -42,7 +50,9 @@ export type SyntheticDocumentShape =
   | 'header-footer'
   | 'fields'
   | 'tables'
-  | 'long-paragraphs';
+  | 'long-paragraphs'
+  | 'tracked'
+  | 'tracked-fields';
 
 export interface SyntheticDocumentOptions {
   /** Body paragraph count (or table count for `tables`). */
@@ -152,6 +162,32 @@ function textParagraph(text: string, over: Partial<DocParagraph> = {}): DocParag
   return paragraph([textRun(text)], over);
 }
 
+/** A run marked as deleted (ECMA-376 §17.13.5.14 `w:del`). Hidden by the
+ *  final-view default; shown struck through in the markup view. */
+function deletedRun(text: string): DocParagraph['runs'][number] {
+  return {
+    ...(textRun(text) as Record<string, unknown>),
+    revision: { kind: 'deletion', author: 'Reviewer A', date: '2024-01-01T00:00:00Z' },
+  } as DocParagraph['runs'][number];
+}
+
+/**
+ * A paragraph whose length depends on which tracked-change view is selected.
+ *
+ * Roughly half the text sits in a deleted run, so the final view lays out
+ * materially less content than the markup view and the two variants reach
+ * different page counts — which is the whole point of the fixture. Every other
+ * paragraph is left untouched so the difference accumulates gradually rather
+ * than doubling the document.
+ */
+function trackedParagraph(next: () => number, words: number, index: number): DocParagraph {
+  if (index % 2 === 1) return textParagraph(sentence(next, words));
+  return paragraph([
+    textRun(`${sentence(next, Math.max(1, Math.round(words / 2)))} `),
+    deletedRun(sentence(next, Math.max(1, Math.round(words / 2)))),
+  ]);
+}
+
 /** All-unset edges. Acquisition dereferences the edge record itself, so an
  *  absent border set is `{ top: null, ... }` rather than a bare `null`. */
 const NO_BORDERS = {
@@ -235,6 +271,11 @@ export function syntheticDocxModel(
       { length: count },
       () => textParagraph(sentence(next, options.wordsPerParagraph ?? 1200)) as BodyElement,
     );
+  } else if (shape === 'tracked' || shape === 'tracked-fields') {
+    body = Array.from(
+      { length: count },
+      (_unused, index) => trackedParagraph(next, words, index) as BodyElement,
+    );
   } else {
     body = Array.from(
       { length: count },
@@ -247,7 +288,7 @@ export function syntheticDocxModel(
   if (shape === 'header-footer') {
     headers.default = headerFooterStory([textRun('Synthetic layout benchmark')]);
     footers.default = headerFooterStory([textRun('Confidential draft')]);
-  } else if (shape === 'fields') {
+  } else if (shape === 'fields' || shape === 'tracked-fields') {
     headers.default = headerFooterStory([textRun('Synthetic layout benchmark')]);
     footers.default = headerFooterStory([
       textRun('Page '),
