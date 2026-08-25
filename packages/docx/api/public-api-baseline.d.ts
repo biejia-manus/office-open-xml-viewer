@@ -1082,6 +1082,7 @@ export interface DocxCommentSelectionContext {
     readonly maxTextCharacters: number;
 }
 export interface DocxCommentsOptions extends ViewerCommentsOptions {
+    readonly cards?: boolean;
     readonly side?: 'auto' | 'left' | 'right';
     readonly markers?: boolean;
     readonly connectors?: ViewerCommentConnectorOptions;

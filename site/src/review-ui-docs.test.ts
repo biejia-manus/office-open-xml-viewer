@@ -16,7 +16,7 @@ describe('Office comment UI integration guide', () => {
       expect(page).toContain(viewer);
     }
     expect(page).toContain('Built-in or custom');
-    expect(page).toContain('Application-owned list, Viewer-owned navigation');
+    expect(page).toContain('Application-owned list, Viewer-owned target');
     expect(page).toContain('keeps the list outside the document surface');
     expect(page).toContain("docxViewer.goToComment(comment.id, { behavior: 'smooth' })");
     expect(page).toContain("pptxViewer.goToComment(slideIndex, commentIndex, { behavior: 'smooth' })");
@@ -24,6 +24,7 @@ describe('Office comment UI integration guide', () => {
     expect(page).toContain('comments: true');
     expect(page).toContain('comments: false');
     expect(page).toContain('<code>markers</code>');
+    expect(page).toContain('<code>cards</code>');
     expect(page).toContain('Defaults to <code>true</code>');
     expect(page).toContain('Set it to <code>false</code> to hide only the icons');
     expect(page).toContain('markers: true, // Default. Set false to hide the message icons only.');
@@ -91,7 +92,7 @@ describe('Office comment UI integration guide', () => {
     }
     expect(page).toContain('The Viewer owns its built-in presentation.');
     expect(page).toContain('The application owns custom product behavior.');
-    expect(page).toContain('Call <code>goToComment()</code> for navigation');
+    expect(page).toContain('Call <code>goToComment()</code> to reveal and highlight');
     expect(page).not.toContain('No page geometry');
     expect(page).not.toContain('Page geometry required');
     expect(page).toContain('<CodeTabs id="comment-primitives" tabs={primitiveTabs} />');
@@ -101,8 +102,18 @@ describe('Office comment UI integration guide', () => {
     expect(page).toContain('<CommentListNavigationDemo />');
     const listDemo = read('./components/CommentListNavigationDemo.astro');
     expect(listDemo).toContain("DocxScrollViewer.fromDocument(host, doc");
-    expect(listDemo).toContain("nextViewer.goToComment(comment.id, { behavior: 'smooth' })");
-    expect(listDemo).toContain("doc.comments.filter((comment) => comment.parentId === undefined)");
+    expect(listDemo.match(/comments: \{ cards: false, markers: false \}/g)).toHaveLength(2);
+    expect(listDemo).toContain("viewer.goToComment(comment.id, { behavior: 'smooth' })");
+    expect(listDemo).toContain('PptxScrollViewer.fromPresentation(host, presentation');
+    expect(listDemo).toContain("viewer.goToComment(slideIndex, commentIndex, { behavior: 'smooth' })");
+    expect(listDemo).toContain("new XlsxViewer(host, { comments: false })");
+    expect(listDemo).toContain("viewer.goToComment(comment.cellRef, { align: 'center' })");
+    expect(listDemo).toContain(".filter((comment) => comment.parentId === undefined && !comment.resolved)");
+    for (const format of ['docx', 'xlsx', 'pptx']) {
+      expect(listDemo).toContain(`sample-1.${format}`);
+    }
+    expect(listDemo).toContain('comment-list-demo__reply');
+    expect(listDemo).toContain('--comment-list-accent');
     expect(listDemo).toContain('data-comment-list-items');
     expect(listDemo).toContain('aria-live="polite"');
     expect(example).toContain('doc.commentAnchorRanges()');

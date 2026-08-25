@@ -17,9 +17,11 @@ describe('XlsxViewer comment UI contract', () => {
     };
     internals.currentSourceComments = [{ cellRef: 'B2', author: 'Ada', text: 'Review this' }];
     const scrollToCell = vi.spyOn(viewer, 'scrollToCell').mockResolvedValue();
+    const setSelection = vi.spyOn(viewer, 'setSelection');
 
     await expect(viewer.goToComment('B2', { align: 'center' })).resolves.toBe(true);
     expect(scrollToCell).toHaveBeenCalledWith('B2', { align: 'center' });
+    expect(setSelection).toHaveBeenCalledWith('B2');
     await expect(viewer.goToComment('C3')).resolves.toBe(false);
     viewer.destroy();
   });

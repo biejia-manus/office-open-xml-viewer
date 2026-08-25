@@ -7,6 +7,7 @@ import {
 import {
   buildReadOnlyCommentMargin,
   createReadOnlyCommentMarker,
+  ensureReadOnlyCommentStyles,
   READ_ONLY_COMMENT_MARKER_SIZE_PX,
   type ReadOnlyCommentMessage,
   type ReadOnlyCommentThread,
@@ -21,6 +22,8 @@ import type { PptxElementBounds } from './element-selection.js';
 import type { PptxComment, PptxCommentReply } from './types.js';
 
 export interface PptxCommentsOptions extends ViewerCommentsOptions {
+  /** Show the built-in margin cards. Set false for an application-owned list. Default true. */
+  readonly cards?: boolean;
   /** Margin side. `auto` follows the Viewer container's CSS direction. Default `auto`. */
   readonly side?: 'auto' | 'left' | 'right';
   /** Show authored comment glyphs on the slide. Default true. */
@@ -55,7 +58,7 @@ function toReplyCard(
 
 export function buildPptxCommentMargin(
   markerLayer: HTMLDivElement,
-  margin: HTMLDivElement,
+  margin: HTMLDivElement | null,
   comments: readonly Readonly<PptxComment>[],
   elementBounds: readonly Readonly<PptxElementBounds>[],
   slideIndex: number,
@@ -70,7 +73,8 @@ export function buildPptxCommentMargin(
   onGeometryChange?: () => void,
   onScrollGeometryChange?: () => void,
 ): ReadOnlyCommentMarginGeometry {
-  margin.dataset.ooxmlCommentZoom = String(zoom);
+  ensureReadOnlyCommentStyles(markerLayer.ownerDocument);
+  if (margin) margin.dataset.ooxmlCommentZoom = String(zoom);
   markerLayer.replaceChildren();
   const visible = comments
     .map((comment, index) => ({
@@ -128,6 +132,17 @@ export function buildPptxCommentMargin(
       width: READ_ONLY_COMMENT_MARKER_SIZE_PX * zoom,
       height: READ_ONLY_COMMENT_MARKER_SIZE_PX * zoom,
     }));
+    if (activeId === id && targetBounds.length === 0 && !showMarkers) {
+      const frame = markerLayer.ownerDocument.createElement('div');
+      frame.dataset.ooxmlCommentTarget = id;
+      frame.style.cssText =
+        `left:${overlayPercent(left, slideWidthEmu)};` +
+        `top:${overlayPercent(top, slideHeightEmu)};` +
+        `width:${READ_ONLY_COMMENT_MARKER_SIZE_PX * zoom}px;` +
+        `height:${READ_ONLY_COMMENT_MARKER_SIZE_PX * zoom}px;` +
+        `border-width:${2 * zoom}px;border-radius:50%;transform:translate(-50%,-50%);`;
+      markerLayer.appendChild(frame);
+    }
     if (showMarkers) {
       const marker = createReadOnlyCommentMarker(markerLayer.ownerDocument, {
         occurrenceKey: id,
@@ -156,18 +171,20 @@ export function buildPptxCommentMargin(
     },
     replies: comment.replies?.map((reply, index) => toReplyCard(reply, id, index)) ?? [],
   }));
-  const cardHosts = buildReadOnlyCommentMargin(margin, cardThreads, {
-    activeId,
-    zoom,
-    logicalWidth: logicalMarginWidth,
-    onSetActive,
-    onGeometryChange,
-    onScrollGeometryChange,
-    preferredTopById: new Map(cardThreads.map((thread) => {
-      const anchor = anchorRects.get(thread.occurrenceKey);
-      return [thread.occurrenceKey, anchor?.y ?? 0] as const;
-    })),
-  });
+  const cardHosts = margin
+    ? buildReadOnlyCommentMargin(margin, cardThreads, {
+        activeId,
+        zoom,
+        logicalWidth: logicalMarginWidth,
+        onSetActive,
+        onGeometryChange,
+        onScrollGeometryChange,
+        preferredTopById: new Map(cardThreads.map((thread) => {
+          const anchor = anchorRects.get(thread.occurrenceKey);
+          return [thread.occurrenceKey, anchor?.y ?? 0] as const;
+        })),
+      })
+    : new Map<string, HTMLButtonElement>();
   for (const entry of visible) {
     const card = cardHosts.get(entry.id);
     const marker = markersById.get(entry.id);
@@ -183,10 +200,10 @@ export function buildPptxCommentMargin(
           anchorRects: Object.freeze(anchorRect ? [anchorRect] : []),
         });
       })),
-      scrollTop: margin.scrollTop,
+      scrollTop: margin?.scrollTop ?? 0,
     });
   }
-  const marginRect = surface ? relativeElementRect(margin, surface) : undefined;
+  const marginRect = margin && surface ? relativeElementRect(margin, surface) : undefined;
   const geometry = Object.freeze(cardThreads.map((thread): ReadOnlyCommentThreadGeometry => {
     const cardHost = cardHosts.get(thread.occurrenceKey);
     const cardRect = cardHost && surface
@@ -203,6 +220,6 @@ export function buildPptxCommentMargin(
   return Object.freeze({
     threads: geometry,
     ...(marginRect ? { cardClipBounds: marginRect } : {}),
-    scrollTop: margin.scrollTop,
+    scrollTop: margin?.scrollTop ?? 0,
   });
 }

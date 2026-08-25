@@ -6,6 +6,7 @@ import {
 import {
   buildReadOnlyCommentMargin,
   createReadOnlyCommentMarker,
+  ensureReadOnlyCommentStyles,
   READ_ONLY_COMMENT_MARKER_SIZE_PX,
   readOnlyCommentAuthorAccent,
   type ReadOnlyCommentMessage,
@@ -32,6 +33,8 @@ export interface DocxCommentMarginModel {
 }
 
 export interface DocxCommentsOptions extends ViewerCommentsOptions {
+  /** Show the built-in margin cards. Set false for an application-owned list. Default true. */
+  readonly cards?: boolean;
   /** Margin side. `auto` follows the Viewer container's CSS direction. Default `auto`. */
   readonly side?: 'auto' | 'left' | 'right';
   /** Show authored comment glyphs beside anchored text. Default true. */
@@ -143,7 +146,7 @@ function mergeSameLineRuns(
  * still tinted but do not duplicate the card. */
 export function buildDocxCommentMargin(
   tintLayer: HTMLDivElement,
-  margin: HTMLDivElement,
+  margin: HTMLDivElement | null,
   runs: readonly Readonly<DocxTextRunInfo>[],
   model: DocxCommentMarginModel,
   cssWidth: number,
@@ -157,7 +160,8 @@ export function buildDocxCommentMargin(
   onGeometryChange?: () => void,
   onScrollGeometryChange?: () => void,
 ): ReadOnlyCommentMarginGeometry {
-  margin.dataset.ooxmlCommentZoom = String(zoom);
+  ensureReadOnlyCommentStyles(tintLayer.ownerDocument);
+  if (margin) margin.dataset.ooxmlCommentZoom = String(zoom);
   tintLayer.innerHTML = '';
   const threads = commentThreads(model.comments, includeResolved);
   const accentById = new Map(threads.map((thread) => [
@@ -211,18 +215,20 @@ export function buildDocxCommentMargin(
       replies: thread.replies.map((reply, index) => toMessage(reply, thread.root.id, index + 1)),
     }];
   });
-  const cardHosts = buildReadOnlyCommentMargin(margin, cardThreads, {
-    activeId,
-    zoom,
-    logicalWidth: logicalMarginWidth,
-    onSetActive,
-    onGeometryChange,
-    onScrollGeometryChange,
-    preferredTopById: new Map(cardThreads.map((thread) => {
-      const first = anchorRects.get(thread.occurrenceKey)?.[0];
-      return [thread.occurrenceKey, first?.y ?? 0] as const;
-    })),
-  });
+  const cardHosts = margin
+    ? buildReadOnlyCommentMargin(margin, cardThreads, {
+        activeId,
+        zoom,
+        logicalWidth: logicalMarginWidth,
+        onSetActive,
+        onGeometryChange,
+        onScrollGeometryChange,
+        preferredTopById: new Map(cardThreads.map((thread) => {
+          const first = anchorRects.get(thread.occurrenceKey)?.[0];
+          return [thread.occurrenceKey, first?.y ?? 0] as const;
+        })),
+      })
+    : new Map<string, HTMLButtonElement>();
   if (showMarkers) {
     for (const [visibleIndex, thread] of cardThreads.entries()) {
       const anchor = markerAnchorById.get(thread.occurrenceKey);
@@ -263,10 +269,10 @@ export function buildDocxCommentMargin(
         active: activeId === thread.occurrenceKey,
         anchorRects: Object.freeze(anchorRects.get(thread.occurrenceKey) ?? []),
       }))),
-      scrollTop: margin.scrollTop,
+      scrollTop: margin?.scrollTop ?? 0,
     });
   }
-  const marginRect = surface ? relativeElementRect(margin, surface) : undefined;
+  const marginRect = margin && surface ? relativeElementRect(margin, surface) : undefined;
   const geometry = Object.freeze(cardThreads.map((thread): ReadOnlyCommentThreadGeometry => {
     const cardHost = cardHosts.get(thread.occurrenceKey);
     const cardRect = cardHost && surface
@@ -282,6 +288,6 @@ export function buildDocxCommentMargin(
   return Object.freeze({
     threads: geometry,
     ...(marginRect ? { cardClipBounds: marginRect } : {}),
-    scrollTop: margin.scrollTop,
+    scrollTop: margin?.scrollTop ?? 0,
   });
 }

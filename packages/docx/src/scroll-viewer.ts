@@ -631,6 +631,10 @@ export class DocxScrollViewer implements ZoomableViewer {
   }
 
   private _hasCommentMargin(): boolean {
+    return this._hasDisplayableComments() && this._commentsOptions()?.cards !== false;
+  }
+
+  private _hasDisplayableComments(): boolean {
     if (!this._commentsEnabled()) return false;
     const doc = this._doc;
     if (!doc) return false;
@@ -947,23 +951,25 @@ export class DocxScrollViewer implements ZoomableViewer {
     let commentTintLayer: HTMLDivElement | null = null;
     let commentMargin: HTMLDivElement | null = null;
     let commentDecorationLayer: HTMLDivElement | null = null;
-    if (this._hasCommentMargin()) {
+    if (this._hasDisplayableComments()) {
       commentTintLayer = document.createElement('div');
       commentTintLayer.style.cssText =
         'position:absolute;inset:0;overflow:hidden;pointer-events:none;';
       wrapper.appendChild(commentTintLayer);
-      commentMargin = document.createElement('div');
-      commentMargin.style.cssText =
-        'position:absolute;top:0;height:100%;box-sizing:border-box;' +
-        'overflow-x:hidden;overflow-y:auto;pointer-events:auto;';
-      this._syncCommentMarginGeometry(commentMargin);
-      if (this._commentsOptions()?.connectors !== undefined) {
-        commentDecorationLayer = document.createElement('div');
-        commentDecorationLayer.style.cssText =
-          'position:absolute;top:0;left:0;overflow:visible;pointer-events:none;';
-        wrapper.appendChild(commentDecorationLayer);
+      if (this._hasCommentMargin()) {
+        commentMargin = document.createElement('div');
+        commentMargin.style.cssText =
+          'position:absolute;top:0;height:100%;box-sizing:border-box;' +
+          'overflow-x:hidden;overflow-y:auto;pointer-events:auto;';
+        this._syncCommentMarginGeometry(commentMargin);
+        if (this._commentsOptions()?.connectors !== undefined) {
+          commentDecorationLayer = document.createElement('div');
+          commentDecorationLayer.style.cssText =
+            'position:absolute;top:0;left:0;overflow:visible;pointer-events:none;';
+          wrapper.appendChild(commentDecorationLayer);
+        }
+        wrapper.appendChild(commentMargin);
       }
-      wrapper.appendChild(commentMargin);
     }
     const elementLayer = createCanvasElementOutlineLayer(
       wrapper,
@@ -1859,11 +1865,57 @@ export class DocxScrollViewer implements ZoomableViewer {
     this._mountVisible();
   }
 
+  private _scrollToPageTarget(
+    page: number,
+    target: Readonly<{ x: number; y: number; w: number; h: number }>,
+    opts?: { behavior?: 'auto' | 'smooth' },
+  ): void {
+    const range = computeVisibleWindow(
+      this._scrollGeometry,
+      0,
+      this._scrollHost.clientHeight,
+      this._overscan(),
+    );
+    const pageWidth = this._pageWidthPx(page);
+    const marginExtent = this._commentMarginExtent();
+    const { left: paddingLeft } = this._padH();
+    const compositeLeft = Math.max(
+      paddingLeft,
+      (this._scrollHost.clientWidth - pageWidth - marginExtent) / 2,
+    );
+    const pageLeft = compositeLeft + (this._commentSide() === 'left' ? marginExtent : 0);
+    const maxTop = Math.max(0, range.totalHeight - this._scrollHost.clientHeight);
+    const spacerWidth = this._spacer.offsetWidth || Number.parseFloat(this._spacer.style.width) || 0;
+    const maxLeft = Math.max(0, spacerWidth - this._scrollHost.clientWidth);
+    const top = Math.min(maxTop, Math.max(
+      0,
+      (range.offsets[page] ?? 0) + target.y + target.h / 2 - this._scrollHost.clientHeight / 2,
+    ));
+    const left = Math.min(maxLeft, Math.max(
+      0,
+      pageLeft + target.x + target.w / 2 - this._scrollHost.clientWidth / 2,
+    ));
+    const host = this._scrollHost as HTMLDivElement & {
+      scrollTo?: (options: {
+        top: number;
+        left: number;
+        behavior?: 'auto' | 'smooth';
+      }) => void;
+    };
+    if (typeof host.scrollTo === 'function') {
+      host.scrollTo({ top, left, behavior: opts?.behavior ?? 'auto' });
+    } else {
+      this._scrollHost.scrollTop = top;
+      this._scrollHost.scrollLeft = left;
+    }
+    this._mountVisible();
+  }
+
   /**
    * Reveal a top-level authored comment by its DOCX comment id. This is the
    * navigation primitive for an application-owned comment list: the Viewer
    * resolves the comment's page lazily, caches that stable page index, scrolls
-   * to it, and selects the thread when comment UI is mounted.
+   * the first anchored text run into view, and selects the thread.
    *
    * Returns `false` for an unknown id or a comment with no rendered anchor.
    */
@@ -1879,24 +1931,31 @@ export class DocxScrollViewer implements ZoomableViewer {
     if (anchors.length === 0) return false;
 
     let page = this._commentPageById.get(commentId);
+    let targetRun: Readonly<DocxTextRunInfo> | undefined;
     if (page === undefined) {
       for (let index = 0; index < doc.pageCount; index += 1) {
         const runs = await this._collectPageRuns(index);
         if (this._destroyed) throw new Error('DocxScrollViewer is destroyed');
         if (this._doc !== doc) return false;
-        if (anchors.some((anchor) => resolveCommentAnchorRuns(anchor, runs).length > 0)) {
+        targetRun = anchors.flatMap((anchor) => resolveCommentAnchorRuns(anchor, runs))[0];
+        if (targetRun) {
           page = index;
           this._commentPageById.set(commentId, index);
           break;
         }
       }
+    } else {
+      const runs = await this._collectPageRuns(page);
+      if (this._destroyed) throw new Error('DocxScrollViewer is destroyed');
+      if (this._doc !== doc) return false;
+      targetRun = anchors.flatMap((anchor) => resolveCommentAnchorRuns(anchor, runs))[0];
     }
-    if (page === undefined) return false;
+    if (page === undefined || !targetRun) return false;
 
     this._activeCommentId = commentId;
     this._activeCommentPage = page;
     this._elementContext = null;
-    this.scrollToPage(page, opts);
+    this._scrollToPageTarget(page, targetRun, opts);
     for (const [mountedPage, slot] of this._slots) {
       this._redrawSlotComments(mountedPage, slot);
     }
@@ -1963,7 +2022,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     slot: PageSlot,
     runs: readonly Readonly<DocxTextRunInfo>[],
   ): void {
-    if (!slot.commentTintLayer || !slot.commentMargin) return;
+    if (!slot.commentTintLayer) return;
     slot.commentRuns = Object.freeze([...runs]);
     slot.commentTintLayer.style.transform = '';
     slot.commentTintLayer.style.transformOrigin = '';
@@ -1971,12 +2030,12 @@ export class DocxScrollViewer implements ZoomableViewer {
     // still hidden, then reveal tint, cards, and connectors together.
     this._redrawSlotComments(page, slot);
     slot.commentTintLayer.style.visibility = '';
-    slot.commentMargin.style.visibility = '';
+    if (slot.commentMargin) slot.commentMargin.style.visibility = '';
     if (slot.commentDecorationLayer) slot.commentDecorationLayer.style.visibility = '';
   }
 
   private _redrawSlotComments(page: number, slot: PageSlot): void {
-    if (!this._doc || !slot.commentTintLayer || !slot.commentMargin) return;
+    if (!this._doc || !slot.commentTintLayer) return;
     slot.commentGeometry = buildDocxCommentMargin(
       slot.commentTintLayer,
       slot.commentMargin,

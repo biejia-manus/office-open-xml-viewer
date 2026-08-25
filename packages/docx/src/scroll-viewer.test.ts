@@ -155,6 +155,40 @@ describe('DocxScrollViewer — skeleton (T1)', () => {
 });
 
 describe('DocxScrollViewer — opt-in comment cards', () => {
+  it('can keep authored range highlighting while an application owns the comment list', async () => {
+    installDom();
+    const engine = new FakeDocxEngine(1, [{ widthPt: 612, heightPt: 792 }]);
+    const source = { story: 'body', storyInstance: 'body', path: [0] } as const;
+    engine.comments = [{ id: 'external-list', author: 'Ada', text: 'Review this' }];
+    engine.commentAnchors = [{
+      commentId: 'external-list', source, startRunIndex: 0, endRunIndex: 1,
+      reference: { source, runIndex: 1, affinity: 'preceding' },
+    }] as CommentAnchorRange[];
+    engine.feedTextRuns = [{
+      text: 'anchored', source, sourceRunIndex: 0,
+      x: 20, y: 30, w: 80, h: 14, fontSize: 12, font: '12px sans-serif',
+    }];
+    const container = makeContainer();
+    const viewer = DocxScrollViewer.fromDocument(
+      container as unknown as HTMLElement,
+      engine.asDoc(),
+      { comments: { cards: false, markers: false } },
+    );
+    await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
+
+    const scrollHost = container.children[0]!.children[0]!;
+    const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
+    expect(page.children.some((child) => child.style.cssText.includes('overflow-y:auto'))).toBe(false);
+    const tintLayer = page.children.find((child) =>
+      child.children.some((entry) => entry.dataset.ooxmlCommentHighlight !== undefined))!;
+    expect(tintLayer).toBeDefined();
+    expect(tintLayer.children[0]?.dataset.active).toBe('false');
+
+    await expect(viewer.goToComment('external-list')).resolves.toBe(true);
+    expect(tintLayer.children[0]?.dataset.active).toBe('true');
+    viewer.destroy();
+  });
+
   it('navigates from an application-owned comment list and caches the resolved page', async () => {
     installDom();
     const engine = new FakeDocxEngine(4, [{ widthPt: 612, heightPt: 792 }]);
@@ -169,7 +203,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
     }] as CommentAnchorRange[];
     const collectPageRuns = vi.fn(async (page: number) => page === 2 ? [{
       text: 'anchored', source, sourceRunIndex: 0,
-      x: 20, y: 30, w: 80, h: 14, fontSize: 12, font: '12px sans-serif',
+      x: 20, y: 500, w: 80, h: 14, fontSize: 12, font: '12px sans-serif',
     }] : []);
     engine.collectPageRuns = collectPageRuns;
     const container = makeContainer();
@@ -178,16 +212,19 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
       engine.asDoc(),
     );
 
-    await expect(viewer.goToComment('7')).resolves.toBe(true);
     const scrollHost = container.children[0]!.children[0]!;
-    expect(scrollHost.scrollTop).toBeGreaterThan(0);
+    viewer.scrollToPage(2);
+    const pageTop = scrollHost.scrollTop;
+    viewer.scrollToPage(0);
+    await expect(viewer.goToComment('7')).resolves.toBe(true);
+    expect(scrollHost.scrollTop).toBeGreaterThan(pageTop);
     expect(viewer.getSelectionContext()).toMatchObject({
       kind: 'comment', commentId: '7', pageIndex: 2,
     });
     expect(collectPageRuns.mock.calls.map(([page]) => page)).toEqual([0, 1, 2]);
 
     await expect(viewer.goToComment('7')).resolves.toBe(true);
-    expect(collectPageRuns).toHaveBeenCalledTimes(3);
+    expect(collectPageRuns.mock.calls.map(([page]) => page)).toEqual([0, 1, 2, 2]);
     await expect(viewer.goToComment('missing')).resolves.toBe(false);
     viewer.destroy();
   });

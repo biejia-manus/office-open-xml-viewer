@@ -153,12 +153,39 @@ describe('PptxScrollViewer — skeleton (T1)', () => {
 });
 
 describe('PptxScrollViewer — opt-in comment cards', () => {
+  it('can highlight a selected coordinate comment while an application owns the list', () => {
+    installDom();
+    const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
+    engine.commentsBySlide = [[{
+      id: 'external-list', author: 'Grace', text: 'Review this',
+      x: SLIDE_W_EMU / 2, y: SLIDE_H_EMU / 2,
+    }]];
+    const container = makeContainer();
+    const viewer = PptxScrollViewer.fromPresentation(
+      container as unknown as HTMLElement,
+      engine.asPres(),
+      { comments: { cards: false, markers: false } },
+    );
+
+    const scrollHost = container.children[0]!.children[0]!;
+    const slide = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
+    expect(slide.children.some((child) => child.style.cssText.includes('overflow-y:auto'))).toBe(false);
+    const markerLayer = slide.children.find((child) => child.style.cssText.includes('inset:0'))!;
+    expect(markerLayer.children.some((child) =>
+      child.dataset.ooxmlCommentTarget !== undefined)).toBe(false);
+
+    expect(viewer.goToComment(0, 0)).toBe(true);
+    expect(markerLayer.children.some((child) =>
+      child.dataset.ooxmlCommentTarget === 'slide:0:external-list')).toBe(true);
+    viewer.destroy();
+  });
+
   it('navigates from an application-owned comment list by slide and occurrence', () => {
     installDom();
     const engine = new FakePptxEngine(4, SLIDE_W_EMU, SLIDE_H_EMU);
     engine.commentsBySlide = [[], [], [{
       id: 'modern-1', author: 'Grace', text: 'Review this',
-      x: SLIDE_W_EMU / 2, y: SLIDE_H_EMU / 2,
+      x: SLIDE_W_EMU / 2, y: SLIDE_H_EMU * 0.9,
     }], []];
     const container = makeContainer();
     const viewer = PptxScrollViewer.fromPresentation(
@@ -166,9 +193,12 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
       engine.asPres(),
     );
 
-    expect(viewer.goToComment(2, 0)).toBe(true);
     const scrollHost = container.children[0]!.children[0]!;
-    expect(scrollHost.scrollTop).toBeGreaterThan(0);
+    viewer.scrollToSlide(2);
+    const slideTop = scrollHost.scrollTop;
+    viewer.scrollToSlide(0);
+    expect(viewer.goToComment(2, 0)).toBe(true);
+    expect(scrollHost.scrollTop).toBeGreaterThan(slideTop);
     expect(viewer.getSelectionContext()).toMatchObject({
       kind: 'comment', commentId: 'modern-1', slideIndex: 2,
     });

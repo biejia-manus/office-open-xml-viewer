@@ -1369,6 +1369,7 @@ export interface PptxCommentSelectionContext {
     readonly maxTextCharacters: number;
 }
 export interface PptxCommentsOptions extends ViewerCommentsOptions {
+    readonly cards?: boolean;
     readonly side?: 'auto' | 'left' | 'right';
     readonly markers?: boolean;
     readonly connectors?: ViewerCommentConnectorOptions;

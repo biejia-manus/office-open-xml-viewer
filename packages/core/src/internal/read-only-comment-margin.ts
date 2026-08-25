@@ -172,7 +172,7 @@ const READ_ONLY_COMMENT_STYLES = `
 }
 `;
 
-function ensureReadOnlyCommentStyles(owner: Document): void {
+export function ensureReadOnlyCommentStyles(owner: Document): void {
   const head = (owner as Document & { head?: HTMLHeadElement }).head;
   if (!head || head.querySelector('style[data-ooxml-comment-styles]')) return;
   const style = owner.createElement('style');

@@ -14,6 +14,15 @@ const pptxComments = presentation.getComments(slideIndex);
 const xlsxComments = xlsxViewer.getComments();`;
 
 const independentListExample = `// Your application owns the list and its styling.
+// DOCX/PPTX keep authored target highlights but omit their margin cards.
+const docxViewer = new DocxScrollViewer(docxHost, {
+  comments: { cards: false, markers: false },
+});
+const pptxViewer = new PptxScrollViewer(pptxHost, {
+  comments: { cards: false, markers: false },
+});
+const xlsxViewer = new XlsxViewer(xlsxHost, { comments: false });
+
 const addRow = (label: string, reveal: () => void | Promise<unknown>) => {
   const button = document.createElement('button');
   button.textContent = label;
@@ -255,6 +264,7 @@ const primitiveTabs = [
             <tr><th><code>comments: true</code></th><td>DOCX, PPTX, XLSX</td><td>Use the built-in presentation and its format defaults. XLSX comments are already visible when the option is omitted.</td></tr>
             <tr><th><code>comments: false</code></th><td>DOCX, PPTX, XLSX</td><td>Do not show the built-in comment presentation.</td></tr>
             <tr><th><code>includeResolved</code></th><td>DOCX, PPTX, XLSX</td><td>Include resolved or closed threads. Defaults to <code>false</code> for DOCX/PPTX and <code>true</code> for XLSX.</td></tr>
+            <tr><th><code>cards</code></th><td>DOCX, PPTX</td><td>Show built-in margin cards. Defaults to <code>true</code>. Set it to <code>false</code> for an application-owned list while retaining Viewer-owned target highlighting.</td></tr>
             <tr><th><code>markers</code></th><td>DOCX, PPTX</td><td>Show the built-in message icon at each comment anchor. Defaults to <code>true</code>. Set it to <code>false</code> to hide only the icons; cards and DOCX range highlights remain visible.</td></tr>
             <tr><th><code>side</code></th><td>DOCX, PPTX</td><td>Place margin cards on <code>auto</code>, <code>left</code>, or <code>right</code>. <code>auto</code> follows the container direction.</td></tr>
             <tr><th><code>connectors</code></th><td>DOCX, PPTX</td><td>Optionally connect an anchor or marker to its card. Omit it for no lines.</td></tr>
@@ -336,11 +346,11 @@ const primitiveTabs = [
       </div>
       <div class="responsibility-boundary">
         <p><strong>The Viewer owns its built-in presentation.</strong> It renders the default cards or popup, markers, highlights, and their scroll and zoom behavior.</p>
-        <p><strong>The application owns custom product behavior.</strong> Use detached comment records for application-specific lists, filtering, search, export, or virtualization. Call <code>goToComment()</code> for navigation; use geometry APIs only when custom UI must remain attached to authored content.</p>
+        <p><strong>The application owns custom product behavior.</strong> Use detached comment records for application-specific lists, filtering, search, export, or virtualization. Call <code>goToComment()</code> to reveal and highlight the authored target; use geometry APIs only when custom UI must remain attached to authored content.</p>
       </div>
       <article class="independent-list-example">
-        <h3>Application-owned list, Viewer-owned navigation</h3>
-        <p>This example keeps the list outside the document surface and delegates only target navigation to <code>goToComment()</code>.</p>
+        <h3>Application-owned list, Viewer-owned target</h3>
+        <p>Switch between DOCX, XLSX, and PPTX. Each example keeps the list outside the document surface while <code>goToComment()</code> reveals and highlights the authored target.</p>
         <CommentListNavigationDemo />
         <Code code={independentListExample} lang="ts" themes={codeThemes} defaultColor={false} />
       </article>

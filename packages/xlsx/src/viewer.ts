@@ -2279,7 +2279,7 @@ class XlsxViewerEngine implements ZoomableViewer {
   }
 
   /**
-   * Reveal the cell that owns a current-sheet comment. This deliberately owns
+   * Reveal and select the cell that owns a current-sheet comment. This deliberately owns
    * no list UI: applications render detached records from `getComments()` and
    * call this navigation primitive from their own rows.
    *
@@ -2295,6 +2295,7 @@ class XlsxViewerEngine implements ZoomableViewer {
       return cell?.row === target.row && cell.col === target.col;
     })) return false;
     await this.scrollToCell(cellRef, options);
+    this.setSelection(cellRef);
     return true;
   }
 
