@@ -30,6 +30,14 @@ describe('DOCX review UI integration guide', () => {
     expect(margin).toContain('--ooxml-comment-avatar-radius');
   });
 
+  it('keeps the built-in preview separated and gives its frame one height contract', () => {
+    const builtIn = read('./components/BuiltInCommentViewer.astro');
+    expect(page).toContain('.built-in-preview { margin-top: 32px; }');
+    expect(builtIn).toContain('height: clamp(520px, 76vh, 720px)');
+    expect(builtIn).toContain('.built-in-comment-demo__viewer { height: 100%; }');
+    expect(builtIn).not.toContain('min-height: 640px');
+  });
+
   it('maps concepts to public APIs and distinguishes transcript from anchored UI', () => {
     const example = read('./examples/review-margin/index.ts');
     for (const api of ['doc.comments', 'doc.revisions', 'commentAnchorRanges()', 'revisionAnchorRanges()', 'onTextRun', 'resolveCommentAnchorRuns()', 'resolveRevisionAnchorRuns()']) {

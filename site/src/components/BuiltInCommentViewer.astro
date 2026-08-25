@@ -34,13 +34,13 @@
 <style>
   .built-in-comment-demo {
     position: relative;
-    min-height: 640px;
+    height: clamp(520px, 76vh, 720px);
     overflow: hidden;
     border: 1px solid var(--border);
     border-radius: 12px;
     background: transparent;
   }
-  .built-in-comment-demo__viewer { height: min(76vh, 720px); }
+  .built-in-comment-demo__viewer { height: 100%; }
   .built-in-comment-demo__status {
     position: absolute;
     inset: 0;
