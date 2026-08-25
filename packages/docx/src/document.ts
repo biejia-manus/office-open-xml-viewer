@@ -33,7 +33,7 @@ import {
   type WorkerRendererDescriptors,
 } from '@silurus/ooxml-core/worker';
 import { BoundedRawPartCache } from '@silurus/ooxml-core/internal/bounded-raw-part-cache';
-import type { DocxDocumentModel, RenderPageOptions, WorkerRequest, WorkerResponse, DocComment, DocNote } from './types';
+import type { DocxDocumentModel, RenderPageOptions, WorkerRequest, WorkerResponse, DocComment, DocNote, DocRevision } from './types';
 import { renderLayoutSourceToCanvas, documentHasMath, prepareMathRuns, type DocxTextRunInfo } from './renderer';
 import { createLayoutServices } from './layout-runtime.js';
 import { buildBookmarkPageMap } from './bookmark-nav';
@@ -49,6 +49,7 @@ import {
   type LayoutSourceStore,
 } from './layout/layout-source-store.js';
 import type { DeepReadonly, DocumentLayout } from './layout/types.js';
+import { snapshotPlainData } from './layout/plain-data.js';
 import type {
   DocumentMeta,
   RenderWorkerRequest,
@@ -57,11 +58,20 @@ import type {
 } from './worker-protocol';
 import { retainRenderWorkerDocumentLayout } from './render-worker-layout.js';
 import { textRunsForSelectedPage } from './text-run-projection.js';
+import { textRunSourceIndexForDocument } from './layout/text-index.js';
 import {
   hitTestSelectedDocxElementContext,
   type DocxElementContextOptions,
 } from './element-context.js';
 import type { DocxElementContext, DocxPagePoint } from './selection-context.js';
+import {
+  collectLayoutSourceCommentRangesIfPresent,
+  type CommentAnchorRange,
+} from './comments.js';
+import {
+  collectLayoutSourceRevisionRangesIfPresent,
+  type RevisionAnchorRange,
+} from './revisions.js';
 import {
   isDocumentPullResponse,
   materializeDocumentPullAdapterSession,
@@ -102,16 +112,47 @@ export type RenderPageToBitmapOptions = Omit<RenderPageOptions, 'onTextRun'> & {
   onTextRun?: (run: DocxTextRunInfo) => void;
 };
 
+interface ReviewSnapshot {
+  readonly comments: readonly Readonly<DocComment>[];
+  readonly revisions: readonly Readonly<DocRevision>[];
+}
+
+const EMPTY_REVIEW_SNAPSHOT: ReviewSnapshot = Object.freeze({
+  comments: Object.freeze([]),
+  revisions: Object.freeze([]),
+});
+
+function snapshotReviewData(
+  comments: readonly DocComment[],
+  revisions: readonly DocRevision[],
+): ReviewSnapshot {
+  // Runtime sealing is recursive; the public type stays shallowly readonly so
+  // existing consumers can read nested paragraph arrays without a new type.
+  return snapshotPlainData({ comments, revisions }, 'DOCX review metadata') as unknown as ReviewSnapshot;
+}
+
 export class DocxDocument {
   private _metrics: OoxmlResourceMetricsSession | null = null;
   private _document: DocxDocumentModel | null = null;
   private _source: LayoutSourceStore | null = null;
   private _meta: DocumentMeta | null = null;
+  /** One immutable review snapshot backs both the public detached records and
+   * lazy anchor projections. It is captured once per load in both render modes. */
+  private _review: ReviewSnapshot = EMPTY_REVIEW_SNAPSHOT;
   /** Lazily-built `bookmarkName → 0-based page index` map for internal hyperlink
    *  anchors (IX-nav). Built on first {@link getBookmarkPage} from the paginated
    *  pages (main) or the worker meta's `bookmarkPages` (worker). Nulled by
    *  {@link destroy} so a reused reference never serves a stale document. */
   private _bookmarkPages: Map<string, number> | null = null;
+  /** Lazily-computed §17.13.4 comment anchor ranges (main mode; worker mode
+   *  reads them from the meta). Nulled by {@link destroy} with the other
+   *  per-document caches. */
+  private _commentAnchorRanges: readonly CommentAnchorRange[] | null = null;
+  /** Lazily-computed §17.13.5 revision source ranges (main mode; worker mode
+   * reads them from metadata). */
+  private _revisionAnchorRanges: readonly RevisionAnchorRange[] | null = null;
+  /** Shared lightweight index for comment and revision anchor projections. */
+  private _reviewTextRunSourceIndex: ReadonlyMap<string, ReadonlySet<number>> | null = null;
   private _mode: 'main' | 'worker' = 'main';
   private _threeD: ChartThreeDRenderer | undefined;
   private _regionMap: ChartRegionMapRenderer | undefined;
@@ -384,6 +425,10 @@ export class DocxDocument {
       this._source = adapted.source;
       this._document = adapted.document;
     }
+    this._review = snapshotReviewData(
+      this._meta?.comments ?? this._document?.comments ?? [],
+      this._meta?.revisions ?? this._document?.revisions ?? [],
+    );
   }
 
   destroy(): void {
@@ -391,8 +436,12 @@ export class DocxDocument {
     this._document = null;
     this._source = null;
     this._meta = null;
+    this._review = EMPTY_REVIEW_SNAPSHOT;
     documentLayoutRuntimeOf(this).services = null;
     this._bookmarkPages = null;
+    this._commentAnchorRanges = null;
+    this._revisionAnchorRanges = null;
+    this._reviewTextRunSourceIndex = null;
     this._rawParts.clear();
     // Release the embedded fonts this document added to the shared FontFaceSet
     // (main mode). Refcounted in core: a font also used by another open document
@@ -529,15 +578,79 @@ export class DocxDocument {
 
   /**
    * ECMA-376 §17.13.4 — the document's comments (`word/comments.xml`), each with
-   * id / author / initials / date / plain-text body. Comments are a data-only
-   * API: they are NOT drawn on the page (authoring applications may display
-   * them in a margin pane / balloons, which this viewer does not reproduce).
-   * Use this to build a review
-   * panel, export an annotation list, etc. Returns `[]` when the document has no
+   * id / author / initials / date / plain-text body. Use this low-level API to
+   * build a custom review panel or export; {@link DocxScrollViewer} can also
+   * provide an opt-in read-only margin. Returns `[]` when the document has no
    * comments part. The same data is also reachable via `document.comments`.
    */
-  get comments(): DocComment[] {
-    return this._meta?.comments ?? this._document?.comments ?? [];
+  get comments(): readonly Readonly<DocComment>[] {
+    return this._reviewSnapshot().comments;
+  }
+
+  /** ECMA-376 §17.13.5 body-story revision events in document order. Available
+   * in both main and worker modes; rendering always projects the accepted final
+   * state. Consumers may use these detached records in their own review UI. */
+  get revisions(): readonly Readonly<DocRevision>[] {
+    return this._reviewSnapshot().revisions;
+  }
+
+  /**
+   * ECMA-376 §17.13.4 — the comment anchors resolved to per-paragraph run
+   * intervals in document order (`commentRangeStart`/`End` pairs, plus point
+   * anchors). Each range carries the exact story/path identity used by
+   * `DocxTextRunInfo.source`, covering body, headers, footers, notes, and text
+   * boxes. Join it to rendered geometry with `sourceRunIndex`. Mode-agnostic:
+   * main mode resolves lazily from the retained source; worker mode returns the
+   * same projection in metadata. Returns `[]` when no anchors exist.
+   */
+  commentAnchorRanges(): readonly CommentAnchorRange[] {
+    if (this._meta) return this._meta.commentAnchorRanges ?? [];
+    if (!this._document || !this._source) return [];
+    const runtime = documentLayoutRuntimeOf(this);
+    const services = runtime.services;
+    if (!services) throw new Error('Document layout services are not initialized');
+    const layout = layoutVariantStoreOf(services)?.defaultLayout;
+    if (!layout) throw new Error('Document layout variant store is not initialized');
+    this._reviewTextRunSourceIndex ??= textRunSourceIndexForDocument(layout);
+    this._commentAnchorRanges ??= collectLayoutSourceCommentRangesIfPresent(
+      this._reviewSnapshot().comments,
+      this._source,
+      this._reviewTextRunSourceIndex,
+    );
+    return this._commentAnchorRanges;
+  }
+
+  /** ECMA-376 §17.13.5 revision containers resolved to normalized source-run
+   * intervals. Join them to `collectPageRuns()` with
+   * `resolveRevisionAnchorRuns()`. Deletions and move sources use the nearest
+   * deterministic final-state text position because accepted rendering gives
+   * their own content no geometry. Mode-agnostic. */
+  revisionAnchorRanges(): readonly RevisionAnchorRange[] {
+    if (this._meta) return this._meta.revisionAnchorRanges ?? [];
+    if (!this._document || !this._source) return [];
+    const runtime = documentLayoutRuntimeOf(this);
+    const services = runtime.services;
+    if (!services) throw new Error('Document layout services are not initialized');
+    const layout = layoutVariantStoreOf(services)?.defaultLayout;
+    if (!layout) throw new Error('Document layout variant store is not initialized');
+    this._reviewTextRunSourceIndex ??= textRunSourceIndexForDocument(layout);
+    this._revisionAnchorRanges ??= collectLayoutSourceRevisionRangesIfPresent(
+      this._reviewSnapshot().revisions,
+      this._source,
+      this._reviewTextRunSourceIndex,
+    );
+    return this._revisionAnchorRanges;
+  }
+
+  /** Object.create-based focused tests and older deserialized instances can
+   * bypass field initializers; preserve the same one-time immutable contract. */
+  private _reviewSnapshot(): ReviewSnapshot {
+    if (this._review) return this._review;
+    this._review = snapshotReviewData(
+      this._meta?.comments ?? this._document?.comments ?? [],
+      this._meta?.revisions ?? this._document?.revisions ?? [],
+    );
+    return this._review;
   }
 
   /**

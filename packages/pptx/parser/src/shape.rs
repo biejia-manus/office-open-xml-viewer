@@ -1115,7 +1115,7 @@ pub(crate) fn parse_shape(
         Default::default()
     };
 
-    // ECMA-376 §19.3.1.21 / §20.1.4.2: a slide-level `<p:cNvSpPr txBox="1"/>`
+    // ECMA-376 §19.3.1.13 / §20.1.4.2: a slide-level `<p:cNvSpPr txBox="1"/>`
     // marks the shape as a true text box, which means the theme's
     // `<a:txDef>` (rather than `<a:spDef>`) provides the fallback bodyPr.
     let is_text_box = child(sp_node, "nvSpPr")
@@ -1198,7 +1198,6 @@ pub(crate) fn parse_shape(
         fill,
         stroke,
         text_body,
-        is_text_box,
         default_text_color,
         cust_geom,
         adj,
@@ -1422,7 +1421,7 @@ pub(crate) fn parse_picture(
 
     let (prst_geom, prst_adjust) = parse_pic_prst_geom(sp_pr);
     Some(PictureElement {
-        id: read_cnv_pr(pic_node, rels).id,
+        id: own_cnv_pr(pic_node).and_then(|node| attr(&node, "id")),
         x: t.x,
         y: t.y,
         width: t.cx,
@@ -1487,7 +1486,7 @@ pub(crate) fn parse_ole_preview_picture(
     } = resolve_blip_source(blip_fill, slide_dir, rels, zip)?;
 
     Some(PictureElement {
-        id: read_cnv_pr(pic_node, rels).id,
+        id: own_cnv_pr(pic_node).and_then(|node| attr(&node, "id")),
         x: gf.x,
         y: gf.y,
         width: gf.cx,
@@ -1633,7 +1632,7 @@ pub(crate) fn parse_media(
     .unwrap_or_default();
 
     Some(MediaElement {
-        id: read_cnv_pr(pic_node, rels).id,
+        id: own_cnv_pr(pic_node).and_then(|node| attr(&node, "id")),
         x: t.x,
         y: t.y,
         width: t.cx,
@@ -2435,7 +2434,7 @@ pub(crate) fn parse_sp_tree_node(
                                     theme_source,
                                 );
                                 out.push(SlideElement::Picture(PictureElement {
-                                    id: read_cnv_pr(node, rels).id,
+                                    id: own_cnv_pr(node).and_then(|cnv| attr(&cnv, "id")),
                                     x: t.x,
                                     y: t.y,
                                     width: t.cx,
@@ -2508,7 +2507,7 @@ pub(crate) fn parse_sp_tree_node(
                                     theme_source,
                                 );
                                 out.push(SlideElement::Picture(PictureElement {
-                                    id: read_cnv_pr(node, rels).id,
+                                    id: own_cnv_pr(node).and_then(|cnv| attr(&cnv, "id")),
                                     x: t.x,
                                     y: t.y,
                                     width: t.cx,
@@ -2613,7 +2612,7 @@ pub(crate) fn parse_sp_tree_node(
                                         theme_source,
                                     );
                                     out.push(SlideElement::Picture(PictureElement {
-                                        id: read_cnv_pr(node, rels).id,
+                                        id: own_cnv_pr(node).and_then(|cnv| attr(&cnv, "id")),
                                         x: t.x,
                                         y: t.y,
                                         width: t.cx,
@@ -2727,7 +2726,7 @@ pub(crate) fn parse_sp_tree_node(
                 if let Some(mut table) =
                     parse_table(tbl_node, &t, theme_source, rels, slide_dir, zip)
                 {
-                    table.id = read_cnv_pr(node, rels).id;
+                    table.id = own_cnv_pr(node).and_then(|cnv| attr(&cnv, "id"));
                     out.push(SlideElement::Table(table));
                 }
                 return;
@@ -2818,7 +2817,7 @@ pub(crate) fn parse_sp_tree_node(
                                 )
                             };
                             if let Some(mut chart) = chart_opt {
-                                chart.id = read_cnv_pr(node, rels).id;
+                                chart.id = own_cnv_pr(node).and_then(|cnv| attr(&cnv, "id"));
                                 chart.x = t.x;
                                 chart.y = t.y;
                                 chart.width = t.cx;
@@ -2867,17 +2866,19 @@ pub(crate) fn parse_sp_tree_node(
                         if let Some(mut pic) =
                             parse_picture(pic_node, slide_dir, rels, theme_source, zip)
                         {
+                            pic.id = own_cnv_pr(node).and_then(|cnv| attr(&cnv, "id"));
                             pic.x = t.x;
                             pic.y = t.y;
                             pic.width = t.cx;
                             pic.height = t.cy;
                             out.push(SlideElement::Picture(pic));
-                        } else if let Some(pic) =
+                        } else if let Some(mut pic) =
                             parse_ole_preview_picture(pic_node, &t, slide_dir, rels, theme, zip)
                         {
                             // The pic lacked an `<a:xfrm>` (parse_picture requires
                             // one), but still carries a resolvable blip — build the
                             // element directly on the graphicFrame geometry.
+                            pic.id = own_cnv_pr(node).and_then(|cnv| attr(&cnv, "id"));
                             out.push(SlideElement::Picture(pic));
                         }
                     }
@@ -3241,7 +3242,6 @@ fn parse_connector(
         fill: None,
         stroke,
         text_body: None,
-        is_text_box: false,
         default_text_color: None,
         cust_geom: None,
         adj,

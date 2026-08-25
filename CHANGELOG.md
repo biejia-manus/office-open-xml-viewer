@@ -5,6 +5,15 @@ semantic versioning. While the major version is zero, minor releases may contain
 explicitly documented breaking changes; patch releases remain compatible with
 the corresponding minor release.
 
+## Unreleased
+
+- **Word tracked changes:** retain body-story insertion, deletion, and move
+  records as detached data while rendering the accepted final state.
+- **read-only comments:** add built-in DOCX/PPTX comment margins and XLSX cell
+  popups. The default UI is themed with CSS custom properties; applications
+  that need different structure use the existing comment, anchor, and rendered
+  geometry APIs.
+
 ## 0.81.0 — 2026-08-25
 
 Minor release expanding Microsoft ChartEx support and improving chart fidelity
