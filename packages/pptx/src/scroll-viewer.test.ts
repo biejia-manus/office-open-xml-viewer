@@ -232,6 +232,31 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     viewer.destroy();
   });
 
+  it('resolves shared drawing-element anchors only once per slide', async () => {
+    installDom();
+    const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
+    engine.commentsBySlide = [[
+      {
+        id: 'first', author: 'Grace', text: 'First',
+        anchors: [{ type: 'drawingElement', elementId: '7' }],
+      },
+      {
+        id: 'second', author: 'Linus', text: 'Second',
+        anchors: [{ type: 'drawingElement', elementId: '7' }],
+      },
+    ]];
+    const viewer = PptxScrollViewer.fromPresentation(
+      makeContainer() as unknown as HTMLElement,
+      engine.asPres(),
+      { comments: true },
+    );
+    await waitForBuiltInCommentUi(viewer);
+    await vi.waitFor(() => expect(engine.elementBoundsCalls).toHaveLength(1));
+
+    expect(engine.elementBoundsCalls[0]).toEqual({ slideIndex: 0, elementIds: ['7'] });
+    viewer.destroy();
+  });
+
   it('renders themeable built-in cards, replies, and markers without connectors', async () => {
     const dom = installDom();
     const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);

@@ -5,6 +5,7 @@ import { installDom, makeContainer, makeEl, makeBorrowedDocxScrollViewer, FakeDo
 import * as docxIndex from './index.js';
 import type { DocxElementContext } from './selection-context.js';
 import type { CommentAnchorRange } from './comments.js';
+import type { DocxTextRunInfo } from './renderer.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -231,8 +232,62 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
     expect(collectPageRuns.mock.calls.map(([page]) => page)).toEqual([0, 1, 2]);
 
     await expect(viewer.goToComment('7')).resolves.toBe(true);
-    expect(collectPageRuns.mock.calls.map(([page]) => page)).toEqual([0, 1, 2, 2]);
+    expect(collectPageRuns.mock.calls.map(([page]) => page)).toEqual([0, 1, 2]);
     await expect(viewer.goToComment('missing')).resolves.toBe(false);
+    viewer.destroy();
+  });
+
+  it('shares a progressive comment-page scan and lets the latest list click win', async () => {
+    installDom();
+    const engine = new FakeDocxEngine(3, [{ widthPt: 612, heightPt: 792 }]);
+    const sourceA = { story: 'body', storyInstance: 'body', path: [0] } as const;
+    const sourceB = { story: 'body', storyInstance: 'body', path: [1] } as const;
+    engine.comments = [
+      { id: 'a', author: 'Ada', text: 'First' },
+      { id: 'b', author: 'Grace', text: 'Second' },
+    ];
+    engine.commentAnchors = [
+      {
+        commentId: 'a', source: sourceA, startRunIndex: 0, endRunIndex: 1,
+        reference: { source: sourceA, runIndex: 1, affinity: 'preceding' },
+      },
+      {
+        commentId: 'b', source: sourceB, startRunIndex: 0, endRunIndex: 1,
+        reference: { source: sourceB, runIndex: 1, affinity: 'preceding' },
+      },
+    ] as CommentAnchorRange[];
+    let resolveFirstPage!: (runs: DocxTextRunInfo[]) => void;
+    const firstPage = new Promise<DocxTextRunInfo[]>((resolve) => { resolveFirstPage = resolve; });
+    const collectPageRuns = vi.fn((page: number) => {
+      if (page === 0) return firstPage;
+      const source = page === 1 ? sourceA : sourceB;
+      return Promise.resolve([{
+        text: page === 1 ? 'first' : 'second', source, sourceRunIndex: 0,
+        x: 20, y: 200, w: 80, h: 14, fontSize: 12, font: '12px sans-serif',
+      }]);
+    });
+    engine.collectPageRuns = collectPageRuns;
+    const viewer = DocxScrollViewer.fromDocument(
+      makeContainer() as unknown as HTMLElement,
+      engine.asDoc(),
+    );
+
+    const older = viewer.goToComment('a');
+    await Promise.resolve();
+    const newer = viewer.goToComment('b');
+    resolveFirstPage([]);
+
+    await expect(older).resolves.toBe(false);
+    await expect(newer).resolves.toBe(true);
+    expect(collectPageRuns.mock.calls.map(([page]) => page)).toEqual([0, 1, 2]);
+    expect(viewer.getSelectionContext()).toMatchObject({
+      kind: 'comment', commentId: 'b', pageIndex: 2,
+    });
+
+    // Page 1 was indexed while the second request advanced to page 2. Navigating
+    // back to its comment reuses that shared scan and its retained run geometry.
+    await expect(viewer.goToComment('a')).resolves.toBe(true);
+    expect(collectPageRuns.mock.calls.map(([page]) => page)).toEqual([0, 1, 2]);
     viewer.destroy();
   });
 

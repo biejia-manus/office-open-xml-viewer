@@ -2721,7 +2721,9 @@ pub(crate) fn parse_sp_tree_node(
                 .descendants()
                 .find(|n| n.is_element() && n.tag_name().name() == "tbl");
             if let Some(tbl_node) = tbl_node {
-                if let Some(mut table) = parse_table(tbl_node, &t, theme_source, rels, slide_dir, zip) {
+                if let Some(mut table) =
+                    parse_table(tbl_node, &t, theme_source, rels, slide_dir, zip)
+                {
                     table.id = own_cnv_pr(node).and_then(|cnv| attr(&cnv, "id"));
                     out.push(SlideElement::Table(table));
                 }

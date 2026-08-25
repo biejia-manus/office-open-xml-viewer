@@ -291,6 +291,19 @@ export class DocxScrollViewer implements ZoomableViewer {
   private _activeCommentPage: number | null = null;
   private _commentUi: DocxCommentUiRuntime | null = null;
   private readonly _commentPageById = new Map<string, number>();
+  /** Page-run requests shared by comment navigation. The scale stamp prevents
+   * geometry collected before a zoom from being reused for target scrolling. */
+  private readonly _commentRunsByPage = new Map<number, {
+    readonly scale: number;
+    readonly runs: Promise<readonly Readonly<DocxTextRunInfo>[]>;
+  }>();
+  /** Pages whose runs have already been joined to every authored comment anchor. */
+  private readonly _commentIndexedPages = new Set<number>();
+  /** First page not yet included in the shared comment-page index. */
+  private _commentScanFrontier = 0;
+  /** Latest list-navigation request. Older async scans may populate caches but
+   * must never restore their scroll/selection after a newer click. */
+  private _commentNavigationGeneration = 0;
   private _commentAnchorRangesForMargin: ReturnType<DocxDocument['commentAnchorRanges']> | null = null;
   private _commentAnchorIds: ReadonlySet<string> = new Set();
   private _commentGeometryScheduled = false;
@@ -558,7 +571,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         this._findActive = false;
         this._activeCommentId = null;
         this._activeCommentPage = null;
-        this._commentPageById.clear();
+        this._resetCommentNavigation();
         if (ownedDocument) {
           // Recycle before the old worker is terminated. Every captured slot
           // dispatcher then becomes stale before its expected rejection lands.
@@ -572,7 +585,7 @@ export class DocxScrollViewer implements ZoomableViewer {
       this._findActive = false;
       this._activeCommentId = null;
       this._activeCommentPage = null;
-      this._commentPageById.clear();
+      this._resetCommentNavigation();
       // Lay out + mount the first window now that the engine exists (mirrors the
       // borrowed-engine path in the constructor). relayout() is idempotent and
       // defers under a zero-width container — `_onResize` re-runs it once width
@@ -1917,6 +1930,72 @@ export class DocxScrollViewer implements ZoomableViewer {
     this._mountVisible();
   }
 
+  private _resetCommentNavigation(): void {
+    this._commentNavigationGeneration++;
+    this._commentPageById.clear();
+    this._commentRunsByPage.clear();
+    this._commentIndexedPages.clear();
+    this._commentScanFrontier = 0;
+  }
+
+  private _advanceCommentScanFrontier(): void {
+    while (this._commentIndexedPages.has(this._commentScanFrontier)) {
+      this._commentScanFrontier++;
+    }
+  }
+
+  /** Join one page's retained run geometry to every comment while it is already
+   * in hand. This makes the page scan shared by all application-owned list rows
+   * instead of repeating a document-prefix scan for each clicked comment. */
+  private _indexCommentPages(
+    page: number,
+    runs: readonly Readonly<DocxTextRunInfo>[],
+    anchors: ReturnType<DocxDocument['commentAnchorRanges']>,
+  ): void {
+    if (this._commentIndexedPages.has(page)) return;
+    for (const anchor of anchors) {
+      if (this._commentPageById.has(anchor.commentId)) continue;
+      if (resolveCommentAnchorRuns(anchor, runs).length > 0) {
+        this._commentPageById.set(anchor.commentId, page);
+      }
+    }
+    this._commentIndexedPages.add(page);
+    this._advanceCommentScanFrontier();
+  }
+
+  /** Collect run geometry at most once per page and scale. Concurrent navigation
+   * requests share the in-flight Promise; a zoom retries rather than committing
+   * coordinates captured at the superseded scale. */
+  private async _commentRunsForPage(
+    page: number,
+    doc: DocxDocument,
+  ): Promise<readonly Readonly<DocxTextRunInfo>[] | null> {
+    while (!this._destroyed && this._doc === doc) {
+      const scale = this._scale;
+      let entry = this._commentRunsByPage.get(page);
+      if (!entry || entry.scale !== scale) {
+        const runs = doc.collectPageRuns(page, {
+          width: this._pageWidthPx(page),
+          currentDate: this._opts.currentDate,
+        });
+        entry = { scale, runs };
+        this._commentRunsByPage.set(page, entry);
+      }
+      try {
+        const runs = await entry.runs;
+        if (this._destroyed || this._doc !== doc) return null;
+        if (this._scale !== scale) continue;
+        return runs;
+      } catch (error) {
+        if (this._commentRunsByPage.get(page) === entry) {
+          this._commentRunsByPage.delete(page);
+        }
+        throw error;
+      }
+    }
+    return null;
+  }
+
   /**
    * Reveal a top-level authored comment by its DOCX comment id. This is the
    * navigation primitive for an application-owned comment list: the Viewer
@@ -1933,30 +2012,31 @@ export class DocxScrollViewer implements ZoomableViewer {
     const doc = this._doc;
     if (!doc || !doc.comments.some((comment) =>
       comment.id === commentId && comment.parentId === undefined)) return false;
+    const generation = ++this._commentNavigationGeneration;
     const anchors = doc.commentAnchorRanges().filter((anchor) => anchor.commentId === commentId);
     if (anchors.length === 0) return false;
 
     let page = this._commentPageById.get(commentId);
     let targetRun: Readonly<DocxTextRunInfo> | undefined;
     if (page === undefined) {
-      for (let index = 0; index < doc.pageCount; index += 1) {
-        const runs = await this._collectPageRuns(index);
+      const allAnchors = doc.commentAnchorRanges();
+      while (page === undefined && this._commentScanFrontier < doc.pageCount) {
+        const index = this._commentScanFrontier;
+        const runs = await this._commentRunsForPage(index, doc);
         if (this._destroyed) throw new Error('DocxScrollViewer is destroyed');
-        if (this._doc !== doc) return false;
-        targetRun = anchors.flatMap((anchor) => resolveCommentAnchorRuns(anchor, runs))[0];
-        if (targetRun) {
-          page = index;
-          this._commentPageById.set(commentId, index);
-          break;
+        if (this._doc !== doc || generation !== this._commentNavigationGeneration || !runs) {
+          return false;
         }
+        this._indexCommentPages(index, runs, allAnchors);
+        page = this._commentPageById.get(commentId);
       }
-    } else {
-      const runs = await this._collectPageRuns(page);
-      if (this._destroyed) throw new Error('DocxScrollViewer is destroyed');
-      if (this._doc !== doc) return false;
-      targetRun = anchors.flatMap((anchor) => resolveCommentAnchorRuns(anchor, runs))[0];
     }
-    if (page === undefined || !targetRun) return false;
+    if (page === undefined) return false;
+    const runs = await this._commentRunsForPage(page, doc);
+    if (this._destroyed) throw new Error('DocxScrollViewer is destroyed');
+    if (this._doc !== doc || generation !== this._commentNavigationGeneration || !runs) return false;
+    targetRun = anchors.flatMap((anchor) => resolveCommentAnchorRuns(anchor, runs))[0];
+    if (!targetRun) return false;
 
     this._activeCommentId = commentId;
     this._activeCommentPage = page;
@@ -2030,6 +2110,16 @@ export class DocxScrollViewer implements ZoomableViewer {
   ): void {
     if (!slot.commentTintLayer) return;
     slot.commentRuns = Object.freeze([...runs]);
+    this._commentRunsByPage.set(page, {
+      scale: this._scale,
+      runs: Promise.resolve(slot.commentRuns),
+    });
+    // Only extend the index in document order. A header/footer anchor can repeat
+    // on later pages; accepting an arbitrary mounted page first would make
+    // `goToComment()` skip the authored range's earliest rendered occurrence.
+    if (this._doc && page === this._commentScanFrontier) {
+      this._indexCommentPages(page, slot.commentRuns, this._doc.commentAnchorRanges());
+    }
     slot.commentTintLayer.style.transform = '';
     slot.commentTintLayer.style.transformOrigin = '';
     // Rebuild against the committed run geometry while the transient preview is
@@ -2465,6 +2555,7 @@ export class DocxScrollViewer implements ZoomableViewer {
   destroy(): void {
     if (this._destroyed) return;
     this._destroyed = true;
+    this._resetCommentNavigation();
     this._find.invalidate();
     this._findActive = false;
     if (this._selectionChangeListener) {

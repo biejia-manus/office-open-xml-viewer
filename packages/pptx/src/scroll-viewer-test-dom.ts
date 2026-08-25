@@ -4,6 +4,7 @@ import type { PresentationHandle } from './presentation-handle';
 import type { PptxTextRunInfo } from './renderer';
 import type { PptxComment } from './types';
 import type {
+  PptxElementBounds,
   PptxElementContextOptions,
   PptxElementContext,
   PptxSlidePoint,
@@ -389,6 +390,7 @@ export class FakePptxEngine {
     point: PptxSlidePoint;
     options: PptxElementContextOptions;
   }> = [];
+  elementBoundsCalls: Array<{ slideIndex: number; elementIds: readonly string[] }> = [];
   constructor(
     private _slideCount: number,
     public readonly slideWidth: number, // EMU, deck-wide (uniform)
@@ -510,6 +512,13 @@ export class FakePptxEngine {
       slideIndex,
       point: { ...point },
     } : null);
+  }
+  getElementBoundsByIds(
+    slideIndex: number,
+    elementIds: readonly string[],
+  ): Promise<readonly PptxElementBounds[]> {
+    this.elementBoundsCalls.push({ slideIndex, elementIds: [...elementIds] });
+    return Promise.resolve([]);
   }
   /** The per-call `width` (px) recorded for every renderSlide call, in call order.
    *  T3 asserts each mounted slide received its OWN px width. */

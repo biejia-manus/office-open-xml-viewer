@@ -2303,11 +2303,11 @@ export class PptxScrollViewer implements ZoomableViewer {
     if (!presentation || slot.commentAnchorSlide === slide) return;
     slot.commentAnchorSlide = slide;
     slot.commentElementBounds = Object.freeze([]);
-    const elementIds = presentation.getComments(slide).flatMap((comment) =>
+    const elementIds = [...new Set(presentation.getComments(slide).flatMap((comment) =>
       (comment.anchors ?? []).flatMap((anchor) =>
         (anchor.type === 'drawingElement' || anchor.type === 'textRange') && anchor.elementId
           ? [anchor.elementId]
-          : []));
+          : [])))];
     if (elementIds.length === 0) return;
     const generation = ++slot.commentAnchorGeneration;
     void presentation.getElementBoundsByIds(slide, elementIds).then((bounds) => {

@@ -1920,14 +1920,13 @@ fn modern_comment_anchor_element(
     // list identifies the target; earlier monikers describe its container
     // path (document/slide/group).
     list.descendants()
-        .filter(|node| {
+        .rfind(|node| {
             node.is_element()
                 && matches!(
                     node.tag_name().name(),
                     "spMk" | "grpSpMk" | "graphicFrameMk" | "cxnSpMk" | "picMk" | "inkMk"
                 )
         })
-        .last()
         .map(|node| {
             (
                 node.attribute("id").map(String::from),
@@ -2046,7 +2045,7 @@ fn parse_pptx_comments_part(
     modern_authors: &mut Option<HashMap<String, String>>,
     modern_authors_path: Option<&str>,
 ) -> Vec<PptxComment> {
-    let Ok(doc) = parse_preflighted_pptx_xml(&xml) else {
+    let Ok(doc) = parse_preflighted_pptx_xml(xml) else {
         return Vec::new();
     };
 
