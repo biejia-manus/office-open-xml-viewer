@@ -18,9 +18,25 @@ describe('DOCX review UI integration guide', () => {
     expect(page).toContain('Highlights or markers');
     expect(page).toContain('showComments: true');
     expect(page).toContain('--ooxml-comment-card-background');
+    expect(page).toContain('--ooxml-comment-avatar-radius: 999px');
+    expect(page).toContain('--ooxml-comment-connector-dasharray: 4 4');
     expect(page).toContain('Theme the default');
+    expect(page).toContain('All comment theme properties');
     expect(page).not.toContain('mountCard');
     expect(page).not.toContain('commentRenderer');
+  });
+
+  it('documents the built-in avatar and connector styling tokens used at runtime', () => {
+    const margin = read('../../packages/core/src/internal/read-only-comment-margin.ts');
+    const decoration = read('../../packages/core/src/internal/read-only-comment-decoration.ts');
+    expect(margin).toContain('--ooxml-comment-avatar-radius');
+    for (const token of [
+      '--ooxml-comment-connector-dasharray',
+      '--ooxml-comment-connector-linecap',
+    ]) {
+      expect(decoration).toContain(token);
+      expect(page).toContain(token);
+    }
   });
 
   it('maps concepts to public APIs and distinguishes transcript from anchored UI', () => {

@@ -31,10 +31,13 @@ const themeExample = `#viewer {
   --ooxml-comment-card-background: #ffffff;
   --ooxml-comment-card-active-background: #dbeafe;
   --ooxml-comment-card-radius: 10px;
+  --ooxml-comment-avatar-radius: 999px;
   --ooxml-comment-highlight: rgba(59, 130, 246, 0.18);
   --ooxml-comment-highlight-active: rgba(37, 99, 235, 0.34);
   --ooxml-comment-connector: #94a3b8;
   --ooxml-comment-connector-active: #2563eb;
+  --ooxml-comment-connector-dasharray: 4 4;
+  --ooxml-comment-connector-linecap: round;
 }`;
 
 const themeReference = `#viewer {
@@ -67,6 +70,8 @@ const themeReference = `#viewer {
   --ooxml-comment-connector-active-width: 1.5px;
   --ooxml-comment-connector-opacity: .45;
   --ooxml-comment-connector-active-opacity: .9;
+  --ooxml-comment-connector-dasharray: none;
+  --ooxml-comment-connector-linecap: butt;
 
   /* DOCX */
   --ooxml-comment-highlight: rgba(59, 130, 246, .18);
@@ -148,9 +153,20 @@ showReviewMargin({ canvas, anchoredComments });
         </article>
       </div>
       <details class="theme-reference">
-        <summary>All comment theme properties</summary>
-        <p>Defaults are shown below. Set only the properties your product theme needs.</p>
-        <Code code={themeReference} lang="css" themes={codeThemes} defaultColor={false} />
+        <summary>
+          <span class="theme-reference-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M8 9l-3 3l3 3m8-6l3 3l-3 3m-2-9l-4 12" /></svg>
+          </span>
+          <span class="theme-reference-copy">
+            <strong>All comment theme properties</strong>
+            <span>Browse every token and its default value.</span>
+          </span>
+          <svg class="theme-reference-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9l6 6l6-6" /></svg>
+        </summary>
+        <div class="theme-reference-body">
+          <p>Copy only the properties your product theme needs.</p>
+          <Code code={themeReference} lang="css" themes={codeThemes} defaultColor={false} />
+        </div>
       </details>
       <div class="built-in-preview">
         <h3>Default appearance</h3>
@@ -293,9 +309,22 @@ showReviewMargin({ canvas, anchoredComments });
   .implementation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
   .implementation-grid article { min-width: 0; padding: 0; overflow: hidden; }
   .implementation-grid h3 { padding: 20px 20px 0; }
-  .theme-reference { margin-top: 16px; border: 1px solid var(--border); background: var(--panel); }
-  .theme-reference summary { padding: 14px 16px; cursor: pointer; font-weight: 700; }
-  .theme-reference p { margin: 0; padding: 0 16px 14px; color: var(--text-dim); }
+  .theme-reference { margin-top: 16px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); transition: border-color .18s ease, box-shadow .18s ease; }
+  .theme-reference:hover { border-color: color-mix(in srgb, var(--accent) 34%, var(--border)); }
+  .theme-reference[open] { border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); box-shadow: 0 12px 30px rgb(15 23 42 / .08); }
+  .theme-reference summary { display: flex; align-items: center; gap: 12px; padding: 13px 14px; cursor: pointer; list-style: none; user-select: none; }
+  .theme-reference summary::-webkit-details-marker { display: none; }
+  .theme-reference summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; border-radius: 10px; }
+  .theme-reference-icon { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border)); border-radius: 9px; color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+  .theme-reference-icon svg, .theme-reference-chevron { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .theme-reference-copy { display: grid; min-width: 0; gap: 2px; }
+  .theme-reference-copy strong { color: var(--text); font-size: 14px; line-height: 1.35; }
+  .theme-reference-copy span { color: var(--text-dim); font-size: 12px; line-height: 1.4; }
+  .theme-reference-chevron { margin-left: auto; flex: 0 0 auto; color: var(--text-faint); transition: transform .2s ease, color .2s ease; }
+  .theme-reference[open] .theme-reference-chevron { transform: rotate(180deg); color: var(--accent); }
+  .theme-reference-body { border-top: 1px solid var(--border); background: var(--code-bg); }
+  .theme-reference-body p { margin: 0; padding: 14px 16px 0; color: var(--text-dim); font-size: 13px; }
+  .theme-reference-body :global(pre) { margin: 0; padding: 16px; overflow-x: auto; background: transparent !important; font-size: 12px; line-height: 1.6; }
   .code-intro { padding: 0 20px; }
   .implementation-grid ol { min-height: 116px; margin: 14px 20px 20px; padding-left: 20px; color: var(--text-dim); }
   .implementation-grid li + li { margin-top: 6px; }
