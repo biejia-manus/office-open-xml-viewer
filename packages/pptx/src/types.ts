@@ -220,6 +220,21 @@ export interface DimOptions {
 
 /** A slide comment. Supports classic PresentationML comments and modern
  * Microsoft PowerPoint comments (`p188:cm`, [MS-PPTX] §2.16). */
+export type PptxCommentAnchor =
+  | Readonly<{ type: 'slide' }>
+  | Readonly<{
+      type: 'drawingElement';
+      elementId?: string;
+      creationId?: string;
+    }>
+  | Readonly<{
+      type: 'textRange';
+      elementId?: string;
+      start?: number;
+      length?: number;
+    }>
+  | Readonly<{ type: 'unknown' }>;
+
 export interface PptxComment {
   /** `<p:cm @authorId>` author-list identifier (ECMA-376 §19.4.1). */
   authorId?: number;
@@ -235,9 +250,15 @@ export interface PptxComment {
   author?: string;
   /** `<p:cm @dt>` — ISO-8601 timestamp the comment was authored. */
   date?: string;
-  /** `<p:pos>` anchor on the slide surface, in EMU (ECMA-376 §19.4.5). */
+  /** Classic `<p:pos>` slide position, or modern `<p188:pos>` offset from the
+   * first explicit anchor's top-left corner, in EMU. */
   x?: number;
   y?: number;
+  /** Explicit modern-comment targets ([MS-PPTX] §2.16.3.3). Empty for classic
+   * comments. Drawing/text anchors retain the DrawingML element id used by the
+   * slide model, so consumers can resolve the authored target without hit-test
+   * guessing. */
+  anchors?: readonly Readonly<PptxCommentAnchor>[];
   /** Modern comment state. Absent for classic comments. */
   status?: 'active' | 'resolved' | 'closed';
   /** Plain-text comment body (`<p:text>` or modern `<p188:txBody>`). */
@@ -259,6 +280,8 @@ export type SlideElement = ShapeElement | PictureElement | TableElement | ChartE
 
 export interface MediaElement {
   type: 'media';
+  /** DrawingML `<p:cNvPr @id>` used by modern-comment anchors. */
+  id?: string;
   x: number;
   y: number;
   width: number;
@@ -461,6 +484,8 @@ export interface Sp3d {
 
 export interface TableElement {
   type: 'table';
+  /** DrawingML `<p:cNvPr @id>` of the containing graphic frame. */
+  id?: string;
   x: number;
   y: number;
   width: number;
@@ -511,6 +536,8 @@ export interface TableCell {
  */
 export interface ChartElement {
   type: 'chart';
+  /** DrawingML `<p:cNvPr @id>` of the containing graphic frame. */
+  id?: string;
   /** Frame geometry on the slide, in EMU. */
   x: number;
   y: number;
@@ -531,6 +558,8 @@ export interface ChartElement {
 
 export interface PictureElement {
   type: 'picture';
+  /** DrawingML `<p:cNvPr @id>` used by modern-comment anchors. */
+  id?: string;
   x: number;
   y: number;
   width: number;

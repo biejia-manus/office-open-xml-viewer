@@ -164,7 +164,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     const viewer = PptxScrollViewer.fromPresentation(
       container as unknown as HTMLElement,
       engine.asPres(),
-      { showComments: true },
+      { comments: { connectors: {} } },
     );
     const scrollHost = container.children[0]!.children[0]!;
     const slide = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
@@ -172,7 +172,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     viewer.destroy();
   });
 
-  it('renders themeable built-in cards, replies, markers, and connectors', () => {
+  it('renders themeable built-in cards, replies, and markers without connectors', () => {
     const dom = installDom();
     const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
     engine.commentsBySlide = [[{
@@ -184,7 +184,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     const viewer = PptxScrollViewer.fromPresentation(
       container as unknown as HTMLElement,
       engine.asPres(),
-      { showComments: true },
+      { comments: true },
     );
 
     const scrollHost = container.children[0]!.children[0]!;
@@ -192,21 +192,109 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     const margin = slide.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
     expect(margin.style.background).toBe('');
     const card = margin.children[0]!.children[0]!;
-    expect(card.children[0]?.children[1]?.children[1]?.textContent).toBe('Review this');
-    expect(card.children[1]?.children[1]?.children[1]?.textContent).toBe('Done');
-    expect(card.style.background).toContain('--ooxml-comment-card-background');
+    const geometry = vi.spyOn(
+      viewer as unknown as { _scheduleCommentGeometry(slide: number, slot: unknown): void },
+      '_scheduleCommentGeometry',
+    );
+    dom.resizeCb()?.();
+    expect(geometry).toHaveBeenCalledWith(0, expect.anything());
+    const frame = card.children.find((child) => child.dataset.ooxmlCommentPart === 'frame')!;
+    expect(card.className).toBe('ooxml-comment-card');
+    expect(card.style.cssText).toContain('--ooxml-comment-author-accent:');
+    expect(card.style.cssText).not.toContain('background:');
+    expect(card.style.cssText).not.toContain('border-radius:');
+    expect(frame.style.cssText).toBe('');
+    expect(card.children[0]?.children[0]?.children[1]?.textContent).toBe('Review this');
+    expect(card.children[1]?.children[0]?.children[1]?.textContent).toBe('Done');
     card.dispatch('click');
-    expect(card.dataset.ooxmlCommentActive).toBe('true');
+    expect(card.dataset.active).toBe('true');
+    expect(viewer.getSelectionContext()).toMatchObject({
+      format: 'pptx', kind: 'comment', slideIndex: 0, commentId: 'modern-1',
+      thread: {
+        root: { author: 'Grace', text: 'Review this' },
+        replies: [{ author: 'Linus', text: 'Done' }],
+      },
+    });
     const marker = slide.children.find((child) => child.style.cssText.includes('inset:0'))!.children[0]!;
     expect(marker.dataset.ooxmlCommentMarker).toBe('');
-    const decoration = slide.children.find((child) => child.dataset.ooxmlCommentConnectors !== undefined)!;
-    expect(decoration).toBeDefined();
+    expect(marker.className).toBe('ooxml-comment-marker');
+    expect(marker.style.cssText).toContain('--ooxml-comment-author-accent:');
+    expect(slide.children.some((child) =>
+      child.dataset.ooxmlCommentConnectors !== undefined)).toBe(false);
     dom.dispatchDocument('pointerdown', { target: container });
-    expect(card.dataset.ooxmlCommentActive).toBe('false');
+    expect(card.dataset.active).toBe('false');
+    expect(viewer.getSelectionContext()).toBeNull();
     viewer.destroy();
   });
 
-  it('scales default cards and authored markers with viewer zoom', () => {
+  it('adds the connector layer only when explicitly requested', () => {
+    installDom();
+    const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
+    engine.commentsBySlide = [[{
+      id: 'connector', author: 'Grace', text: 'Review this',
+      x: SLIDE_W_EMU / 2, y: SLIDE_H_EMU / 2,
+    }]];
+    const container = makeContainer();
+    const viewer = PptxScrollViewer.fromPresentation(
+      container as unknown as HTMLElement,
+      engine.asPres(),
+      { comments: { connectors: {} } },
+    );
+    const scrollHost = container.children[0]!.children[0]!;
+    const slide = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
+    expect(slide.children.some((child) =>
+      child.dataset.ooxmlCommentConnectors !== undefined)).toBe(true);
+    viewer.destroy();
+  });
+
+  it('can hide authored markers without hiding comment cards', () => {
+    installDom();
+    const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
+    engine.commentsBySlide = [[{
+      id: 'no-marker', author: 'Grace', text: 'Review this',
+      x: SLIDE_W_EMU / 2, y: SLIDE_H_EMU / 2,
+    }]];
+    const container = makeContainer();
+    const viewer = PptxScrollViewer.fromPresentation(
+      container as unknown as HTMLElement,
+      engine.asPres(),
+      { comments: { markers: false } },
+    );
+    const scrollHost = container.children[0]!.children[0]!;
+    const slide = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
+    const markerLayer = slide.children.find((child) => child.style.cssText.includes('inset:0'))!;
+    const margin = slide.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
+    expect(markerLayer.children.some((child) =>
+      child.dataset.ooxmlCommentMarker !== undefined)).toBe(false);
+    expect(margin.children).toHaveLength(1);
+    viewer.destroy();
+  });
+
+  it('places the margin on the requested side', () => {
+    installDom();
+    const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
+    engine.commentsBySlide = [[{
+      id: 'left', author: 'Grace', text: 'Review this',
+      x: SLIDE_W_EMU / 2, y: SLIDE_H_EMU / 2,
+    }]];
+    const container = makeContainer();
+    const viewer = PptxScrollViewer.fromPresentation(
+      container as unknown as HTMLElement,
+      engine.asPres(),
+      { comments: { side: 'left', connectors: {} } },
+    );
+    const scrollHost = container.children[0]!.children[0]!;
+    const slide = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
+    const margin = slide.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
+    const connectors = slide.children.find((child) =>
+      child.dataset.ooxmlCommentConnectors !== undefined)!;
+    expect(margin.style.right).toContain('calc(100% +');
+    expect(margin.style.left).toBe('');
+    expect(parseFloat(connectors.style.left)).toBeLessThan(0);
+    viewer.destroy();
+  });
+
+  it('smoothly previews cards and authored markers while the zoom render is pending', async () => {
     installDom();
     const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
     engine.commentsBySlide = [[{
@@ -217,20 +305,43 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     const viewer = PptxScrollViewer.fromPresentation(
       container as unknown as HTMLElement,
       engine.asPres(),
-      { showComments: true },
+      { comments: { connectors: {} } },
     );
     const scrollHost = container.children[0]!.children[0]!;
     const slide = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
     const margin = slide.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
     const markerLayer = slide.children.find((child) => child.style.cssText.includes('inset:0'))!;
+    const decoration = slide.children.find((child) =>
+      child.dataset.ooxmlCommentConnectors !== undefined)!;
+    const item = margin.children[0]!;
+    margin.clientHeight = 1000;
+    item.children[0]!.dispatch('click');
     const baseScale = viewer.getScale();
-    expect(margin.style.width).toBe(`${280 / 13}em`);
-    expect(parseFloat(markerLayer.children[0]?.style.width ?? '0')).toBeCloseTo(22 * baseScale);
+    const baseTop = parseFloat(item.style.top);
+    expect(baseTop).toBeGreaterThan(0);
+    expect(parseFloat(margin.style.width)).toBeCloseTo(440 * baseScale);
+    expect(parseFloat(margin.style.fontSize)).toBeCloseTo(20);
+    expect(item.style.transform).toBe(`scale(${baseScale})`);
+    expect(parseFloat(markerLayer.children[0]?.style.width ?? '0')).toBeCloseTo(24 * baseScale);
+
+    await Promise.resolve();
+    await Promise.resolve();
 
     viewer.setScale(baseScale * 1.5);
-    expect(margin.style.width).toBe(`${280 / 13}em`);
-    expect(parseFloat(margin.style.fontSize)).toBeCloseTo(13 * baseScale * 1.5);
-    expect(parseFloat(markerLayer.children[0]?.style.width ?? '0')).toBeCloseTo(22 * baseScale * 1.5);
+    expect(parseFloat(margin.style.width)).toBeCloseTo(440 * baseScale * 1.5);
+    expect(parseFloat(margin.style.fontSize)).toBeCloseTo(20);
+    expect(parseFloat(item.style.top)).toBeCloseTo(baseTop * 1.5);
+    expect(item.style.transform).toBe(`scale(${baseScale * 1.5})`);
+    expect(markerLayer.children[0]?.style.transform).toBe('translate(-50%,-50%) scale(1.5)');
+    expect(markerLayer.style.visibility).toBe('');
+    expect(margin.style.visibility).toBe('');
+    expect(decoration.style.visibility).toBe('');
+    await vi.waitFor(() => {
+      expect(markerLayer.children[0]?.style.transform).toBe('translate(-50%,-50%)');
+      expect(markerLayer.style.visibility).toBe('');
+      expect(margin.style.visibility).toBe('');
+      expect(decoration.style.visibility).toBe('');
+    });
     viewer.destroy();
   });
 
@@ -245,7 +356,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     const viewer = PptxScrollViewer.fromPresentation(
       container as unknown as HTMLElement,
       engine.asPres(),
-      { showComments: true },
+      { comments: true },
     );
     const scrollHost = container.children[0]!.children[0]!;
     const keys = scrollHost.children

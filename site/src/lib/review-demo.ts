@@ -156,6 +156,7 @@ export function mountReviewDemo(root: HTMLElement, url: string): void {
     loaded = undefined;
   };
   window.addEventListener('pagehide', cleanup, { once: true });
+  document.addEventListener('astro:before-swap', cleanup, { once: true });
 
   void DocxDocument.load(url, { useGoogleFonts: true }).then(async (documentModel) => {
     loaded = documentModel;

@@ -84,13 +84,7 @@ export class SheetOverlayHost {
     this.comment.style.cssText =
       `position:absolute;z-index:3;pointer-events:none;display:none;` +
       `max-width:${options.commentMaxWidth}px;max-height:${options.commentMaxHeight}px;overflow:hidden;` +
-      `box-sizing:border-box;padding:var(--ooxml-comment-card-padding,.78em .92em);` +
-      `background:var(--ooxml-comment-card-background,#fff);` +
-      `border:var(--ooxml-comment-card-border,1px solid rgba(148,163,184,.24));` +
-      `border-radius:var(--ooxml-comment-card-radius,.62em);` +
-      `box-shadow:var(--ooxml-comment-card-shadow,0 .08em .16em rgba(15,23,42,.12));` +
-      `font:12px/1.45 var(--ooxml-comment-font-family,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);` +
-      `color:var(--ooxml-comment-body-color,#334155);white-space:pre-wrap;word-break:break-word;`;
+      `font:13px/1.45 var(--ooxml-comment-font-family,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);`;
 
     this.validation = ownerDocument.createElement('div');
     this.validation.setAttribute('data-xlsx-validation-panel', '');

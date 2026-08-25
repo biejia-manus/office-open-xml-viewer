@@ -4,88 +4,85 @@ import Base from '../layouts/Base.astro';
 import Nav from '../components/Nav.astro';
 import SiteFooter from '../components/SiteFooter.astro';
 import BuiltInCommentViewer from '../components/BuiltInCommentViewer.astro';
-import ReviewGuideExample from '../components/ReviewGuideExample.astro';
 import { codeThemes } from '../lib/code-theme';
 
-const transcriptExample = `import { DocxDocument } from '@silurus/ooxml/docx';
+const transcriptExample = `// Detached records for an application-owned list, search, or export.
+const docxComments = docxDocument.comments;
+const pptxComments = presentation.getComments(slideIndex);
+const xlsxComments = xlsxViewer.getComments();`;
 
-const doc = await DocxDocument.load(source);
-
-showTranscript({
-  comments: doc.comments,
-  revisions: doc.revisions,
-});
-
-// Keep the document only while you still need to render pages.
-doc.destroy();`;
-
-const scrollViewerExample = `import { DocxScrollViewer } from '@silurus/ooxml/docx';
+const docxViewerExample = `import { DocxScrollViewer } from '@silurus/ooxml/docx';
 
 const viewer = new DocxScrollViewer(container, {
-  showComments: true,
+  comments: {
+    markers: true, // Default. Set false to hide the message icons only.
+  },
 });
 
 await viewer.load(source);`;
 
+const pptxViewerExample = `import { PptxScrollViewer } from '@silurus/ooxml/pptx';
+
+const viewer = new PptxScrollViewer(container, {
+  comments: {
+    markers: true, // Default. Set false to hide the message icons only.
+  },
+});
+
+await viewer.load(source);`;
+
+const xlsxViewerExample = `import { XlsxViewer } from '@silurus/ooxml/xlsx';
+
+// Comments are shown by default. Pass options only to change the policy.
+const viewer = new XlsxViewer(container, {
+  comments: { includeResolved: false },
+});
+
+await viewer.load(source);`;
+
+const connectorExample = `// Available on DocxScrollViewer and PptxScrollViewer.
+const viewer = new DocxScrollViewer(container, {
+  comments: {
+    side: 'auto',
+    connectors: {
+      route: 'bezier', // or 'orthogonal'
+      stroke: 'solid', // or 'dashed'
+      color: '#94a3b8',
+      activeColor: '#2563eb',
+    },
+  },
+});`;
+
 const themeExample = `#viewer {
   --ooxml-comment-card-background: #ffffff;
+  --ooxml-comment-card-border: 1px solid #cbd5e1;
+  --ooxml-comment-card-border-left: 3px solid #2563eb;
+  --ooxml-comment-card-border-right: 1px solid #cbd5e1;
+  --ooxml-comment-card-radius: 8px;
   --ooxml-comment-card-active-background: #dbeafe;
-  --ooxml-comment-card-radius: 10px;
-  --ooxml-comment-avatar-display: grid;
-  --ooxml-comment-avatar-radius: 999px;
   --ooxml-comment-highlight: rgba(59, 130, 246, 0.18);
   --ooxml-comment-highlight-active: rgba(37, 99, 235, 0.34);
-  --ooxml-comment-connector: #94a3b8;
-  --ooxml-comment-connector-active: #2563eb;
-}`;
+  --ooxml-comment-marker-color: #2563eb;
+}
 
-const themeReference = `#viewer {
-  /* DOCX, XLSX, and PPTX */
-  --ooxml-comment-font-family: system-ui, sans-serif;
-  --ooxml-comment-author-color: #0f172a;
-  --ooxml-comment-body-color: #334155;
-  --ooxml-comment-card-background: #fff;
-  --ooxml-comment-card-border: 1px solid rgba(148, 163, 184, .34);
-  --ooxml-comment-card-radius: .3em;
-  --ooxml-comment-card-shadow: none;
-  --ooxml-comment-card-padding: .56em .68em;
-  --ooxml-comment-reply-border: rgba(100, 116, 139, .24);
+/* Stable classes are available when token changes are not enough. */
+#viewer .ooxml-comment-card {
+  background: rgb(255 255 255 / 0.78);
+  box-shadow: 0 12px 32px rgb(15 23 42 / 0.14);
+  backdrop-filter: blur(14px);
+}
 
-  /* DOCX and PPTX margins */
-  --ooxml-comment-content-gap: .5em;
-  --ooxml-comment-avatar-display: none;
-  --ooxml-comment-avatar-background: #2563eb;
-  --ooxml-comment-avatar-color: #fff;
-  --ooxml-comment-avatar-radius: .7em;
-  --ooxml-comment-date-font-family: ui-monospace, monospace;
-  --ooxml-comment-muted-color: #64748b;
-  --ooxml-comment-card-gap: .42em;
-  --ooxml-comment-card-active-background: #eff6ff;
-  --ooxml-comment-card-active-border: 1px solid rgba(37, 99, 235, .5);
-  --ooxml-comment-card-active-shadow: none;
-  --ooxml-comment-card-focus-shadow: inset 0 0 0 .12em rgba(37, 99, 235, .65);
-  --ooxml-comment-connector: #94a3b8;
-  --ooxml-comment-connector-active: #2563eb;
-  --ooxml-comment-connector-width: 1px;
-  --ooxml-comment-connector-active-width: 1.5px;
-  --ooxml-comment-connector-opacity: .45;
-  --ooxml-comment-connector-active-opacity: .9;
+#viewer .ooxml-comment-card__author {
+  letter-spacing: 0.01em;
+}
 
-  /* DOCX */
-  --ooxml-comment-highlight: rgba(59, 130, 246, .18);
-  --ooxml-comment-highlight-active: rgba(37, 99, 235, .34);
-
-  /* PPTX */
-  --ooxml-comment-marker-background: #2563eb;
-  --ooxml-comment-marker-color: #fff;
-  --ooxml-comment-marker-border: #fff;
-  --ooxml-comment-marker-shadow: 0 1px 3px rgba(15, 23, 42, .28);
-  --ooxml-comment-marker-active-shadow: 0 0 0 3px rgba(37, 99, 235, .35);
+#viewer .ooxml-comment-card[data-active="true"] {
+  box-shadow: 0 0 0 2px #2563eb;
 }`;
 
 const anchoredExample = `import {
   DocxDocument,
-  resolveCommentAnchorRuns,
+  resolveDocxCommentThreads,
   type DocxTextRunInfo,
 } from '@silurus/ooxml/docx';
 
@@ -97,144 +94,159 @@ await doc.renderPage(canvas, pageIndex, {
   onTextRun: (run) => runs.push(run),
 });
 
-const commentsById = new Map(doc.comments.map((comment) => [comment.id, comment]));
-const anchoredComments = doc.commentAnchorRanges().flatMap((anchor) => {
-  const comment = commentsById.get(anchor.commentId);
-  const geometry = resolveCommentAnchorRuns(anchor, runs);
-  return comment && geometry.length ? [{ comment, geometry }] : [];
-});
+const threads = resolveDocxCommentThreads(
+  doc.comments,
+  doc.commentAnchorRanges(),
+  runs,
+);
 
-showReviewMargin({ canvas, anchoredComments });
+showReviewMargin({ canvas, threads });
 // Destroy doc when the owning UI unmounts.`;
 ---
 
 <Base
-  title="DOCX comments and tracked changes | @silurus/ooxml"
-  description="Use DOCX comments, tracked changes, anchors, and rendered geometry in an application-owned review UI."
+  title="Comments in DOCX, XLSX, and PPTX | @silurus/ooxml"
+  description="Show authored comments with the built-in viewers or compose an application-owned UI from comment data and format-specific geometry."
   canonicalPath="/review-ui/"
 >
-  <Nav active="docx" />
+  <Nav />
 
   <header class="review-hero">
     <div class="wrap">
-      <a class="back" href="/docx">← DOCX examples</a>
-      <h1>DOCX comments and tracked changes</h1>
+      <a class="back" href="/">← Overview</a>
+      <h1>Comments in DOCX, XLSX, and PPTX</h1>
       <p class="lead">
-        <code>@silurus/ooxml</code> reads review data already stored in a DOCX file and can relate it
-        to rendered page text. <code>DocxScrollViewer</code> includes an optional read-only comment
-        margin; the lower-level APIs remain available when an application needs a different layout.
+        <code>@silurus/ooxml</code> reads comments already stored in Office files. Start with each
+        Viewer's read-only UI, or use detached comment records and format-specific anchor geometry
+        when the application needs a different layout.
       </p>
       <nav class="hero-actions" aria-label="Review UI resources">
-        <a class="primary" href="#live-example">See the live example</a>
-        <a href="/review-ui/source">Open complete example source</a>
-        <a href="/api/docx#docx-document">DOCX API reference</a>
+        <a class="primary" href="#built-in-ui">Built-in UI</a>
+        <a href="/api/docx#docx-scroll-viewer">DOCX API</a>
+        <a href="/api/xlsx#xlsx-viewer">XLSX API</a>
+        <a href="/api/pptx#pptx-scroll-viewer">PPTX API</a>
       </nav>
     </div>
   </header>
 
   <main class="wrap review-main">
-    <section class="review-section" aria-labelledby="built-in-margin">
+    <section class="review-section" aria-labelledby="built-in-ui">
       <div class="section-heading">
-        <h2 id="built-in-margin">Start with the built-in margin</h2>
-        <p>Enable the default cards with one option. There is no comment UI or geometry work to manage.</p>
+        <h2 id="built-in-ui">Start with the built-in UI</h2>
+        <p>Use the same <code>comments</code> option across formats. The presentation follows the document type: a page margin for DOCX, a slide margin and markers for PPTX, and a cell-anchored popup for XLSX.</p>
       </div>
-      <div class="implementation-grid">
+      <div class="format-setup-grid">
         <article>
-          <h3>Default cards</h3>
-          <p class="code-intro">Use the neutral read-only cards as they are.</p>
-          <Code code={scrollViewerExample} lang="ts" themes={codeThemes} defaultColor={false} />
+          <h3>DOCX</h3>
+          <p class="code-intro">Opt in to page-side cards, range highlights, and message icons.</p>
+          <Code code={docxViewerExample} lang="ts" themes={codeThemes} defaultColor={false} />
         </article>
         <article>
-          <h3>Theme the default</h3>
-          <p class="code-intro">Set CSS custom properties on the Viewer container. The structure and lifecycle stay Viewer-owned.</p>
-          <Code code={themeExample} lang="css" themes={codeThemes} defaultColor={false} />
+          <h3>PPTX</h3>
+          <p class="code-intro">Opt in to slide message icons and page-side cards.</p>
+          <Code code={pptxViewerExample} lang="ts" themes={codeThemes} defaultColor={false} />
+        </article>
+        <article>
+          <h3>XLSX</h3>
+          <p class="code-intro">Cell comments are visible by default; options can narrow visibility.</p>
+          <Code code={xlsxViewerExample} lang="ts" themes={codeThemes} defaultColor={false} />
         </article>
       </div>
-      <details class="theme-reference">
-        <summary>
-          <span class="theme-reference-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M8 9l-3 3l3 3m8-6l3 3l-3 3m-2-9l-4 12" /></svg>
-          </span>
-          <span class="theme-reference-copy">
-            <strong>All comment theme properties</strong>
-            <span>Browse every token and its default value.</span>
-          </span>
-          <svg class="theme-reference-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9l6 6l6-6" /></svg>
-        </summary>
-        <div class="theme-reference-body">
-          <p>Copy only the properties your product theme needs.</p>
-          <Code code={themeReference} lang="css" themes={codeThemes} defaultColor={false} />
-        </div>
-      </details>
+      <div class="table-wrap" role="region" aria-label="Built-in comment options" tabindex="0">
+        <table>
+          <thead><tr><th>Option</th><th>Formats</th><th>Behavior</th></tr></thead>
+          <tbody>
+            <tr><th><code>comments: true</code></th><td>DOCX, PPTX, XLSX</td><td>Use the built-in presentation and its format defaults. XLSX comments are already visible when the option is omitted.</td></tr>
+            <tr><th><code>comments: false</code></th><td>DOCX, PPTX, XLSX</td><td>Do not show the built-in comment presentation.</td></tr>
+            <tr><th><code>includeResolved</code></th><td>DOCX, PPTX, XLSX</td><td>Include resolved or closed threads. Defaults to <code>false</code> for DOCX/PPTX and <code>true</code> for XLSX.</td></tr>
+            <tr><th><code>markers</code></th><td>DOCX, PPTX</td><td>Show the built-in message icon at each comment anchor. Defaults to <code>true</code>. Set it to <code>false</code> to hide only the icons; cards and DOCX range highlights remain visible.</td></tr>
+            <tr><th><code>side</code></th><td>DOCX, PPTX</td><td>Place margin cards on <code>auto</code>, <code>left</code>, or <code>right</code>. <code>auto</code> follows the container direction.</td></tr>
+            <tr><th><code>connectors</code></th><td>DOCX, PPTX</td><td>Optionally connect an anchor or marker to its card. Omit it for no lines.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <article class="basic-theme">
+        <h3>Optional DOCX/PPTX connectors</h3>
+        <p>Choose the route, stroke, and colors in Viewer options. Omit <code>connectors</code> for no line. A color may be a CSS variable such as <code>var(--review-connector)</code>, so a theme switch can update an existing Viewer.</p>
+        <Code code={connectorExample} lang="ts" themes={codeThemes} defaultColor={false} />
+      </article>
+      <article class="basic-theme">
+        <h3>Theme the built-in UI</h3>
+        <p>Use CSS variables for simple tokens and regular CSS for fuller visual changes. The stable hooks are <code>.ooxml-comment-card</code>, <code>.ooxml-comment-card__author</code>, <code>.ooxml-comment-card__date</code>, <code>.ooxml-comment-card__body</code>, <code>.ooxml-comment-card__reply</code>, and <code>.ooxml-comment-marker</code>; cards expose <code>data-active</code> and <code>data-focused</code>. Viewer defaults use low-specificity selectors, so application CSS can override them without <code>!important</code>.</p>
+        <p>Changing variables, a theme class, or <code>data-theme</code> on the Viewer container or an ancestor updates mounted cards, highlights, and markers without recreating the Viewer. Geometry-affecting changes such as font size, font family, or padding are measured again before the cards are repositioned.</p>
+        <p>By default, the Viewer assigns each author a stable accent color. Here, <code>#viewer</code> is an example ID on the application-owned Viewer container. The fixed blue values deliberately replace per-author accents; omit them to keep automatic author colors.</p>
+        <Code code={themeExample} lang="css" themes={codeThemes} defaultColor={false} />
+      </article>
       <div class="built-in-preview">
         <h3>Default appearance</h3>
-        <p>Compact margin balloons keep the document primary. The themed example above shows how to opt into larger avatar cards.</p>
+        <p>Switch between the live DOCX margin, XLSX cell popup, and PPTX slide margin. Lines are off unless requested.</p>
+        <p class="demo-surface-note">The demo background is applied by the surrounding page, not by <code>ScrollViewer</code>.</p>
         <BuiltInCommentViewer />
       </div>
     </section>
 
     <section class="review-section" aria-labelledby="concepts">
       <div class="section-heading">
-        <h2 id="concepts">Review UI concepts</h2>
-        <p>A review UI combines four concepts. Only the last two are needed when marks must follow text on a rendered page.</p>
+        <h2 id="concepts">How comments are represented</h2>
+        <p>Every format exposes detached comment data. What differs is how an authored comment is anchored to visible content.</p>
       </div>
       <div class="concept-grid">
         <article><h3>Comments and threads</h3><p>Reviewer notes, replies, authors, dates, and resolved state.</p></article>
-        <article><h3>Tracked changes</h3><p>Insertions, deletions, and moves recorded in the document.</p></article>
-        <article><h3>Anchors</h3><p>Logical positions or ranges that connect a review record to document content.</p></article>
-        <article><h3>Rendered geometry</h3><p>Text rectangles from one rendered page, used to place highlights or markers.</p></article>
+        <article><h3>Anchors</h3><p>A text range in DOCX, a slide, drawing element, or text range in PPTX, and a cell reference in XLSX.</p></article>
+        <article><h3>Built-in presentation</h3><p>The Viewer turns those anchors into a margin, marker, highlight, or popup.</p></article>
+        <article><h3>Viewport geometry</h3><p>Primitive APIs expose visible coordinates when the application owns the UI.</p></article>
       </div>
-      <div class="table-wrap" role="region" aria-label="Review concepts and APIs" tabindex="0">
+      <div class="table-wrap" role="region" aria-label="Comment APIs by format" tabindex="0">
         <table>
-          <thead><tr><th>Concept</th><th>Public API</th><th>Use</th></tr></thead>
+          <thead><tr><th>Format</th><th>Comment data</th><th>Anchor geometry</th></tr></thead>
           <tbody>
-            <tr><th>Comments and threads</th><td><code>doc.comments</code></td><td>Build a thread list, transcript, search, or export.</td></tr>
-            <tr><th>Tracked changes</th><td><code>doc.revisions</code></td><td>Label and filter recorded changes.</td></tr>
-            <tr><th>Logical anchors</th><td><code>commentAnchorRanges()</code><br /><code>revisionAnchorRanges()</code></td><td>Connect records to document content.</td></tr>
-            <tr><th>Visible page location</th><td><code>onTextRun</code><br /><code>resolveCommentAnchorRuns()</code><br /><code>resolveRevisionAnchorRuns()</code></td><td>Place markers or coordinate a margin with the current page.</td></tr>
+            <tr><th>DOCX</th><td><code>doc.comments</code></td><td><code>commentAnchorRanges()</code>, rendered text runs, and <code>resolveDocxCommentThreads()</code></td></tr>
+            <tr><th>PPTX</th><td><code>presentation.getComments(slideIndex)</code></td><td>Modern anchor monikers and <code>getElementBoundsByIds()</code>; classic slide points</td></tr>
+            <tr><th>XLSX</th><td><code>viewer.getComments()</code></td><td>Cell references and <code>getCellViewportRect()</code></td></tr>
           </tbody>
         </table>
       </div>
+      <p class="format-context"><code>getSelectionContext()</code> includes the selected comment thread in DOCX and PPTX, and comments attached to selected XLSX cells.</p>
     </section>
 
     <section class="review-section" aria-labelledby="choose-ui">
       <div class="section-heading">
         <h2 id="choose-ui">Integration options</h2>
-        <p>Use these lower-level paths only when the built-in margin does not fit the product UI.</p>
+        <p>Use these lower-level paths only when the built-in presentation does not fit the product UI.</p>
       </div>
       <div class="choice-grid">
         <article>
           <p class="choice-label">No page geometry</p>
           <h3>List, search, or export</h3>
-          <p>Read <code>doc.comments</code> and <code>doc.revisions</code>, then render application-owned rows or serialized data.</p>
+          <p>Read detached comment records, then render application-owned rows or serialized data.</p>
         </article>
         <article>
           <p class="choice-label">Page geometry required</p>
           <h3>Margin or separate pane</h3>
-          <p>Resolve anchors for the current page so selecting a row can identify the related rendered text.</p>
+          <p>Resolve the format's text range, slide anchor, drawing element, or cell reference so selecting a row can identify its visible content.</p>
         </article>
         <article>
           <p class="choice-label">Page geometry required</p>
           <h3>Highlights or markers</h3>
-          <p>Draw application-owned SVG or DOM marks over the page using resolved text-run rectangles.</p>
+          <p>Draw application-owned SVG or DOM marks using the format-specific viewport geometry.</p>
         </article>
       </div>
     </section>
 
     <section class="review-section" aria-labelledby="minimum-flow">
       <div class="section-heading">
-        <h2 id="minimum-flow">Minimum implementation</h2>
-        <p>Start with the transcript path. Use the anchored path only if the UI needs a visible connection to page content.</p>
+        <h2 id="minimum-flow">Custom UI with primitive APIs</h2>
+        <p>Start with detached records. Add geometry only if the application needs a visible connection to document content.</p>
       </div>
       <div class="implementation-grid">
         <article>
-          <h3>Transcript path</h3>
-          <ol><li>Load the document.</li><li>Read comments and revisions.</li><li>Render your list, search results, or export.</li></ol>
+          <h3>Read comment records</h3>
+          <ol><li>Load the Office file.</li><li>Read comments from the format API.</li><li>Render a list, search result, or export.</li></ol>
           <Code code={transcriptExample} lang="ts" themes={codeThemes} defaultColor={false} />
         </article>
         <article>
-          <h3>Anchored page path</h3>
-          <ol><li>Render the current page and collect text runs.</li><li>Read logical anchors.</li><li>Resolve anchors against those runs.</li><li>Render your margin or markers.</li></ol>
+          <h3>DOCX anchored example</h3>
+          <ol><li>Render the current page and collect text runs.</li><li>Resolve threads and their page rectangles.</li><li>Render the application-owned UI.</li></ol>
           <Code code={anchoredExample} lang="ts" themes={codeThemes} defaultColor={false} />
         </article>
       </div>
@@ -242,8 +254,8 @@ showReviewMargin({ canvas, anchoredComments });
 
     <section class="review-section final-state" aria-labelledby="final-state">
       <div class="section-heading">
-        <h2 id="final-state">Accepted-final rendering</h2>
-        <p>DOCX pages use the accepted-final document. Recorded changes do not all have visible text in that result.</p>
+        <h2 id="final-state">DOCX tracked changes</h2>
+        <p>Tracked changes are a separate DOCX feature. Pages use the accepted-final document, so recorded changes do not all have visible text in that result.</p>
       </div>
       <div class="final-state-grid">
         <article><h3>Visible in the page</h3><p>Insertions and move destinations can be highlighted using their resolved text geometry.</p></article>
@@ -251,22 +263,16 @@ showReviewMargin({ canvas, anchoredComments });
       </div>
     </section>
 
-    <section id="live-example" class="review-section live-example" aria-labelledby="live-example-title">
-      <div class="section-heading">
-        <h2 id="live-example-title">Live example</h2>
-        <p>The page, highlights, and right-hand review cards are application UI built from the APIs above.</p>
-      </div>
-      <ReviewGuideExample />
-    </section>
-
     <section class="review-section next-steps" aria-labelledby="next-steps">
       <div class="section-heading">
-        <h2 id="next-steps">Reference and production details</h2>
-        <p>Canvas content needs an accessible transcript or text layer. Destroy an owned <code>DocxDocument</code> when its UI is finished.</p>
+        <h2 id="next-steps">Reference and complete example</h2>
+        <p>Canvas content needs an accessible transcript or text layer. The API references document each format's records, anchors, and Viewer options.</p>
       </div>
       <nav class="detail-links" aria-label="Review UI details">
-        <a href="/review-ui/source"><strong>Complete example source →</strong><span>See the controller, HTML, and CSS used by the live example.</span></a>
-        <a href="/api/docx#docx-document"><strong>DOCX API reference →</strong><span>Look up review records, anchor ranges, text runs, and method signatures.</span></a>
+        <a href="/review-ui/source"><strong>Complete DOCX custom UI →</strong><span>Open the finished custom UI and its complete portable implementation.</span></a>
+        <a href="/api/docx#docx-document"><strong>DOCX API reference →</strong><span>Look up comment records, anchor ranges, text runs, and method signatures.</span></a>
+        <a href="/api/xlsx#xlsx-viewer"><strong>XLSX API reference →</strong><span>Look up cell comments, popup options, and viewport geometry.</span></a>
+        <a href="/api/pptx#pptx-presentation"><strong>PPTX API reference →</strong><span>Look up slide comments, modern anchors, element bounds, and Viewer options.</span></a>
         <a href="/production#rendering-mode"><strong>Rendering modes →</strong><span>Choose main-thread or Worker rendering for your application.</span></a>
       </nav>
     </section>
@@ -298,45 +304,39 @@ showReviewMargin({ canvas, anchoredComments });
   article p { margin: 9px 0 0; color: var(--text-dim); }
   .choice-label { margin: 0 0 9px; color: var(--accent); font: 600 11px var(--mono); text-transform: uppercase; }
   .table-wrap { margin-top: 20px; overflow-x: auto; border: 1px solid var(--border); }
-  table { width: 100%; min-width: 740px; border-collapse: collapse; }
-  th, td { padding: 14px 16px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
-  thead th { color: var(--text-faint); background: var(--bg-elev); font: 600 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+  table { width: 100%; min-width: 740px; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 10px 14px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+  thead th { color: var(--text-faint); background: var(--bg-elev); font: 600 12px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
   tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
   tbody th { width: 21%; }
   tbody td { color: var(--text-dim); }
-  .implementation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
-  .implementation-grid article { min-width: 0; padding: 0; overflow: hidden; }
-  .implementation-grid h3 { padding: 20px 20px 0; }
-  .theme-reference { margin-top: 16px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); transition: border-color .18s ease, box-shadow .18s ease; }
-  .theme-reference:hover { border-color: color-mix(in srgb, var(--accent) 34%, var(--border)); }
-  .theme-reference[open] { border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); box-shadow: 0 12px 30px rgb(15 23 42 / .08); }
-  .theme-reference summary { display: flex; align-items: center; gap: 12px; padding: 13px 14px; cursor: pointer; list-style: none; user-select: none; }
-  .theme-reference summary::-webkit-details-marker { display: none; }
-  .theme-reference summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; border-radius: 10px; }
-  .theme-reference-icon { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border)); border-radius: 9px; color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
-  .theme-reference-icon svg, .theme-reference-chevron { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-  .theme-reference-copy { display: grid; min-width: 0; gap: 2px; }
-  .theme-reference-copy strong { color: var(--text); font-size: 14px; line-height: 1.35; }
-  .theme-reference-copy span { color: var(--text-dim); font-size: 12px; line-height: 1.4; }
-  .theme-reference-chevron { margin-left: auto; flex: 0 0 auto; color: var(--text-faint); transition: transform .2s ease, color .2s ease; }
-  .theme-reference[open] .theme-reference-chevron { transform: rotate(180deg); color: var(--accent); }
-  .theme-reference-body { border-top: 1px solid var(--border); background: var(--code-bg); }
-  .theme-reference-body p { margin: 0; padding: 14px 16px 0; color: var(--text-dim); font-size: 13px; }
-  .theme-reference-body :global(pre) { margin: 0; padding: 16px; overflow-x: auto; background: transparent !important; font-size: 12px; line-height: 1.6; }
+  .format-context { margin: 14px 0 0; color: var(--text-dim); }
+  .format-setup-grid, .implementation-grid { display: grid; gap: 16px; align-items: start; }
+  .format-setup-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .implementation-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .format-setup-grid article, .implementation-grid article { min-width: 0; padding: 0; overflow: hidden; }
+  .format-setup-grid h3, .implementation-grid h3 { padding: 20px 20px 0; }
+  .basic-theme { margin-top: 16px; padding: 0; overflow: hidden; }
+  .basic-theme h3 { padding: 20px 20px 0; }
+  .basic-theme > p { padding: 0 20px; }
+  .basic-theme :global(pre) { margin: 0; padding: 18px 20px; overflow-x: auto; background: var(--code-bg) !important; font-size: 12px; line-height: 1.6; }
   .built-in-preview { margin-top: 32px; }
   .built-in-preview > h3 { margin: 0; font-size: 18px; }
   .built-in-preview > p { margin: 9px 0 16px; color: var(--text-dim); }
-  .code-intro { padding: 0 20px; }
+  .built-in-preview > .demo-surface-note { margin-top: -6px; font: 500 11px/1.5 var(--mono); }
+  .code-intro { min-height: 48px; padding: 0 20px; }
   .implementation-grid ol { min-height: 116px; margin: 14px 20px 20px; padding-left: 20px; color: var(--text-dim); }
   .implementation-grid li + li { margin-top: 6px; }
-  .implementation-grid :global(pre) { margin: 0; padding: 18px 20px; overflow-x: auto; background: var(--code-bg) !important; font-size: 12px; line-height: 1.6; }
+  .format-setup-grid :global(pre), .implementation-grid :global(pre) { margin: 0; padding: 18px 20px; overflow-x: auto; background: var(--code-bg) !important; font-size: 12px; line-height: 1.6; }
   .detail-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .detail-links a { padding: 17px 18px; border: 1px solid var(--border); background: var(--panel); }
   .detail-links strong { display: block; color: var(--accent); }
   .detail-links span { display: block; margin-top: 6px; color: var(--text-dim); font-size: 14px; line-height: 1.5; }
   @media (max-width: 900px) {
     .concept-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .format-setup-grid { grid-template-columns: 1fr; }
     .choice-grid, .implementation-grid { grid-template-columns: 1fr; }
+    .code-intro { min-height: 0; }
     .implementation-grid ol { min-height: 0; }
   }
   @media (max-width: 620px) {

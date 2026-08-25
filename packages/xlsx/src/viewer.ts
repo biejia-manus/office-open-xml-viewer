@@ -5,7 +5,7 @@ import {
   retainXlsxViewerFonts,
 } from './workbook.js';
 import type { LoadOptions } from './workbook.js';
-import type { Cell, Hyperlink, Row, ViewportRange, Worksheet, XlsxComment } from './types.js';
+import type { Cell, Hyperlink, Row, ViewportRange, Worksheet, XlsxChromeColors, XlsxComment } from './types.js';
 import type { FindHighlightColors, HyperlinkTarget, FindMatch, FindMatchesOptions, OoxmlResourceMetrics, ViewerContextMenuEvent, ZoomableViewer } from '@silurus/ooxml-core';
 import { nextVisibleIndex, resolveVisibleIndex, countVisible, zoomStepScale, anchoredZoomOffset, openExternalHyperlink, nextZoomStep, prevZoomStep, fitScale } from '@silurus/ooxml-core';
 import {
@@ -13,6 +13,10 @@ import {
   resolveCanvasViewerMode,
   type CanvasViewerRenderMode,
 } from '@silurus/ooxml-core/internal/canvas-viewer-mechanics';
+import {
+  paintReadOnlyCommentCard,
+  type ReadOnlyCommentThread,
+} from '@silurus/ooxml-core/internal/read-only-comment-margin';
 import {
   HEADER_W,
   HEADER_H,
@@ -54,7 +58,7 @@ import {
 export type { CellAddress } from './selection.js';
 import { XlsxFindController, type FindCell, type XlsxMatchLocation } from './find.js';
 import { computeCommentPopupPosition } from './comment-popup.js';
-import type { XlsxCommentUiOptions } from './comment-card.js';
+import type { XlsxCommentsOptions } from './comment-card.js';
 import {
   computeValidationPanelPosition,
   type ResolvedList,
@@ -151,15 +155,15 @@ const VIEWER_STYLE_CSS =
   // focus ring is visually indistinguishable from a sheet selection border.
   `[data-xlsx-viewport-input]:focus{outline:none}` +
   `.xlsx-tab-nav{background:transparent;transition:background 0.1s;}` +
-  `.xlsx-tab-nav:hover{background:rgba(0,0,0,0.08);}` +
+  `.xlsx-tab-nav:hover{background:color-mix(in srgb,var(--ooxml-xlsx-chrome-text,#444) 8%,transparent);}` +
   // Excel-status-bar zoom slider: a thin uniform gray track (no colored
   // fill on either side of the thumb) with a small round gray handle.
   `.xlsx-zoom-slider{-webkit-appearance:none;appearance:none;background:transparent;height:15px;margin:0;}` +
-  `.xlsx-zoom-slider::-webkit-slider-runnable-track{height:4px;background:#c4c4c4;border-radius:2px;}` +
-  `.xlsx-zoom-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:12px;height:12px;margin-top:-4px;border-radius:50%;background:#808080;cursor:pointer;}` +
-  `.xlsx-zoom-slider:hover::-webkit-slider-thumb{background:#5f5f5f;}` +
-  `.xlsx-zoom-slider::-moz-range-track{height:4px;background:#c4c4c4;border-radius:2px;}` +
-  `.xlsx-zoom-slider::-moz-range-thumb{width:12px;height:12px;border:none;border-radius:50%;background:#808080;cursor:pointer;}`;
+  `.xlsx-zoom-slider::-webkit-slider-runnable-track{height:4px;background:var(--ooxml-xlsx-chrome-border,#c4c4c4);border-radius:2px;}` +
+  `.xlsx-zoom-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:12px;height:12px;margin-top:-4px;border-radius:50%;background:var(--ooxml-xlsx-chrome-text-muted,#808080);cursor:pointer;}` +
+  `.xlsx-zoom-slider:hover::-webkit-slider-thumb{background:var(--ooxml-xlsx-chrome-text,#5f5f5f);}` +
+  `.xlsx-zoom-slider::-moz-range-track{height:4px;background:var(--ooxml-xlsx-chrome-border,#c4c4c4);border-radius:2px;}` +
+  `.xlsx-zoom-slider::-moz-range-thumb{width:12px;height:12px;border:none;border-radius:50%;background:var(--ooxml-xlsx-chrome-text-muted,#808080);cursor:pointer;}`;
 
 /**
  * Inject the shared viewer stylesheet into one owning document exactly once,
@@ -177,6 +181,22 @@ function ensureViewerStyleInjected(ownerDocument: Document): void {
   style.setAttribute(VIEWER_STYLE_ATTR, '');
   style.textContent = VIEWER_STYLE_CSS;
   ownerDocument.head.appendChild(style);
+}
+
+const XLSX_CHROME_COLOR_PROPERTIES = {
+  background: '--ooxml-xlsx-chrome-background',
+  surface: '--ooxml-xlsx-chrome-surface',
+  mutedSurface: '--ooxml-xlsx-chrome-surface-muted',
+  text: '--ooxml-xlsx-chrome-text',
+  mutedText: '--ooxml-xlsx-chrome-text-muted',
+  border: '--ooxml-xlsx-chrome-border',
+  selectedSurface: '--ooxml-xlsx-chrome-selection-background',
+  accent: '--ooxml-xlsx-chrome-accent',
+} as const satisfies Record<keyof XlsxChromeColors, string>;
+
+function sameChromeColors(left: XlsxChromeColors, right: XlsxChromeColors): boolean {
+  return Object.keys(XLSX_CHROME_COLOR_PROPERTIES).every((key) =>
+    left[key as keyof XlsxChromeColors] === right[key as keyof XlsxChromeColors]);
 }
 
 export interface XlsxSheetViewerOptions extends LoadOptions {
@@ -282,10 +302,11 @@ export interface XlsxSheetViewerOptions extends LoadOptions {
   selectionColor?: string;
   /** CSS backgrounds for ordinary and active in-document search matches. */
   findHighlightColors?: FindHighlightColors;
-  /** Show authored cell notes and threaded comments. Default true. */
-  showComments?: boolean;
-  /** Visibility options for the built-in comment UI. */
-  commentUi?: XlsxCommentUiOptions;
+  /**
+   * Show authored cell notes and threaded comments. Pass options to configure
+   * resolved-thread visibility. Default true.
+   */
+  comments?: boolean | XlsxCommentsOptions;
   /**
    * `'main'` (default): parse in a worker, render on the main thread. `'worker'`:
    * parse AND render entirely inside the worker and paint the returned
@@ -591,6 +612,7 @@ type XlsxViewerMount =
     };
 
 class XlsxViewerEngine implements ZoomableViewer {
+  private readonly container: HTMLElement;
   /** DOM realm of the mount target. Sheet canvases may belong to a same-origin
    * popup rather than the Window that created the viewer instance. */
   private readonly hostDocument: Document;
@@ -696,6 +718,10 @@ class XlsxViewerEngine implements ZoomableViewer {
    *  viewers' `_destroyed` flag. */
   private _destroyed = false;
   private resizeObserver: ResizeObserver | null = null;
+  private chromeColors: XlsxChromeColors = {};
+  private chromeStyleObserver: MutationObserver | null = null;
+  private chromeSchemeMedia: MediaQueryList | null = null;
+  private chromeSchemeListener: (() => void) | null = null;
   /** Last offset delivered to onViewportChange. Keeping this in the shared
    *  engine prevents a programmatic scroll followed by the browser's native
    *  scroll event from producing duplicate notifications. */
@@ -833,6 +859,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     opts: XlsxViewerOptions | XlsxSheetViewerOptions = {},
     mount: XlsxViewerMount,
   ) {
+    this.container = container;
     this.hostDocument =
       (mount.kind === 'sheet' ? mount.canvas.ownerDocument : container.ownerDocument) ?? document;
     const hostWindow = this.hostDocument.defaultView;
@@ -852,7 +879,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     this.wrapper = this.hostDocument.createElement('div');
     this.wrapper.style.cssText =
       `position:relative;width:100%;height:100%;` +
-      `background:${mount.kind === 'composite' ? '#fff' : 'transparent'};` +
+      `background:${mount.kind === 'composite' ? 'var(--ooxml-xlsx-chrome-surface,#fff)' : 'transparent'};` +
       `box-sizing:border-box;font-family:sans-serif;display:flex;flex-direction:column;`;
 
     // The grid region fills the space above the tab bar. The outline gutters
@@ -867,7 +894,8 @@ class XlsxViewerEngine implements ZoomableViewer {
     // +/- toggles and level buttons are clickable; they are painted on the main
     // thread even in worker mode (cheap chrome, independent of the grid bitmap).
     const gutterStyle =
-      `position:absolute;top:0;left:0;z-index:3;display:none;background:#f5f5f5;`;
+      `position:absolute;top:0;left:0;z-index:3;display:none;` +
+      `background:var(--ooxml-xlsx-chrome-background,#f5f5f5);`;
     this.cornerGutter = this.hostDocument.createElement('canvas');
     this.cornerGutter.style.cssText = gutterStyle;
     this.cornerGutter.setAttribute('data-xlsx-outline', 'corner');
@@ -895,7 +923,8 @@ class XlsxViewerEngine implements ZoomableViewer {
     this.scrollHost.style.cssText =
       `position:absolute;inset:0;` +
       `overflow:${this._nativeScrollbars ? 'auto' : 'clip'};` +
-      `z-index:2;background:transparent;`;
+      `z-index:2;background:transparent;` +
+      `scrollbar-color:var(--ooxml-xlsx-chrome-scrollbar-color,auto);`;
     this.spacer = this.hostDocument.createElement('div');
     this.spacer.style.cssText = `position:absolute;top:0;left:0;pointer-events:none;`;
     if (this._nativeScrollbars) this.scrollHost.appendChild(this.spacer);
@@ -926,7 +955,8 @@ class XlsxViewerEngine implements ZoomableViewer {
       this.tabBar = this.hostDocument.createElement('div');
       this.tabBar.style.cssText =
         `display:flex;align-items:flex-end;height:${TAB_BAR_H}px;flex-shrink:0;` +
-        `background:#f0f0f0;border-top:1px solid #c8ccd0;`;
+        `background:var(--ooxml-xlsx-chrome-background,#f0f0f0);` +
+        `border-top:1px solid var(--ooxml-xlsx-chrome-border,#c8ccd0);`;
 
       // Excel-style scroll buttons. They scroll the tab strip; they do NOT change
       // the active sheet. Disabled (greyed) at the ends / when there is no overflow.
@@ -982,6 +1012,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     this.wrapper.appendChild(this.gridRegion);
     if (mount.kind === 'composite') this.wrapper.appendChild(this.tabBar);
     container.appendChild(this.wrapper);
+    this.installChromeThemeRefresh();
 
     // Gutter click handling (XL4): +/- toggles and the numbered level banks
     // (each in its own gutter's header strip; the corner is inert background).
@@ -1061,6 +1092,53 @@ class XlsxViewerEngine implements ZoomableViewer {
       }
     }
 
+  }
+
+  /**
+   * Re-read the CSS custom properties that affect Canvas-painted Viewer chrome.
+   * DOM chrome follows inherited CSS variables without help; row/column headers
+   * and outline gutters need an explicit repaint because their colors are baked
+   * into pixels.
+   */
+  private refreshChromeTheme(): void {
+    if (this._destroyed) return;
+    const getComputedStyle = this.hostWindow.getComputedStyle?.bind(this.hostWindow);
+    if (!getComputedStyle) return;
+    const computed = getComputedStyle(this.wrapper);
+    const next: Record<string, string> = {};
+    for (const [key, property] of Object.entries(XLSX_CHROME_COLOR_PROPERTIES)) {
+      const value = computed.getPropertyValue(property).trim();
+      if (value) next[key] = value;
+    }
+    const nextColors = next as XlsxChromeColors;
+    if (sameChromeColors(this.chromeColors, nextColors)) return;
+    this.chromeColors = nextColors;
+    this.renderGutters();
+    this.scheduleRender();
+  }
+
+  /** Observe the ordinary ways an application changes theme state. */
+  private installChromeThemeRefresh(): void {
+    this.refreshChromeTheme();
+
+    const MutationObserverClass = this.hostWindow.MutationObserver ?? globalThis.MutationObserver;
+    if (MutationObserverClass) {
+      this.chromeStyleObserver = new MutationObserverClass(() => this.refreshChromeTheme());
+      for (let target: HTMLElement | null = this.container; target; target = target.parentElement) {
+        this.chromeStyleObserver.observe(target, {
+          attributes: true,
+          attributeFilter: ['class', 'style', 'data-theme'],
+        });
+      }
+    }
+
+    const media = this.hostWindow.matchMedia?.('(prefers-color-scheme: dark)') ?? null;
+    if (media) {
+      const listener = () => this.refreshChromeTheme();
+      media.addEventListener?.('change', listener);
+      this.chromeSchemeMedia = media;
+      this.chromeSchemeListener = listener;
+    }
   }
 
   /** Every non-empty cell of a sheet with its rendered display text (IX2 find
@@ -1361,7 +1439,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
-    ctx.fillStyle = '#f5f5f5';
+    ctx.fillStyle = this.chromeColors.background ?? '#f5f5f5';
     ctx.fillRect(0, 0, cssW, cssH);
 
     const lanePx = OUTLINE_LANE_PX * cs;
@@ -1372,9 +1450,9 @@ class XlsxViewerEngine implements ZoomableViewer {
     // The gutter canvas top is at gridRegion y = gutter.h, and canvasArea top is
     // also at gutter.h — so a band's canvasArea-space y maps 1:1 to gutter-canvas
     // y. Likewise x for the col gutter (offset by gutter.w).
-    ctx.strokeStyle = '#808080';
+    ctx.strokeStyle = this.chromeColors.border ?? '#808080';
     ctx.lineWidth = 1;
-    ctx.fillStyle = '#404040';
+    ctx.fillStyle = this.chromeColors.text ?? '#404040';
 
     // Outline gutter geometry participates in the same header/frozen-pane split
     // as the worksheet canvas. Clip every logical run to its own pane so a
@@ -1497,7 +1575,7 @@ class XlsxViewerEngine implements ZoomableViewer {
           ? cssW - headerExtent - frozenExtent
           : headerExtent + frozenExtent;
       ctx.save();
-      ctx.strokeStyle = '#7a7a7a';
+      ctx.strokeStyle = this.chromeColors.border ?? '#7a7a7a';
       ctx.lineWidth = 0.5;
       ctx.beginPath();
       if (isRow) {
@@ -1524,12 +1602,12 @@ class XlsxViewerEngine implements ZoomableViewer {
     const x = Math.round(cx - s / 2);
     const y = Math.round(cy - s / 2);
     ctx.save();
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#808080';
+    ctx.fillStyle = this.chromeColors.surface ?? '#ffffff';
+    ctx.strokeStyle = this.chromeColors.border ?? '#808080';
     ctx.lineWidth = 1;
     ctx.fillRect(x + 0.5, y + 0.5, s, s);
     ctx.strokeRect(x + 0.5, y + 0.5, s, s);
-    ctx.strokeStyle = '#404040';
+    ctx.strokeStyle = this.chromeColors.text ?? '#404040';
     ctx.beginPath();
     // horizontal stroke (present for both + and -)
     ctx.moveTo(x + 2.5, y + s / 2 + 0.5);
@@ -1560,12 +1638,12 @@ class XlsxViewerEngine implements ZoomableViewer {
     ctx.font = `${Math.round(9 * cs)}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#808080';
+    ctx.fillStyle = this.chromeColors.surface ?? '#ffffff';
+    ctx.strokeStyle = this.chromeColors.border ?? '#808080';
     ctx.lineWidth = 1;
     ctx.fillRect(x + 0.5, y + 0.5, s, s);
     ctx.strokeRect(x + 0.5, y + 0.5, s, s);
-    ctx.fillStyle = '#404040';
+    ctx.fillStyle = this.chromeColors.text ?? '#404040';
     ctx.fillText(label, cx, cy + 0.5);
     ctx.restore();
   }
@@ -1583,7 +1661,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
-    ctx.fillStyle = '#f5f5f5';
+    ctx.fillStyle = this.chromeColors.background ?? '#f5f5f5';
     ctx.fillRect(0, 0, cssW, cssH);
   }
 
@@ -2181,6 +2259,12 @@ class XlsxViewerEngine implements ZoomableViewer {
       : null;
   }
 
+  /** Detached comments for the current sheet, in authored order. */
+  getComments(): readonly Readonly<XlsxComment>[] {
+    this.assertOpen();
+    return structuredClone(this.currentWorksheet?.comments ?? []);
+  }
+
   /** Returns the full selection model, detached from viewer-owned state. */
   get selectionState(): XlsxSelectionState | null {
     return this.selectionController.snapshot();
@@ -2316,7 +2400,8 @@ class XlsxViewerEngine implements ZoomableViewer {
             const cell = rowCells[cellIndex++];
             if (cell.col > selectedColumnsInterval.last) break;
             const raw = cell.value;
-            if (raw.type === 'empty' && cell.formula === undefined) continue;
+            const sourceComment = this.commentMap.get(`${cell.row}:${cell.col}`);
+            if (raw.type === 'empty' && cell.formula === undefined && !sourceComment) continue;
             if (cells.length >= maxCells) { cellsTruncated = true; break cellScan; }
             const displayText = boundedField(this.wb?.cellText(worksheet, cell) ?? '');
             const value = raw.type === 'text'
@@ -2327,13 +2412,30 @@ class XlsxViewerEngine implements ZoomableViewer {
                   ? raw.bool
                   : raw.type === 'error'
                     ? boundedField(raw.error)
-                    : null;
+                  : null;
+            const comment = sourceComment ? {
+              root: {
+                id: sourceComment.id,
+                author: sourceComment.author,
+                date: sourceComment.date,
+                text: boundedField(sourceComment.rootText ?? sourceComment.text),
+                status: sourceComment.resolved ? 'resolved' as const : 'active' as const,
+              },
+              replies: (sourceComment.replies ?? []).map((reply) => ({
+                id: reply.id,
+                author: reply.author,
+                date: reply.date,
+                text: boundedField(reply.text),
+                status: reply.resolved ? 'resolved' as const : 'active' as const,
+              })),
+            } : undefined;
             cells.push({
               address: { row: cell.row, col: cell.col },
               displayText,
               valueType: raw.type,
               value,
               ...(cell.formula === undefined ? {} : { formula: boundedField(cell.formula) }),
+              ...(comment === undefined ? {} : { comment }),
             });
             if (textTruncated) break cellScan;
           }
@@ -3360,12 +3462,15 @@ class XlsxViewerEngine implements ZoomableViewer {
 
   private createVisibleSheetView(source: Worksheet): Worksheet {
     const worksheet = createSheetViewModel(source);
-    if (this.opts.showComments === false) {
+    if (this.opts.comments === false) {
       return { ...worksheet, commentRefs: [], comments: [] };
     }
     // Keep the pre-customization behavior: XLSX historically exposed resolved
     // threaded comments. Consumers may explicitly hide them.
-    if (this.opts.commentUi?.includeResolved !== false) return worksheet;
+    const commentOptions = typeof this.opts.comments === 'object'
+      ? this.opts.comments
+      : undefined;
+    if (commentOptions?.includeResolved !== false) return worksheet;
     const resolved = new Set(
       (worksheet.comments ?? [])
         .filter((comment) => comment.resolved === true)
@@ -3483,48 +3588,42 @@ class XlsxViewerEngine implements ZoomableViewer {
     if (!this._cellRect(cell.row, cell.col)) return;
     this.commentPopupCell = cell;
 
-    // Author on its own line, then the body and replies. textContent escapes
-    // authored data; data attributes and CSS variables are the stable theming seam.
-    this.commentPopup.replaceChildren();
+    // Use the same card structure and default theme as the DOCX/PPTX margins;
+    // XLSX owns only the cell-anchored popup geometry.
+    const occurrenceKey = `sheet:${this.currentSheet}:cell:${comment.cellRef}:comment:${comment.id ?? 'root'}`;
+    const thread: ReadOnlyCommentThread = {
+      occurrenceKey,
+      root: {
+        messageKey: `${occurrenceKey}:root`,
+        sourceId: comment.id,
+        author: comment.author,
+        date: comment.date,
+        text: comment.rootText ?? comment.text,
+        status: comment.resolved ? 'resolved' : 'active',
+      },
+      replies: (comment.replies ?? []).map((reply, index) => ({
+        messageKey: `${occurrenceKey}:reply:${reply.id ?? index}`,
+        sourceId: reply.id,
+        author: reply.author,
+        date: reply.date,
+        text: reply.text,
+        status: reply.resolved ? 'resolved' : 'active',
+      })),
+    };
+    paintReadOnlyCommentCard(this.commentPopup, thread, {
+      interactive: false,
+      standalone: true,
+    });
     this.commentPopup.dataset.ooxmlCommentUi = 'popup';
-    if (comment.author) {
-      const authorEl = this.hostDocument.createElement('div');
-      authorEl.dataset.ooxmlCommentPart = 'author';
-      authorEl.style.cssText =
-        'font-weight:700;color:var(--ooxml-comment-author-color,#0f172a);margin-bottom:.25em;';
-      authorEl.textContent = comment.author;
-      this.commentPopup.appendChild(authorEl);
-    }
-    const bodyEl = this.hostDocument.createElement('div');
-    bodyEl.dataset.ooxmlCommentPart = 'body';
-    bodyEl.textContent = comment.rootText ?? comment.text;
-    this.commentPopup.appendChild(bodyEl);
-    for (const reply of comment.replies ?? []) {
-      const replyEl = this.hostDocument.createElement('div');
-      replyEl.dataset.ooxmlCommentPart = 'reply';
-      replyEl.style.cssText =
-        'margin-top:.65em;padding-top:.65em;border-top:1px solid var(--ooxml-comment-reply-border,rgba(100,116,139,.2));';
-      if (reply.author) {
-        const replyAuthor = this.hostDocument.createElement('div');
-        replyAuthor.dataset.ooxmlCommentPart = 'author';
-        replyAuthor.style.cssText =
-          'font-weight:700;color:var(--ooxml-comment-author-color,#0f172a);margin-bottom:.2em;';
-        replyAuthor.textContent = reply.author;
-        replyEl.appendChild(replyAuthor);
-      }
-      const replyBody = this.hostDocument.createElement('div');
-      replyBody.dataset.ooxmlCommentPart = 'body';
-      replyBody.textContent = reply.text;
-      replyEl.appendChild(replyBody);
-      this.commentPopup.appendChild(replyEl);
-    }
+    this.commentPopup.style.maxWidth = `${COMMENT_POPUP_MAX_W}px`;
+    this.commentPopup.style.maxHeight = `${COMMENT_POPUP_MAX_H}px`;
 
     // Anchor to the cell's *screen* rect (RTL already mirrored by screenX), then
     // run the pure position calc against the popup's measured size. Make it
     // visible (off-screen) first so offsetWidth/Height reflect the wrapped text.
     this.commentPopup.style.left = '-9999px';
     this.commentPopup.style.top = '-9999px';
-    this.commentPopup.style.display = 'block';
+    this.commentPopup.style.display = '';
     this.positionCommentPopup();
     this.scheduleCommentPopupPosition();
   }
@@ -4219,7 +4318,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     const base =
       `flex:1;height:100%;padding:0;` +
       `display:flex;align-items:center;justify-content:center;` +
-      `border:none;color:#666;font-size:9px;line-height:1;` +
+      `border:none;color:var(--ooxml-xlsx-chrome-text-muted,#666);font-size:9px;line-height:1;` +
       `box-sizing:border-box;outline:none;`;
     return disabled
       ? base + `opacity:0.3;cursor:default;pointer-events:none;`
@@ -4301,7 +4400,8 @@ class XlsxViewerEngine implements ZoomableViewer {
     const inactiveH = TAB_BAR_H - 5;
     const base =
       `display:inline-block;flex:none;padding:0 14px;position:relative;` +
-      `border:1px solid #c8ccd0;border-bottom:none;border-radius:3px 3px 0 0;` +
+      `border:1px solid var(--ooxml-xlsx-chrome-border,#c8ccd0);border-bottom:none;` +
+      `border-radius:3px 3px 0 0;` +
       `cursor:pointer;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis;` +
       `outline:none;box-sizing:border-box;`;
     // `<sheetPr><tabColor>` renders as a color bar along the tab's bottom edge
@@ -4314,11 +4414,15 @@ class XlsxViewerEngine implements ZoomableViewer {
     return active
       ? base +
         `height:${activeH}px;font-size:13px;` +
-        `background:#fff;color:#000;border-bottom:1px solid #fff;font-weight:600;top:1px;` +
+        `background:var(--ooxml-xlsx-chrome-surface,#fff);` +
+        `color:var(--ooxml-xlsx-chrome-text,#000);` +
+        `border-bottom:1px solid var(--ooxml-xlsx-chrome-surface,#fff);` +
+        `font-weight:600;top:1px;` +
         bar
       : base +
         `height:${inactiveH}px;font-size:11px;` +
-        `background:#e0e0e0;color:#555;` +
+        `background:var(--ooxml-xlsx-chrome-surface-muted,#e0e0e0);` +
+        `color:var(--ooxml-xlsx-chrome-text-muted,#555);` +
         bar;
   }
 
@@ -4346,7 +4450,8 @@ class XlsxViewerEngine implements ZoomableViewer {
     const wrap = this.hostDocument.createElement('div');
     wrap.style.cssText =
       `display:flex;align-items:center;flex-shrink:0;gap:2px;` +
-      `padding:0 10px;height:100%;color:#555;font-size:12px;user-select:none;`;
+      `padding:0 10px;height:100%;` +
+      `color:var(--ooxml-xlsx-chrome-text-muted,#555);font-size:12px;user-select:none;`;
 
     // The steppers walk the shared IX9 zoom ladder (ZOOM_STEP_LADDER via
     // zoomIn/zoomOut) so the built-in chrome and a host's own buttons wired to
@@ -4360,7 +4465,8 @@ class XlsxViewerEngine implements ZoomableViewer {
       b.title = label;
       b.style.cssText =
         `width:18px;height:18px;padding:0;border:none;background:transparent;` +
-        `color:#555;font-size:14px;line-height:1;cursor:pointer;border-radius:3px;`;
+        `color:var(--ooxml-xlsx-chrome-text-muted,#555);` +
+        `font-size:14px;line-height:1;cursor:pointer;border-radius:3px;`;
       b.addEventListener('click', step);
       return b;
     };
@@ -4683,6 +4789,7 @@ class XlsxViewerEngine implements ZoomableViewer {
       freezeCols,
       selectedRowRange,
       selectedColRange,
+      chromeColors: this.chromeColors,
     };
 
     const sizeProjection = this.wireSizeOverrides();
@@ -4776,6 +4883,13 @@ class XlsxViewerEngine implements ZoomableViewer {
     this.stopSelectionAutoScroll();
     this.sheetRequestGeneration++;
     this.resizeObserver?.disconnect();
+    this.chromeStyleObserver?.disconnect();
+    this.chromeStyleObserver = null;
+    if (this.chromeSchemeMedia && this.chromeSchemeListener) {
+      this.chromeSchemeMedia.removeEventListener?.('change', this.chromeSchemeListener);
+    }
+    this.chromeSchemeMedia = null;
+    this.chromeSchemeListener = null;
     this.commentPopupResizeObserver?.disconnect();
     this.commentPopupResizeObserver = null;
     this.renderDispatcher.destroy();
@@ -5000,6 +5114,12 @@ export class XlsxSheetViewer implements ZoomableViewer {
 
   getCellViewportRect(cell: CellAddress | string): XlsxCellViewportRect | null {
     return this.destroyed ? null : this.engine.getCellViewportRect(cell);
+  }
+
+  /** Detached comments for the current sheet, in authored order. */
+  getComments(): readonly Readonly<XlsxComment>[] {
+    this.assertOpen();
+    return this.engine.getComments();
   }
 
   get selectionState(): XlsxSelectionState | null {

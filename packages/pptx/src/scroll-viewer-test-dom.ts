@@ -32,6 +32,7 @@ export interface FakeEl {
   /** Uppercase tag, mirroring the real DOM (`div` → `DIV`) — the viewer's
    *  canvas-container guard reads it. */
   tagName: string;
+  className: string;
   textContent: string;
   innerHTML: string;
   dataset: Record<string, string>;
@@ -90,6 +91,7 @@ export function makeEl(tag: string): FakeEl {
   const el: FakeEl = {
     tag,
     tagName: tag.toUpperCase(),
+    className: '',
     textContent: '',
     innerHTML: '',
     dataset: {},
@@ -145,6 +147,7 @@ export function makeEl(tag: string): FakeEl {
       for (const child of children) this.appendChild(child);
     },
     setAttribute(name: string, value: string) {
+      if (name === 'class') this.className = value;
       if (name.startsWith('data-')) {
         const key = name.slice(5).replace(/-([a-z])/g, (_, char: string) => char.toUpperCase());
         this.dataset[key] = value;

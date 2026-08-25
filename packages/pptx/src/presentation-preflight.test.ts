@@ -90,6 +90,7 @@ describe('PresentationPreflightBuilder', () => {
         date: '2026-08-24T12:00:00Z',
         x: 6096000,
         y: 3429000,
+        anchors: [{ type: 'drawingElement', elementId: '7', creationId: '{SHAPE}' }],
         status: 'active',
         text: 'Root',
         replies: [{
@@ -106,6 +107,8 @@ describe('PresentationPreflightBuilder', () => {
     expect(facts.slides[1]).not.toHaveProperty('comments');
     expect(Object.isFrozen(facts.slides[0].comments)).toBe(true);
     expect(Object.isFrozen(facts.slides[0].comments?.[0])).toBe(true);
+    expect(Object.isFrozen(facts.slides[0].comments?.[0]?.anchors)).toBe(true);
+    expect(Object.isFrozen(facts.slides[0].comments?.[0]?.anchors?.[0])).toBe(true);
     expect(Object.isFrozen(facts.slides[0].comments?.[0]?.replies?.[0])).toBe(true);
     first.comments![0]!.text = 'mutated';
     expect(facts.slides[0].comments?.[0]?.text).toBe('Root');

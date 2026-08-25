@@ -924,6 +924,14 @@ export interface CommentAnchorRange {
     readonly reference: CommentAnchorPoint;
     readonly geometryFallback?: CommentAnchorGeometryFallback;
 }
+export type DocxCommentAnchorKind = 'range' | 'point' | 'fallback';
+export interface DocxCommentHighlightRect {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+    readonly transform?: string;
+}
 export interface DocComment {
     id: string;
     author?: string;
@@ -1061,7 +1069,22 @@ export interface DocxCommentMark {
     kind: 'rangeStart' | 'rangeEnd' | 'reference' | string;
     runIndex: number;
 }
-export interface DocxCommentUiOptions extends ViewerCommentUiOptions {
+export interface DocxCommentSelectionContext {
+    readonly format: 'docx';
+    readonly kind: 'comment';
+    readonly pageIndex: number;
+    readonly commentId: string;
+    readonly source?: DocxSelectionSourceLocator;
+    readonly thread: ViewerCommentThreadContext;
+    readonly truncated: boolean;
+    readonly truncationReasons: readonly 'text'[];
+    readonly textCharacters: number;
+    readonly maxTextCharacters: number;
+}
+export interface DocxCommentsOptions extends ViewerCommentsOptions {
+    readonly side?: 'auto' | 'left' | 'right';
+    readonly markers?: boolean;
+    readonly connectors?: ViewerCommentConnectorOptions;
 }
 export class DocxDocument {
     static load(source: string | ArrayBuffer, opts?: LoadOptions): Promise<DocxDocument>;
@@ -1184,8 +1207,7 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
     paddingRight?: number;
     overscan?: number;
     enableTextSelection?: boolean;
-    showComments?: boolean;
-    commentUi?: DocxCommentUiOptions;
+    comments?: boolean | DocxCommentsOptions;
     enableElementSelection?: boolean;
     onSelectionContextChange?: (context: DocxSelectionContext | null) => void;
     onContextMenu?: (event: ViewerContextMenuEvent<DocxSelectionContext>) => void;
@@ -1202,7 +1224,7 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
     enableHyperlinks?: boolean;
     onError?: (err: Error) => void;
 }
-export type DocxSelectionContext = DocxTextSelectionContext | DocxElementContext;
+export type DocxSelectionContext = DocxTextSelectionContext | DocxElementContext | DocxCommentSelectionContext;
 export type DocxSelectionContextOptions = TextSelectionContextOptions;
 export interface DocxSelectionRunLocator {
     readonly pageIndex: number;
@@ -1270,11 +1292,18 @@ export interface DocxTextRunInfo {
     source?: Readonly<DocxStorySource>;
     paragraphId?: string;
     sourceRunIndex?: number;
+    direction?: 'ltr' | 'rtl';
     text: string;
     x: number;
     y: number;
     w: number;
     h: number;
+    highlightBounds?: Readonly<{
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    }>;
     fontSize: number;
     font: string;
     letterSpacingPx?: number;
@@ -1847,7 +1876,21 @@ export type RenderPageToBitmapOptions = Omit<RenderPageOptions, 'onTextRun'> & {
     onTextRun?: (run: DocxTextRunInfo) => void;
 };
 export function resolveCommentAnchorRuns(anchor: Readonly<CommentAnchorRange>, runs: readonly Readonly<DocxTextRunInfo>[]): readonly Readonly<DocxTextRunInfo>[];
+export function resolveDocxCommentThreads(comments: readonly Readonly<DocComment>[], anchors: readonly Readonly<CommentAnchorRange>[], runs: readonly Readonly<DocxTextRunInfo>[], options?: ResolveDocxCommentThreadsOptions): readonly Readonly<ResolvedDocxCommentThread>[];
 export function resolveRevisionAnchorRuns(anchor: Readonly<RevisionAnchorRange>, runs: readonly Readonly<DocxTextRunInfo>[]): readonly Readonly<DocxTextRunInfo>[];
+export interface ResolvedDocxCommentAnchor {
+    readonly anchor: Readonly<CommentAnchorRange>;
+    readonly kind: DocxCommentAnchorKind;
+    readonly rects: readonly Readonly<DocxCommentHighlightRect>[];
+}
+export interface ResolvedDocxCommentThread {
+    readonly root: Readonly<DocComment>;
+    readonly replies: readonly Readonly<DocComment>[];
+    readonly anchors: readonly Readonly<ResolvedDocxCommentAnchor>[];
+}
+export interface ResolveDocxCommentThreadsOptions {
+    readonly includeResolved?: boolean;
+}
 export interface RevisionAnchorGeometryFallback {
     readonly source: Readonly<DocxStorySource>;
     readonly sourceRunIndex: number;
@@ -2154,8 +2197,27 @@ export interface TileInfo {
     flip?: string;
     algn?: string;
 }
-interface ViewerCommentUiOptions {
+export interface ViewerCommentConnectorOptions {
+    readonly route?: ViewerCommentConnectorRoute;
+    readonly stroke?: ViewerCommentConnectorStroke;
+    readonly color?: string;
+    readonly activeColor?: string;
+}
+export type ViewerCommentConnectorRoute = 'bezier' | 'orthogonal';
+export type ViewerCommentConnectorStroke = 'solid' | 'dashed';
+export interface ViewerCommentMessageContext {
+    readonly id?: string;
+    readonly author?: string;
+    readonly date?: string;
+    readonly text: string;
+    readonly status?: 'active' | 'resolved' | 'closed';
+}
+interface ViewerCommentsOptions {
     readonly includeResolved?: boolean;
+}
+export interface ViewerCommentThreadContext {
+    readonly root: ViewerCommentMessageContext;
+    readonly replies: readonly ViewerCommentMessageContext[];
 }
 export interface ViewerContextMenuEvent<TContext> {
     readonly originalEvent: MouseEvent;

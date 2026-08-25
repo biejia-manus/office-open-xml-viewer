@@ -13,11 +13,28 @@ and application-specific review workflows remain application responsibilities.
 `XlsxViewer` and `XlsxSheetViewer` can show cell-anchored comment popups. These
 Viewers own placement, zoom updates, page or sheet lifecycle, and cleanup.
 
-The built-in structure is intentionally fixed. Applications theme it through
-documented CSS custom properties inherited from the Viewer container. Internal
-`data-ooxml-comment-*` attributes support Viewer behavior and tests; they are
-not a public styling or DOM-structure contract. There is no component-mount
-callback or framework-specific adapter.
+The built-in structure is intentionally fixed. Applications use CSS custom
+properties for simple token changes and stable classes for presentation changes
+that do not replace the structure:
+
+- `.ooxml-comment-card`;
+- `.ooxml-comment-card__author`;
+- `.ooxml-comment-card__date`;
+- `.ooxml-comment-card__body`;
+- `.ooxml-comment-card__reply`;
+- `.ooxml-comment-marker`.
+
+Cards expose `data-active` and `data-focused` styling states. Defaults use
+low-specificity `:where(...)` selectors. Inline styles are reserved for dynamic
+geometry, Viewer zoom, and the computed author accent. Other internal
+`data-ooxml-comment-*` attributes support Viewer behavior and tests and are not
+a public styling or DOM-structure contract. There is no component-mount callback
+or framework-specific adapter.
+
+CSS cascade changes apply to already-mounted UI; applications can switch a
+theme class, `data-theme`, or custom properties without recreating a Viewer.
+Cards are observed for geometry changes, so font, line-height, family, padding,
+and other size-affecting overrides trigger a new non-overlapping layout.
 
 This keeps the common path small and makes it usable from plain TypeScript,
 React, Vue, and other frameworks without giving the Viewer ownership of an
@@ -41,9 +58,10 @@ ownership and would duplicate framework lifecycle rules.
 
 ## Shared policy and format boundaries
 
-All formats use `commentUi.includeResolved` as the visibility option. DOCX and
-PPTX hide resolved or closed threads by default. XLSX preserves its historical
-behavior and includes resolved threads by default.
+All formats use the single `comments` feature option. `comments: true` enables
+the format default; `comments: { includeResolved: … }` also controls thread
+visibility. DOCX and PPTX hide resolved or closed threads by default. XLSX
+preserves its historical behavior and includes resolved threads by default.
 
 The formats deliberately do not pretend their geometry is identical:
 
@@ -64,7 +82,7 @@ pagination independently.
 
 Page and slide virtualization remain the first bounded layer. A future need for
 card-level virtualization should be implemented inside the built-in margin,
-without changing the public `commentUi` option. Application-owned UIs choose
+without changing the public `comments` option. Application-owned UIs choose
 their own list virtualization strategy from the primitive data APIs.
 
 No public identity or geometry type is introduced solely to predict a future
@@ -82,7 +100,8 @@ virtualization implementation.
 ## Acceptance checks
 
 - the default UI works without callbacks;
-- CSS custom properties theme cards, highlights, markers, and connectors;
+- CSS custom properties cover simple theme tokens and stable classes allow
+  presentation overrides without replacing the built-in structure;
 - DOCX/PPTX cards and geometry follow zoom and virtualized surface lifecycle;
 - XLSX popup data and visible markers use the same resolved-thread policy;
 - outside interaction clears the active DOCX/PPTX card;

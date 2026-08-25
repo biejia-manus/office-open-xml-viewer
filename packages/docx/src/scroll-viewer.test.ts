@@ -180,7 +180,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
     const viewer = DocxScrollViewer.fromDocument(
       container as unknown as HTMLElement,
       engine.asDoc(),
-      { showComments: true },
+      { comments: true },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
     const scrollHost = container.children[0]!.children[0]!;
@@ -189,7 +189,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
     viewer.destroy();
   });
 
-  it('renders a themeable built-in card and connector and clears selection outside it', async () => {
+  it('renders a themeable built-in card without a connector and clears selection outside it', async () => {
     const dom = installDom();
     const engine = new FakeDocxEngine(1, [{ widthPt: 612, heightPt: 792 }]);
     const source = { story: 'body', storyInstance: 'body', path: [0] } as const;
@@ -203,37 +203,145 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
     }] as CommentAnchorRange[];
     engine.feedTextRuns = [{
       text: 'anchored', source, sourceRunIndex: 0,
-      x: 20, y: 30, w: 80, h: 14, fontSize: 12, font: '12px sans-serif',
+      x: 20, y: 30, w: 80, h: 14,
+      highlightBounds: { x: 20, y: 32, width: 80, height: 10 },
+      fontSize: 12, font: '12px sans-serif',
     }];
     const container = makeContainer();
     const viewer = DocxScrollViewer.fromDocument(
       container as unknown as HTMLElement,
       engine.asDoc(),
-      { showComments: true },
+      { comments: true },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
 
     const scrollHost = container.children[0]!.children[0]!;
     const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
     const margin = page.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
+    const tintLayer = page.children.find((child) =>
+      child.children.some((entry) => entry.dataset.ooxmlCommentHighlight !== undefined))!;
+    const tint = tintLayer.children[0]!;
+    expect(parseFloat(tint.style.top) / parseFloat(tint.style.height)).toBeCloseTo(3.2);
     expect(margin.style.background).toBe('');
     expect(margin.dataset.ooxmlCommentUi).toBe('margin');
     const card = margin.children[0]!.children[0]!;
+    const geometry = vi.spyOn(
+      viewer as unknown as { _scheduleCommentGeometry(page: number, slot: unknown): void },
+      '_scheduleCommentGeometry',
+    );
+    dom.resizeCb()?.();
+    expect(geometry).toHaveBeenCalledWith(0, expect.anything());
+    const frame = card.children.find((child) => child.dataset.ooxmlCommentPart === 'frame')!;
     expect(card.dataset.ooxmlCommentCard).toBe('');
-    expect(card.children[0]?.children[1]?.children[1]?.textContent).toBe('Review this');
-    expect(card.style.background).toContain('--ooxml-comment-card-background');
+    expect(card.className).toBe('ooxml-comment-card');
+    expect(card.style.cssText).toContain('--ooxml-comment-author-accent:');
+    expect(card.style.cssText).not.toContain('background:');
+    expect(card.style.cssText).not.toContain('border-radius:');
+    expect(frame.style.cssText).toBe('');
+    expect(tint.style.cssText).toContain('--ooxml-comment-author-accent:');
+    expect(tint.style.background).toBe('');
+    expect(tint.dataset.active).toBe('false');
+    const marker = tintLayer.children.find((child) =>
+      child.dataset.ooxmlCommentMarker !== undefined)!;
+    expect(marker.className).toBe('ooxml-comment-marker');
+    expect(parseFloat(marker.style.left)).toBeGreaterThan(
+      parseFloat(tint.style.left) + parseFloat(tint.style.width),
+    );
+    expect(card.children[0]?.children[0]?.children[1]?.textContent).toBe('Review this');
     card.dispatch('click');
-    expect(card.dataset.ooxmlCommentActive).toBe('true');
+    expect(card.dataset.active).toBe('true');
+    expect(viewer.getSelectionContext()).toMatchObject({
+      format: 'docx', kind: 'comment', pageIndex: 0, commentId: '7',
+      thread: { root: { author: 'Ada', text: 'Review this' }, replies: [] },
+    });
     dom.dispatchDocument('pointerdown', { target: card });
-    expect(card.dataset.ooxmlCommentActive).toBe('true');
+    expect(card.dataset.active).toBe('true');
     dom.dispatchDocument('pointerdown', { target: container });
-    expect(card.dataset.ooxmlCommentActive).toBe('false');
-    const decoration = page.children.find((child) => child.dataset.ooxmlCommentConnectors !== undefined)!;
-    expect(decoration).toBeDefined();
+    expect(card.dataset.active).toBe('false');
+    expect(viewer.getSelectionContext()).toBeNull();
+    expect(page.children.some((child) =>
+      child.dataset.ooxmlCommentConnectors !== undefined)).toBe(false);
     viewer.destroy();
   });
 
-  it('scales default cards with viewer zoom and hides stale anchor geometry during preview', async () => {
+  it('adds the connector layer only when explicitly requested', async () => {
+    installDom();
+    const engine = new FakeDocxEngine(1, [{ widthPt: 612, heightPt: 792 }]);
+    const source = { story: 'body', storyInstance: 'body', path: [0] } as const;
+    engine.comments = [{ id: 'connector', author: 'Ada', text: 'Review this' }];
+    engine.commentAnchors = [{
+      commentId: 'connector', source, startRunIndex: 0, endRunIndex: 1,
+      reference: { source, runIndex: 1, affinity: 'preceding' },
+    }] as CommentAnchorRange[];
+    engine.feedTextRuns = [{
+      text: 'anchored', source, sourceRunIndex: 0,
+      x: 20, y: 300, w: 80, h: 14, fontSize: 12, font: '12px sans-serif',
+    }];
+    const container = makeContainer();
+    const viewer = DocxScrollViewer.fromDocument(
+      container as unknown as HTMLElement,
+      engine.asDoc(),
+      { comments: { connectors: {} } },
+    );
+    await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
+    const scrollHost = container.children[0]!.children[0]!;
+    const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
+    expect(page.children.some((child) =>
+      child.dataset.ooxmlCommentConnectors !== undefined)).toBe(true);
+    viewer.destroy();
+  });
+
+  it('places the margin on the left for an RTL host and permits an explicit override', async () => {
+    installDom();
+    const engine = new FakeDocxEngine(1, [{ widthPt: 612, heightPt: 792 }]);
+    const source = { story: 'body', storyInstance: 'body', path: [0] } as const;
+    engine.comments = [{ id: 'rtl', author: 'Ada', text: 'Review this' }];
+    engine.commentAnchors = [{
+      commentId: 'rtl', source, startRunIndex: 0, endRunIndex: 1,
+      reference: { source, runIndex: 1, affinity: 'preceding' },
+    }] as CommentAnchorRange[];
+    engine.feedTextRuns = [{
+      text: 'anchored', source, sourceRunIndex: 0,
+      x: 20, y: 30, w: 80, h: 14, fontSize: 12, font: '12px sans-serif',
+    }];
+    const rtlContainer = makeContainer();
+    rtlContainer.style.direction = 'rtl';
+    const rtlViewer = DocxScrollViewer.fromDocument(
+      rtlContainer as unknown as HTMLElement,
+      engine.asDoc(),
+      { comments: { side: 'auto', connectors: {} } },
+    );
+    await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
+    const rtlHost = rtlContainer.children[0]!.children[0]!;
+    const rtlPage = rtlHost.children.find((child) => child !== rtlHost.children[0])!;
+    const rtlMargin = rtlPage.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
+    const rtlConnectors = rtlPage.children.find((child) =>
+      child.dataset.ooxmlCommentConnectors !== undefined)!;
+    expect(rtlMargin.style.right).toContain('calc(100% +');
+    expect(rtlMargin.style.left).toBe('');
+    expect(parseFloat(rtlConnectors.style.left)).toBeLessThan(0);
+    rtlViewer.destroy();
+
+    const rightContainer = makeContainer();
+    rightContainer.style.direction = 'rtl';
+    const rightViewer = DocxScrollViewer.fromDocument(
+      rightContainer as unknown as HTMLElement,
+      engine.asDoc(),
+      { comments: { side: 'right', connectors: {} } },
+    );
+    await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(2));
+    const rightHost = rightContainer.children[0]!.children[0]!;
+    const rightPage = rightHost.children.find((child) => child !== rightHost.children[0])!;
+    const rightMargin = rightPage.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
+    const rightConnectors = rightPage.children.find((child) =>
+      child.dataset.ooxmlCommentConnectors !== undefined)!;
+    expect(rightMargin.style.left).toContain('calc(100% +');
+    expect(rightMargin.style.right).toBe('');
+    expect(rightConnectors.style.left).toBe('0px');
+    rightViewer.destroy();
+  });
+
+  it('smoothly previews comment geometry while the settled zoom render is pending', async () => {
     installDom();
     const engine = new FakeDocxEngine(1, [{ widthPt: 612, heightPt: 792 }]);
     const source = { story: 'body', storyInstance: 'body', path: [0] } as const;
@@ -252,7 +360,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
     const viewer = DocxScrollViewer.fromDocument(
       container as unknown as HTMLElement,
       engine.asDoc(),
-      { showComments: true },
+      { comments: { connectors: {} } },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
 
@@ -262,31 +370,48 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
     const tint = page.children.find((child) => child.style.cssText.includes('inset:0'))!;
     const decoration = page.children.find((child) =>
       child.style.cssText.includes('overflow:visible'))!;
-    const card = margin.children[0]!.children[0]!;
+    const item = margin.children[0]!;
+    const card = item.children[0]!;
+    margin.clientHeight = 1000;
     const comment = card.children[0]!;
-    const avatar = comment.children[0]!;
-    const content = comment.children[1]!;
+    const content = comment.children[0]!;
     const identity = content.children[0]!;
     const baseScale = viewer.getScale();
-    expect(margin.style.width).toBe(`${280 / 13}em`);
-    expect(parseFloat(margin.style.fontSize)).toBeCloseTo(13 * baseScale);
-    expect(card.style.background).toBe('var(--ooxml-comment-card-background,#fff)');
+    expect(parseFloat(margin.style.width)).toBeCloseTo(280 * baseScale);
+    expect(parseFloat(margin.style.fontSize)).toBeCloseTo(13);
+    expect(item.style.transform).toBe(`scale(${baseScale})`);
+    expect(card.dataset.focused).toBe('false');
     card.dispatch('focus');
-    expect(card.style.boxShadow).toContain('--ooxml-comment-card-focus-shadow');
-    expect(card.style.boxShadow).toContain('inset');
+    expect(card.dataset.focused).toBe('true');
+    expect(card.style.boxShadow).toBe('');
     card.dispatch('blur');
+    expect(card.dataset.focused).toBe('false');
     card.dispatch('click');
-    expect(card.style.cssText).toContain('--ooxml-comment-card-active-shadow');
-    expect(avatar.dataset.ooxmlCommentPart).toBe('avatar');
+    const baseTop = parseFloat(item.style.top);
+    expect(baseTop).toBeGreaterThan(0);
+    expect(card.dataset.active).toBe('true');
     expect(identity.children[0]?.dataset.ooxmlCommentPart).toBe('author');
+    expect(identity.children[0]?.className).toBe('ooxml-comment-card__author');
     expect(identity.children[1]?.dataset.ooxmlCommentPart).toBe('date');
+    expect(identity.children[1]?.className).toBe('ooxml-comment-card__date');
     expect(content.children[1]?.dataset.ooxmlCommentPart).toBe('body');
+    expect(content.children[1]?.className).toBe('ooxml-comment-card__body');
 
     viewer.setScale(baseScale * 1.5);
-    expect(margin.style.width).toBe(`${280 / 13}em`);
-    expect(parseFloat(margin.style.fontSize)).toBeCloseTo(13 * baseScale * 1.5);
-    expect(tint.style.visibility).toBe('hidden');
-    expect(decoration.style.visibility).toBe('hidden');
+    expect(parseFloat(margin.style.width)).toBeCloseTo(280 * baseScale * 1.5);
+    expect(parseFloat(margin.style.fontSize)).toBeCloseTo(13);
+    expect(parseFloat(item.style.top)).toBeCloseTo(baseTop * 1.5);
+    expect(item.style.transform).toBe(`scale(${baseScale * 1.5})`);
+    expect(tint.style.visibility).toBe('');
+    expect(margin.style.visibility).toBe('');
+    expect(decoration.style.visibility).toBe('');
+    await vi.waitFor(() => {
+      expect(parseFloat(item.style.top)).toBeCloseTo(baseTop * 1.5);
+      expect(item.style.transform).toBe(`scale(${baseScale * 1.5})`);
+      expect(tint.style.visibility).toBe('');
+      expect(margin.style.visibility).toBe('');
+      expect(decoration.style.visibility).toBe('');
+    });
     viewer.destroy();
   });
 
@@ -300,26 +425,73 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
       reference: { source, runIndex: 4, affinity: 'preceding' },
     }] as CommentAnchorRange[];
     engine.feedTextRuns = [
-      { text: 'among', source, sourceRunIndex: 0, x: 20, y: 30, w: 35, h: 14, fontSize: 12, font: '12px sans-serif' },
-      { text: 'older', source, sourceRunIndex: 1, x: 60, y: 30, w: 30, h: 14, fontSize: 12, font: '12px sans-serif' },
-      { text: 'things', source, sourceRunIndex: 2, x: 96, y: 30, w: 36, h: 14, fontSize: 12, font: '12px sans-serif' },
-      { text: 'below', source, sourceRunIndex: 3, x: 20, y: 50, w: 34, h: 14, fontSize: 12, font: '12px sans-serif' },
+      { text: 'among', source, sourceRunIndex: 0, direction: 'rtl', x: 20, y: 30, w: 35, h: 14, fontSize: 12, font: '12px sans-serif' },
+      { text: 'older', source, sourceRunIndex: 1, direction: 'rtl', x: 60, y: 30, w: 30, h: 14, fontSize: 12, font: '12px sans-serif' },
+      { text: 'things', source, sourceRunIndex: 2, direction: 'rtl', x: 96, y: 30, w: 36, h: 14, fontSize: 12, font: '12px sans-serif' },
+      { text: 'below', source, sourceRunIndex: 3, direction: 'rtl', x: 20, y: 50, w: 34, h: 14, fontSize: 12, font: '12px sans-serif' },
     ];
     const container = makeContainer();
     const viewer = DocxScrollViewer.fromDocument(
       container as unknown as HTMLElement,
       engine.asDoc(),
-      { showComments: true },
+      { comments: true },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
 
     const scrollHost = container.children[0]!.children[0]!;
     const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
     const tint = page.children.find((child) => child.style.cssText.includes('inset:0'))!;
-    expect(tint.children).toHaveLength(2);
+    const highlights = tint.children.filter((child) =>
+      child.dataset.ooxmlCommentHighlight !== undefined);
+    expect(highlights).toHaveLength(2);
     const pageWidth = parseFloat(page.style.width);
-    expect(tint.children[0]?.style.left).toBe(`${20 / pageWidth * 100}%`);
-    expect(tint.children[0]?.style.width).toBe(`${112 / pageWidth * 100}%`);
+    expect(highlights[0]?.style.left).toBe(`${20 / pageWidth * 100}%`);
+    expect(highlights[0]?.style.width).toBe(`${112 / pageWidth * 100}%`);
+    const marker = tint.children.find((child) =>
+      child.dataset.ooxmlCommentMarker !== undefined)!;
+    expect(parseFloat(marker.style.left)).toBeLessThan(parseFloat(highlights[0]!.style.left));
+    viewer.destroy();
+  });
+
+  it('does not paint an orphan highlight for a hidden resolved thread', async () => {
+    installDom();
+    const engine = new FakeDocxEngine(1, [{ widthPt: 612, heightPt: 792 }]);
+    const source = { story: 'body', storyInstance: 'body', path: [0] } as const;
+    engine.comments = [
+      { id: 'active', author: 'Ada', text: 'Visible' },
+      { id: 'resolved', author: 'Grace', text: 'Hidden', resolved: true },
+    ];
+    engine.commentAnchors = [
+      {
+        commentId: 'active', source, startRunIndex: 0, endRunIndex: 1,
+        reference: { source, runIndex: 1, affinity: 'preceding' },
+      },
+      {
+        commentId: 'resolved', source, startRunIndex: 1, endRunIndex: 2,
+        reference: { source, runIndex: 2, affinity: 'preceding' },
+      },
+    ] as CommentAnchorRange[];
+    engine.feedTextRuns = [
+      { text: 'active', source, sourceRunIndex: 0, x: 20, y: 30, w: 40, h: 14, fontSize: 12, font: '12px sans-serif' },
+      { text: 'resolved', source, sourceRunIndex: 1, x: 20, y: 60, w: 50, h: 14, fontSize: 12, font: '12px sans-serif' },
+    ];
+    const container = makeContainer();
+    const viewer = DocxScrollViewer.fromDocument(
+      container as unknown as HTMLElement,
+      engine.asDoc(),
+      { comments: { markers: false } },
+    );
+    await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
+
+    const scrollHost = container.children[0]!.children[0]!;
+    const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
+    const tint = page.children.find((child) => child.style.cssText.includes('inset:0'))!;
+    const margin = page.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
+    expect(tint.children.filter((child) =>
+      child.dataset.ooxmlCommentHighlight !== undefined)).toHaveLength(1);
+    expect(tint.children.filter((child) =>
+      child.dataset.ooxmlCommentMarker !== undefined)).toHaveLength(0);
+    expect(margin.children).toHaveLength(1);
     viewer.destroy();
   });
 
@@ -331,7 +503,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
     const viewer = DocxScrollViewer.fromDocument(
       container as unknown as HTMLElement,
       engine.asDoc(),
-      { showComments: true },
+      { comments: true },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
     const scrollHost = container.children[0]!.children[0]!;

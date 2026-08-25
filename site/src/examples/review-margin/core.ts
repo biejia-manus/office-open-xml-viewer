@@ -1,6 +1,5 @@
 import {
-  resolveCommentAnchorRuns,
-  resolveRevisionAnchorRuns,
+  resolveDocxCommentThreads,
   type DocxDocument,
   type DocxTextRunInfo,
 } from '@silurus/ooxml/docx';
@@ -19,23 +18,11 @@ export async function renderReviewPage(
     onTextRun: (run) => runs.push(run),
   });
 
-  const comments = doc.commentAnchorRanges().flatMap((anchor) => {
-    const comment = doc.comments.find((item) => item.id === anchor.commentId);
-    const geometry = resolveCommentAnchorRuns(anchor, runs);
-    return comment && geometry.length > 0 ? [{ comment, anchor, geometry }] : [];
-  });
+  const comments = resolveDocxCommentThreads(
+    doc.comments,
+    doc.commentAnchorRanges(),
+    runs,
+  );
 
-  const revisions = doc.revisionAnchorRanges().flatMap((anchor) => {
-    const revision = doc.revisions[anchor.revisionIndex];
-    const geometry = resolveRevisionAnchorRuns(anchor, runs);
-    if (!revision || geometry.length === 0) return [];
-    return [{
-      revision,
-      geometry,
-      // deletion/moveFrom geometry is a nearby final-state position, not its old range.
-      isPositionHint: revision.kind === 'deletion' || revision.kind === 'moveFrom',
-    }];
-  });
-
-  return { pageIndex, comments, revisions };
+  return { pageIndex, comments };
 }

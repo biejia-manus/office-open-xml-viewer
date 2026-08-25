@@ -1884,6 +1884,66 @@ fn modern_comment_status(node: roxmltree::Node<'_, '_>) -> Option<String> {
     }
 }
 
+fn modern_comment_anchor_element(
+    list: roxmltree::Node<'_, '_>,
+) -> (Option<String>, Option<String>) {
+    // [MS-ODRAWXML] §2.29.3.20: the last drawing-element moniker in the
+    // list identifies the target; earlier monikers describe its container
+    // path (document/slide/group).
+    list.descendants()
+        .filter(|node| {
+            node.is_element()
+                && matches!(
+                    node.tag_name().name(),
+                    "spMk" | "grpSpMk" | "graphicFrameMk" | "cxnSpMk" | "picMk" | "inkMk"
+                )
+        })
+        .last()
+        .map(|node| {
+            (
+                node.attribute("id").map(String::from),
+                node.attribute("creationId").map(String::from),
+            )
+        })
+        .unwrap_or((None, None))
+}
+
+fn parse_modern_comment_anchors(
+    comment: roxmltree::Node<'_, '_>,
+) -> Vec<PptxCommentAnchor> {
+    let mut anchors = Vec::new();
+    for list in comment.children().filter(|node| node.is_element()) {
+        match list.tag_name().name() {
+            "sldMkLst" => anchors.push(PptxCommentAnchor::Slide),
+            "deMkLst" => {
+                let (element_id, creation_id) = modern_comment_anchor_element(list);
+                anchors.push(PptxCommentAnchor::DrawingElement {
+                    element_id,
+                    creation_id,
+                });
+            }
+            "txMkLst" => {
+                let (element_id, _) = modern_comment_anchor_element(list);
+                let range = list
+                    .descendants()
+                    .find(|node| node.is_element() && node.tag_name().name() == "txMk");
+                anchors.push(PptxCommentAnchor::TextRange {
+                    element_id,
+                    start: range
+                        .and_then(|node| node.attribute("cp"))
+                        .and_then(|value| value.parse::<i32>().ok()),
+                    length: range
+                        .and_then(|node| node.attribute("len"))
+                        .and_then(|value| value.parse::<i32>().ok()),
+                });
+            }
+            "unknownAnchor" => anchors.push(PptxCommentAnchor::Unknown),
+            _ => {}
+        }
+    }
+    anchors
+}
+
 /// Resolve and parse the slide's classic or modern comments relationship.
 /// Classic comments are ECMA-376 §19.4 `<p:cmLst>` parts. Modern comments use
 /// the 2018 PowerPoint namespace and relationship defined by [MS-PPTX] §2.1.5.
@@ -1964,6 +2024,7 @@ fn load_pptx_comments(
                     y: position
                         .and_then(|node| node.attribute("y"))
                         .and_then(|value| value.parse::<i64>().ok()),
+                    anchors: parse_modern_comment_anchors(cm),
                     status: modern_comment_status(cm),
                     text: comment_text_body(cm),
                     replies,
@@ -2022,6 +2083,7 @@ fn load_pptx_comments(
             date,
             x,
             y,
+            anchors: Vec::new(),
             status: None,
             text,
             replies: Vec::new(),
@@ -3370,6 +3432,7 @@ mod tests {
     #[test]
     fn picture_element_serializes_path_not_data_url() {
         let pic = PictureElement {
+            id: None,
             x: 0,
             y: 0,
             width: 100,
@@ -10945,7 +11008,7 @@ mod tests {
 
     #[test]
     fn modern_comment_preserves_thread_author_status_text_and_position() {
-        let comments = r#"<p188:cmLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p188:cm id="{ROOT}" authorId="{ADA}" status="active" created="2026-08-24T12:00:00Z"><p188:pos x="6096000" y="3429000"/><p188:replyLst><p188:reply id="{REPLY}" authorId="{BOB}" status="resolved" created="2026-08-24T12:01:00Z"><p188:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Reply</a:t></a:r></a:p></p188:txBody></p188:reply></p188:replyLst><p188:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>First line</a:t></a:r></a:p><a:p><a:r><a:t>Second line</a:t></a:r></a:p></p188:txBody></p188:cm></p188:cmLst>"#;
+        let comments = r#"<p188:cmLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pc="http://schemas.microsoft.com/office/powerpoint/2013/main/command" xmlns:ac="http://schemas.microsoft.com/office/drawing/2013/main/command"><p188:cm id="{ROOT}" authorId="{ADA}" status="active" created="2026-08-24T12:00:00Z"><ac:deMkLst><pc:docMk/><pc:sldMk sldId="256"/><ac:spMk id="3" creationId="{SHAPE}"/></ac:deMkLst><p188:pos x="120000" y="240000"/><p188:replyLst><p188:reply id="{REPLY}" authorId="{BOB}" status="resolved" created="2026-08-24T12:01:00Z"><p188:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Reply</a:t></a:r></a:p></p188:txBody></p188:reply></p188:replyLst><p188:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>First line</a:t></a:r></a:p><a:p><a:r><a:t>Second line</a:t></a:r></a:p></p188:txBody></p188:cm></p188:cmLst>"#;
         let authors = r#"<p188:authorLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><p188:author id="{ADA}" name="Ada" initials="AL"/><p188:author id="{BOB}" name="Bob" initials="B"/></p188:authorLst>"#;
         let data = build_modern_comment_deck(comments, authors);
         let presentation = parse_presentation_from_bytes(&data).expect("modern comments parse");
@@ -10956,7 +11019,18 @@ mod tests {
         assert_eq!(comment.author.as_deref(), Some("Ada"));
         assert_eq!(comment.status.as_deref(), Some("active"));
         assert_eq!(comment.date.as_deref(), Some("2026-08-24T12:00:00Z"));
-        assert_eq!((comment.x, comment.y), (Some(6096000), Some(3429000)));
+        assert_eq!((comment.x, comment.y), (Some(120000), Some(240000)));
+        assert_eq!(
+            comment.anchors,
+            vec![PptxCommentAnchor::DrawingElement {
+                element_id: Some("3".to_string()),
+                creation_id: Some("{SHAPE}".to_string()),
+            }]
+        );
+        assert_eq!(
+            serde_json::to_value(&comment.anchors).unwrap()[0]["elementId"],
+            "3"
+        );
         assert_eq!(comment.text, "First line\nSecond line");
         assert_eq!(comment.replies.len(), 1);
         assert_eq!(comment.replies[0].author.as_deref(), Some("Bob"));

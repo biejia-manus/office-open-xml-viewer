@@ -15,7 +15,11 @@ export type {
   HiddenSheetMode,
   XlsxCopyResult,
 } from './viewer.js';
-export type { XlsxCommentUiOptions } from './comment-card.js';
+export type { XlsxCommentsOptions } from './comment-card.js';
+export type {
+  ViewerCommentMessageContext,
+  ViewerCommentThreadContext,
+} from '@silurus/ooxml-core';
 export type {
   CellAddress,
   XlsxSelectionArea,

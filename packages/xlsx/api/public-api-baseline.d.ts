@@ -1849,8 +1849,19 @@ export interface TileInfo {
     flip?: string;
     algn?: string;
 }
-interface ViewerCommentUiOptions {
+export interface ViewerCommentMessageContext {
+    readonly id?: string;
+    readonly author?: string;
+    readonly date?: string;
+    readonly text: string;
+    readonly status?: 'active' | 'resolved' | 'closed';
+}
+interface ViewerCommentsOptions {
     readonly includeResolved?: boolean;
+}
+export interface ViewerCommentThreadContext {
+    readonly root: ViewerCommentMessageContext;
+    readonly replies: readonly ViewerCommentMessageContext[];
 }
 export interface ViewerContextMenuEvent<TContext> {
     readonly originalEvent: MouseEvent;
@@ -1950,7 +1961,7 @@ export interface XlsxCommentReply {
     text: string;
     resolved?: boolean;
 }
-export interface XlsxCommentUiOptions extends ViewerCommentUiOptions {
+export interface XlsxCommentsOptions extends ViewerCommentsOptions {
 }
 export type XlsxCopyResult = Readonly<{
     status: 'copied';
@@ -2066,6 +2077,7 @@ export interface XlsxSelectionContextCell {
     readonly valueType: 'empty' | 'text' | 'number' | 'bool' | 'error' | 'shared';
     readonly value: string | number | boolean | null;
     readonly formula?: string;
+    readonly comment?: ViewerCommentThreadContext;
 }
 export interface XlsxSelectionContextOptions {
     readonly maxCells?: number;
@@ -2101,6 +2113,7 @@ export class XlsxSheetViewer implements ZoomableViewer {
     fitPage(): void;
     getCellAt(clientX: number, clientY: number): CellAddress | null;
     getCellViewportRect(cell: CellAddress | string): XlsxCellViewportRect | null;
+    getComments(): readonly Readonly<XlsxComment>[];
     get selectionState(): XlsxSelectionState | null;
     setSelection(selection: XlsxSelectionInput): void;
     getSelectionContext(options?: XlsxSelectionContextOptions): XlsxSelectionContext | null;
@@ -2135,8 +2148,7 @@ export interface XlsxSheetViewerOptions extends LoadOptions {
     enableHyperlinks?: boolean;
     selectionColor?: string;
     findHighlightColors?: FindHighlightColors;
-    showComments?: boolean;
-    commentUi?: XlsxCommentUiOptions;
+    comments?: boolean | XlsxCommentsOptions;
     hiddenSheetMode?: HiddenSheetMode;
     onViewportChange?: (offset: XlsxViewportOffset) => void;
 }
@@ -2169,6 +2181,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     scrollToCell(ref: string, options?: XlsxScrollToCellOptions): Promise<void>;
     getCellAt(clientX: number, clientY: number): CellAddress | null;
     getCellViewportRect(cell: CellAddress | string): XlsxCellViewportRect | null;
+    getComments(): readonly Readonly<XlsxComment>[];
     get selectionState(): XlsxSelectionState | null;
     setSelection(input: XlsxSelectionInput): void;
     getSelectionContext(options?: XlsxSelectionContextOptions): XlsxSelectionContext | null;

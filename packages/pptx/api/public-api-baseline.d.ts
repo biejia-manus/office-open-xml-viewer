@@ -162,6 +162,7 @@ export interface ChartDisplayUnitsLabel {
 }
 export interface ChartElement {
     type: 'chart';
+    id?: string;
     x: number;
     y: number;
     width: number;
@@ -1123,6 +1124,7 @@ export interface MathSvg {
 }
 export interface MediaElement {
     type: 'media';
+    id?: string;
     x: number;
     y: number;
     width: number;
@@ -1281,6 +1283,7 @@ export interface PatternFill {
 }
 export interface PictureElement {
     type: 'picture';
+    id?: string;
     x: number;
     y: number;
     width: number;
@@ -1313,6 +1316,20 @@ export interface PictureElement {
     scene3d?: Scene3d;
     sp3d?: Sp3d;
 }
+export type PptxCommentAnchor = Readonly<{
+    type: 'slide';
+}> | Readonly<{
+    type: 'drawingElement';
+    elementId?: string;
+    creationId?: string;
+}> | Readonly<{
+    type: 'textRange';
+    elementId?: string;
+    start?: number;
+    length?: number;
+}> | Readonly<{
+    type: 'unknown';
+}>;
 export interface PptxComment {
     authorId?: number;
     modernAuthorId?: string;
@@ -1322,6 +1339,7 @@ export interface PptxComment {
     date?: string;
     x?: number;
     y?: number;
+    anchors?: readonly Readonly<PptxCommentAnchor>[];
     status?: 'active' | 'resolved' | 'closed';
     text: string;
     replies?: readonly Readonly<PptxCommentReply>[];
@@ -1334,7 +1352,33 @@ export interface PptxCommentReply {
     status?: 'active' | 'resolved' | 'closed';
     text: string;
 }
-export interface PptxCommentUiOptions extends ViewerCommentUiOptions {
+export interface PptxCommentSelectionContext {
+    readonly format: 'pptx';
+    readonly kind: 'comment';
+    readonly slideIndex: number;
+    readonly occurrenceId: string;
+    readonly commentId?: string;
+    readonly point?: Readonly<{
+        x: number;
+        y: number;
+    }>;
+    readonly thread: ViewerCommentThreadContext;
+    readonly truncated: boolean;
+    readonly truncationReasons: readonly 'text'[];
+    readonly textCharacters: number;
+    readonly maxTextCharacters: number;
+}
+export interface PptxCommentsOptions extends ViewerCommentsOptions {
+    readonly side?: 'auto' | 'left' | 'right';
+    readonly markers?: boolean;
+    readonly connectors?: ViewerCommentConnectorOptions;
+}
+export interface PptxElementBounds {
+    readonly elementId: string;
+    readonly elementIndex: number;
+    readonly origin: SlideElementOrigin | 'unknown';
+    readonly elementType: SlideElement['type'];
+    readonly bounds: PptxElementContext['bounds'];
 }
 export interface PptxElementContext {
     readonly format: 'pptx';
@@ -1394,6 +1438,7 @@ export class PptxPresentation {
     renderSlideToBitmap(slideIndex: number, opts?: RenderSlideToBitmapOptions): Promise<ImageBitmap>;
     collectSlideRuns(slideIndex: number, width?: number): Promise<PptxTextRunInfo[]>;
     getElementContextAt(slideIndex: number, point: PptxSlidePoint, options?: PptxElementContextOptions): Promise<PptxElementContext | null>;
+    getElementBoundsByIds(slideIndex: number, elementIds: readonly string[]): Promise<readonly PptxElementBounds[]>;
     getMedia(mediaPath: string): Promise<Blob>;
     getImage(imagePath: string, mimeType: string): Promise<Blob>;
     getResourceMetrics(): Promise<OoxmlResourceMetrics>;
@@ -1437,8 +1482,7 @@ export interface PptxScrollViewerOptions extends Pick<RenderSlideOptions, 'width
     paddingRight?: number;
     overscan?: number;
     enableTextSelection?: boolean;
-    showComments?: boolean;
-    commentUi?: PptxCommentUiOptions;
+    comments?: boolean | PptxCommentsOptions;
     enableElementSelection?: boolean;
     elementHitTolerance?: number;
     onSelectionContextChange?: (context: PptxSelectionContext | null) => void;
@@ -1458,7 +1502,7 @@ export interface PptxScrollViewerOptions extends Pick<RenderSlideOptions, 'width
     onHyperlinkClick?: (target: HyperlinkTarget) => void;
     enableHyperlinks?: boolean;
 }
-export type PptxSelectionContext = PptxTextSelectionContext | PptxElementContext;
+export type PptxSelectionContext = PptxTextSelectionContext | PptxCommentSelectionContext | PptxElementContext;
 export type PptxSelectionContextOptions = TextSelectionContextOptions;
 export interface PptxSelectionRunLocator {
     readonly slideIndex: number;
@@ -1798,6 +1842,7 @@ export interface TableCell {
 }
 export interface TableElement {
     type: 'table';
+    id?: string;
     x: number;
     y: number;
     width: number;
@@ -1893,8 +1938,27 @@ export interface TileInfo {
     flip?: string;
     algn?: string;
 }
-interface ViewerCommentUiOptions {
+export interface ViewerCommentConnectorOptions {
+    readonly route?: ViewerCommentConnectorRoute;
+    readonly stroke?: ViewerCommentConnectorStroke;
+    readonly color?: string;
+    readonly activeColor?: string;
+}
+export type ViewerCommentConnectorRoute = 'bezier' | 'orthogonal';
+export type ViewerCommentConnectorStroke = 'solid' | 'dashed';
+export interface ViewerCommentMessageContext {
+    readonly id?: string;
+    readonly author?: string;
+    readonly date?: string;
+    readonly text: string;
+    readonly status?: 'active' | 'resolved' | 'closed';
+}
+interface ViewerCommentsOptions {
     readonly includeResolved?: boolean;
+}
+export interface ViewerCommentThreadContext {
+    readonly root: ViewerCommentMessageContext;
+    readonly replies: readonly ViewerCommentMessageContext[];
 }
 export interface ViewerContextMenuEvent<TContext> {
     readonly originalEvent: MouseEvent;

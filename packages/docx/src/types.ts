@@ -1651,6 +1651,8 @@ export interface DocxTextRunInfo {
    *  runs. With {@link source}, this joins a rendered fragment back to its
    *  model run — e.g. to place ECMA-376 §17.13.4 comment-anchor overlays. */
   sourceRunIndex?: number;
+  /** Resolved direction of this rendered text segment. */
+  direction?: 'ltr' | 'rtl';
   text: string;
   /** Left edge in canvas CSS px. */
   x: number;
@@ -1660,6 +1662,11 @@ export interface DocxTextRunInfo {
   w: number;
   /** Line height in CSS px. */
   h: number;
+  /** Exact font-box rectangle used for Word-style highlighting. Falls back to
+   * x/y/w/h only when retained font metrics are unavailable. */
+  /** Character-height rectangle for authored or application-owned highlighting.
+   * Unlike x/y/w/h, this excludes additional paragraph line advance. */
+  highlightBounds?: Readonly<{ x: number; y: number; width: number; height: number }>;
   /** Font size in CSS px. */
   fontSize: number;
   /** CSS `font` shorthand used for canvas drawing. */

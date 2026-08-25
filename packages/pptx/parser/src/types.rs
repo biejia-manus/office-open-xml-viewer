@@ -102,6 +102,33 @@ pub(crate) struct SlideElementSource {
     pub(crate) origin: SlideElementOrigin,
 }
 
+/// Explicit target carried by a PowerPoint modern comment. [MS-PPTX]
+/// §2.16.3.3 requires one anchor group; drawing and text anchors use the
+/// content-moniker lists from [MS-ODRAWXML] §2.29.3.20/21.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub(crate) enum PptxCommentAnchor {
+    Slide,
+    DrawingElement {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "elementId")]
+        element_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "creationId")]
+        creation_id: Option<String>,
+    },
+    TextRange {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "elementId")]
+        element_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        start: Option<i32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        length: Option<i32>,
+    },
+    Unknown,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PptxComment {
@@ -136,6 +163,10 @@ pub(crate) struct PptxComment {
     pub(crate) x: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) y: Option<i64>,
+    /// Modern comment targets. Multiple drawing/text moniker lists mean one
+    /// comment can explicitly target multiple slide elements.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) anchors: Vec<PptxCommentAnchor>,
     /// Modern `p188:cm@status`; omitted for classic comments. The schema
     /// defaults a missing value to `active`, so the parser resolves that value.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -188,6 +219,8 @@ pub(crate) enum SlideElement {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ChartElement {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) id: Option<String>,
     pub(crate) x: i64,
     pub(crate) y: i64,
     pub(crate) width: i64,
@@ -201,6 +234,8 @@ pub(crate) struct ChartElement {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TableElement {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) id: Option<String>,
     pub(crate) x: i64,
     pub(crate) y: i64,
     pub(crate) width: i64,
@@ -504,6 +539,8 @@ pub(crate) struct ShapeElement {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PictureElement {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) id: Option<String>,
     pub(crate) x: i64,
     pub(crate) y: i64,
     pub(crate) width: i64,
@@ -615,6 +652,8 @@ pub(crate) struct PictureElement {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MediaElement {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) id: Option<String>,
     pub(crate) x: i64,
     pub(crate) y: i64,
     pub(crate) width: i64,
@@ -1535,6 +1574,7 @@ mod group_transform_tests {
             .expect("minimal chart");
         let mut elements = vec![
             SlideElement::Table(TableElement {
+                id: None,
                 x: 10,
                 y: 20,
                 width: 20,
@@ -1557,6 +1597,7 @@ mod group_transform_tests {
                 ..chart
             }),
             SlideElement::Media(MediaElement {
+                id: None,
                 x: 10,
                 y: 20,
                 width: 20,

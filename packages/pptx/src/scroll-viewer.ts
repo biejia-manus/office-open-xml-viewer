@@ -8,7 +8,7 @@ import {
 } from '@silurus/ooxml-core/internal/canvas-viewer-mechanics';
 import {
   disposeReadOnlyCommentMargin,
-  READ_ONLY_COMMENT_MARGIN_WIDTH_PX,
+  previewReadOnlyCommentMargin,
 } from '@silurus/ooxml-core/internal/read-only-comment-margin';
 import { eventTargetsDataAttributeWithin } from '@silurus/ooxml-core/internal/dom-interaction-boundary';
 import {
@@ -22,9 +22,11 @@ import { buildPptxTextLayer } from './text-layer';
 import { PptxFindController, type PptxMatchLocation } from './find';
 import { buildPptxHighlightLayer } from './find-highlight-layer';
 import {
+  createPptxCommentSelectionContext,
   readPptxTextSelectionContext,
 } from './selection-context';
 import type {
+  PptxElementBounds,
   PptxElementContext,
   PptxSelectionContext,
   PptxSelectionContextOptions,
@@ -35,7 +37,8 @@ import {
 } from './element-selection';
 import {
   buildPptxCommentMargin,
-  type PptxCommentUiOptions,
+  pptxCommentOccurrenceKey,
+  type PptxCommentsOptions,
 } from './comment-margin';
 
 /**
@@ -61,7 +64,11 @@ const ZOOM_SETTLE_MS = 150;
  */
 const DEFAULT_PAGE_SHADOW = '0 1px 3px rgba(0,0,0,0.2)';
 const COMMENT_MARGIN_GAP_PX = 12;
-const COMMENT_MARGIN_FONT_SIZE_PX = 13;
+// Presentation slides have a wider natural canvas than a DOCX page. Give the
+// built-in PPTX review margin its own baseline so it does not become
+// disproportionately small when the composite slide + margin is fit to width.
+const COMMENT_MARGIN_WIDTH_PX = 440;
+const COMMENT_MARGIN_FONT_SIZE_PX = 20;
 const borrowedPresentationOption = Symbol('PptxScrollViewer.borrowedPresentation');
 type InternalPptxScrollViewerOptions = PptxScrollViewerOptions & {
   [borrowedPresentationOption]?: PptxPresentation;
@@ -105,10 +112,8 @@ export interface PptxScrollViewerOptions extends Pick<RenderSlideOptions, 'width
    *  shipped back beside the slide bitmap, so the overlay is populated identically
    *  to main mode (no more empty overlay / one-time warning). */
   enableTextSelection?: boolean;
-  /** Show read-only slide comment markers and cards. Default false. */
-  showComments?: boolean;
-  /** Visibility options for the built-in comment UI. */
-  commentUi?: PptxCommentUiOptions;
+  /** Show the built-in read-only comments. Pass options to configure them. Default false. */
+  comments?: boolean | PptxCommentsOptions;
   /** Enable read-only slide-element selection with a non-editable outline. Default false. */
   enableElementSelection?: boolean;
   /** Straight-line hit tolerance in CSS pixels. Default 6. */
@@ -232,6 +237,9 @@ interface SlideSlot {
   commentMarkerLayer: HTMLDivElement | null;
   commentMargin: HTMLDivElement | null;
   commentDecorationLayer: HTMLDivElement | null;
+  commentElementBounds: readonly PptxElementBounds[];
+  commentAnchorSlide: number;
+  commentAnchorGeneration: number;
   /** slide index this slot is currently rendering / has rendered, or -1 when free. */
   renderedSlide: number;
   /** The `_scale` at which this slot's on-screen canvas bitmap (and text overlay)
@@ -311,6 +319,7 @@ export class PptxScrollViewer implements ZoomableViewer {
   private _commentOutsidePointerListener: ((event: PointerEvent) => void) | null = null;
   private _elementContext: PptxElementContext | null = null;
   private _activeCommentId: string | null = null;
+  private _activeCommentSlide: number | null = null;
   private _commentGeometryScheduled = false;
   private readonly _pendingCommentGeometry = new Map<number, SlideSlot>();
   private _hasComments = false;
@@ -430,7 +439,7 @@ export class PptxScrollViewer implements ZoomableViewer {
     if (borrowedPresentation) {
       this._presentationOwner = new TerminalResourceOwner('PptxScrollViewer', borrowedPresentation, false);
       this._mode = resolveCanvasViewerMode('PptxScrollViewer', opts.mode, borrowedPresentation);
-      this._hasComments = opts.showComments === true
+      this._hasComments = (opts.comments === true || typeof opts.comments === 'object')
         && this._presentationHasComments(borrowedPresentation);
     } else {
       this._presentationOwner = new TerminalResourceOwner('PptxScrollViewer');
@@ -474,12 +483,14 @@ export class PptxScrollViewer implements ZoomableViewer {
     this._scrollListener = () => this._onScroll();
     this._scrollHost.addEventListener('scroll', this._scrollListener);
 
-    if (opts.showComments) {
+    if (opts.comments) {
       this._commentOutsidePointerListener = (event) => {
         if (eventTargetsDataAttributeWithin(event, this._wrapper, 'ooxmlCommentId')) return;
         if (this._activeCommentId === null) return;
         this._activeCommentId = null;
+        this._activeCommentSlide = null;
         for (const [slide, slot] of this._slots) this._redrawSlotComments(slide, slot);
+        this._emitSelectionContextChange();
       };
       this._wrapper.ownerDocument.addEventListener('pointerdown', this._commentOutsidePointerListener);
     }
@@ -570,6 +581,7 @@ export class PptxScrollViewer implements ZoomableViewer {
         this._find.invalidate();
         this._findActive = false;
         this._activeCommentId = null;
+        this._activeCommentSlide = null;
         this._hasComments = false;
         if (ownedPresentation) {
           for (const [idx, slot] of [...this._slots]) this._recycleSlot(idx, slot);
@@ -583,7 +595,8 @@ export class PptxScrollViewer implements ZoomableViewer {
       this._find.invalidate();
       this._findActive = false;
       this._activeCommentId = null;
-      this._hasComments = this._opts.showComments === true
+      this._activeCommentSlide = null;
+      this._hasComments = this._commentsEnabled()
         && this._presentationHasComments(pres);
       // Lay out + mount the first window now that the engine exists (mirrors the
       // borrowed-engine path in the constructor). relayout() is idempotent and
@@ -638,35 +651,55 @@ export class PptxScrollViewer implements ZoomableViewer {
     // the composite fit in one pass so a resize never feeds the old card scale
     // back into the next base-scale calculation.
     const naturalSlideWidth = this._pres ? this._pres.slideWidth / EMU_PER_PX : 0;
-    const fit = this._opts.showComments && this._hasComments && naturalSlideWidth > 0
+    const fit = this._commentsEnabled() && this._hasComments && naturalSlideWidth > 0
       ? available * naturalSlideWidth /
-        (naturalSlideWidth + COMMENT_MARGIN_GAP_PX + READ_ONLY_COMMENT_MARGIN_WIDTH_PX)
+        (naturalSlideWidth + COMMENT_MARGIN_GAP_PX + COMMENT_MARGIN_WIDTH_PX)
       : available;
     return fit > 0 ? fit : 0; // gutters ≥ container ⇒ defer (same as zero-width)
   }
 
   private _commentMarginExtent(): number {
-    return this._opts.showComments && this._hasComments
-      ? (COMMENT_MARGIN_GAP_PX + READ_ONLY_COMMENT_MARGIN_WIDTH_PX) * this._commentUiZoom()
+    return this._commentsEnabled() && this._hasComments
+      ? (COMMENT_MARGIN_GAP_PX + COMMENT_MARGIN_WIDTH_PX) * this._commentZoom()
       : 0;
   }
 
   /** Comment chrome uses the same absolute zoom as the rendered presentation. */
-  private _commentUiZoom(): number {
+  private _commentZoom(): number {
     return this._scaleEstablished ? this._scale : 1;
+  }
+
+  private _commentsEnabled(): boolean {
+    return this._opts.comments === true || typeof this._opts.comments === 'object';
+  }
+
+  private _commentsOptions(): PptxCommentsOptions | undefined {
+    return typeof this._opts.comments === 'object' ? this._opts.comments : undefined;
+  }
+
+  private _commentSide(): 'left' | 'right' {
+    const requested = this._commentsOptions()?.side;
+    if (requested === 'left' || requested === 'right') return requested;
+    const computedDirection = this._container.ownerDocument.defaultView?.getComputedStyle?.(
+      this._container,
+    ).direction;
+    const direction = computedDirection || this._container.dir || this._container.style.direction;
+    return direction === 'rtl' ? 'left' : 'right';
   }
 
   private _syncCommentMarginGeometry(margin: HTMLDivElement | null): void {
     if (!margin) return;
-    const zoom = this._commentUiZoom();
-    margin.style.left = `calc(100% + ${COMMENT_MARGIN_GAP_PX / COMMENT_MARGIN_FONT_SIZE_PX}em)`;
-    margin.style.width = `${READ_ONLY_COMMENT_MARGIN_WIDTH_PX / COMMENT_MARGIN_FONT_SIZE_PX}em`;
-    margin.style.fontSize = `${COMMENT_MARGIN_FONT_SIZE_PX * zoom}px`;
+    const zoom = this._commentZoom();
+    const offset = `calc(100% + ${COMMENT_MARGIN_GAP_PX * zoom}px)`;
+    margin.style.left = this._commentSide() === 'right' ? offset : '';
+    margin.style.right = this._commentSide() === 'left' ? offset : '';
+    margin.style.width = `${COMMENT_MARGIN_WIDTH_PX * zoom}px`;
+    margin.style.fontSize = `${COMMENT_MARGIN_FONT_SIZE_PX}px`;
     margin.dataset.ooxmlCommentZoom = String(zoom);
   }
 
   private _presentationHasComments(presentation: PptxPresentation): boolean {
-    const includeResolved = this._opts.commentUi?.includeResolved === true;
+    const includeResolved = this._commentsOptions()?.includeResolved === true;
     for (let i = 0; i < presentation.slideCount; i++) {
       if (presentation.getComments(i).some((comment) => includeResolved ||
         (comment.status !== 'resolved' && comment.status !== 'closed'))) return true;
@@ -941,7 +974,7 @@ export class PptxScrollViewer implements ZoomableViewer {
     let commentMarkerLayer: HTMLDivElement | null = null;
     let commentMargin: HTMLDivElement | null = null;
     let commentDecorationLayer: HTMLDivElement | null = null;
-    if (this._opts.showComments && this._hasComments) {
+    if (this._commentsEnabled() && this._hasComments) {
       commentMarkerLayer = document.createElement('div');
       commentMarkerLayer.style.cssText =
         'position:absolute;inset:0;overflow:hidden;pointer-events:none;';
@@ -951,10 +984,12 @@ export class PptxScrollViewer implements ZoomableViewer {
         'position:absolute;top:0;height:100%;box-sizing:border-box;' +
         'overflow-x:hidden;overflow-y:auto;pointer-events:auto;';
       this._syncCommentMarginGeometry(commentMargin);
-      commentDecorationLayer = document.createElement('div');
-      commentDecorationLayer.style.cssText =
-        'position:absolute;top:0;left:0;overflow:visible;pointer-events:none;';
-      wrapper.appendChild(commentDecorationLayer);
+      if (this._commentsOptions()?.connectors !== undefined) {
+        commentDecorationLayer = document.createElement('div');
+        commentDecorationLayer.style.cssText =
+          'position:absolute;top:0;left:0;overflow:visible;pointer-events:none;';
+        wrapper.appendChild(commentDecorationLayer);
+      }
       wrapper.appendChild(commentMargin);
     }
     const elementLayer = createCanvasElementOutlineLayer(
@@ -971,6 +1006,9 @@ export class PptxScrollViewer implements ZoomableViewer {
       commentMarkerLayer,
       commentMargin,
       commentDecorationLayer,
+      commentElementBounds: Object.freeze([]),
+      commentAnchorSlide: -1,
+      commentAnchorGeneration: 0,
       renderedSlide: -1,
       renderedScale: -1,
       dispatcher: new StaticCanvasRenderDispatcher(canvas, this._mode === 'worker'),
@@ -1010,11 +1048,21 @@ export class PptxScrollViewer implements ZoomableViewer {
     slot.highlightLayer.innerHTML = '';
     slot.highlightLayer.style.transform = '';
     slot.highlightLayer.style.transformOrigin = '';
-    slot.commentMarkerLayer?.replaceChildren();
-    if (slot.commentMargin) disposeReadOnlyCommentMargin(slot.commentMargin);
+    if (slot.commentMarkerLayer) {
+      slot.commentMarkerLayer.replaceChildren();
+      slot.commentMarkerLayer.style.visibility = '';
+    }
+    if (slot.commentMargin) {
+      disposeReadOnlyCommentMargin(slot.commentMargin);
+      slot.commentMargin.style.visibility = '';
+    }
     if (slot.commentDecorationLayer) {
       disposeReadOnlyCommentDecoration(slot.commentDecorationLayer);
+      slot.commentDecorationLayer.style.visibility = '';
     }
+    slot.commentElementBounds = Object.freeze([]);
+    slot.commentAnchorSlide = -1;
+    slot.commentAnchorGeneration++;
     renderCanvasElementOutline(slot.elementLayer, null);
     // `_previewSlot` pins an explicit CSS height while stretching the current
     // bitmap during a zoom burst. A slot can leave the visible range before the
@@ -1036,7 +1084,11 @@ export class PptxScrollViewer implements ZoomableViewer {
     slot.wrapper.style.height = `${this._slideHeightPx()}px`;
     this._syncCommentMarginGeometry(slot.commentMargin);
     if (slot.commentDecorationLayer) {
-      slot.commentDecorationLayer.style.width = `${wpx + this._commentMarginExtent()}px`;
+      const marginExtent = this._commentMarginExtent();
+      slot.commentDecorationLayer.style.left = this._commentSide() === 'left'
+        ? `${-marginExtent}px`
+        : '0px';
+      slot.commentDecorationLayer.style.width = `${wpx + marginExtent}px`;
       slot.commentDecorationLayer.style.height = `${this._slideHeightPx()}px`;
     }
     this._redrawElementOutlineForSlot(i, slot);
@@ -1049,8 +1101,11 @@ export class PptxScrollViewer implements ZoomableViewer {
     // duplicated per viewer (one line; not hoisted to core).
     const { left: padL } = this._padH();
     const cw = this._scrollHost.clientWidth;
-    const compositeWidth = wpx + this._commentMarginExtent();
-    slot.wrapper.style.left = `${Math.max(padL, (cw - compositeWidth) / 2)}px`;
+    const marginExtent = this._commentMarginExtent();
+    const compositeWidth = wpx + marginExtent;
+    const compositeLeft = Math.max(padL, (cw - compositeWidth) / 2);
+    slot.wrapper.style.left = `${compositeLeft +
+      (this._commentSide() === 'left' ? marginExtent : 0)}px`;
   }
 
   /** Device-pixel ratio for a render (opts override → window → 1). */
@@ -1158,6 +1213,7 @@ export class PptxScrollViewer implements ZoomableViewer {
           buildPptxTextLayer(slot.textLayer, runs, Math.round(widthPx), Math.round(this._slideHeightPx()), this._hyperlinkHandler(), i);
         }
         if (wantRuns) this._refreshFindRuns(i, runs);
+        this._commitSlotComments(i, slot);
         this._redrawSlotHighlights(i, slot);
       })
       .catch((err: unknown) => {
@@ -1233,6 +1289,7 @@ export class PptxScrollViewer implements ZoomableViewer {
           );
         }
         if (wantRuns) this._refreshFindRuns(i, runs);
+        this._commitSlotComments(i, slot);
         this._redrawSlotHighlights(i, slot);
       })
       .catch((err: unknown) => {
@@ -1392,6 +1449,7 @@ export class PptxScrollViewer implements ZoomableViewer {
         }
       }
       if (wantRuns) this._refreshFindRuns(i, runs);
+      this._commitSlotComments(i, slot);
       this._redrawSlotHighlights(i, slot);
       painted = true;
     } catch (err) {
@@ -1723,7 +1781,24 @@ export class PptxScrollViewer implements ZoomableViewer {
       slot.textLayer.style.transformOrigin = '0 0';
       slot.textLayer.style.transform = `scale(${ratio})`;
     }
-    this._redrawSlotComments(i, slot);
+    if (slot.renderedScale > 0) {
+      const ratio = this._scale / slot.renderedScale;
+      const previewScale = Math.round(ratio * 1_000_000) / 1_000_000;
+      if (slot.commentMargin) previewReadOnlyCommentMargin(slot.commentMargin, ratio);
+      for (const marker of slot.commentMarkerLayer?.children ?? []) {
+        if ((marker as HTMLElement).dataset.ooxmlCommentMarker === undefined) continue;
+        (marker as HTMLElement).style.transform = `translate(-50%,-50%) scale(${previewScale})`;
+      }
+      if (slot.commentMarkerLayer) slot.commentMarkerLayer.style.visibility = '';
+      if (slot.commentMargin) slot.commentMargin.style.visibility = '';
+      if (slot.commentDecorationLayer) slot.commentDecorationLayer.style.visibility = '';
+      return;
+    }
+    // No committed geometry exists during the first render, so there is nothing
+    // trustworthy to preview yet.
+    if (slot.commentMarkerLayer) slot.commentMarkerLayer.style.visibility = 'hidden';
+    if (slot.commentMargin) slot.commentMargin.style.visibility = 'hidden';
+    if (slot.commentDecorationLayer) slot.commentDecorationLayer.style.visibility = 'hidden';
   }
 
   /** (Re)schedule the debounced settle re-render (design §7 mechanism 2). Resets
@@ -1849,6 +1924,7 @@ export class PptxScrollViewer implements ZoomableViewer {
           }
         }
         if (wantRuns) this._refreshFindRuns(i, runs);
+        this._commitSlotComments(i, slot);
         this._redrawSlotHighlights(i, slot);
       })
       .catch((err: unknown) => {
@@ -1933,6 +2009,7 @@ export class PptxScrollViewer implements ZoomableViewer {
           }
         }
         if (wantRuns) this._refreshFindRuns(i, runs);
+        this._commitSlotComments(i, slot);
         this._redrawSlotHighlights(i, slot);
       })
       .catch((err: unknown) => {
@@ -2042,6 +2119,7 @@ export class PptxScrollViewer implements ZoomableViewer {
       slot.commentMarkerLayer,
       slot.commentMargin,
       this._pres.getComments(slide),
+      slot.commentElementBounds,
       slide,
       this._pres.slideWidth,
       this._pres.slideHeight,
@@ -2050,28 +2128,81 @@ export class PptxScrollViewer implements ZoomableViewer {
         const next = active ? id : this._activeCommentId === id ? null : this._activeCommentId;
         if (next === this._activeCommentId) return;
         this._activeCommentId = next;
+        this._activeCommentSlide = next ? slide : null;
+        this._elementContext = null;
         for (const [mountedSlide, mountedSlot] of this._slots) {
           this._redrawSlotComments(mountedSlide, mountedSlot);
         }
+        this._emitSelectionContextChange();
       },
-      this._commentUiZoom(),
-      this._opts.commentUi?.includeResolved === true,
+      this._commentZoom(),
+      COMMENT_MARGIN_WIDTH_PX,
+      this._commentsOptions()?.markers !== false,
+      this._commentsOptions()?.includeResolved === true,
       () => this._scheduleCommentGeometry(slide, slot),
     );
     if (slot.commentDecorationLayer) {
       const width = this._slideWidthPx();
       const height = this._slideHeightPx();
+      const side = this._commentSide();
+      const marginExtent = this._commentMarginExtent();
+      const connectorOptions = this._commentsOptions()?.connectors;
+      if (!connectorOptions) return;
       buildReadOnlyCommentDecoration(
         slot.commentDecorationLayer,
         Object.freeze({
           surfaceBounds: Object.freeze({
-            x: 0, y: 0, width: width + this._commentMarginExtent(), height,
+            x: side === 'left' ? -marginExtent : 0,
+            y: 0,
+            width: width + marginExtent,
+            height,
           }),
           contentBounds: Object.freeze({ x: 0, y: 0, width, height }),
+          side,
           threads,
         }),
+        {
+          route: connectorOptions.route ?? 'bezier',
+          stroke: connectorOptions.stroke ?? 'solid',
+          color: connectorOptions.color,
+          activeColor: connectorOptions.activeColor,
+        },
       );
     }
+  }
+
+  /** Commit comment geometry and reveal every comment layer in one settled frame. */
+  private _commitSlotComments(slide: number, slot: SlideSlot): void {
+    this._ensureSlotCommentAnchors(slide, slot);
+    this._redrawSlotComments(slide, slot);
+    if (slot.commentMarkerLayer) slot.commentMarkerLayer.style.visibility = '';
+    if (slot.commentMargin) slot.commentMargin.style.visibility = '';
+    if (slot.commentDecorationLayer) slot.commentDecorationLayer.style.visibility = '';
+  }
+
+  private _ensureSlotCommentAnchors(slide: number, slot: SlideSlot): void {
+    const presentation = this._pres;
+    if (!presentation || slot.commentAnchorSlide === slide) return;
+    slot.commentAnchorSlide = slide;
+    slot.commentElementBounds = Object.freeze([]);
+    const elementIds = presentation.getComments(slide).flatMap((comment) =>
+      (comment.anchors ?? []).flatMap((anchor) =>
+        (anchor.type === 'drawingElement' || anchor.type === 'textRange') && anchor.elementId
+          ? [anchor.elementId]
+          : []));
+    if (elementIds.length === 0) return;
+    const generation = ++slot.commentAnchorGeneration;
+    void presentation.getElementBoundsByIds(slide, elementIds).then((bounds) => {
+      if (this._destroyed || generation !== slot.commentAnchorGeneration ||
+          presentation !== this._pres || this._slots.get(slide) !== slot ||
+          slot.commentAnchorSlide !== slide) return;
+      slot.commentElementBounds = bounds;
+      this._redrawSlotComments(slide, slot);
+    }).catch((error: unknown) => {
+      if (!this._destroyed && generation === slot.commentAnchorGeneration) {
+        this._reportRenderError(error);
+      }
+    });
   }
 
   /** Coalesce card measurement and margin scrolling into one geometry refresh
@@ -2086,7 +2217,10 @@ export class PptxScrollViewer implements ZoomableViewer {
       this._pendingCommentGeometry.clear();
       if (this._destroyed) return;
       for (const [pendingSlide, pendingSlot] of pending) {
-        if (this._slots.get(pendingSlide) === pendingSlot) {
+        if (
+          this._slots.get(pendingSlide) === pendingSlot &&
+          pendingSlot.renderedScale === this._scale
+        ) {
           this._redrawSlotComments(pendingSlide, pendingSlot);
         }
       }
@@ -2323,6 +2457,20 @@ export class PptxScrollViewer implements ZoomableViewer {
   /** Return the current mounted browser text selection with PPTX source locators. */
   getSelectionContext(options: PptxSelectionContextOptions = {}): PptxSelectionContext | null {
     if (this._destroyed) throw new Error('PptxScrollViewer is destroyed');
+    if (this._pres && this._activeCommentId !== null && this._activeCommentSlide !== null) {
+      const comments = this._pres.getComments(this._activeCommentSlide);
+      const entry = comments.find((comment, index) =>
+        pptxCommentOccurrenceKey(comment, index, this._activeCommentSlide as number) ===
+          this._activeCommentId);
+      if (entry) {
+        return createPptxCommentSelectionContext(
+          entry,
+          this._activeCommentSlide,
+          this._activeCommentId,
+          options,
+        );
+      }
+    }
     const text = this._opts.enableTextSelection
       ? readPptxTextSelectionContext(
           this._wrapper,

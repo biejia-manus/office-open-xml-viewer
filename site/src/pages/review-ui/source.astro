@@ -3,6 +3,7 @@ import Base from '../../layouts/Base.astro';
 import Nav from '../../components/Nav.astro';
 import SiteFooter from '../../components/SiteFooter.astro';
 import CodeTabs from '../../components/CodeTabs.astro';
+import ReviewDemo from '../../components/ReviewDemo.astro';
 import core from '../../examples/review-margin/core.ts?raw';
 import controller from '../../examples/review-margin/index.ts?raw';
 import markup from '../../examples/review-margin/index.html?raw';
@@ -25,11 +26,24 @@ const tabs = [
   <header class="source-hero">
     <div class="wrap">
       <a href="/review-ui">← DOCX review UI</a>
-      <h1>DOCX review UI example source</h1>
-      <p>These are the files used by the live example: API flow, application controller, markup, and styles.</p>
+      <h1>Custom DOCX review UI</h1>
+      <p>
+        This is one application-owned presentation built from detached comments and page geometry.
+        The library resolves review data and anchors; the application owns its layout, interaction,
+        accessibility, and styles.
+      </p>
     </div>
   </header>
   <main class="wrap source-main">
+    <ReviewDemo showCode={false} />
+    <div class="source-intro">
+      <p class="source-label">Complete source</p>
+      <h2>A portable implementation of the same boundary.</h2>
+      <p>
+        The files below keep the presentation deliberately smaller than the site preview so the
+        comment-data, anchor-geometry, interaction, and cleanup responsibilities remain visible.
+      </p>
+    </div>
     <CodeTabs id="review-example-complete-source" tabs={tabs} />
   </main>
   <SiteFooter />
@@ -41,5 +55,13 @@ const tabs = [
   .source-hero h1 { margin: 18px 0 12px; font-size: clamp(34px, 5vw, 54px); }
   .source-hero p { max-width: 760px; color: var(--text-dim); }
   .source-main { padding-top: 36px; padding-bottom: 64px; }
+  .source-main :global(.review-demo) { padding-top: 0; border-top: 0; }
+  .source-intro { max-width: 760px; margin: 48px 0 20px; }
+  .source-label {
+    margin: 0; color: var(--accent); font: 600 12px/1.4 var(--mono);
+    letter-spacing: .12em; text-transform: uppercase;
+  }
+  .source-intro h2 { margin: 8px 0; font-size: 26px; }
+  .source-intro > p:last-child { margin: 0; color: var(--text-dim); }
   .source-main :global(.ct-panel) { max-height: 72vh; overflow: auto; }
 </style>

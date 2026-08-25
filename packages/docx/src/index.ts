@@ -6,13 +6,21 @@ export {
 } from './document';
 export { DocxViewer, type DocxViewerOptions } from './viewer';
 export { DocxScrollViewer, type DocxScrollViewerOptions } from './scroll-viewer';
-export type { DocxCommentUiOptions } from './comment-margin';
+export type { DocxCommentsOptions } from './comment-margin';
+export type {
+  ViewerCommentConnectorOptions,
+  ViewerCommentConnectorRoute,
+  ViewerCommentConnectorStroke,
+  ViewerCommentMessageContext,
+  ViewerCommentThreadContext,
+} from '@silurus/ooxml-core';
 export { buildDocxTextLayer } from './text-layer';
 export {
   readDocxTextSelectionContext,
   type DocxSelectionContext,
   type DocxTextSelectionContext,
   type DocxElementContext,
+  type DocxCommentSelectionContext,
   type DocxPagePoint,
   type DocxSelectionContextOptions,
   type DocxSelectionSourceLocator,
@@ -117,9 +125,15 @@ export {
 // ECMA-376 §17.13.4 comment data projections for application-owned review UIs.
 export {
   resolveCommentAnchorRuns,
+  resolveDocxCommentThreads,
   type CommentAnchorPoint,
   type CommentAnchorGeometryFallback,
   type CommentAnchorRange,
+  type DocxCommentAnchorKind,
+  type DocxCommentHighlightRect,
+  type ResolvedDocxCommentAnchor,
+  type ResolvedDocxCommentThread,
+  type ResolveDocxCommentThreadsOptions,
 } from './comments';
 export {
   resolveRevisionAnchorRuns,

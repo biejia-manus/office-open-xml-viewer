@@ -1,9 +1,13 @@
 import {
   overlayPercent,
-  type ViewerCommentUiOptions,
+  type ViewerCommentsOptions,
+  type ViewerCommentConnectorOptions,
 } from '@silurus/ooxml-core';
 import {
   buildReadOnlyCommentMargin,
+  createReadOnlyCommentMarker,
+  READ_ONLY_COMMENT_MARKER_SIZE_PX,
+  readOnlyCommentAuthorAccent,
   type ReadOnlyCommentMessage,
   type ReadOnlyCommentThread,
 } from '@silurus/ooxml-core/internal/read-only-comment-margin';
@@ -29,7 +33,14 @@ export interface DocxCommentMarginModel {
   readonly anchors: readonly CommentAnchorRange[];
 }
 
-export interface DocxCommentUiOptions extends ViewerCommentUiOptions {}
+export interface DocxCommentsOptions extends ViewerCommentsOptions {
+  /** Margin side. `auto` follows the Viewer container's CSS direction. Default `auto`. */
+  readonly side?: 'auto' | 'left' | 'right';
+  /** Show authored comment glyphs beside anchored text. Default true. */
+  readonly markers?: boolean;
+  /** Draw anchor-to-card connectors with the requested geometry. Default none. */
+  readonly connectors?: ViewerCommentConnectorOptions;
+}
 
 function commentThreads(comments: readonly DocComment[], includeResolved: boolean): CommentThread[] {
   const byId = new Map(comments.map((comment) => [comment.id, comment]));
@@ -77,23 +88,31 @@ function createTint(
   cssWidth: number,
   cssHeight: number,
   active: boolean,
+  accent: string,
 ): HTMLDivElement {
   const tint = layer.ownerDocument.createElement('div');
   tint.style.cssText =
-    'position:absolute;pointer-events:none;' +
+    `--ooxml-comment-author-accent:${accent};` +
     `left:${overlayPercent(run.x, cssWidth)};top:${overlayPercent(run.y, cssHeight)};` +
-    `width:${overlayPercent(run.w, cssWidth)};height:${overlayPercent(run.h, cssHeight)};` +
-    `background:${active
-      ? 'var(--ooxml-comment-highlight-active,rgba(37,99,235,.34))'
-      : 'var(--ooxml-comment-highlight,rgba(59,130,246,.18))'};`;
+    `width:${overlayPercent(run.w, cssWidth)};height:${overlayPercent(run.h, cssHeight)};`;
   tint.dataset.ooxmlCommentHighlight = '';
-  tint.dataset.ooxmlCommentActive = String(active);
+  tint.dataset.active = String(active);
   if (run.transform) {
     tint.style.transform = run.transform;
-    tint.style.transformOrigin = 'top left';
   }
   layer.appendChild(tint);
   return tint;
+}
+
+function wordHighlightRun(run: Readonly<DocxTextRunInfo>): DocxTextRunInfo {
+  const bounds = run.highlightBounds;
+  return {
+    ...run,
+    x: bounds?.x ?? run.x,
+    y: bounds?.y ?? run.y,
+    w: bounds?.width ?? run.w,
+    h: bounds?.height ?? run.h,
+  };
 }
 
 /** Fill the whitespace between consecutive anchor runs on one rendered line.
@@ -134,26 +153,54 @@ export function buildDocxCommentMargin(
   activeId: string | null,
   onSetActive: (id: string, active: boolean) => void,
   zoom: number,
+  logicalMarginWidth: number,
+  showMarkers: boolean,
   includeResolved = false,
   onGeometryChange?: () => void,
 ): readonly ReadOnlyCommentThreadGeometry[] {
   margin.dataset.ooxmlCommentZoom = String(zoom);
   tintLayer.innerHTML = '';
   const threads = commentThreads(model.comments, includeResolved);
+  const accentById = new Map(threads.map((thread) => [
+    thread.root.id,
+    readOnlyCommentAuthorAccent(thread.root.author),
+  ]));
+  const visibleThreadIds = new Set(threads.map((thread) => thread.root.id));
   const firstAnchor = new Map<string, CommentAnchorRange>();
   const anchorRects = new Map<string, ReadOnlyCommentRect[]>();
+  const markerAnchorById = new Map<string, Readonly<{
+    rect: ReadOnlyCommentRect;
+    direction?: 'ltr' | 'rtl';
+  }>>();
   const surface = tintLayer.parentElement;
   for (const anchor of model.anchors) {
+    if (!visibleThreadIds.has(anchor.commentId)) continue;
     if (!firstAnchor.has(anchor.commentId)) firstAnchor.set(anchor.commentId, anchor);
     const active = activeId === anchor.commentId;
-    for (const run of mergeSameLineRuns(resolveCommentAnchorRuns(anchor, runs))) {
-      const tint = createTint(tintLayer, run, cssWidth, cssHeight, active);
+    for (const run of mergeSameLineRuns(
+      resolveCommentAnchorRuns(anchor, runs).map(wordHighlightRun),
+    )) {
+      const tint = createTint(
+        tintLayer,
+        run,
+        cssWidth,
+        cssHeight,
+        active,
+        accentById.get(anchor.commentId) ?? readOnlyCommentAuthorAccent(undefined),
+      );
       const rect = run.transform && surface
         ? relativeElementRect(tint, surface)
         : Object.freeze({ x: run.x, y: run.y, width: run.w, height: run.h });
       const list = anchorRects.get(anchor.commentId) ?? [];
       if (!anchorRects.has(anchor.commentId)) anchorRects.set(anchor.commentId, list);
-      list.push(rect ?? Object.freeze({ x: run.x, y: run.y, width: run.w, height: run.h }));
+      const resolvedRect = rect ?? Object.freeze({ x: run.x, y: run.y, width: run.w, height: run.h });
+      list.push(resolvedRect);
+      if (!markerAnchorById.has(anchor.commentId)) {
+        markerAnchorById.set(anchor.commentId, Object.freeze({
+          rect: resolvedRect,
+          ...(run.direction ? { direction: run.direction } : {}),
+        }));
+      }
     }
   }
   const cardThreads = threads.flatMap((thread): ReadOnlyCommentThread[] => {
@@ -168,9 +215,54 @@ export function buildDocxCommentMargin(
   const cardHosts = buildReadOnlyCommentMargin(margin, cardThreads, {
     activeId,
     zoom,
+    logicalWidth: logicalMarginWidth,
     onSetActive,
     onGeometryChange,
+    preferredTopById: new Map(cardThreads.map((thread) => {
+      const first = anchorRects.get(thread.occurrenceKey)?.[0];
+      return [thread.occurrenceKey, first?.y ?? 0] as const;
+    })),
   });
+  if (showMarkers) {
+    for (const [visibleIndex, thread] of cardThreads.entries()) {
+      const anchor = markerAnchorById.get(thread.occurrenceKey);
+      if (!anchor) continue;
+      const marker = createReadOnlyCommentMarker(tintLayer.ownerDocument, {
+        occurrenceKey: thread.occurrenceKey,
+        visibleIndex,
+        author: thread.root.author,
+        active: activeId === thread.occurrenceKey,
+        zoom,
+        onSetActive,
+      });
+      const half = READ_ONLY_COMMENT_MARKER_SIZE_PX * zoom / 2;
+      const gap = 4 * zoom;
+      const inheritedDirection = tintLayer.ownerDocument.defaultView?.getComputedStyle?.(
+        tintLayer,
+      ).direction;
+      const rtl = (anchor.direction ?? inheritedDirection) === 'rtl';
+      const preferredLeft = rtl
+        ? anchor.rect.x - gap - half
+        : anchor.rect.x + anchor.rect.width + gap + half;
+      const left = Math.max(half, Math.min(preferredLeft, cssWidth - half));
+      const top = Math.max(
+        half,
+        Math.min(anchor.rect.y + anchor.rect.height / 2, cssHeight - half),
+      );
+      marker.style.left = `${left / cssWidth * 100}%`;
+      marker.style.top = `${top / cssHeight * 100}%`;
+      const card = cardHosts.get(thread.occurrenceKey);
+      if (card?.id) marker.setAttribute('aria-controls', card.id);
+      tintLayer.appendChild(marker);
+    }
+  }
+  if (!onGeometryChange) {
+    return Object.freeze(cardThreads.map((thread): ReadOnlyCommentThreadGeometry => Object.freeze({
+      occurrenceKey: thread.occurrenceKey,
+      active: activeId === thread.occurrenceKey,
+      anchorRects: Object.freeze(anchorRects.get(thread.occurrenceKey) ?? []),
+    })));
+  }
   const marginRect = surface ? relativeElementRect(margin, surface) : undefined;
   return Object.freeze(cardThreads.map((thread): ReadOnlyCommentThreadGeometry => {
     const cardHost = cardHosts.get(thread.occurrenceKey);

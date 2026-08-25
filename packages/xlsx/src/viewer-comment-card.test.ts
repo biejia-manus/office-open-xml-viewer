@@ -9,6 +9,23 @@ afterEach(() => {
 });
 
 describe('XlsxViewer comment UI contract', () => {
+  it('returns detached comments for application-owned current-sheet UI', () => {
+    installDom();
+    const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
+    const internals = viewer as unknown as { currentWorksheet: Worksheet };
+    internals.currentWorksheet = {
+      name: 'Sheet 1', rows: [], colWidths: {}, rowHeights: {},
+      defaultColWidth: 64, defaultRowHeight: 20, mergeCells: [],
+      comments: [{ cellRef: 'A1', author: 'Ada', text: 'Review this' }],
+    } as unknown as Worksheet;
+
+    const comments = viewer.getComments();
+    expect(comments).toEqual([{ cellRef: 'A1', author: 'Ada', text: 'Review this' }]);
+    (comments[0] as XlsxComment).text = 'Changed by the caller';
+    expect(viewer.getComments()[0]?.text).toBe('Review this');
+    viewer.destroy();
+  });
+
   it.each([
     { direction: 'LTR', rightToLeft: false },
     { direction: 'RTL', rightToLeft: true },
@@ -36,7 +53,7 @@ describe('XlsxViewer comment UI contract', () => {
   });
 
   it('renders a structured, themeable built-in popup', () => {
-    installDom();
+    const dom = installDom();
     const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
     const internals = viewer as unknown as {
       currentSheet: number;
@@ -59,28 +76,49 @@ describe('XlsxViewer comment UI contract', () => {
       rootText: 'Review',
       text: 'Review\nDone',
       replies: [{
-        id: '{reply}', parentId: '{root}', personId: '{person}', author: 'Grace', text: 'Done',
+        id: '{reply}', parentId: '{root}', personId: '{person}', author: 'Grace',
+        date: '2026-08-21T09:00:00Z', text: 'Done',
       }],
     };
 
     internals.renderCommentPopup({ row: 2, col: 2 }, comment);
 
+    const styles = dom.head.querySelector('style[data-ooxml-comment-styles]');
+    expect(styles?.textContent).toContain(':where(.ooxml-comment-card)');
+    expect(styles?.textContent).toContain(':where(.ooxml-comment-marker)');
+    expect(styles?.textContent).toContain('.ooxml-comment-card[data-active="true"]');
+
     expect(internals.commentPopup.dataset.ooxmlCommentUi).toBe('popup');
-    expect(internals.commentPopup.style.background).toContain('--ooxml-comment-card-background');
-    expect(internals.commentPopup.children[0]?.dataset.ooxmlCommentPart).toBe('author');
-    expect(internals.commentPopup.children[1]?.dataset.ooxmlCommentPart).toBe('body');
-    expect(internals.commentPopup.children[2]?.dataset.ooxmlCommentPart).toBe('reply');
-    expect(internals.commentPopup.children[2]?.children[0]?.textContent).toBe('Grace');
-    expect(internals.commentPopup.children[2]?.children[1]?.textContent).toBe('Done');
-    expect(internals.commentPopup.style.cssText).toContain('pointer-events:none');
+    expect(internals.commentPopup.dataset.ooxmlCommentCard).toBe('');
+    expect(internals.commentPopup.getAttribute('class')).toBe('ooxml-comment-card');
+    expect(internals.commentPopup.style.cssText).toContain('--ooxml-comment-author-accent:');
+    expect(internals.commentPopup.style.cssText).not.toContain('background:');
+    expect(internals.commentPopup.style.cssText).not.toContain('border-radius:');
+    expect(internals.commentPopup.children[0]?.dataset.ooxmlCommentPart).toBe('comment');
+    expect(internals.commentPopup.children[1]?.dataset.ooxmlCommentPart).toBe('reply');
+    expect(internals.commentPopup.children[1]?.getAttribute('class')).toBe(
+      'ooxml-comment-card__reply',
+    );
+    expect(internals.commentPopup.children[2]?.dataset.ooxmlCommentPart).toBe('frame');
+    expect(internals.commentPopup.children[2]?.style.cssText).toBe('');
+    expect(internals.commentPopup.children[0]?.children[0]?.children[0]?.children[0]?.textContent).toBe('Ada');
+    expect(internals.commentPopup.children[0]?.children[0]?.children[0]?.children[1]?.dataset.ooxmlCommentPart).toBe('date');
+    expect(internals.commentPopup.children[0]?.children[0]?.children[0]?.children[1]?.getAttribute('class')).toBe('ooxml-comment-card__date');
+    expect(internals.commentPopup.children[1]?.children[0]?.children[0]?.children[0]?.textContent).toBe('Grace');
+    expect(internals.commentPopup.children[1]?.children[0]?.children[1]?.textContent).toBe('Done');
+    expect(internals.commentPopup.dataset.standalone).toBe('true');
+    expect(internals.commentPopup.style.pointerEvents).toBe('');
     expect(internals.commentPopup.style.display).toBe('block');
+    internals.renderCommentPopup({ row: 2, col: 2 }, comment);
+    expect(dom.head.children.filter((child) =>
+      child.dataset.ooxmlCommentStyles !== undefined)).toHaveLength(1);
     viewer.destroy();
   });
 
   it('applies the same authored visibility policy to popup data and markers', () => {
     installDom();
     const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement, {
-      commentUi: { includeResolved: false },
+      comments: { includeResolved: false },
     });
     const internals = viewer as unknown as {
       createVisibleSheetView(source: Worksheet): Worksheet;

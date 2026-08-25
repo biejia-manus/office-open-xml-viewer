@@ -1,9 +1,8 @@
 import {
   DocxDocument,
-  resolveCommentAnchorRuns,
-  resolveRevisionAnchorRuns,
+  resolveDocxCommentThreads,
   type DocComment,
-  type DocRevision,
+  type DocxCommentHighlightRect,
   type DocxTextRunInfo,
 } from '@silurus/ooxml/docx';
 
@@ -15,9 +14,8 @@ interface ReviewItem {
   label: string;
   text: string;
   meta: string;
-  runs: readonly Readonly<DocxTextRunInfo>[];
+  rects: readonly Readonly<DocxCommentHighlightRect>[];
   marker: 'range' | 'point' | 'fallback';
-  deleted: boolean;
   replies?: readonly DocComment[];
 }
 
@@ -26,115 +24,21 @@ interface ReviewController {
   destroy(): void;
 }
 
-function sameSource(a: DocxTextRunInfo['source'], b: DocxTextRunInfo['source']): boolean {
-  return a !== undefined && b !== undefined && a.story === b.story
-    && a.storyInstance === b.storyInstance
-    && a.path.length === b.path.length
-    && a.path.every((part, index) => part === b.path[index]);
-}
-
-function lineBands(runs: readonly Readonly<DocxTextRunInfo>[]) {
-  const result: Array<Readonly<DocxTextRunInfo> & { sourceKey: string }> = [];
-  for (const run of [...runs].sort((a, b) => a.y - b.y || a.x - b.x)) {
-    if (run.w <= 0 || run.h <= 0) continue;
-    const sourceKey = run.source
-      ? `${run.source.story}:${run.source.storyInstance}:${run.source.path.join('.')}`
-      : `paragraph:${run.paragraphId ?? ''}`;
-    const previous = result.at(-1);
-    const gap = previous ? run.x - (previous.x + previous.w) : Number.POSITIVE_INFINITY;
-    if (previous && previous.sourceKey === sourceKey && previous.transform === run.transform
-      && Math.abs(previous.y - run.y) <= 1 && Math.abs(previous.h - run.h) <= 1
-      && gap >= -1 && gap <= Math.max(2, run.h * .4)) {
-      result[result.length - 1] = { ...previous, w: run.x + run.w - previous.x };
-    } else {
-      result.push({ ...run, sourceKey });
-    }
-  }
-  return result;
-}
-
-function commentThreads(comments: readonly DocComment[]) {
-  const byId = new Map(comments.map((comment) => [comment.id, comment]));
-  const rootOf = (comment: DocComment): DocComment => {
-    const seen = new Set<string>();
-    let current = comment;
-    while (current.parentId && byId.has(current.parentId) && !seen.has(current.id)) {
-      seen.add(current.id);
-      current = byId.get(current.parentId) as DocComment;
-    }
-    return current;
-  };
-  const replies = new Map<string, DocComment[]>();
-  for (const comment of comments) {
-    const root = rootOf(comment);
-    if (root === comment) continue;
-    const group = replies.get(root.id) ?? [];
-    group.push(comment);
-    replies.set(root.id, group);
-  }
-  return { byId, replies, rootOf };
-}
-
-function revisionLabel(revision: DocRevision): string {
-  const labels: Record<string, string> = {
-    insertion: 'Inserted', deletion: 'Deleted', moveFrom: 'Moved from', moveTo: 'Moved to',
-  };
-  const action = labels[revision.kind] ?? `Changed (${revision.kind})`;
-  return `${action} by ${revision.author || 'Unknown reviewer'}`;
-}
-
 function reviewItems(doc: DocxDocument, runs: readonly Readonly<DocxTextRunInfo>[]): ReviewItem[] {
-  const threads = commentThreads(doc.comments);
-  const comments = new Map<string, ReviewItem>();
-  for (const anchor of doc.commentAnchorRanges()) {
-    const comment = threads.byId.get(anchor.commentId);
-    if (!comment) continue;
-    const resolved = resolveCommentAnchorRuns(anchor, runs);
-    if (resolved.length === 0) continue;
-    const root = threads.rootOf(comment);
-    const direct = resolved.some((run) => run.sourceRunIndex !== undefined
-      && sameSource(run.source, anchor.source)
-      && run.sourceRunIndex >= anchor.startRunIndex && run.sourceRunIndex < anchor.endRunIndex);
-    const point = !direct && anchor.startRunIndex === anchor.endRunIndex
-      && resolved.some((run) => run.sourceRunIndex !== undefined && sameSource(run.source, anchor.source));
-    const reference = !direct && !point
-      && resolved.some((run) => run.sourceRunIndex !== undefined
-        && sameSource(run.source, anchor.reference.source));
-    const marker = direct ? 'range' : point || reference ? 'point' : 'fallback';
-    const existing = comments.get(root.id);
-    const orphan = root.parentId !== undefined && !threads.byId.has(root.parentId);
-    comments.set(root.id, {
-      id: `comment-${root.id}`,
-      label: root.author || 'Unknown reviewer',
-      text: root.text,
-      meta: `${root.resolved ? 'Resolved thread' : 'Open thread'}${orphan ? ' · orphaned reply' : ''}${marker === 'point' ? ' · authored boundary' : marker === 'fallback' ? ' · approximate final-state position' : ''}`,
-      runs: [...(existing?.runs ?? []), ...resolved],
-      marker: existing?.marker === 'range' || marker === 'range' ? 'range'
-        : existing?.marker === 'point' || marker === 'point' ? 'point' : 'fallback',
-      deleted: false,
-      replies: threads.replies.get(root.id) ?? [],
-    });
-  }
-
-  const revisions = doc.revisionAnchorRanges().flatMap((anchor): ReviewItem[] => {
-    const revision = doc.revisions[anchor.revisionIndex];
-    if (!revision) return [];
-    const resolved = resolveRevisionAnchorRuns(anchor, runs);
-    if (resolved.length === 0) return [];
-    const direct = resolved.some((run) => run.sourceRunIndex !== undefined
-      && sameSource(run.source, anchor.source)
-      && run.sourceRunIndex >= anchor.startRunIndex && run.sourceRunIndex < anchor.endRunIndex);
-    return [{
-      id: `revision-${anchor.revisionIndex}`,
-      label: revisionLabel(revision),
-      text: revision.text,
-      meta: direct ? revision.kind : `${revision.kind} · approximate final-state position`,
-      runs: resolved,
-      marker: direct ? 'range' : 'fallback',
-      deleted: revision.kind === 'deletion' || revision.kind === 'moveFrom',
-    }];
+  return resolveDocxCommentThreads(doc.comments, doc.commentAnchorRanges(), runs).map((thread) => {
+    const kinds = thread.anchors.map(({ kind }) => kind);
+    const marker = kinds.includes('range') ? 'range'
+      : kinds.includes('point') ? 'point' : 'fallback';
+    return {
+      id: `comment-${thread.root.id}`,
+      label: thread.root.author || 'Unknown reviewer',
+      text: thread.root.text,
+      meta: `${thread.root.resolved ? 'Resolved thread' : 'Open thread'}${marker === 'point' ? ' · authored boundary' : marker === 'fallback' ? ' · approximate final-state position' : ''}`,
+      rects: thread.anchors.flatMap(({ rects }) => rects),
+      marker,
+      replies: thread.replies,
+    };
   });
-  return [...comments.values(), ...revisions];
 }
 
 export async function mountReviewExample(root: HTMLElement, signal?: AbortSignal): Promise<ReviewController> {
@@ -228,10 +132,9 @@ export async function mountReviewExample(root: HTMLElement, signal?: AbortSignal
       button.className = 'review-example__item';
       button.dataset.reviewId = item.id;
       button.setAttribute('aria-pressed', 'false');
-      const quote = item.runs.map((run) => run.text).join('').trim();
-      button.setAttribute('aria-label', `${item.label}. Page ${pageIndex + 1}. ${item.text}. Anchored to ${quote || 'a nearby final-state position'}.`);
+      button.setAttribute('aria-label', `${item.label}. Page ${pageIndex + 1}. ${item.text}. Anchored to the highlighted document text.`);
       const label = document.createElement('strong');
-      const body = item.deleted ? document.createElement('del') : document.createElement('span');
+      const body = document.createElement('span');
       const meta = document.createElement('span');
       label.textContent = item.label;
       body.textContent = item.text;
@@ -251,7 +154,7 @@ export async function mountReviewExample(root: HTMLElement, signal?: AbortSignal
       row.append(button);
       list.append(row);
 
-      const bands = item.marker === 'range' ? lineBands(item.runs) : lineBands(item.runs).slice(0, 1);
+      const bands = item.marker === 'range' ? item.rects : item.rects.slice(0, 1);
       const anchorIds: string[] = [];
       for (const [index, band] of bands.entries()) {
         const rect = document.createElementNS(SVG_NS, 'rect');
@@ -265,8 +168,8 @@ export async function mountReviewExample(root: HTMLElement, signal?: AbortSignal
         rect.setAttribute('focusable', 'false');
         rect.setAttribute('x', String(band.x));
         rect.setAttribute('y', String(band.y));
-        rect.setAttribute('width', String(item.marker === 'range' ? band.w : 3));
-        rect.setAttribute('height', String(band.h));
+        rect.setAttribute('width', String(item.marker === 'range' ? band.width : 3));
+        rect.setAttribute('height', String(band.height));
         if (band.transform) {
           rect.style.transform = band.transform;
           rect.style.transformOrigin = `${band.x}px ${band.y}px`;

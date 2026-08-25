@@ -4,10 +4,11 @@ import {
   collectLayoutSourceCommentRangesIfPresent,
   collectStoryCommentRanges,
   resolveCommentAnchorRuns,
+  resolveDocxCommentThreads,
 } from './comments.js';
 import type { LayoutSourceStore } from './layout/layout-source-store.js';
 import type { SourceRef } from './layout/types.js';
-import type { DocParagraph, DocxCommentMark, DocxTextRunInfo } from './types.js';
+import type { DocComment, DocParagraph, DocxCommentMark, DocxTextRunInfo } from './types.js';
 
 function para(runTexts: readonly string[], marks?: readonly DocxCommentMark[]): DocParagraph {
   return {
@@ -308,5 +309,54 @@ describe('comment data projections', () => {
       },
     });
     expect(collectLayoutSourceCommentRangesIfPresent([], layoutSource)).toEqual([]);
+  });
+
+  it('projects page comments into valid threads and continuous highlight rectangles', () => {
+    const comments: DocComment[] = [
+      { id: '1', author: 'Ada', text: 'Root' },
+      { id: '2', parentId: '1', author: 'Bob', text: 'Reply' },
+      { id: '3', author: 'Chen', text: 'Done', resolved: true },
+      { id: '4', parentId: 'missing', text: 'Orphan' },
+    ];
+    const anchors = [
+      {
+        commentId: '1', source: source([0]), startRunIndex: 0, endRunIndex: 2,
+        reference: reference([0], 2, 'preceding'),
+      },
+      {
+        commentId: '3', source: source([1]), startRunIndex: 0, endRunIndex: 0,
+        reference: reference([1], 0, 'following'),
+      },
+      {
+        commentId: '4', source: source([2]), startRunIndex: 0, endRunIndex: 1,
+        reference: reference([2], 1, 'preceding'),
+      },
+    ];
+    const runs = [
+      {
+        source: source([0]), sourceRunIndex: 0, text: 'one',
+        x: 0, y: 10, w: 5, h: 12,
+        highlightBounds: { x: 1, y: 12, width: 4, height: 8 },
+      },
+      {
+        source: source([0]), sourceRunIndex: 1, text: 'two',
+        x: 5, y: 10, w: 6, h: 12,
+        highlightBounds: { x: 5, y: 12, width: 5, height: 8 },
+      },
+      { source: source([1]), sourceRunIndex: 0, text: 'point', x: 20, y: 30, w: 7, h: 9 },
+      { source: source([2]), sourceRunIndex: 0, text: 'orphan', x: 0, y: 50, w: 9, h: 9 },
+    ] as DocxTextRunInfo[];
+
+    const projected = resolveDocxCommentThreads(comments, anchors, runs);
+    expect(projected).toHaveLength(2);
+    expect(projected[0]?.root.id).toBe('1');
+    expect(projected[0]?.replies.map(({ id }) => id)).toEqual(['2']);
+    expect(projected[0]?.anchors[0]?.kind).toBe('range');
+    expect(projected[0]?.anchors[0]?.rects).toEqual([
+      { x: 1, y: 12, width: 9, height: 8 },
+    ]);
+    expect(projected[1]?.anchors[0]?.kind).toBe('point');
+    expect(resolveDocxCommentThreads(comments, anchors, runs, { includeResolved: false }))
+      .toHaveLength(1);
   });
 });

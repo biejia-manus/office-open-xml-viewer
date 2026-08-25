@@ -1108,10 +1108,24 @@ export interface XlsxRenderViewportOptions {
   selectedColRange?: { start: number; end: number; strong: boolean } | null;
 }
 
+/** @internal Resolved host CSS colors for Viewer-owned worksheet chrome. */
+export interface XlsxChromeColors {
+  readonly background?: string;
+  readonly surface?: string;
+  readonly mutedSurface?: string;
+  readonly text?: string;
+  readonly mutedText?: string;
+  readonly border?: string;
+  readonly selectedSurface?: string;
+  readonly accent?: string;
+}
+
 /** Internal renderer options. The workbook owns both the byte source and the
  * frame-local decoded image map, so these fields are not part of its public
  * method contract. */
 export interface RenderViewportOptions extends XlsxRenderViewportOptions {
+  /** @internal Viewer chrome only; never applied to authored worksheet content. */
+  chromeColors?: XlsxChromeColors;
   loadedImages?: Map<string, CanvasImageSource | null>;
   fetchImage?: (path: string, mimeType: string) => Promise<Blob>;
   /** @internal Optional synchronous 3-D chart renderer retained by the workbook. */

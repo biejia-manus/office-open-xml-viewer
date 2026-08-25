@@ -16,7 +16,18 @@ export interface ReadOnlyCommentThreadGeometry {
 export interface ReadOnlyCommentDecorationSnapshot {
   readonly surfaceBounds: ReadOnlyCommentRect;
   readonly contentBounds: ReadOnlyCommentRect;
+  readonly side: 'left' | 'right';
   readonly threads: readonly ReadOnlyCommentThreadGeometry[];
+}
+
+export type ReadOnlyCommentConnectorRoute = 'bezier' | 'orthogonal';
+export type ReadOnlyCommentConnectorStroke = 'solid' | 'dashed';
+
+export interface ReadOnlyCommentDecorationOptions {
+  readonly route: ReadOnlyCommentConnectorRoute;
+  readonly stroke: ReadOnlyCommentConnectorStroke;
+  readonly color?: string;
+  readonly activeColor?: string;
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -28,6 +39,36 @@ interface DecorationState {
 
 const stateByLayer = new WeakMap<HTMLDivElement, DecorationState>();
 
+interface Point { readonly x: number; readonly y: number }
+
+function n(value: number): string {
+  const rounded = Math.round(value * 1000) / 1000;
+  return Object.is(rounded, -0) ? '0' : String(rounded);
+}
+
+function bezierControls(start: Point, end: Point): readonly [Point, Point] {
+  const control = (end.x - start.x) * 0.5;
+  return [
+    { x: start.x + control, y: start.y },
+    { x: end.x - control, y: end.y },
+  ];
+}
+
+/** Generate one connector path. Exported only for focused geometry tests. */
+export function readOnlyCommentConnectorPath(
+  start: Point,
+  end: Point,
+  route: ReadOnlyCommentConnectorRoute,
+): string {
+  const elbowX = start.x + (end.x - start.x) * 0.55;
+  if (route === 'orthogonal') {
+    return `M ${n(start.x)} ${n(start.y)} H ${n(elbowX)} V ${n(end.y)} H ${n(end.x)}`;
+  }
+  const [control1, control2] = bezierControls(start, end);
+  return `M ${n(start.x)} ${n(start.y)} C ${n(control1.x)} ${n(control1.y)}, ` +
+    `${n(control2.x)} ${n(control2.y)}, ${n(end.x)} ${n(end.y)}`;
+}
+
 export function disposeReadOnlyCommentDecoration(layer: HTMLDivElement): void {
   stateByLayer.delete(layer);
   layer.replaceChildren();
@@ -37,6 +78,7 @@ export function disposeReadOnlyCommentDecoration(layer: HTMLDivElement): void {
 export function buildReadOnlyCommentDecoration(
   layer: HTMLDivElement,
   snapshot: ReadOnlyCommentDecorationSnapshot,
+  options: ReadOnlyCommentDecorationOptions,
 ): void {
   layer.dataset.ooxmlCommentConnectors = '';
   let state = stateByLayer.get(layer);
@@ -51,7 +93,8 @@ export function buildReadOnlyCommentDecoration(
   }
   state.svg.setAttribute(
     'viewBox',
-    `0 0 ${snapshot.surfaceBounds.width} ${snapshot.surfaceBounds.height}`,
+    `${snapshot.surfaceBounds.x} ${snapshot.surfaceBounds.y} ` +
+      `${snapshot.surfaceBounds.width} ${snapshot.surfaceBounds.height}`,
   );
 
   const orderedPaths: SVGPathElement[] = [];
@@ -62,33 +105,33 @@ export function buildReadOnlyCommentDecoration(
     if (!anchor || !card) continue;
     desired.add(thread.occurrenceKey);
 
-    const startX = anchor.x + anchor.width;
+    const startX = snapshot.side === 'left' ? anchor.x : anchor.x + anchor.width;
     const startY = anchor.y + anchor.height / 2;
-    const endX = card.x;
+    const endX = snapshot.side === 'left' ? card.x + card.width : card.x;
     const endY = card.y + Math.min(card.height / 2, 25);
-    const elbowX = startX + (endX - startX) * 0.55;
     let path = state.paths.get(thread.occurrenceKey);
     if (!path) {
       path = layer.ownerDocument.createElementNS(SVG_NS, 'path');
       state.paths.set(thread.occurrenceKey, path);
     }
     path.dataset.ooxmlCommentConnector = thread.occurrenceKey;
-    path.dataset.ooxmlCommentActive = String(thread.active);
+    path.dataset.active = String(thread.active);
     path.setAttribute(
       'd',
-      `M ${startX} ${startY} H ${elbowX} V ${endY} H ${endX}`,
+      readOnlyCommentConnectorPath(
+        { x: startX, y: startY },
+        { x: endX, y: endY },
+        options.route,
+      ),
     );
     path.style.cssText =
       'fill:none;vector-effect:non-scaling-stroke;' +
       `stroke:${thread.active
-        ? 'var(--ooxml-comment-connector-active,#2563eb)'
-        : 'var(--ooxml-comment-connector,#94a3b8)'};` +
-      `stroke-width:${thread.active
-        ? 'var(--ooxml-comment-connector-active-width,1.5px)'
-        : 'var(--ooxml-comment-connector-width,1px)'};` +
-      `opacity:${thread.active
-        ? 'var(--ooxml-comment-connector-active-opacity,.9)'
-        : 'var(--ooxml-comment-connector-opacity,.45)'};`;
+        ? options.activeColor ?? options.color ?? '#2563eb'
+        : options.color ?? '#94a3b8'};` +
+      `stroke-width:${thread.active ? '1.5px' : '1px'};` +
+      `stroke-dasharray:${options.stroke === 'dashed' ? '4 4' : 'none'};` +
+      `opacity:${thread.active ? '.9' : '.45'};`;
     orderedPaths.push(path);
   }
 

@@ -22,9 +22,13 @@ const revisions = doc.revisionAnchorRanges().map((anchor) => ({
 }));
 
 renderReviewMargin({ comments, revisions });`;
+interface Props {
+  showCode?: boolean;
+}
+const { showCode = true } = Astro.props;
 ---
 
-<section class="review-demo" data-review-demo data-reveal>
+<section id="review-ui" class="review-demo" data-review-demo data-reveal>
   <div class="review-demo-head">
     <p class="demo-badge">Live · Consumer-owned review UI</p>
     <h3>Comments in context, composed by your app.</h3>
@@ -65,7 +69,7 @@ renderReviewMargin({ comments, revisions });`;
     </div>
   </div>
 
-  <div class="review-code">
+  {showCode && <div class="review-code">
     <div class="review-code-head">
       <div>
         <p class="demo-badge">Core wiring</p>
@@ -74,7 +78,7 @@ renderReviewMargin({ comments, revisions });`;
       <a href="/review-ui">Full integration guide →</a>
     </div>
     <Code code={reviewSnippet} lang="ts" themes={codeThemes} defaultColor={false} />
-  </div>
+  </div>}
 </section>
 
 <script>

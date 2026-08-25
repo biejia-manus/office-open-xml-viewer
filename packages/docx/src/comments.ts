@@ -2,7 +2,7 @@ import type { LayoutSourceStore } from './layout/layout-source-store.js';
 import { sourceKey } from './layout/source-key.js';
 import type { SourceRef } from './layout/types.js';
 import { decimalReviewIdKey } from './review-id.js';
-import type { DocxCommentMark, DocxStorySource, DocxTextRunInfo } from './types.js';
+import type { DocComment, DocxCommentMark, DocxStorySource, DocxTextRunInfo } from './types.js';
 
 export interface CommentAnchorRange {
   readonly commentId: string;
@@ -32,6 +32,37 @@ export interface CommentAnchorPoint {
 export interface CommentAnchorGeometryFallback {
   readonly source: Readonly<DocxStorySource>;
   readonly sourceRunIndex: number;
+}
+
+export type DocxCommentAnchorKind = 'range' | 'point' | 'fallback';
+
+/** UI-neutral rectangle for one continuous highlighted line segment. */
+export interface DocxCommentHighlightRect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly transform?: string;
+}
+
+/** One authored anchor resolved against the text geometry supplied for a page. */
+export interface ResolvedDocxCommentAnchor {
+  readonly anchor: Readonly<CommentAnchorRange>;
+  readonly kind: DocxCommentAnchorKind;
+  readonly rects: readonly Readonly<DocxCommentHighlightRect>[];
+}
+
+/** A top-level comment and its replies, limited to anchors visible in the
+ * supplied page runs. This shape carries no DOM or Viewer-owned UI state. */
+export interface ResolvedDocxCommentThread {
+  readonly root: Readonly<DocComment>;
+  readonly replies: readonly Readonly<DocComment>[];
+  readonly anchors: readonly Readonly<ResolvedDocxCommentAnchor>[];
+}
+
+export interface ResolveDocxCommentThreadsOptions {
+  /** Include threads whose root is resolved. Default `true`. */
+  readonly includeResolved?: boolean;
 }
 
 interface ParagraphVisit {
@@ -374,4 +405,122 @@ export function resolveCommentAnchorRuns(
   return runs.filter((run) =>
     run.sourceRunIndex === fallback.sourceRunIndex
     && sameStorySource(run.source, fallback.source));
+}
+
+function resolvedAnchorKind(
+  anchor: Readonly<CommentAnchorRange>,
+  runs: readonly Readonly<DocxTextRunInfo>[],
+): DocxCommentAnchorKind {
+  const covered = runs.some((run) =>
+    run.sourceRunIndex !== undefined
+    && sameStorySource(run.source, anchor.source)
+    && run.sourceRunIndex >= anchor.startRunIndex
+    && run.sourceRunIndex < anchor.endRunIndex);
+  if (covered) return 'range';
+  const authoredPoint = runs.some((run) =>
+    sameStorySource(run.source, anchor.source)
+    || sameStorySource(run.source, anchor.reference.source));
+  return authoredPoint ? 'point' : 'fallback';
+}
+
+function highlightRects(
+  runs: readonly Readonly<DocxTextRunInfo>[],
+): readonly Readonly<DocxCommentHighlightRect>[] {
+  const rects = runs
+    .map((run): DocxCommentHighlightRect => {
+      const bounds = run.highlightBounds;
+      return {
+        x: bounds?.x ?? run.x,
+        y: bounds?.y ?? run.y,
+        width: bounds?.width ?? run.w,
+        height: bounds?.height ?? run.h,
+        ...(run.transform ? { transform: run.transform } : {}),
+      };
+    })
+    .filter(({ width, height }) => width > 0 && height > 0)
+    .sort((left, right) => left.y - right.y || left.x - right.x);
+  const merged: DocxCommentHighlightRect[] = [];
+  for (const rect of rects) {
+    const previous = merged.at(-1);
+    if (
+      previous
+      && previous.y === rect.y
+      && previous.height === rect.height
+      && previous.transform === rect.transform
+    ) {
+      const left = Math.min(previous.x, rect.x);
+      const right = Math.max(previous.x + previous.width, rect.x + rect.width);
+      merged[merged.length - 1] = Object.freeze({
+        ...previous,
+        x: left,
+        width: right - left,
+      });
+    } else {
+      merged.push(Object.freeze({ ...rect }));
+    }
+  }
+  return Object.freeze(merged);
+}
+
+/** Resolve page-visible DOCX comments into UI-neutral threads and continuous
+ * highlight rectangles. This absorbs thread ancestry, anchor joining, Word's
+ * text-highlight bounds, and same-line run merging without owning any DOM,
+ * selection state, styling, or framework lifecycle. Invalid orphan/cyclic
+ * replies are not promoted to roots. */
+export function resolveDocxCommentThreads(
+  comments: readonly Readonly<DocComment>[],
+  anchors: readonly Readonly<CommentAnchorRange>[],
+  runs: readonly Readonly<DocxTextRunInfo>[],
+  options: ResolveDocxCommentThreadsOptions = {},
+): readonly Readonly<ResolvedDocxCommentThread>[] {
+  const byId = new Map(comments.map((comment) => [comment.id, comment]));
+  const roots = comments.filter((comment) => comment.parentId === undefined);
+  const rootById = new Map(roots.map((root) => [root.id, root]));
+  const replies = new Map<string, Readonly<DocComment>[]>();
+  const rootIdByCommentId = new Map(roots.map((root) => [root.id, root.id]));
+  for (const comment of comments) {
+    if (comment.parentId === undefined) continue;
+    const seen = new Set<string>([comment.id]);
+    let current: Readonly<DocComment> = comment;
+    while (current.parentId !== undefined) {
+      const parent = byId.get(current.parentId);
+      if (!parent || seen.has(parent.id)) {
+        current = comment;
+        break;
+      }
+      seen.add(parent.id);
+      current = parent;
+    }
+    if (!rootById.has(current.id) || current === comment) continue;
+    rootIdByCommentId.set(comment.id, current.id);
+    const group = replies.get(current.id) ?? [];
+    if (!replies.has(current.id)) replies.set(current.id, group);
+    group.push(comment);
+  }
+
+  const resolvedByRoot = new Map<string, ResolvedDocxCommentAnchor[]>();
+  for (const anchor of anchors) {
+    const rootId = rootIdByCommentId.get(anchor.commentId);
+    if (rootId === undefined) continue;
+    const resolvedRuns = resolveCommentAnchorRuns(anchor, runs);
+    if (resolvedRuns.length === 0) continue;
+    const resolved = resolvedByRoot.get(rootId) ?? [];
+    if (!resolvedByRoot.has(rootId)) resolvedByRoot.set(rootId, resolved);
+    resolved.push(Object.freeze({
+      anchor,
+      kind: resolvedAnchorKind(anchor, resolvedRuns),
+      rects: highlightRects(resolvedRuns),
+    }));
+  }
+
+  return Object.freeze(roots.flatMap((root): ResolvedDocxCommentThread[] => {
+    if (options.includeResolved === false && root.resolved === true) return [];
+    const resolved = resolvedByRoot.get(root.id);
+    if (!resolved?.length) return [];
+    return [Object.freeze({
+      root,
+      replies: Object.freeze([...(replies.get(root.id) ?? [])]),
+      anchors: Object.freeze([...resolved]),
+    })];
+  }));
 }

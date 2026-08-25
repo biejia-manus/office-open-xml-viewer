@@ -8,7 +8,13 @@ import {
 } from '@silurus/ooxml-core/internal/resource-measurement';
 import { HARD_MAX_PPTX_PREFLIGHT_PROJECTION_BYTES } from '@silurus/ooxml-core/worker';
 import { PptxFontPreloadAccumulator } from './google-fonts';
-import type { MediaElement, PptxComment, PptxCommentReply, Slide } from './types';
+import type {
+  MediaElement,
+  PptxComment,
+  PptxCommentAnchor,
+  PptxCommentReply,
+  Slide,
+} from './types';
 import type {
   PresentationBootstrap,
   PresentationBootstrapSlide,
@@ -145,6 +151,10 @@ function copyCommentReply(reply: PptxCommentReply): Readonly<PptxCommentReply> {
   });
 }
 
+function copyCommentAnchor(anchor: PptxCommentAnchor): Readonly<PptxCommentAnchor> {
+  return Object.freeze({ ...anchor });
+}
+
 function copyComment(comment: PptxComment): Readonly<PptxComment> {
   return Object.freeze({
     ...(comment.authorId === undefined ? {} : { authorId: comment.authorId }),
@@ -155,6 +165,9 @@ function copyComment(comment: PptxComment): Readonly<PptxComment> {
     ...(comment.date === undefined ? {} : { date: comment.date }),
     ...(comment.x === undefined ? {} : { x: comment.x }),
     ...(comment.y === undefined ? {} : { y: comment.y }),
+    ...(comment.anchors?.length
+      ? { anchors: Object.freeze(comment.anchors.map(copyCommentAnchor)) }
+      : {}),
     ...(comment.status === undefined ? {} : { status: comment.status }),
     text: comment.text,
     ...(comment.replies?.length
@@ -201,7 +214,8 @@ function normalizeComment(value: unknown, slideIndex: number): Readonly<PptxComm
     }
   }
   if (typeof comment.text !== 'string' ||
-      (comment.replies !== undefined && !Array.isArray(comment.replies))) {
+      (comment.replies !== undefined && !Array.isArray(comment.replies)) ||
+      (comment.anchors !== undefined && !Array.isArray(comment.anchors))) {
     throw new Error(`invalid PPTX presentation preflight comment fields at slide ${slideIndex}`);
   }
   if (comment.status !== undefined && !['active', 'resolved', 'closed'].includes(comment.status)) {
@@ -209,10 +223,46 @@ function normalizeComment(value: unknown, slideIndex: number): Readonly<PptxComm
   }
   return copyComment({
     ...(comment as PptxComment),
+    ...(comment.anchors?.length
+      ? { anchors: comment.anchors.map((anchor) => normalizeCommentAnchor(anchor, slideIndex)) }
+      : {}),
     ...(comment.replies?.length
       ? { replies: comment.replies.map((reply) => normalizeCommentReply(reply, slideIndex)) }
       : {}),
   });
+}
+
+function normalizeCommentAnchor(value: unknown, slideIndex: number): Readonly<PptxCommentAnchor> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`invalid PPTX presentation preflight comment anchor at slide ${slideIndex}`);
+  }
+  const anchor = value as Partial<PptxCommentAnchor>;
+  if (anchor.type === 'slide' || anchor.type === 'unknown') return Object.freeze({ type: anchor.type });
+  if (anchor.type === 'drawingElement') {
+    assertOptionalString(anchor.elementId, 'anchor.elementId', slideIndex);
+    assertOptionalString(anchor.creationId, 'anchor.creationId', slideIndex);
+    return Object.freeze({
+      type: 'drawingElement',
+      ...(anchor.elementId === undefined ? {} : { elementId: anchor.elementId }),
+      ...(anchor.creationId === undefined ? {} : { creationId: anchor.creationId }),
+    });
+  }
+  if (anchor.type === 'textRange') {
+    assertOptionalString(anchor.elementId, 'anchor.elementId', slideIndex);
+    for (const field of ['start', 'length'] as const) {
+      const item = anchor[field];
+      if (item !== undefined && (typeof item !== 'number' || !Number.isSafeInteger(item))) {
+        throw new Error(`invalid PPTX presentation preflight comment anchor.${field} at slide ${slideIndex}`);
+      }
+    }
+    return Object.freeze({
+      type: 'textRange',
+      ...(anchor.elementId === undefined ? {} : { elementId: anchor.elementId }),
+      ...(anchor.start === undefined ? {} : { start: anchor.start }),
+      ...(anchor.length === undefined ? {} : { length: anchor.length }),
+    });
+  }
+  throw new Error(`invalid PPTX presentation preflight comment anchor type at slide ${slideIndex}`);
 }
 
 function normalizeMediaElement(value: unknown, slideIndex: number): Readonly<MediaElement> {

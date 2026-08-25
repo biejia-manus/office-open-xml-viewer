@@ -269,20 +269,18 @@ for (const format of formats) {
   forbidOption(api, format.canvasOptions, format.borrowedOption);
   forbidOption(api, format.containerOptions, format.borrowedOption);
 
-  const commentUiType = `${format.label[0]}${format.label.slice(1).toLowerCase()}CommentUiOptions`;
+  const commentsType = `${format.label[0]}${format.label.slice(1).toLowerCase()}CommentsOptions`;
+  const commentsOptionType = `boolean | ${commentsType}`;
   if (format.label === 'XLSX') {
     for (const options of [format.canvasOptions, format.containerOptions]) {
-      requireOption(api, options, 'showComments', 'boolean');
-      requireOption(api, options, 'commentUi', commentUiType);
+      requireOption(api, options, 'comments', commentsOptionType);
     }
   } else {
-    forbidOption(api, format.canvasOptions, 'showComments');
-    forbidOption(api, format.canvasOptions, 'commentUi');
-    requireOption(api, format.containerOptions, 'showComments', 'boolean');
-    requireOption(api, format.containerOptions, 'commentUi', commentUiType);
+    forbidOption(api, format.canvasOptions, 'comments');
+    requireOption(api, format.containerOptions, 'comments', commentsOptionType);
   }
-  const commentUiMembers = interfaceMembers(api, commentUiType);
-  if (!commentUiMembers.has('includeResolved')) {
+  const commentsMembers = interfaceMembers(api, commentsType);
+  if (!commentsMembers.has('includeResolved')) {
     fail(`${format.label} comment UI must expose the shared resolved-thread policy`);
   }
 
@@ -314,21 +312,18 @@ for (const relativePath of ['docs/api-architecture-0.76.md']) {
   }
 }
 
-const publicGuide = readFileSync(path.join(root, 'site/src/components/ApiReference.astro'), 'utf8');
+const publicGuide = readFileSync(path.join(root, 'site/src/pages/production.astro'), 'utf8');
 for (const token of [
-  'Load once for one Viewer or share one document',
-  'For most applications',
-  'When several views need the same document',
-  'viewer.load(source)',
+  'id="ownership"',
+  'one Viewer own one document',
+  'several views must share one parse',
   'DocxDocument',
   'PptxPresentation',
   'XlsxWorkbook',
-  "factory: 'fromDocument()'",
-  "factory: 'fromPresentation()'",
-  "factory: 'fromWorkbook()'",
-  'Those Viewers cannot replace the file',
-  'your application must destroy the shared engine',
-  "engine's mode is authoritative",
+  'fromDocument()',
+  'fromPresentation()',
+  'fromWorkbook()',
+  'Destroy every view before the shared document',
 ]) {
   if (!publicGuide.includes(token)) fail(`official-site ownership guide is missing: ${token}`);
 }

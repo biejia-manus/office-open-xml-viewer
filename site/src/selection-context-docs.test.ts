@@ -89,7 +89,7 @@ describe('official selection-context guide', () => {
     expect(sitemapPaths).toContain('/selection-context/');
     expect(source('./components/Nav.astro')).not.toContain('href="/selection-context"');
     expect(source('./components/SiteFooter.astro')).not.toContain('href="/selection-context"');
-    expect(source('./components/ApiReference.astro')).toContain('Open the selection &amp; AI guide');
+    expect(source('./pages/production.astro')).toContain('href="/selection-context"');
     expect(page).not.toContain('XLSX 0.77 migration');
     expect(source('./lib/announcements.ts')).toContain("slug: 'v077-migration-guide'");
     expect(source('./lib/announcements.ts')).toContain('setSelection(), selectionState');

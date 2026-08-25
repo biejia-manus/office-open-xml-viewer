@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { XlsxSheetViewer } from './viewer.js';
 import { XlsxWorkbook } from './workbook.js';
 import type { OoxmlResourceMetrics } from '@silurus/ooxml-core';
-import type { Worksheet } from './types.js';
+import type { Worksheet, XlsxComment } from './types.js';
 import {
   installDom,
   makeContainer,
@@ -893,6 +893,48 @@ describe('XlsxSheetViewer canvas mount', () => {
       { address: { row: 1, col: 2 }, displayText: '', valueType: 'number', value: 42 },
     ]);
     expect(context.truncated).toBe(false);
+    viewer.destroy();
+  });
+
+  it('includes an authored comment when its cell is selected', () => {
+    installDom();
+    const parent = makeContainer();
+    const canvas = makeEl('canvas');
+    parent.appendChild(canvas);
+    const viewer = new XlsxSheetViewer(canvas as unknown as HTMLCanvasElement);
+    const engine = (viewer as unknown as { engine: {
+      currentWorksheet: Worksheet;
+      commentMap: Map<string, XlsxComment>;
+    } }).engine;
+    const comment = {
+      kind: 'thread' as const,
+      id: 'root',
+      cellRef: 'A1',
+      author: 'Ada',
+      rootText: 'Review this',
+      text: 'Review this\nDone',
+      replies: [{
+        id: 'reply', parentId: 'root', personId: 'person', author: 'Linus', text: 'Done',
+      }],
+    };
+    engine.currentWorksheet = {
+      ...worksheet('Comments'),
+      comments: [comment],
+      rows: [{ index: 1, cells: [{ row: 1, col: 1, value: { type: 'empty' } }] }],
+    } as unknown as Worksheet;
+    engine.commentMap = new Map([['1:1', comment]]);
+    viewer.setSelection('A1');
+
+    const context = viewer.getSelectionContext();
+    expect(context?.kind).toBe('range');
+    if (!context || context.kind !== 'range') throw new Error('Expected range context');
+    expect(context.cells[0]).toMatchObject({
+      address: { row: 1, col: 1 },
+      comment: {
+        root: { id: 'root', author: 'Ada', text: 'Review this' },
+        replies: [{ id: 'reply', author: 'Linus', text: 'Done' }],
+      },
+    });
     viewer.destroy();
   });
 

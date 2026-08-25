@@ -356,6 +356,9 @@ export interface TextPlacement {
   readonly range: TextRange;
   readonly origin: PointPt;
   readonly bounds: LayoutRect;
+  /** Font-box rectangle used by WordprocessingML run highlighting. Unlike
+   * {@link bounds}, this excludes extra line leading. */
+  readonly highlightBounds?: LayoutRect;
   readonly advancePt: number;
   /** Shaped cluster geometry for selection/hit testing. Always covers `range`. */
   readonly clusters: readonly TextClusterLayout[];

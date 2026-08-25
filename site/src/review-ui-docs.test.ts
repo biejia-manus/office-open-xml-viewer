@@ -3,33 +3,52 @@ import { describe, expect, it } from 'vitest';
 
 const read = (path: string): string => readFileSync(new URL(path, import.meta.url), 'utf8');
 
-describe('DOCX review UI integration guide', () => {
+describe('Office comment UI integration guide', () => {
   const page = read('./pages/review-ui.astro');
 
   it('starts with the built-in path and keeps low-level composition available', () => {
-    expect(page).toContain('<h1>DOCX comments and tracked changes</h1>');
-    expect(page).toContain('reads review data already stored in a DOCX file');
-    for (const concept of ['Comments and threads', 'Tracked changes', 'Anchors', 'Rendered geometry']) {
+    expect(page).toContain('<h1>Comments in DOCX, XLSX, and PPTX</h1>');
+    expect(page).toContain('reads comments already stored in Office files');
+    for (const concept of ['Comments and threads', 'Anchors', 'Built-in presentation', 'Viewport geometry']) {
       expect(page).toContain(concept);
     }
-    expect(page).toContain('includes an optional read-only comment');
+    for (const viewer of ['DocxScrollViewer', 'PptxScrollViewer', 'XlsxViewer']) {
+      expect(page).toContain(viewer);
+    }
     expect(page).toContain('List, search, or export');
     expect(page).toContain('Margin or separate pane');
     expect(page).toContain('Highlights or markers');
-    expect(page).toContain('showComments: true');
+    expect(page).toContain('comments: true');
+    expect(page).toContain('comments: false');
+    expect(page).toContain('<code>markers</code>');
+    expect(page).toContain('Defaults to <code>true</code>');
+    expect(page).toContain('Set it to <code>false</code> to hide only the icons');
+    expect(page).toContain('markers: true, // Default. Set false to hide the message icons only.');
+    expect(page).toContain('Defaults to <code>false</code> for DOCX/PPTX and <code>true</code> for XLSX');
     expect(page).toContain('--ooxml-comment-card-background');
-    expect(page).toContain('--ooxml-comment-avatar-display: grid');
-    expect(page).toContain('--ooxml-comment-avatar-radius: 999px');
-    expect(page).toContain('Theme the default');
-    expect(page).toContain('All comment theme properties');
+    expect(page).toContain('--ooxml-comment-card-border-left: 3px solid #2563eb');
+    expect(page).toContain('--ooxml-comment-card-border-right: 1px solid #cbd5e1');
+    expect(page).toContain('--ooxml-comment-card-radius: 8px');
+    expect(page).toContain('--ooxml-comment-marker-color: #2563eb');
+    expect(page).toContain('.ooxml-comment-card__author');
+    expect(page).toContain('.ooxml-comment-card[data-active="true"]');
+    expect(page).toContain('backdrop-filter: blur(14px)');
+    expect(page).toContain('fixed blue values deliberately replace per-author accents');
+    expect(page).toContain('omit them to keep automatic author colors');
+    expect(page).toContain('Optional DOCX/PPTX connectors');
+    expect(page).toContain('Theme the built-in UI');
+    expect(page).toContain('updates mounted cards, highlights, and markers without recreating the Viewer');
+    expect(page).toContain('font size, font family, or padding are measured again');
+    expect(page).toContain('var(--review-connector)');
+    expect(page).toContain("side: 'auto'");
+    expect(page).toContain("route: 'bezier'");
+    expect(page).toContain("stroke: 'solid'");
+    expect(page).toContain("activeColor: '#2563eb'");
+    expect(page).not.toContain('All comment theme properties');
+    expect(page).not.toContain('commentUi');
+    expect(page).not.toContain('--ooxml-comment-avatar');
     expect(page).not.toContain('mountCard');
     expect(page).not.toContain('commentRenderer');
-  });
-
-  it('documents the built-in avatar styling token used at runtime', () => {
-    const margin = read('../../packages/core/src/internal/read-only-comment-margin.ts');
-    expect(margin).toContain('--ooxml-comment-avatar-display');
-    expect(margin).toContain('--ooxml-comment-avatar-radius');
   });
 
   it('keeps the built-in preview separated and gives its frame one height contract', () => {
@@ -37,50 +56,81 @@ describe('DOCX review UI integration guide', () => {
     expect(page).toContain('.built-in-preview { margin-top: 32px; }');
     expect(builtIn).toContain('height: clamp(520px, 76vh, 720px)');
     expect(builtIn).toContain('.built-in-comment-demo__viewer { height: 100%; }');
+    expect(builtIn).toContain('background: radial-gradient(120% 80% at 50% 0%, var(--preview-top), var(--preview-bottom) 70%)');
+    expect(page).toContain('not by <code>ScrollViewer</code>');
+    expect(builtIn).toContain("['docx', 'xlsx', 'pptx']");
+    expect(builtIn).toContain('data-comment-demo-format={format}');
+    for (const format of ['docx', 'xlsx', 'pptx']) {
+      expect(builtIn).toContain(`sample-1.${format}`);
+    }
+    expect(builtIn).toContain("new DocxScrollViewer(host, { comments: true");
+    expect(builtIn).toContain("new PptxScrollViewer(host, { comments: true");
+    expect(builtIn).toContain("new XlsxViewer(host, { comments: true");
     expect(builtIn).not.toContain('min-height: 640px');
   });
 
   it('maps concepts to public APIs and distinguishes transcript from anchored UI', () => {
     const example = read('./examples/review-margin/index.ts');
-    for (const api of ['doc.comments', 'doc.revisions', 'commentAnchorRanges()', 'revisionAnchorRanges()', 'onTextRun', 'resolveCommentAnchorRuns()', 'resolveRevisionAnchorRuns()']) {
+    for (const api of ['doc.comments', 'commentAnchorRanges()', 'onTextRun', 'resolveDocxCommentThreads()']) {
       expect(page).toContain(api);
     }
     expect(page).toContain('No page geometry');
     expect(page).toContain('Page geometry required');
-    expect(page).toContain('Transcript path');
-    expect(page).toContain('Anchored page path');
+    expect(page).toContain('Read comment records');
+    expect(page).toContain('DOCX anchored example');
     expect(example).toContain('doc.commentAnchorRanges()');
-    expect(example).toContain('doc.revisionAnchorRanges()');
     expect(example).toContain('onTextRun: (run) => runs.push(run)');
-    expect(example).toContain('resolveCommentAnchorRuns(anchor, runs)');
-    expect(example).toContain('resolveRevisionAnchorRuns(anchor, runs)');
+    expect(example).toContain('resolveDocxCommentThreads(doc.comments, doc.commentAnchorRanges(), runs)');
     const apiReference = read('./lib/api-reference.ts');
     expect(apiReference).toContain('get comments(): DocComment[]');
     expect(apiReference).toContain('get revisions(): DocRevision[]');
     expect(apiReference).toContain('commentAnchorRanges(): readonly CommentAnchorRange[]');
     expect(apiReference).toContain('revisionAnchorRanges(): readonly RevisionAnchorRange[]');
+    expect(apiReference).toContain('resolveDocxCommentThreads(comments, anchors, runs, options?)');
     expect(apiReference).toContain('resolveCommentAnchorRuns()');
     expect(apiReference).toContain('collectPageRuns(index');
+    expect(apiReference).toContain("detailsHref: '/review-ui', detailsLabel: 'Comment UI guide'");
   });
 
-  it('keeps the overview short while linking the complete page-aware example source', () => {
-    const component = read('./components/ReviewGuideExample.astro');
+  it('documents the same built-in and primitive boundary for every Office format', () => {
+    const apiReference = read('./lib/api-reference.ts');
+    const apiComponent = read('./components/ApiReference.astro');
+    expect(page).toContain('How comments are represented');
+    expect(page).toContain('Use the same <code>comments</code> option across formats');
+    expect(page).toContain('presentation.getComments(slideIndex)');
+    expect(page).toContain('viewer.getComments()');
+    expect(page).toContain('getCellViewportRect()');
+    expect(page).toContain('getSelectionContext()');
+    expect(apiReference).toContain('getComments(slideIndex: number)');
+    expect(apiReference.match(/getComments\(\): readonly Readonly<XlsxComment>\[\]/g)).toHaveLength(2);
+    expect(apiReference).toContain('selected comment thread');
+    expect(apiReference).toContain('including attached comments');
+    for (const href of ['/api/docx#docx-scroll-viewer', '/api/xlsx#xlsx-viewer', '/api/pptx#pptx-scroll-viewer']) {
+      expect(page).toContain(`href="${href}"`);
+    }
+    expect(page).toContain('href="/api/');
+    expect(apiComponent).toContain('id={classAnchor(c.name)}');
+    expect(page).toContain('font-size: 14px; }');
+    expect(page).toContain('padding: 10px 14px;');
+    expect(page).toContain('font: 600 12px var(--mono);');
+  });
+
+  it('keeps the overview short while linking the DOCX demo and complete source', () => {
     const core = read('./examples/review-margin/core.ts');
     const markup = read('./examples/review-margin/index.html');
     const controller = read('./examples/review-margin/index.ts');
     const styles = read('./examples/review-margin/styles.css');
-    expect(page).toContain('<ReviewGuideExample />');
-    expect(component).toContain("index.html?raw");
-    expect(component).not.toContain("core.ts?raw");
-    expect(component).not.toContain("index.ts?raw");
-    expect(component).not.toContain("styles.css?raw");
-    expect(component).toContain("import '../examples/review-margin/index'");
+    expect(page).not.toContain('<ReviewGuideExample />');
+    expect(page).not.toContain('<h2 id="live-example-title">Live example</h2>');
+    expect(page).not.toContain('href="/docx#review-ui"');
+    expect(page).toContain('href="#built-in-ui"');
     expect(markup).toContain('data-review-example');
     expect(core).toContain('export async function renderReviewPage(');
-    expect(core).toContain("isPositionHint: revision.kind === 'deletion' || revision.kind === 'moveFrom'");
-    expect(component).toContain('href="/review-ui/source"');
-    expect(component).toContain('Open complete example source');
+    expect(core).toContain('resolveDocxCommentThreads(');
+    expect(page).toContain('href="/review-ui/source"');
+    expect(page).toContain('Complete DOCX custom UI');
     const sourcePage = read('./pages/review-ui/source.astro');
+    expect(sourcePage).toContain('<ReviewDemo showCode={false} />');
     expect(sourcePage).toContain("core.ts?raw");
     expect(sourcePage).toContain("index.ts?raw");
     expect(sourcePage).toContain("index.html?raw");
@@ -93,14 +143,11 @@ describe('DOCX review UI integration guide', () => {
     expect(controller).toContain('updatePage(pageIndex: number): Promise<void>');
     expect(controller).toContain('const destroy = (): void =>');
     expect(controller).toContain('request !== generation');
-    expect(controller).toContain('function lineBands(');
-    expect(controller).toContain('previous.transform === run.transform');
-    expect(controller).toContain('gap <= Math.max(2, run.h * .4)');
+    expect(controller).not.toContain('function lineBands(');
+    expect(controller).toContain('thread.anchors.flatMap(({ rects }) => rects)');
     expect(styles).toContain('.review-example__margin');
     expect(styles).toContain('@container (max-width: 720px)');
     expect(styles).not.toContain('@media (max-width: 720px)');
-    expect(component).not.toContain('<CodeTabs');
-    expect(component).toContain('max-height: min(76vh, 720px)');
   });
 
   it('keeps only the essential accepted-final rule and delegates advanced details', () => {
@@ -110,11 +157,10 @@ describe('DOCX review UI integration guide', () => {
     expect(page).toContain('accepted-final document');
     expect(page).toContain('nearby final-state position');
     expect(page).toContain('Canvas content needs an accessible transcript');
-    expect(page).toContain('Destroy an owned <code>DocxDocument</code>');
     expect(page).toContain('href="/production#rendering-mode"');
     expect(page).not.toContain('href="/production#ownership"');
-    expect(page).toContain('See the controller, HTML, and CSS used by the live example.');
-    expect(page).toContain('Look up review records, anchor ranges, text runs, and method signatures.');
+    expect(page).toContain('Open the finished custom UI and its complete portable implementation.');
+    expect(page).toContain('Look up comment records, anchor ranges, text runs, and method signatures.');
     expect(page).toContain('Choose main-thread or Worker rendering for your application.');
     expect(page).not.toContain('Manage a loaded document when it is shared by more than one view.');
     for (const detail of ['geometryFallback', 'storyInstance', 'sourceRunIndex', 'Device pixel ratio', 'renderPageToBitmap', 'useGoogleFonts', 'same-origin or return suitable CORS headers']) {
@@ -122,15 +168,11 @@ describe('DOCX review UI integration guide', () => {
     }
   });
 
-  it('renders all revision kinds, threads, fallback carets, linked controls, and live states', () => {
+  it('renders resolved threads, fallback carets, linked controls, and live states', () => {
     const example = read('./examples/review-margin/index.ts');
     const markup = read('./examples/review-margin/index.html');
-    for (const kind of ['insertion', 'deletion', 'moveFrom', 'moveTo']) {
-      expect(example).toContain(kind);
-    }
-    expect(example).toContain('threads.rootOf(comment)');
-    expect(example).toContain("orphaned reply");
-    expect(example).toContain("item.marker === 'range' ? band.w : 3");
+    expect(example).toContain('resolveDocxCommentThreads(');
+    expect(example).toContain("item.marker === 'range' ? band.width : 3");
     expect(example).toContain("rect.setAttribute('aria-hidden', 'true')");
     expect(example).toContain("rect.setAttribute('focusable', 'false')");
     expect(example).not.toContain("rect.setAttribute('role', 'button')");
@@ -139,7 +181,7 @@ describe('DOCX review UI integration guide', () => {
     expect(example).toContain("root.addEventListener('focusin'");
     expect(example).toContain('const controllers = mounted.filter');
     expect(example).toContain('updatePage(page).catch');
-    expect(example).toContain('run.sourceRunIndex !== undefined && sameSource');
+    expect(example).not.toContain('sameSource');
     expect(markup).toContain('role="status"');
     expect(markup).toContain('data-review-empty');
     expect(markup).toContain('aria-label="Review transcript"');
@@ -156,22 +198,37 @@ describe('DOCX review UI integration guide', () => {
     expect(tabs).toContain('Copy failed. Select the code and copy it manually.');
   });
 
-  it('is linked as durable DOCX guidance and included in the sitemap', () => {
-    expect(read('./pages/docx.astro')).toContain('<ReviewDemo />');
-    expect(read('./components/ReviewDemo.astro')).toContain('href="/review-ui"');
+  it('is linked as durable format guidance and included in the sitemap', () => {
+    expect(read('./pages/docx.astro')).toContain('<FormatCommentsDemo format="docx" />');
+    expect(read('./pages/pptx.astro')).toContain('<FormatCommentsDemo format="pptx" />');
+    expect(read('./pages/review-ui/source.astro')).toContain('<ReviewDemo showCode={false} />');
     expect(read('./pages/sitemap.xml.ts')).toContain("'/review-ui/'");
     expect(read('./pages/sitemap.xml.ts')).toContain("'/review-ui/source/'");
   });
 
-  it('ships a real, consumer-owned review-margin demo on the DOCX page', () => {
+  it('keeps the format pages simple and moves the consumer-owned UI to its source page', () => {
     const docxPage = read('./pages/docx.astro');
+    const pptxPage = read('./pages/pptx.astro');
+    const builtIn = read('./components/FormatCommentsDemo.astro');
+    const sourcePage = read('./pages/review-ui/source.astro');
     const component = read('./components/ReviewDemo.astro');
     const controller = read('./lib/review-demo.ts');
     const sampleCopy = read('../scripts/copy-samples.mjs');
 
-    expect(docxPage).toContain('<ReviewDemo />');
-    expect(docxPage.indexOf('<ReviewDemo />')).toBeGreaterThan(docxPage.indexOf('kind="masterdetail"'));
+    expect(docxPage).toContain('<FormatCommentsDemo format="docx" />');
+    expect(pptxPage).toContain('<FormatCommentsDemo format="pptx" />');
+    expect(docxPage).not.toContain('<ReviewDemo />');
+    expect(pptxPage).not.toContain('<ReviewDemo />');
+    expect(docxPage.indexOf('<FormatCommentsDemo')).toBeGreaterThan(docxPage.indexOf('kind="masterdetail"'));
+    expect(pptxPage.indexOf('<FormatCommentsDemo')).toBeGreaterThan(pptxPage.indexOf('kind="masterdetail"'));
+    expect(builtIn).toContain("viewer: 'DocxScrollViewer'");
+    expect(builtIn).toContain("viewer: 'PptxScrollViewer'");
+    expect(builtIn).toContain('comments: true');
+    expect(builtIn).toContain('formats={[format]}');
+    expect(builtIn).toContain('href="/review-ui"');
+    expect(sourcePage).toContain('<ReviewDemo showCode={false} />');
     expect(component).toContain('data-review-connectors');
+    expect(component).toContain('id="review-ui"');
     expect(component).toContain('class="review-margin"');
     expect(component).toContain('Core wiring');
     expect(component).toContain('resolveCommentAnchorRuns');

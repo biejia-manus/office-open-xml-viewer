@@ -619,7 +619,7 @@ file without uploading it.
 | | Field date/time pictures (`TIME` / `DATE` field `\@` format, §17.16.5.72 / .16) | ✅ |
 | | `w:snapToGrid` opt-out of the document grid (§17.3.1.32) | ✅ |
 | | Track changes (§17.13.5 `w:ins` / `w:del` / `w:moveFrom` / `w:moveTo`) — the default render is the FINAL state (deletions and moved-away text hidden); the opt-in markup view (`showTrackedChanges`) draws author-coloured underline / strikethrough plus margin change bars | ✅ |
-| | Comments (§17.13.4) — opt-in margin balloons (`showComments`): commented ranges tinted, threaded replies via `commentsExtended.xml`, resolved threads hidden, click-to-select stacking; also available as data (`doc.comments`, `doc.commentAnchorRanges()`) | ✅ |
+| | Comments (§17.13.4) — opt-in margin balloons (`comments: true`): commented ranges tinted, threaded replies via `commentsExtended.xml`, resolved threads hidden, click-to-select stacking; also available as data (`doc.comments`, `doc.commentAnchorRanges()`) | ✅ |
 | | Markdown export (`DocxDocument.toMarkdown()` — headings, lists, tables, footnotes / comments) | ✅ |
 | | Mail merge fields | ❌ Not planned |
 | **Interaction** | Text selection (transparent overlay, native copy) | ✅ |
