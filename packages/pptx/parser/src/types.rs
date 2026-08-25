@@ -220,6 +220,7 @@ pub(crate) enum SlideElement {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ChartElement {
+    /// `<p:nvGraphicFramePr><p:cNvPr @id>` for the chart frame.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) id: Option<String>,
     pub(crate) x: i64,
@@ -235,6 +236,7 @@ pub(crate) struct ChartElement {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TableElement {
+    /// `<p:nvGraphicFramePr><p:cNvPr @id>` for the table frame.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) id: Option<String>,
     pub(crate) x: i64,
@@ -540,6 +542,7 @@ pub(crate) struct ShapeElement {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PictureElement {
+    /// The source drawing node's `<p:cNvPr @id>`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) id: Option<String>,
     pub(crate) x: i64,
@@ -653,6 +656,7 @@ pub(crate) struct PictureElement {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MediaElement {
+    /// `<p:nvPicPr><p:cNvPr @id>` for the media frame.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) id: Option<String>,
     pub(crate) x: i64,
@@ -1588,6 +1592,7 @@ mod group_transform_tests {
                 rtl: false,
             }),
             SlideElement::Chart(ChartElement {
+                id: None,
                 x: 10,
                 y: 20,
                 width: 20,

@@ -159,7 +159,9 @@ mod chartex_sidecar_package_tests {
         let json = crate::parse_pptx_native(&bytes).expect("full PPTX package parses");
         let presentation: serde_json::Value =
             serde_json::from_str(&json).expect("presentation JSON");
-        let chart = &presentation["slides"][0]["elements"][0]["chart"];
+        let element = &presentation["slides"][0]["elements"][0];
+        assert_eq!(element["id"], serde_json::Value::String("2".to_string()));
+        let chart = &element["chart"];
         assert_eq!(
             chart["chartexColorPalette"][0],
             serde_json::Value::String("336699".to_string()),
@@ -3490,6 +3492,43 @@ mod style_ref_tests {
             (100, 200, 300, 400)
         );
     }
+
+    #[test]
+    fn table_element_exposes_graphic_frame_id() {
+        let doc = roxmltree::Document::parse(
+            r#"<p:graphicFrame xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                                xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <p:nvGraphicFramePr><p:cNvPr id="42" name="Table 1"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>
+              <p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></p:xfrm>
+              <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">
+                <a:tbl><a:tblPr/><a:tblGrid><a:gridCol w="100"/></a:tblGrid>
+                  <a:tr h="100"><a:tc><a:txBody/></a:tc></a:tr>
+                </a:tbl>
+              </a:graphicData></a:graphic>
+            </p:graphicFrame>"#,
+        )
+        .unwrap();
+        let mut zip = empty_zip();
+        let mut out = Vec::new();
+        parse_sp_tree_node(
+            doc.root_element(),
+            &LayoutPlaceholders::default(),
+            "ppt/slides",
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut zip,
+            &PptxTheme::default(),
+            &mut out,
+            false,
+            None,
+            DepthGuard::root(),
+        );
+
+        let SlideElement::Table(table) = out.pop().expect("table output") else {
+            panic!("expected TableElement")
+        };
+        assert_eq!(table.id.as_deref(), Some("42"));
+    }
 }
 
 #[cfg(test)]
@@ -3614,6 +3653,7 @@ mod picture_property_resolution_tests {
             &theme,
             &mut zip,
         );
+        assert_eq!(ordinary.id.as_deref(), Some("1"));
         assert_theme_properties(&ordinary);
 
         let mut zip = image_zip();
@@ -3631,6 +3671,7 @@ mod picture_property_resolution_tests {
             &theme,
             &mut zip,
         );
+        assert_eq!(blip_shape.id.as_deref(), Some("2"));
         assert_theme_properties(&blip_shape);
     }
 
