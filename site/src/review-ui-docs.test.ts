@@ -21,6 +21,9 @@ describe('Office comment UI integration guide', () => {
     expect(page).toContain("docxViewer.goToComment(comment.id, { behavior: 'smooth' })");
     expect(page).toContain("pptxViewer.goToComment(slideIndex, commentIndex, { behavior: 'smooth' })");
     expect(page).toContain("xlsxViewer.goToComment(comment.cellRef, { align: 'center' })");
+    expect(page).toContain('DocxScrollViewer.fromDocument(docxHost, docxDocument');
+    expect(page).toContain('PptxScrollViewer.fromPresentation(pptxHost, presentation');
+    expect(page).toContain('await xlsxViewer.load(xlsxSource)');
     expect(page).toContain('comments: true');
     expect(page).toContain('comments: false');
     expect(page).toContain('<code>markers</code>');

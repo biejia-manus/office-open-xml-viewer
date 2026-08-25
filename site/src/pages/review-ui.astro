@@ -13,15 +13,28 @@ const docxComments = docxDocument.comments;
 const pptxComments = presentation.getComments(slideIndex);
 const xlsxComments = xlsxViewer.getComments();`;
 
-const independentListExample = `// Your application owns the list and its styling.
-// DOCX/PPTX keep authored target highlights but omit their margin cards.
-const docxViewer = new DocxScrollViewer(docxHost, {
+const independentListExample = `import {
+  DocxDocument,
+  DocxScrollViewer,
+} from '@silurus/ooxml/docx';
+import {
+  PptxPresentation,
+  PptxScrollViewer,
+} from '@silurus/ooxml/pptx';
+import { XlsxViewer } from '@silurus/ooxml/xlsx';
+
+// The application owns the list; each Viewer still reveals its authored target.
+const docxDocument = await DocxDocument.load(docxSource);
+const docxViewer = DocxScrollViewer.fromDocument(docxHost, docxDocument, {
   comments: { cards: false, markers: false },
 });
-const pptxViewer = new PptxScrollViewer(pptxHost, {
+const presentation = await PptxPresentation.load(pptxSource);
+const pptxViewer = PptxScrollViewer.fromPresentation(pptxHost, presentation, {
   comments: { cards: false, markers: false },
 });
 const xlsxViewer = new XlsxViewer(xlsxHost, { comments: false });
+await xlsxViewer.load(xlsxSource);
+const slideIndex = 0;
 
 const addRow = (label: string, reveal: () => void | Promise<unknown>) => {
   const button = document.createElement('button');
@@ -44,7 +57,15 @@ presentation.getComments(slideIndex)
 xlsxViewer.getComments()
   .forEach((comment) => addRow(comment.text, () =>
     xlsxViewer.goToComment(comment.cellRef, { align: 'center' })
-  ));`;
+  ));
+
+const destroy = () => {
+  docxViewer.destroy();
+  docxDocument.destroy();
+  pptxViewer.destroy();
+  presentation.destroy();
+  xlsxViewer.destroy();
+};`;
 
 const docxViewerExample = `import { DocxScrollViewer } from '@silurus/ooxml/docx';
 
