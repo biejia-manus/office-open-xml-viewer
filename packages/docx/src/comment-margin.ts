@@ -19,6 +19,7 @@ import type {
 } from '@silurus/ooxml-core/internal/read-only-comment-decoration';
 import { relativeElementRect } from '@silurus/ooxml-core/internal/dom-geometry';
 import { resolveCommentAnchorRuns, type CommentAnchorRange } from './comments.js';
+import { sourceKey } from './layout/source-key.js';
 import type { DocxTextRunInfo } from './renderer.js';
 import type { DocComment } from './types.js';
 
@@ -30,6 +31,31 @@ interface CommentThread {
 export interface DocxCommentMarginModel {
   readonly comments: readonly DocComment[];
   readonly anchors: readonly CommentAnchorRange[];
+}
+
+interface ResolvedPageCommentAnchor {
+  readonly anchor: Readonly<CommentAnchorRange>;
+  readonly runs: readonly Readonly<DocxTextRunInfo>[];
+}
+
+/** Resolve only anchors whose authored, reference, or final-state fallback
+ * source occurs in this page's projected runs. A mounted page must not pay the
+ * `anchors × runs` join cost for comments belonging to every other page. */
+export function resolvePageCommentAnchors(
+  anchors: readonly Readonly<CommentAnchorRange>[],
+  runs: readonly Readonly<DocxTextRunInfo>[],
+): readonly ResolvedPageCommentAnchor[] {
+  const pageSources = new Set(runs.flatMap((run) => run.source ? [sourceKey(run.source)] : []));
+  if (pageSources.size === 0) return [];
+  return anchors.flatMap((anchor): ResolvedPageCommentAnchor[] => {
+    const mayResolve = pageSources.has(sourceKey(anchor.source)) ||
+      pageSources.has(sourceKey(anchor.reference.source)) ||
+      (anchor.geometryFallback !== undefined &&
+        pageSources.has(sourceKey(anchor.geometryFallback.source)));
+    if (!mayResolve) return [];
+    const resolved = resolveCommentAnchorRuns(anchor, runs);
+    return resolved.length > 0 ? [{ anchor, runs: resolved }] : [];
+  });
 }
 
 export interface DocxCommentsOptions extends ViewerCommentsOptions {
@@ -170,19 +196,23 @@ export function buildDocxCommentMargin(
   ]));
   const visibleThreadIds = new Set(threads.map((thread) => thread.root.id));
   const firstAnchor = new Map<string, CommentAnchorRange>();
+  for (const anchor of model.anchors) {
+    if (visibleThreadIds.has(anchor.commentId) && !firstAnchor.has(anchor.commentId)) {
+      firstAnchor.set(anchor.commentId, anchor);
+    }
+  }
+  const resolvedPageAnchors = resolvePageCommentAnchors(model.anchors, runs);
+  const resolvedAnchorSet = new Set(resolvedPageAnchors.map(({ anchor }) => anchor));
   const anchorRects = new Map<string, ReadOnlyCommentRect[]>();
   const markerAnchorById = new Map<string, Readonly<{
     rect: ReadOnlyCommentRect;
     direction?: 'ltr' | 'rtl';
   }>>();
   const surface = tintLayer.parentElement;
-  for (const anchor of model.anchors) {
+  for (const { anchor, runs: anchorRuns } of resolvedPageAnchors) {
     if (!visibleThreadIds.has(anchor.commentId)) continue;
-    if (!firstAnchor.has(anchor.commentId)) firstAnchor.set(anchor.commentId, anchor);
     const active = activeId === anchor.commentId;
-    for (const run of mergeSameLineRuns(
-      resolveCommentAnchorRuns(anchor, runs).map(wordHighlightRun),
-    )) {
+    for (const run of mergeSameLineRuns(anchorRuns.map(wordHighlightRun))) {
       const tint = createTint(
         tintLayer,
         run,
@@ -208,7 +238,7 @@ export function buildDocxCommentMargin(
   }
   const cardThreads = threads.flatMap((thread): ReadOnlyCommentThread[] => {
     const anchor = firstAnchor.get(thread.root.id);
-    if (!anchor || resolveCommentAnchorRuns(anchor, runs).length === 0) return [];
+    if (!anchor || !resolvedAnchorSet.has(anchor)) return [];
     return [{
       occurrenceKey: thread.root.id,
       root: toMessage(thread.root, thread.root.id, 0),
