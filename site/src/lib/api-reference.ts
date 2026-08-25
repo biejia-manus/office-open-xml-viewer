@@ -356,7 +356,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
         CHART_EX,
         DPR,
         MODE,
-        { name: 'onVisiblePageChange', type: '(topIndex: number, total: number) => void', desc: 'Fires when the top-most visible page changes.' },
+        { name: 'onVisiblePageChange', type: '(topIndex: number, total: number, layoutComplete: boolean) => void', desc: 'Fires when the top-most visible page or the page count changes. While layoutComplete is false, total is the pages laid out so far.' },
         VIEWER_ON_ERROR,
       ],
       methods: [
