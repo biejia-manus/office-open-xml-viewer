@@ -15,14 +15,12 @@ describe('Office comment UI integration guide', () => {
     for (const viewer of ['DocxScrollViewer', 'PptxScrollViewer', 'XlsxViewer']) {
       expect(page).toContain(viewer);
     }
-    expect(page).toContain('List, search, or export');
-    expect(page).toContain('Independent list with Viewer navigation');
-    expect(page).toContain('does not scale or move with the rendered file');
+    expect(page).toContain('Built-in or custom');
+    expect(page).toContain('Application-owned list, Viewer-owned navigation');
+    expect(page).toContain('keeps the list outside the document surface');
     expect(page).toContain("docxViewer.goToComment(comment.id, { behavior: 'smooth' })");
     expect(page).toContain("pptxViewer.goToComment(slideIndex, commentIndex, { behavior: 'smooth' })");
     expect(page).toContain("xlsxViewer.goToComment(comment.cellRef, { align: 'center' })");
-    expect(page).toContain('Margin or separate pane');
-    expect(page).toContain('Highlights or markers');
     expect(page).toContain('comments: true');
     expect(page).toContain('comments: false');
     expect(page).toContain('<code>markers</code>');
@@ -91,8 +89,11 @@ describe('Office comment UI integration guide', () => {
     for (const api of ['doc.comments', 'commentAnchorRanges()', 'onTextRun', 'resolveDocxCommentThreads()']) {
       expect(page).toContain(api);
     }
-    expect(page).toContain('No page geometry');
-    expect(page).toContain('Page geometry required');
+    expect(page).toContain('The Viewer owns its built-in presentation.');
+    expect(page).toContain('The application owns custom product behavior.');
+    expect(page).toContain('Call <code>goToComment()</code> for navigation');
+    expect(page).not.toContain('No page geometry');
+    expect(page).not.toContain('Page geometry required');
     expect(page).toContain('<CodeTabs id="comment-primitives" tabs={primitiveTabs} />');
     for (const tab of ["label: 'Records'", "label: 'DOCX'", "label: 'XLSX'", "label: 'PPTX'"]) {
       expect(page).toContain(tab);

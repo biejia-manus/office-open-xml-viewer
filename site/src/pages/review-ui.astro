@@ -331,29 +331,16 @@ const primitiveTabs = [
 
     <section class="review-section" aria-labelledby="choose-ui">
       <div class="section-heading">
-        <h2 id="choose-ui">Integration options</h2>
-        <p>Use these lower-level paths only when the built-in presentation does not fit the product UI.</p>
+        <h2 id="choose-ui">Built-in or custom</h2>
+        <p>Use the built-in Viewer UI when its format-specific presentation is enough. DOCX and PPTX ScrollViewer, and XlsxViewer, keep comments aligned while the file scrolls or zooms.</p>
       </div>
-      <div class="choice-grid">
-        <article>
-          <p class="choice-label">No page geometry</p>
-          <h3>List, search, or export</h3>
-          <p>Read detached comment records, then render application-owned rows or serialized data.</p>
-        </article>
-        <article>
-          <p class="choice-label">Page geometry required</p>
-          <h3>Margin or separate pane</h3>
-          <p>Resolve the format's text range, slide anchor, drawing element, or cell reference so selecting a row can identify its visible content.</p>
-        </article>
-        <article>
-          <p class="choice-label">Page geometry required</p>
-          <h3>Highlights or markers</h3>
-          <p>Draw application-owned SVG or DOM marks using the format-specific viewport geometry.</p>
-        </article>
+      <div class="responsibility-boundary">
+        <p><strong>The Viewer owns its built-in presentation.</strong> It renders the default cards or popup, markers, highlights, and their scroll and zoom behavior.</p>
+        <p><strong>The application owns custom product behavior.</strong> Use detached comment records for application-specific lists, filtering, search, export, or virtualization. Call <code>goToComment()</code> for navigation; use geometry APIs only when custom UI must remain attached to authored content.</p>
       </div>
       <article class="independent-list-example">
-        <h3>Independent list with Viewer navigation</h3>
-        <p>Keep the list outside the document rail so it does not scale or move with the rendered file. The application owns row layout, filtering, and virtualization; each Viewer owns only navigation to the authored target.</p>
+        <h3>Application-owned list, Viewer-owned navigation</h3>
+        <p>This example keeps the list outside the document surface and delegates only target navigation to <code>goToComment()</code>.</p>
         <CommentListNavigationDemo />
         <Code code={independentListExample} lang="ts" themes={codeThemes} defaultColor={false} />
       </article>
@@ -411,14 +398,16 @@ const primitiveTabs = [
   .section-heading { max-width: 820px; margin-bottom: 24px; }
   .section-heading h2 { margin: 0; font-size: clamp(28px, 4vw, 42px); line-height: 1.08; letter-spacing: -.03em; }
   .section-heading p { margin: 12px 0 0; color: var(--text-dim); }
-  .concept-grid, .choice-grid, .final-state-grid { display: grid; gap: 14px; }
+  .concept-grid, .final-state-grid { display: grid; gap: 14px; }
   .concept-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .choice-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .final-state-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   article { padding: 20px; border: 1px solid var(--border); background: var(--panel); }
   article h3 { margin: 0; font-size: 18px; }
   article p { margin: 9px 0 0; color: var(--text-dim); }
-  .choice-label { margin: 0 0 9px; color: var(--accent); font: 600 11px var(--mono); text-transform: uppercase; }
+  .responsibility-boundary { max-width: 820px; }
+  .responsibility-boundary p { margin: 0; color: var(--text-dim); }
+  .responsibility-boundary p + p { margin-top: 12px; }
+  .responsibility-boundary strong { color: var(--text); }
   .independent-list-example { margin-top: 16px; padding: 0; overflow: hidden; }
   .independent-list-example h3 { padding: 20px 20px 0; }
   .independent-list-example p { padding: 0 20px; }
@@ -462,7 +451,6 @@ const primitiveTabs = [
   @media (max-width: 900px) {
     .concept-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .format-setup-grid { grid-template-columns: 1fr; }
-    .choice-grid { grid-template-columns: 1fr; }
     .code-intro { min-height: 0; }
     .styling-paths { grid-template-columns: 1fr; }
     .styling-path > p:not(.styling-path__label) { min-height: 0; }
