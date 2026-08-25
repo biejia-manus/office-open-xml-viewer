@@ -16,6 +16,11 @@ describe('Office comment UI integration guide', () => {
       expect(page).toContain(viewer);
     }
     expect(page).toContain('List, search, or export');
+    expect(page).toContain('Independent list with Viewer navigation');
+    expect(page).toContain('does not scale or move with the rendered file');
+    expect(page).toContain("docxViewer.goToComment(comment.id, { behavior: 'smooth' })");
+    expect(page).toContain("pptxViewer.goToComment(slideIndex, commentIndex, { behavior: 'smooth' })");
+    expect(page).toContain("xlsxViewer.goToComment(comment.cellRef, { align: 'center' })");
     expect(page).toContain('Margin or separate pane');
     expect(page).toContain('Highlights or markers');
     expect(page).toContain('comments: true');
@@ -115,6 +120,9 @@ describe('Office comment UI integration guide', () => {
     expect(page).toContain('getCellViewportRect()');
     expect(page).toContain('getSelectionContext()');
     expect(apiReference).toContain('getComments(slideIndex: number)');
+    expect(apiReference).toContain('goToComment(slideIndex: number, commentIndex: number');
+    expect(apiReference).toContain('goToComment(commentId: string');
+    expect(apiReference.match(/goToComment\(cellRef: string/g)).toHaveLength(2);
     expect(apiReference.match(/getComments\(\): readonly Readonly<XlsxComment>\[\]/g)).toHaveLength(2);
     expect(apiReference).toContain('selected comment thread');
     expect(apiReference).toContain('including attached comments');

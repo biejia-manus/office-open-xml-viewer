@@ -2052,6 +2052,36 @@ export class PptxScrollViewer implements ZoomableViewer {
     this._mountVisible();
   }
 
+  /**
+   * Reveal one authored comment occurrence from an application-owned list.
+   * `commentIndex` is its index in `presentation.getComments(slideIndex)`.
+   * Returns `false` when either index does not identify a comment.
+   */
+  goToComment(
+    slideIndex: number,
+    commentIndex: number,
+    opts?: { behavior?: 'auto' | 'smooth' },
+  ): boolean {
+    if (this._destroyed) throw new Error('PptxScrollViewer is destroyed');
+    const presentation = this._pres;
+    if (!presentation || !Number.isInteger(slideIndex) || !Number.isInteger(commentIndex)) {
+      return false;
+    }
+    if (slideIndex < 0 || slideIndex >= presentation.slideCount) return false;
+    const comment = presentation.getComments(slideIndex)[commentIndex];
+    if (!comment) return false;
+
+    this._activeCommentId = pptxCommentOccurrenceKey(comment, commentIndex, slideIndex);
+    this._activeCommentSlide = slideIndex;
+    this._elementContext = null;
+    this.scrollToSlide(slideIndex, opts);
+    for (const [mountedSlide, slot] of this._slots) {
+      this._redrawSlotComments(mountedSlide, slot);
+    }
+    this._emitSelectionContextChange();
+    return true;
+  }
+
   /** Search the complete presentation, including slides outside the
    * virtualized mounted window. Matching is case-insensitive by default. */
   async findText(

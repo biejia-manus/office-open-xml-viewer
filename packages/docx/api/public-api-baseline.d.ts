@@ -1188,6 +1188,9 @@ export class DocxScrollViewer implements ZoomableViewer {
     scrollToPage(index: number, opts?: {
         behavior?: 'auto' | 'smooth';
     }): void;
+    goToComment(commentId: string, opts?: {
+        behavior?: 'auto' | 'smooth';
+    }): Promise<boolean>;
     findText(query: string, opts?: FindMatchesOptions): Promise<FindMatch<DocxMatchLocation>[]>;
     findNext(): Promise<FindMatch<DocxMatchLocation> | null>;
     findPrev(): Promise<FindMatch<DocxMatchLocation> | null>;

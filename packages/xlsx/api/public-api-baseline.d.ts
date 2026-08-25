@@ -2114,6 +2114,7 @@ export class XlsxSheetViewer implements ZoomableViewer {
     getCellAt(clientX: number, clientY: number): CellAddress | null;
     getCellViewportRect(cell: CellAddress | string): XlsxCellViewportRect | null;
     getComments(): readonly Readonly<XlsxComment>[];
+    goToComment(cellRef: string, options?: XlsxScrollToCellOptions): Promise<boolean>;
     get selectionState(): XlsxSelectionState | null;
     setSelection(selection: XlsxSelectionInput): void;
     getSelectionContext(options?: XlsxSelectionContextOptions): XlsxSelectionContext | null;
@@ -2182,6 +2183,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     getCellAt(clientX: number, clientY: number): CellAddress | null;
     getCellViewportRect(cell: CellAddress | string): XlsxCellViewportRect | null;
     getComments(): readonly Readonly<XlsxComment>[];
+    goToComment(cellRef: string, options?: XlsxScrollToCellOptions): Promise<boolean>;
     get selectionState(): XlsxSelectionState | null;
     setSelection(input: XlsxSelectionInput): void;
     getSelectionContext(options?: XlsxSelectionContextOptions): XlsxSelectionContext | null;

@@ -11,6 +11,30 @@ const docxComments = docxDocument.comments;
 const pptxComments = presentation.getComments(slideIndex);
 const xlsxComments = xlsxViewer.getComments();`;
 
+const independentListExample = `// Your application owns the list and its styling.
+const addRow = (label: string, reveal: () => void | Promise<unknown>) => {
+  const button = document.createElement('button');
+  button.textContent = label;
+  button.addEventListener('click', () => void reveal());
+  commentList.append(button);
+};
+
+docxDocument.comments
+  .filter((comment) => comment.parentId === undefined)
+  .forEach((comment) => addRow(comment.text, () =>
+    docxViewer.goToComment(comment.id, { behavior: 'smooth' })
+  ));
+
+presentation.getComments(slideIndex)
+  .forEach((comment, commentIndex) => addRow(comment.text, () =>
+    pptxViewer.goToComment(slideIndex, commentIndex, { behavior: 'smooth' })
+  ));
+
+xlsxViewer.getComments()
+  .forEach((comment) => addRow(comment.text, () =>
+    xlsxViewer.goToComment(comment.cellRef, { align: 'center' })
+  ));`;
+
 const docxViewerExample = `import { DocxScrollViewer } from '@silurus/ooxml/docx';
 
 const viewer = new DocxScrollViewer(container, {
@@ -318,6 +342,11 @@ const destroy = () => presentation.destroy(); // Call from the owning UI's clean
           <p>Draw application-owned SVG or DOM marks using the format-specific viewport geometry.</p>
         </article>
       </div>
+      <article class="independent-list-example">
+        <h3>Independent list with Viewer navigation</h3>
+        <p>Keep the list outside the document rail so it does not scale or move with the rendered file. The application owns row layout, filtering, and virtualization; each Viewer owns only navigation to the authored target.</p>
+        <Code code={independentListExample} lang="ts" themes={codeThemes} defaultColor={false} />
+      </article>
     </section>
 
     <section class="review-section" aria-labelledby="minimum-flow">
@@ -402,6 +431,10 @@ const destroy = () => presentation.destroy(); // Call from the owning UI's clean
   article h3 { margin: 0; font-size: 18px; }
   article p { margin: 9px 0 0; color: var(--text-dim); }
   .choice-label { margin: 0 0 9px; color: var(--accent); font: 600 11px var(--mono); text-transform: uppercase; }
+  .independent-list-example { margin-top: 16px; padding: 0; overflow: hidden; }
+  .independent-list-example h3 { padding: 20px 20px 0; }
+  .independent-list-example p { padding: 0 20px; }
+  .independent-list-example :global(pre) { margin: 18px 0 0; padding: 18px 20px; overflow-x: auto; background: var(--code-bg) !important; font-size: 12px; line-height: 1.6; }
   .table-wrap { margin-top: 20px; overflow-x: auto; border: 1px solid var(--border); }
   table { width: 100%; min-width: 740px; border-collapse: collapse; font-size: 14px; }
   th, td { padding: 10px 14px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }

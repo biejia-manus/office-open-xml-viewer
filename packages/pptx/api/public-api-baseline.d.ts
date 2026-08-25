@@ -1463,6 +1463,9 @@ export class PptxScrollViewer implements ZoomableViewer {
     scrollToSlide(index: number, opts?: {
         behavior?: 'auto' | 'smooth';
     }): void;
+    goToComment(slideIndex: number, commentIndex: number, opts?: {
+        behavior?: 'auto' | 'smooth';
+    }): boolean;
     findText(query: string, opts?: FindMatchesOptions): Promise<FindMatch<PptxMatchLocation>[]>;
     findNext(): Promise<FindMatch<PptxMatchLocation> | null>;
     findPrev(): Promise<FindMatch<PptxMatchLocation> | null>;

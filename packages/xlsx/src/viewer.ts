@@ -2278,6 +2278,26 @@ class XlsxViewerEngine implements ZoomableViewer {
     return structuredClone(this.currentSourceComments);
   }
 
+  /**
+   * Reveal the cell that owns a current-sheet comment. This deliberately owns
+   * no list UI: applications render detached records from `getComments()` and
+   * call this navigation primitive from their own rows.
+   *
+   * Returns `false` when `cellRef` does not identify a current-sheet comment.
+   */
+  async goToComment(
+    cellRef: string,
+    options?: XlsxScrollToCellOptions,
+  ): Promise<boolean> {
+    const target = parseA1(cellRef);
+    if (!target || !this.currentSourceComments.some((comment) => {
+      const cell = parseA1(comment.cellRef);
+      return cell?.row === target.row && cell.col === target.col;
+    })) return false;
+    await this.scrollToCell(cellRef, options);
+    return true;
+  }
+
   /** Returns the full selection model, detached from viewer-owned state. */
   get selectionState(): XlsxSelectionState | null {
     return this.selectionController.snapshot();
@@ -5195,6 +5215,17 @@ export class XlsxSheetViewer implements ZoomableViewer {
   getComments(): readonly Readonly<XlsxComment>[] {
     this.assertOpen();
     return this.engine.getComments();
+  }
+
+  async goToComment(
+    cellRef: string,
+    options?: XlsxScrollToCellOptions,
+  ): Promise<boolean> {
+    this.assertOpen();
+    const found = await this.engine.goToComment(cellRef, options);
+    this.assertOpen();
+    this.captureSnapshot();
+    return found;
   }
 
   get selectionState(): XlsxSelectionState | null {

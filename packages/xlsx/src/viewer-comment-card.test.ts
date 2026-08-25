@@ -9,6 +9,21 @@ afterEach(() => {
 });
 
 describe('XlsxViewer comment UI contract', () => {
+  it('navigates from an application-owned comment list by cell reference', async () => {
+    installDom();
+    const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
+    const internals = viewer as unknown as {
+      currentSourceComments: readonly XlsxComment[];
+    };
+    internals.currentSourceComments = [{ cellRef: 'B2', author: 'Ada', text: 'Review this' }];
+    const scrollToCell = vi.spyOn(viewer, 'scrollToCell').mockResolvedValue();
+
+    await expect(viewer.goToComment('B2', { align: 'center' })).resolves.toBe(true);
+    expect(scrollToCell).toHaveBeenCalledWith('B2', { align: 'center' });
+    await expect(viewer.goToComment('C3')).resolves.toBe(false);
+    viewer.destroy();
+  });
+
   it('returns detached comments for application-owned current-sheet UI', () => {
     installDom();
     const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);

@@ -155,6 +155,43 @@ describe('DocxScrollViewer — skeleton (T1)', () => {
 });
 
 describe('DocxScrollViewer — opt-in comment cards', () => {
+  it('navigates from an application-owned comment list and caches the resolved page', async () => {
+    installDom();
+    const engine = new FakeDocxEngine(4, [{ widthPt: 612, heightPt: 792 }]);
+    const source = { story: 'body', storyInstance: 'body', path: [0] } as const;
+    engine.comments = [{ id: '7', author: 'Ada', text: 'Review this' }];
+    engine.commentAnchors = [{
+      commentId: '7',
+      source,
+      startRunIndex: 0,
+      endRunIndex: 1,
+      reference: { source, runIndex: 1, affinity: 'preceding' },
+    }] as CommentAnchorRange[];
+    const collectPageRuns = vi.fn(async (page: number) => page === 2 ? [{
+      text: 'anchored', source, sourceRunIndex: 0,
+      x: 20, y: 30, w: 80, h: 14, fontSize: 12, font: '12px sans-serif',
+    }] : []);
+    engine.collectPageRuns = collectPageRuns;
+    const container = makeContainer();
+    const viewer = DocxScrollViewer.fromDocument(
+      container as unknown as HTMLElement,
+      engine.asDoc(),
+    );
+
+    await expect(viewer.goToComment('7')).resolves.toBe(true);
+    const scrollHost = container.children[0]!.children[0]!;
+    expect(scrollHost.scrollTop).toBeGreaterThan(0);
+    expect(viewer.getSelectionContext()).toMatchObject({
+      kind: 'comment', commentId: '7', pageIndex: 2,
+    });
+    expect(collectPageRuns.mock.calls.map(([page]) => page)).toEqual([0, 1, 2]);
+
+    await expect(viewer.goToComment('7')).resolves.toBe(true);
+    expect(collectPageRuns).toHaveBeenCalledTimes(3);
+    await expect(viewer.goToComment('missing')).resolves.toBe(false);
+    viewer.destroy();
+  });
+
   it('does not collect comment geometry or add comment DOM by default', async () => {
     installDom();
     const engine = new FakeDocxEngine(1, [{ widthPt: 612, heightPt: 792 }]);

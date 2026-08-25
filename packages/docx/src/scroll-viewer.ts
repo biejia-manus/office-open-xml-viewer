@@ -47,6 +47,7 @@ import {
   buildDocxCommentMargin,
   type DocxCommentsOptions,
 } from './comment-margin';
+import { resolveCommentAnchorRuns } from './comments';
 
 /**
  * Debounce window (ms) after the last `setScale` in a zoom burst before the
@@ -293,6 +294,7 @@ export class DocxScrollViewer implements ZoomableViewer {
   private _elementContext: DocxElementContext | null = null;
   private _activeCommentId: string | null = null;
   private _activeCommentPage: number | null = null;
+  private readonly _commentPageById = new Map<string, number>();
   private _commentAnchorRangesForMargin: ReturnType<DocxDocument['commentAnchorRanges']> | null = null;
   private _commentAnchorIds: ReadonlySet<string> = new Set();
   private _commentGeometryScheduled = false;
@@ -552,6 +554,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         this._findActive = false;
         this._activeCommentId = null;
         this._activeCommentPage = null;
+        this._commentPageById.clear();
         if (ownedDocument) {
           // Recycle before the old worker is terminated. Every captured slot
           // dispatcher then becomes stale before its expected rejection lands.
@@ -565,6 +568,7 @@ export class DocxScrollViewer implements ZoomableViewer {
       this._findActive = false;
       this._activeCommentId = null;
       this._activeCommentPage = null;
+      this._commentPageById.clear();
       // Lay out + mount the first window now that the engine exists (mirrors the
       // borrowed-engine path in the constructor). relayout() is idempotent and
       // defers under a zero-width container — `_onResize` re-runs it once width
@@ -1853,6 +1857,51 @@ export class DocxScrollViewer implements ZoomableViewer {
       this._scrollHost.scrollTop = top;
     }
     this._mountVisible();
+  }
+
+  /**
+   * Reveal a top-level authored comment by its DOCX comment id. This is the
+   * navigation primitive for an application-owned comment list: the Viewer
+   * resolves the comment's page lazily, caches that stable page index, scrolls
+   * to it, and selects the thread when comment UI is mounted.
+   *
+   * Returns `false` for an unknown id or a comment with no rendered anchor.
+   */
+  async goToComment(
+    commentId: string,
+    opts?: { behavior?: 'auto' | 'smooth' },
+  ): Promise<boolean> {
+    if (this._destroyed) throw new Error('DocxScrollViewer is destroyed');
+    const doc = this._doc;
+    if (!doc || !doc.comments.some((comment) =>
+      comment.id === commentId && comment.parentId === undefined)) return false;
+    const anchors = doc.commentAnchorRanges().filter((anchor) => anchor.commentId === commentId);
+    if (anchors.length === 0) return false;
+
+    let page = this._commentPageById.get(commentId);
+    if (page === undefined) {
+      for (let index = 0; index < doc.pageCount; index += 1) {
+        const runs = await this._collectPageRuns(index);
+        if (this._destroyed) throw new Error('DocxScrollViewer is destroyed');
+        if (this._doc !== doc) return false;
+        if (anchors.some((anchor) => resolveCommentAnchorRuns(anchor, runs).length > 0)) {
+          page = index;
+          this._commentPageById.set(commentId, index);
+          break;
+        }
+      }
+    }
+    if (page === undefined) return false;
+
+    this._activeCommentId = commentId;
+    this._activeCommentPage = page;
+    this._elementContext = null;
+    this.scrollToPage(page, opts);
+    for (const [mountedPage, slot] of this._slots) {
+      this._redrawSlotComments(mountedPage, slot);
+    }
+    this._emitSelectionContextChange();
+    return true;
   }
 
   /** Search the complete document, including pages outside the virtualized

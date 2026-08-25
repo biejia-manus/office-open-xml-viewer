@@ -153,6 +153,29 @@ describe('PptxScrollViewer — skeleton (T1)', () => {
 });
 
 describe('PptxScrollViewer — opt-in comment cards', () => {
+  it('navigates from an application-owned comment list by slide and occurrence', () => {
+    installDom();
+    const engine = new FakePptxEngine(4, SLIDE_W_EMU, SLIDE_H_EMU);
+    engine.commentsBySlide = [[], [], [{
+      id: 'modern-1', author: 'Grace', text: 'Review this',
+      x: SLIDE_W_EMU / 2, y: SLIDE_H_EMU / 2,
+    }], []];
+    const container = makeContainer();
+    const viewer = PptxScrollViewer.fromPresentation(
+      container as unknown as HTMLElement,
+      engine.asPres(),
+    );
+
+    expect(viewer.goToComment(2, 0)).toBe(true);
+    const scrollHost = container.children[0]!.children[0]!;
+    expect(scrollHost.scrollTop).toBeGreaterThan(0);
+    expect(viewer.getSelectionContext()).toMatchObject({
+      kind: 'comment', commentId: 'modern-1', slideIndex: 2,
+    });
+    expect(viewer.goToComment(2, 9)).toBe(false);
+    viewer.destroy();
+  });
+
   it('does not reserve an empty margin when every thread is resolved', () => {
     installDom();
     const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
