@@ -1,0 +1,181 @@
+<div class="comment-list-demo" data-comment-list-demo>
+  <div class="comment-list-demo__viewer-wrap">
+    <p class="comment-list-demo__loading" data-comment-list-loading>Loading sample-1.docx…</p>
+    <div class="comment-list-demo__viewer" data-comment-list-viewer></div>
+  </div>
+  <aside class="comment-list-demo__rail" aria-label="Document comments">
+    <div class="comment-list-demo__rail-head">
+      <strong>Comments</strong>
+      <span>sample-1.docx</span>
+    </div>
+    <div class="comment-list-demo__items" data-comment-list-items></div>
+    <p class="comment-list-demo__status" data-comment-list-status aria-live="polite"></p>
+  </aside>
+</div>
+
+<script>
+  import { DocxDocument, DocxScrollViewer } from '@silurus/ooxml-docx';
+
+  const base = import.meta.env.BASE_URL;
+  const sampleUrl = `${base}samples/sample-1.docx`.replace(/([^:])\/\/+/g, '$1/');
+
+  for (const root of document.querySelectorAll<HTMLElement>('[data-comment-list-demo]')) {
+    if (root.dataset.mounted === '1') continue;
+    root.dataset.mounted = '1';
+    const host = root.querySelector<HTMLElement>('[data-comment-list-viewer]') as HTMLElement;
+    const loading = root.querySelector<HTMLElement>('[data-comment-list-loading]') as HTMLElement;
+    const items = root.querySelector<HTMLElement>('[data-comment-list-items]') as HTMLElement;
+    const status = root.querySelector<HTMLElement>('[data-comment-list-status]') as HTMLElement;
+    let documentModel: DocxDocument | null = null;
+    let viewer: DocxScrollViewer | null = null;
+    let disposed = false;
+
+    const destroy = () => {
+      if (disposed) return;
+      disposed = true;
+      viewer?.destroy();
+      documentModel?.destroy();
+      viewer = null;
+      documentModel = null;
+    };
+
+    const mount = async () => {
+      try {
+        const doc = await DocxDocument.load(sampleUrl, { useGoogleFonts: true });
+        if (disposed) {
+          doc.destroy();
+          return;
+        }
+        documentModel = doc;
+        const nextViewer = DocxScrollViewer.fromDocument(host, doc, {
+          background: 'transparent',
+        });
+        viewer = nextViewer;
+        const comments = doc.comments.filter((comment) => comment.parentId === undefined);
+        for (const comment of comments) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'comment-list-demo__item';
+          const author = document.createElement('strong');
+          author.textContent = comment.author || 'Reviewer';
+          const body = document.createElement('span');
+          body.textContent = comment.text;
+          button.append(author, body);
+          button.addEventListener('click', async () => {
+            const found = await nextViewer.goToComment(comment.id, { behavior: 'smooth' });
+            if (disposed) return;
+            for (const item of items.querySelectorAll<HTMLButtonElement>('button')) {
+              const active = item === button && found;
+              item.dataset.active = String(active);
+              item.setAttribute('aria-pressed', String(active));
+            }
+            status.textContent = found
+              ? `Revealed comment by ${comment.author || 'Reviewer'}.`
+              : 'This comment has no rendered anchor.';
+          });
+          items.append(button);
+        }
+        loading.hidden = true;
+        status.textContent = comments.length > 0
+          ? 'Select a comment to reveal its document location.'
+          : 'This document has no comments.';
+      } catch (error: unknown) {
+        if (!disposed) loading.textContent = error instanceof Error
+          ? error.message
+          : 'Unable to load the sample.';
+      }
+    };
+
+    void mount();
+    window.addEventListener('pagehide', destroy, { once: true });
+    document.addEventListener('astro:before-swap', destroy, { once: true });
+  }
+</script>
+
+<style>
+  .comment-list-demo {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+    height: clamp(520px, 72vh, 680px);
+    margin-top: 18px;
+    border-block: 1px solid var(--border);
+    background: radial-gradient(120% 80% at 50% 0%, var(--preview-top), var(--preview-bottom) 70%);
+  }
+  .comment-list-demo__viewer-wrap { position: relative; min-width: 0; min-height: 0; }
+  .comment-list-demo__viewer { height: 100%; }
+  .comment-list-demo__loading {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    margin: 0;
+    color: var(--text-dim);
+    background: var(--bg);
+    font: 500 12px/1.5 var(--mono);
+  }
+  .comment-list-demo__loading[hidden] { display: none; }
+  .comment-list-demo__rail {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    min-width: 0;
+    min-height: 0;
+    border-left: 1px solid var(--border);
+    background: var(--bg-elev);
+  }
+  .comment-list-demo__rail-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .comment-list-demo__rail-head strong { font-size: 14px; }
+  .comment-list-demo__rail-head span { color: var(--text-faint); font: 11px var(--mono); }
+  .comment-list-demo__items { min-height: 0; overflow-y: auto; padding: 10px; }
+  :global(.comment-list-demo__item) {
+    display: grid;
+    gap: 5px;
+    width: 100%;
+    padding: 12px 13px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    color: var(--text);
+    background: var(--panel);
+    text-align: left;
+    cursor: pointer;
+  }
+  :global(.comment-list-demo__item + .comment-list-demo__item) { margin-top: 8px; }
+  :global(.comment-list-demo__item:hover) { border-color: var(--border-bright); }
+  :global(.comment-list-demo__item[data-active='true']) {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  :global(.comment-list-demo__item strong) { font-size: 12px; }
+  :global(.comment-list-demo__item span) {
+    display: -webkit-box;
+    overflow: hidden;
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+  .comment-list-demo__status {
+    min-height: 38px;
+    margin: 0;
+    padding: 10px 13px;
+    border-top: 1px solid var(--border);
+    color: var(--text-faint);
+    font: 11px/1.5 var(--mono);
+  }
+  @media (max-width: 760px) {
+    .comment-list-demo {
+      grid-template-columns: 1fr;
+      grid-template-rows: minmax(440px, 62vh) minmax(220px, 36vh);
+      height: auto;
+    }
+    .comment-list-demo__rail { border-top: 1px solid var(--border); border-left: 0; }
+  }
+</style>

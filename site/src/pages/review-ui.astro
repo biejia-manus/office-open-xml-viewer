@@ -4,6 +4,8 @@ import Base from '../layouts/Base.astro';
 import Nav from '../components/Nav.astro';
 import SiteFooter from '../components/SiteFooter.astro';
 import BuiltInCommentViewer from '../components/BuiltInCommentViewer.astro';
+import CodeTabs from '../components/CodeTabs.astro';
+import CommentListNavigationDemo from '../components/CommentListNavigationDemo.astro';
 import { codeThemes } from '../lib/code-theme';
 
 const transcriptExample = `// Detached records for an application-owned list, search, or export.
@@ -188,6 +190,13 @@ const placements = comments.map((comment) => {
 
 renderSlideCommentCards(placements);
 const destroy = () => presentation.destroy(); // Call from the owning UI's cleanup.`;
+
+const primitiveTabs = [
+  { id: 'records', label: 'Records', lang: 'ts', code: transcriptExample },
+  { id: 'docx', label: 'DOCX', lang: 'ts', code: anchoredExample },
+  { id: 'xlsx', label: 'XLSX', lang: 'ts', code: xlsxAnchoredExample },
+  { id: 'pptx', label: 'PPTX', lang: 'ts', code: pptxAnchoredExample },
+];
 ---
 
 <Base
@@ -345,6 +354,7 @@ const destroy = () => presentation.destroy(); // Call from the owning UI's clean
       <article class="independent-list-example">
         <h3>Independent list with Viewer navigation</h3>
         <p>Keep the list outside the document rail so it does not scale or move with the rendered file. The application owns row layout, filtering, and virtualization; each Viewer owns only navigation to the authored target.</p>
+        <CommentListNavigationDemo />
         <Code code={independentListExample} lang="ts" themes={codeThemes} defaultColor={false} />
       </article>
     </section>
@@ -354,30 +364,8 @@ const destroy = () => presentation.destroy(); // Call from the owning UI's clean
         <h2 id="minimum-flow">Custom UI with primitive APIs</h2>
         <p>Start with detached records. Add geometry only if the application needs a visible connection to document content.</p>
       </div>
-      <div class="implementation-grid">
-        <article>
-          <h3>Read comment records</h3>
-          <ol><li>Load the Office file.</li><li>Read comments from the format API.</li><li>Render a list, search result, or export.</li></ol>
-          <Code code={transcriptExample} lang="ts" themes={codeThemes} defaultColor={false} />
-        </article>
-        <article>
-          <h3>DOCX anchored example</h3>
-          <ol><li>Render the current page and collect text runs.</li><li>Resolve threads and their page rectangles.</li><li>Render the application-owned UI.</li></ol>
-          <p class="helper-note"><code>resolveDocxCommentThreads()</code> is a standalone export from <code>@silurus/ooxml/docx</code>, not a <code>DocxDocument</code> method.</p>
-          <Code code={anchoredExample} lang="ts" themes={codeThemes} defaultColor={false} />
-        </article>
-        <article>
-          <h3>XLSX cell-anchored example</h3>
-          <ol><li>Read comments for the current sheet.</li><li>Resolve each A1 cell reference into viewport CSS pixels.</li><li>Reposition application-owned cards after sheet, scroll, or zoom changes.</li></ol>
-          <Code code={xlsxAnchoredExample} lang="ts" themes={codeThemes} defaultColor={false} />
-        </article>
-        <article>
-          <h3>PPTX slide-anchored example</h3>
-          <ol><li>Read comments for the current slide.</li><li>Resolve modern element anchors; use the authored slide point for classic comments.</li><li>Convert slide EMU into rendered CSS pixels.</li></ol>
-          <Code code={pptxAnchoredExample} lang="ts" themes={codeThemes} defaultColor={false} />
-        </article>
-      </div>
-      <p class="format-context">The rendering functions in these examples are application code: they receive detached records plus viewport geometry and create the cards, pane, or overlay your product needs. Recompute geometry when the visible page, slide, sheet, scroll position, or zoom changes.</p>
+      <CodeTabs id="comment-primitives" tabs={primitiveTabs} />
+      <p class="format-context"><code>resolveDocxCommentThreads()</code> is a standalone export from <code>@silurus/ooxml/docx</code>, not a <code>DocxDocument</code> method. The rendering functions in these examples are application code: they receive detached records plus viewport geometry and create the cards, pane, or overlay your product needs.</p>
     </section>
 
     <section class="review-section final-state" aria-labelledby="final-state">
@@ -446,11 +434,10 @@ const destroy = () => presentation.destroy(); // Call from the owning UI's clean
   .format-context a { color: var(--accent); font-weight: 700; }
   .setup-note { margin: 18px 0 0; color: var(--text-dim); }
   .setup-note a { color: var(--accent); font-weight: 700; }
-  .format-setup-grid, .implementation-grid { display: grid; gap: 16px; align-items: start; }
+  .format-setup-grid { display: grid; gap: 16px; align-items: start; }
   .format-setup-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .implementation-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .format-setup-grid article, .implementation-grid article { min-width: 0; padding: 0; overflow: hidden; }
-  .format-setup-grid h3, .implementation-grid h3 { padding: 20px 20px 0; }
+  .format-setup-grid article { min-width: 0; padding: 0; overflow: hidden; }
+  .format-setup-grid h3 { padding: 20px 20px 0; }
   .basic-theme { margin-top: 16px; padding: 0; overflow: hidden; }
   .basic-theme h3 { padding: 20px 20px 0; }
   .basic-theme > p { padding: 0 20px; }
@@ -467,10 +454,7 @@ const destroy = () => presentation.destroy(); // Call from the owning UI's clean
   .built-in-preview > p { margin: 9px 0 16px; color: var(--text-dim); }
   .built-in-preview > .demo-surface-note { margin-top: -6px; font: 500 11px/1.5 var(--mono); }
   .code-intro { min-height: 48px; padding: 0 20px; }
-  .implementation-grid ol { min-height: 116px; margin: 14px 20px 20px; padding-left: 20px; color: var(--text-dim); }
-  .implementation-grid .helper-note { margin: -6px 20px 18px; color: var(--text-dim); font-size: 13px; }
-  .implementation-grid li + li { margin-top: 6px; }
-  .format-setup-grid :global(pre), .implementation-grid :global(pre) { margin: 0; padding: 18px 20px; overflow-x: auto; background: var(--code-bg) !important; font-size: 12px; line-height: 1.6; }
+  .format-setup-grid :global(pre) { margin: 0; padding: 18px 20px; overflow-x: auto; background: var(--code-bg) !important; font-size: 12px; line-height: 1.6; }
   .detail-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .detail-links a { padding: 17px 18px; border: 1px solid var(--border); background: var(--panel); }
   .detail-links strong { display: block; color: var(--accent); }
@@ -478,9 +462,8 @@ const destroy = () => presentation.destroy(); // Call from the owning UI's clean
   @media (max-width: 900px) {
     .concept-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .format-setup-grid { grid-template-columns: 1fr; }
-    .choice-grid, .implementation-grid { grid-template-columns: 1fr; }
+    .choice-grid { grid-template-columns: 1fr; }
     .code-intro { min-height: 0; }
-    .implementation-grid ol { min-height: 0; }
     .styling-paths { grid-template-columns: 1fr; }
     .styling-path > p:not(.styling-path__label) { min-height: 0; }
   }

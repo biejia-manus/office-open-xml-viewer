@@ -93,8 +93,17 @@ describe('Office comment UI integration guide', () => {
     }
     expect(page).toContain('No page geometry');
     expect(page).toContain('Page geometry required');
-    expect(page).toContain('Read comment records');
-    expect(page).toContain('DOCX anchored example');
+    expect(page).toContain('<CodeTabs id="comment-primitives" tabs={primitiveTabs} />');
+    for (const tab of ["label: 'Records'", "label: 'DOCX'", "label: 'XLSX'", "label: 'PPTX'"]) {
+      expect(page).toContain(tab);
+    }
+    expect(page).toContain('<CommentListNavigationDemo />');
+    const listDemo = read('./components/CommentListNavigationDemo.astro');
+    expect(listDemo).toContain("DocxScrollViewer.fromDocument(host, doc");
+    expect(listDemo).toContain("nextViewer.goToComment(comment.id, { behavior: 'smooth' })");
+    expect(listDemo).toContain("doc.comments.filter((comment) => comment.parentId === undefined)");
+    expect(listDemo).toContain('data-comment-list-items');
+    expect(listDemo).toContain('aria-live="polite"');
     expect(example).toContain('doc.commentAnchorRanges()');
     expect(example).toContain('onTextRun: (run) => runs.push(run)');
     expect(example).toContain('resolveDocxCommentThreads(');
