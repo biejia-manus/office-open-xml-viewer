@@ -10116,7 +10116,7 @@ mod tests {
     fn bootstrap_projection_and_descriptor_limits_accept_exact_and_reject_plus_one() {
         let data = build_three_slide_deck(usize::MAX, "");
         let mut baseline = PptxArchive::new(data.clone(), None, None, None).unwrap();
-        baseline.presentation_bootstrap().unwrap();
+        baseline.presentation_bootstrap_inner().unwrap();
         let shared = baseline.presentation.as_ref().unwrap();
         assert!(
             shared.master_cache.is_empty(),
@@ -10130,6 +10130,8 @@ mod tests {
             &shared.pres_rels,
             &shared.theme,
             &shared.pres_master_path,
+            &shared.comment_authors_path,
+            &shared.modern_comment_authors_path,
         ))
         .unwrap()
         .json_bytes;
@@ -10141,7 +10143,7 @@ mod tests {
                 ..PptxInternalLimits::default()
             });
             let mut exact = PptxArchive::new(data.clone(), None, None, None).unwrap();
-            exact.presentation_bootstrap().unwrap();
+            exact.presentation_bootstrap_inner().unwrap();
         }
         {
             let _limits = InternalLimitsOverride::set(PptxInternalLimits {
