@@ -56,6 +56,9 @@ export default defineConfig({
         '@silurus/ooxml-core/internal/read-only-comment-decoration': fileURLToPath(
           new URL('../packages/core/src/internal/read-only-comment-decoration.ts', import.meta.url),
         ),
+        '@silurus/ooxml-core/internal/virtual-scroll': fileURLToPath(
+          new URL('../packages/core/src/internal/virtual-scroll.ts', import.meta.url),
+        ),
         '@silurus/ooxml-core/internal/dom-interaction-boundary': fileURLToPath(
           new URL('../packages/core/src/internal/dom-interaction-boundary.ts', import.meta.url),
         ),

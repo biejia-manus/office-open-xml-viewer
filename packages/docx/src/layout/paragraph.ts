@@ -959,7 +959,12 @@ export function planLine(input: PlanLineInput): LineLayout {
           highlightFragments: [{
             // ECMA-376 §17.3.2.15 applies highlighting behind the run
             // contents, not across the paragraph's authored line advance.
-            rect: highlightBounds,
+            rect: style.highlight ? highlightBounds : {
+              xPt,
+              yPt: line.topPt,
+              widthPt: widthPt + ownedTrailingSlackPt,
+              heightPt: line.advancePt,
+            },
             color: style.highlight ?? style.background!,
           }],
         } : {}),

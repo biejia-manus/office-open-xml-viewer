@@ -28,7 +28,7 @@ import {
   rtlMirrorX,
 } from './renderer.js';
 import { findListValidationAt } from './data-validation.js';
-import { parseA1 } from './a1.js';
+import { formatA1, parseA1 } from './a1.js';
 import { resolveXlsxInternalHyperlink } from './internal-hyperlink.js';
 import type {
   CellAddress,
@@ -151,9 +151,10 @@ const VIEWER_STYLE_ATTR = 'data-xlsx-viewer-styles';
 const VIEWER_STYLE_CSS =
   `.xlsx-tab-strip::-webkit-scrollbar{display:none}` +
   // The viewport remains focusable so copy shortcuts belong to the active
-  // Viewer, but selection state is communicated at cell level. A viewport-wide
-  // focus ring is visually indistinguishable from a sheet selection border.
+  // Viewer. Pointer focus stays quiet, while keyboard focus remains visible at
+  // the viewport boundary and distinct from the selected-cell border.
   `[data-xlsx-viewport-input]:focus{outline:none}` +
+  `[data-xlsx-viewport-input]:focus-visible{outline:2px solid var(--ooxml-xlsx-focus-ring,#2563eb);outline-offset:-2px}` +
   `.xlsx-tab-nav{background:transparent;transition:background 0.1s;}` +
   `.xlsx-tab-nav:hover{background:color-mix(in srgb,var(--ooxml-xlsx-chrome-text,#444) 8%,transparent);}` +
   // Excel-status-bar zoom slider: a thin uniform gray track (no colored
@@ -698,6 +699,10 @@ class XlsxViewerEngine implements ZoomableViewer {
   private fontBinding: Readonly<{ workbook: XlsxWorkbook; release: () => void }> | null = null;
   private _hiddenSheetMode: HiddenSheetMode;
   private currentWorksheet: Worksheet | null = null;
+  /** Authored comments for the selected sheet. Presentation filtering must not
+   * erase the application-owned data and selection-context contracts. */
+  private currentSourceComments: readonly XlsxComment[] = [];
+  private sourceCommentMap = new Map<string, XlsxComment>();
   /** Viewer-owned projections of workbook-cached worksheets. Only view-mutable
    * size/outline state is copied; immutable cell/content graphs stay shared. */
   private sheetViews = new Map<number, Worksheet>();
@@ -919,6 +924,11 @@ class XlsxViewerEngine implements ZoomableViewer {
 
     this.scrollHost = this.hostDocument.createElement('div');
     this.scrollHost.setAttribute('data-xlsx-viewport-input', mount.kind);
+    this.scrollHost.setAttribute('role', 'region');
+    this.scrollHost.setAttribute(
+      'aria-label',
+      'Spreadsheet viewport. Use Arrow keys to move the selected cell. Press Enter to show its comment.',
+    );
     this.scrollHost.tabIndex = 0;
     this.scrollHost.style.cssText =
       `position:absolute;inset:0;` +
@@ -1285,10 +1295,11 @@ class XlsxViewerEngine implements ZoomableViewer {
     const generation = ++this.sheetRequestGeneration;
     const workbook = this.workbook;
     let worksheet: Worksheet;
+    let sourceWorksheet: Worksheet;
     try {
       if (!await this.ensureHostFonts(workbook)) return;
-      const source = await workbook.getWorksheet(index);
-      worksheet = this.sheetViews.get(index) ?? this.createVisibleSheetView(source);
+      sourceWorksheet = await workbook.getWorksheet(index);
+      worksheet = this.sheetViews.get(index) ?? this.createVisibleSheetView(sourceWorksheet);
       const prepareRowHeights = workbook[prepareXlsxViewerRowHeights];
       if (typeof prepareRowHeights === 'function') {
         const measureCanvas = this.hostDocument.createElement('canvas');
@@ -1305,6 +1316,8 @@ class XlsxViewerEngine implements ZoomableViewer {
 
     this.currentSheet = index;
     this.currentWorksheet = worksheet;
+    this.currentSourceComments = sourceWorksheet.comments ?? [];
+    this.sourceCommentMap = this.createCommentMap(this.currentSourceComments);
     this.setElementContext(null);
     this.pendingElementClick = null;
     this.updateFooterDirection();
@@ -2262,7 +2275,7 @@ class XlsxViewerEngine implements ZoomableViewer {
   /** Detached comments for the current sheet, in authored order. */
   getComments(): readonly Readonly<XlsxComment>[] {
     this.assertOpen();
-    return structuredClone(this.currentWorksheet?.comments ?? []);
+    return structuredClone(this.currentSourceComments);
   }
 
   /** Returns the full selection model, detached from viewer-owned state. */
@@ -2400,7 +2413,7 @@ class XlsxViewerEngine implements ZoomableViewer {
             const cell = rowCells[cellIndex++];
             if (cell.col > selectedColumnsInterval.last) break;
             const raw = cell.value;
-            const sourceComment = this.commentMap.get(`${cell.row}:${cell.col}`);
+            const sourceComment = this.sourceCommentMap.get(`${cell.row}:${cell.col}`);
             if (raw.type === 'empty' && cell.formula === undefined && !sourceComment) continue;
             if (cells.length >= maxCells) { cellsTruncated = true; break cellScan; }
             const displayText = boundedField(this.wb?.cellText(worksheet, cell) ?? '');
@@ -3453,11 +3466,16 @@ class XlsxViewerEngine implements ZoomableViewer {
    *  collision (Excel allows at most one note per cell, so this is moot in
    *  practice). */
   private buildCommentMap(ws: Worksheet): void {
-    this.commentMap = new Map();
-    for (const c of ws.comments ?? []) {
+    this.commentMap = this.createCommentMap(ws.comments ?? []);
+  }
+
+  private createCommentMap(comments: readonly XlsxComment[]): Map<string, XlsxComment> {
+    const map = new Map<string, XlsxComment>();
+    for (const c of comments) {
       const p = parseA1(c.cellRef);
-      if (p) this.commentMap.set(`${p.row}:${p.col}`, c);
+      if (p) map.set(`${p.row}:${p.col}`, c);
     }
+    return map;
   }
 
   private createVisibleSheetView(source: Worksheet): Worksheet {
@@ -3614,6 +3632,15 @@ class XlsxViewerEngine implements ZoomableViewer {
       interactive: false,
       standalone: true,
     });
+    const rootText = (comment.rootText ?? comment.text).trim();
+    const byAuthor = comment.author?.trim() ? ` by ${comment.author.trim()}` : '';
+    const replyCount = comment.replies?.length ?? 0;
+    const replies = replyCount === 0
+      ? ''
+      : `; ${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}`;
+    this.overlayHost.announceComment(
+      `Comment on ${comment.cellRef}${byAuthor}${rootText ? `: ${rootText}` : ''}${replies}`,
+    );
     this.commentPopup.dataset.ooxmlCommentUi = 'popup';
     this.commentPopup.style.maxWidth = `${COMMENT_POPUP_MAX_W}px`;
     this.commentPopup.style.maxHeight = `${COMMENT_POPUP_MAX_H}px`;
@@ -3625,7 +3652,6 @@ class XlsxViewerEngine implements ZoomableViewer {
     this.commentPopup.style.top = '-9999px';
     this.commentPopup.style.display = '';
     this.positionCommentPopup();
-    this.scheduleCommentPopupPosition();
   }
 
   private scheduleCommentPopupPosition(): void {
@@ -4266,6 +4292,13 @@ class XlsxViewerEngine implements ZoomableViewer {
       this.hideCommentPopup();
     });
 
+    // A canvas-backed sheet has no native focused cell. Establish the ordinary
+    // A1 selection when its viewport receives keyboard focus, then reuse the
+    // public selection contract for Arrow-key movement below.
+    this.surface.on('focus', () => {
+      if (this.currentWorksheet && !this.activeCell) this.setSelection('A1');
+    });
+
     this.keydownHandler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
         if (e.defaultPrevented || e.isComposing) return;
@@ -4274,8 +4307,48 @@ class XlsxViewerEngine implements ZoomableViewer {
         if (target?.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
         e.preventDefault();
         void this.copySelection();
+      } else if (
+        !e.defaultPrevented && !e.isComposing &&
+        !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey &&
+        (e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
+          e.key === 'ArrowLeft' || e.key === 'ArrowRight')
+      ) {
+        const current = this.activeCell;
+        const rowDelta = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+        const colDelta = e.key === 'ArrowLeft'
+          ? (this.isRtl ? 1 : -1)
+          : e.key === 'ArrowRight'
+            ? (this.isRtl ? -1 : 1)
+            : 0;
+        const next = current ? {
+          row: Math.max(1, Math.min(MAX_WORKSHEET_ROW, current.row + rowDelta)),
+          col: Math.max(1, Math.min(MAX_WORKSHEET_COL, current.col + colDelta)),
+        } : { row: 1, col: 1 };
+        e.preventDefault();
+        this.hideCommentPopup();
+        const ref = formatA1(next.row, next.col);
+        this.setSelection(ref);
+        // Selection already schedules the paint. Reuse the ordinary viewport
+        // geometry without starting a second immediate render for every key.
+        this._scrollCellIntoView(next.row, next.col);
+        this.updateSelectionOverlay();
+        this.updateFindOverlay();
+        this.emitViewportChange();
       } else if (e.key === 'Escape' && this.validationPanel.style.display !== 'none') {
         this.hideValidationPanel();
+      } else if (e.key === 'Escape' && this.commentPopup.style.display !== 'none') {
+        this.hideCommentPopup();
+      } else if (
+        e.key === 'Enter' && this.activeCell &&
+        !e.defaultPrevented && !e.isComposing &&
+        !e.ctrlKey && !e.metaKey && !e.altKey
+      ) {
+        const comment = this.commentMap.get(`${this.activeCell.row}:${this.activeCell.col}`);
+        if (comment) {
+          e.preventDefault();
+          this.hideCommentPopup();
+          this.renderCommentPopup(this.activeCell, comment);
+        }
       }
     };
     this.surface.on('keydown', this.keydownHandler);
@@ -4906,6 +4979,8 @@ class XlsxViewerEngine implements ZoomableViewer {
       releaseProjection.call(this.wb, this.projectionId);
     }
     this.currentWorksheet = null;
+    this.currentSourceComments = [];
+    this.sourceCommentMap.clear();
     this.elementContext = null;
     this.pendingElementClick = null;
     this.selectionController.reset();

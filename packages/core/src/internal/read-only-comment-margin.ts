@@ -44,6 +44,7 @@ interface MarginState {
   zoom: number;
   resizeObserver?: ResizeObserver;
   onGeometryChange?: () => void;
+  onScrollGeometryChange?: () => void;
 }
 
 let nextCommentCardDomId = 1;
@@ -236,8 +237,10 @@ export interface ReadOnlyCommentMarginOptions {
   /** Card-list width before Viewer zoom is applied. */
   readonly logicalWidth: number;
   readonly onSetActive: (id: string, active: boolean) => void;
-  /** Called when a card's measured geometry or the margin scroll changes. */
+  /** Called when a card's measured geometry changes. */
   readonly onGeometryChange?: () => void;
+  /** Called when only the margin scroll offset changed. */
+  readonly onScrollGeometryChange?: () => void;
   /** Preferred card top in the same CSS-pixel coordinate space as the margin. */
   readonly preferredTopById?: ReadonlyMap<string, number>;
 }
@@ -459,23 +462,27 @@ export function buildReadOnlyCommentMargin(
   if (!state) {
     const created: MarginState = {
       cards: new Map<string, MountedCard>(),
-      onScroll: () => created.onGeometryChange?.(),
+      onScroll: () => created.onScrollGeometryChange?.(),
       zoom: options.zoom,
       onGeometryChange: options.onGeometryChange,
+      onScrollGeometryChange: options.onScrollGeometryChange,
     };
+    if (options.onGeometryChange || options.onScrollGeometryChange) {
+      margin.addEventListener('scroll', created.onScroll, { passive: true });
+    }
     if (options.onGeometryChange) {
       const ResizeObserverClass = margin.ownerDocument.defaultView?.ResizeObserver ??
         globalThis.ResizeObserver;
       if (ResizeObserverClass) {
         created.resizeObserver = new ResizeObserverClass(() => created.onGeometryChange?.());
       }
-      margin.addEventListener('scroll', created.onScroll, { passive: true });
     }
     state = created;
     stateByMargin.set(margin, state);
   }
   state.zoom = options.zoom;
   state.onGeometryChange = options.onGeometryChange;
+  state.onScrollGeometryChange = options.onScrollGeometryChange;
 
   const desired = new Set<string>();
   for (const thread of threads) {

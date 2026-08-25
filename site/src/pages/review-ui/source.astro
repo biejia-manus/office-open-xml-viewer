@@ -4,16 +4,14 @@ import Nav from '../../components/Nav.astro';
 import SiteFooter from '../../components/SiteFooter.astro';
 import CodeTabs from '../../components/CodeTabs.astro';
 import ReviewDemo from '../../components/ReviewDemo.astro';
-import core from '../../examples/review-margin/core.ts?raw';
-import controller from '../../examples/review-margin/index.ts?raw';
-import markup from '../../examples/review-margin/index.html?raw';
-import styles from '../../examples/review-margin/styles.css?raw';
+import portableController from '../../examples/review-margin/index.ts?raw';
+import portableMarkup from '../../examples/review-margin/index.html?raw';
+import portableStyles from '../../examples/review-margin/styles.css?raw';
 
-const tabs = [
-  { id: 'core', label: 'core.ts', lang: 'ts', code: core.trim() },
-  { id: 'controller', label: 'index.ts', lang: 'ts', code: controller.trim() },
-  { id: 'html', label: 'index.html', lang: 'html', code: markup.trim() },
-  { id: 'css', label: 'styles.css', lang: 'css', code: styles.trim() },
+const portableTabs = [
+  { id: 'controller', label: 'index.ts', lang: 'ts', code: portableController.trim() },
+  { id: 'html', label: 'index.html', lang: 'html', code: portableMarkup.trim() },
+  { id: 'css', label: 'styles.css', lang: 'css', code: portableStyles.trim() },
 ];
 ---
 
@@ -37,14 +35,25 @@ const tabs = [
   <main class="wrap source-main">
     <ReviewDemo showCode={false} />
     <div class="source-intro">
-      <p class="source-label">Complete source</p>
-      <h2>A portable implementation of the same boundary.</h2>
+      <p class="source-label">Demo source</p>
+      <h2>The implementation behind this demo.</h2>
       <p>
-        The files below keep the presentation deliberately smaller than the site preview so the
-        comment-data, anchor-geometry, interaction, and cleanup responsibilities remain visible.
+        The polished preview intentionally opens the first page containing review items. Its exact
+        <a href="https://github.com/yukiyokotani/office-open-xml-viewer/blob/main/site/src/components/ReviewDemo.astro">component</a>
+        and <a href="https://github.com/yukiyokotani/office-open-xml-viewer/blob/main/site/src/lib/review-demo.ts">controller</a>
+        are available on GitHub.
       </p>
     </div>
-    <CodeTabs id="review-example-complete-source" tabs={tabs} />
+    <div class="source-intro source-intro--secondary">
+      <p class="source-label">Portable starter</p>
+      <h2>Use the same boundary without site-specific UI.</h2>
+      <p>
+        This plainer version uses only <code>@silurus/ooxml/docx</code>, ordinary HTML and CSS. It
+        includes page navigation and an explicit <code>destroy()</code> lifecycle for plain
+        TypeScript, React, Vue, or another host framework.
+      </p>
+    </div>
+    <CodeTabs id="review-example-portable-source" tabs={portableTabs} />
   </main>
   <SiteFooter />
 </Base>
@@ -57,11 +66,13 @@ const tabs = [
   .source-main { padding-top: 36px; padding-bottom: 64px; }
   .source-main :global(.review-demo) { padding-top: 0; border-top: 0; }
   .source-intro { max-width: 760px; margin: 48px 0 20px; }
+  .source-intro--secondary { margin-top: 64px; }
   .source-label {
     margin: 0; color: var(--accent); font: 600 12px/1.4 var(--mono);
     letter-spacing: .12em; text-transform: uppercase;
   }
   .source-intro h2 { margin: 8px 0; font-size: 26px; }
   .source-intro > p:last-child { margin: 0; color: var(--text-dim); }
+  .source-intro a { color: var(--accent); }
   .source-main :global(.ct-panel) { max-height: 72vh; overflow: auto; }
 </style>

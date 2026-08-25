@@ -681,7 +681,7 @@ fn finalize_projected_sheet(
         shared.theme_format_scheme.as_ref(),
     );
     ws.hyperlinks = load_hyperlinks(archive, sheet_path, hyperlink_rids);
-    ws.comments = load_sheet_comments(archive, sheet_path);
+    ws.comments = load_sheet_comments(archive, sheet_path, &shared.rels_xml);
     ws.comment_refs = ws.comments.iter().map(|c| c.cell_ref.clone()).collect();
     ws.defined_names = defined_names;
     ws.tables = load_sheet_tables(archive, sheet_path, theme_colors);
@@ -2390,7 +2390,11 @@ fn find_internal_rel_target_by_type(rels_xml: &str, type_suffix: &str) -> Option
 /// Reads xl/commentsN.xml for the given sheet and returns each `<comment>` as
 /// a structured `XlsxComment` (cell ref, resolved author name, plain text).
 /// Callers can derive `comment_refs: Vec<String>` from `c.cell_ref`.
-fn load_sheet_comments(archive: &mut XlsxZip, sheet_path: &str) -> Vec<XlsxComment> {
+fn load_sheet_comments(
+    archive: &mut XlsxZip,
+    sheet_path: &str,
+    workbook_rels_xml: &str,
+) -> Vec<XlsxComment> {
     let Some((sheet_dir, sheet_file)) = sheet_path.rsplit_once('/') else {
         return Vec::new();
     };
@@ -2428,7 +2432,7 @@ fn load_sheet_comments(archive: &mut XlsxZip, sheet_path: &str) -> Vec<XlsxComme
     let threaded_comments = if let Some(target) = threaded_target {
         let tc_path = resolve_zip_path(&format!("xl/{}", sheet_dir), &target);
         let comments = if let Ok(tc_xml) = read_zip_string(archive, &tc_path) {
-            let persons = load_persons(archive);
+            let persons = load_persons(archive, workbook_rels_xml);
             parse_threaded_comments_xml(&tc_xml, &persons)
         } else {
             Vec::new()
@@ -2531,33 +2535,34 @@ fn merge_sheet_comments(
     merged
 }
 
-/// Load `personId` → display-name map from `xl/persons/person*.xml`
-/// (Office-365 threaded-comment authors, MS-XLSX schema
-/// `…/office/spreadsheetml/2018/threadedcomments`). `<person displayName id/>`.
-/// Returns an empty map when no persons part exists.
-fn load_persons(archive: &mut XlsxZip) -> HashMap<String, String> {
+/// Load the `personId` → display-name map from the Persons part targeted by the
+/// workbook's implicit relationship ([MS-XLSX] §2.1.18, relationship Type
+/// `http://schemas.microsoft.com/office/2017/10/relationships/person`). The
+/// package part name is relationship-owned; `xl/persons/` is only a convention
+/// and unreferenced entries there must not be observed. `<person displayName id/>`.
+/// Returns an empty map when no internal Persons relationship or readable part exists.
+fn load_persons(archive: &mut XlsxZip, workbook_rels_xml: &str) -> HashMap<String, String> {
+    const PERSON_RELATIONSHIP_TYPE: &str =
+        "http://schemas.microsoft.com/office/2017/10/relationships/person";
     let mut out: HashMap<String, String> = HashMap::new();
-    // Persons live under xl/persons/ by convention; collect every part there so
-    // we don't depend on the exact file name (person.xml vs person1.xml).
-    let person_paths: Vec<String> = archive
-        .entry_paths()
-        .into_iter()
-        .filter(|n| n.starts_with("xl/persons/") && n.ends_with(".xml"))
-        .collect();
-    for path in person_paths {
-        let Ok(xml) = read_zip_string(archive, &path) else {
-            continue;
-        };
-        let Ok(doc) = parse_guarded(&xml) else {
-            continue;
-        };
-        for p in doc
-            .descendants()
-            .filter(|n| n.is_element() && n.tag_name().name() == "person")
-        {
-            if let (Some(id), Some(name)) = (p.attribute("id"), p.attribute("displayName")) {
-                out.insert(id.to_string(), name.to_string());
-            }
+    let Some(target) =
+        find_internal_rel_target_by_type(workbook_rels_xml, PERSON_RELATIONSHIP_TYPE)
+    else {
+        return out;
+    };
+    let path = resolve_zip_path("xl", &target);
+    let Ok(xml) = read_zip_string(archive, &path) else {
+        return out;
+    };
+    let Ok(doc) = parse_guarded(&xml) else {
+        return out;
+    };
+    for p in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "person")
+    {
+        if let (Some(id), Some(name)) = (p.attribute("id"), p.attribute("displayName")) {
+            out.insert(id.to_string(), name.to_string());
         }
     }
     out
@@ -4968,9 +4973,11 @@ mod comment_tests {
 #[cfg(test)]
 mod threaded_comment_tests {
     use super::{
-        merge_sheet_comments, parse_comments_xml, parse_threaded_comments_xml, XlsxCommentKind,
+        merge_sheet_comments, parse_comments_xml, parse_sheet_native, parse_threaded_comments_xml,
+        XlsxCommentKind,
     };
     use std::collections::HashMap;
+    use std::io::{Cursor, Write};
 
     const TC_NS: &str = "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments";
 
@@ -4979,6 +4986,103 @@ mod threaded_comment_tests {
         m.insert("{p1}".to_string(), "Reviewer".to_string());
         m.insert("{p2}".to_string(), "Ops Team".to_string());
         m
+    }
+
+    fn workbook_with_threaded_comment(
+        person_relationship: &str,
+        person_parts: &[(&str, &str)],
+    ) -> Vec<u8> {
+        let workbook = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rSheet1"/></sheets></workbook>"#;
+        let workbook_rels = format!(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rSheet1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>{person_relationship}</Relationships>"#,
+        );
+        let worksheet = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
+        let worksheet_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rThread" Type="http://schemas.microsoft.com/office/2017/10/relationships/threadedComment" Target="../threadedComments/threadedComment1.xml"/></Relationships>"#;
+        let threaded_comments = format!(
+            r#"<ThreadedComments xmlns="{TC_NS}"><threadedComment ref="A1" personId="{{p1}}" id="thread-1"><text>Review this.</text></threadedComment></ThreadedComments>"#,
+        );
+
+        let mut bytes = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(Cursor::new(&mut bytes));
+            let options = zip::write::SimpleFileOptions::default();
+            for (path, body) in [
+                ("xl/workbook.xml", workbook),
+                ("xl/_rels/workbook.xml.rels", workbook_rels.as_str()),
+                ("xl/worksheets/sheet1.xml", worksheet),
+                ("xl/worksheets/_rels/sheet1.xml.rels", worksheet_rels),
+                (
+                    "xl/threadedComments/threadedComment1.xml",
+                    threaded_comments.as_str(),
+                ),
+            ] {
+                writer.start_file(path, options).unwrap();
+                writer.write_all(body.as_bytes()).unwrap();
+            }
+            for (path, body) in person_parts {
+                writer.start_file(path, options).unwrap();
+                writer.write_all(body.as_bytes()).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        bytes
+    }
+
+    fn parsed_thread_author(package: &[u8]) -> Option<String> {
+        let json = parse_sheet_native(package, 0, "Sheet1").expect("sheet parses");
+        let sheet: serde_json::Value = serde_json::from_str(&json).expect("sheet JSON");
+        sheet["comments"][0]["author"].as_str().map(str::to_owned)
+    }
+
+    #[test]
+    fn resolves_persons_from_unconventional_workbook_relationship_target() {
+        let package = workbook_with_threaded_comment(
+            r#"<Relationship Id="rPersons" Type="http://schemas.microsoft.com/office/2017/10/relationships/person" Target="reviewers/custom-person-list.xml"/>"#,
+            &[(
+                "xl/reviewers/custom-person-list.xml",
+                r#"<personList><person id="{p1}" displayName="Referenced Reviewer"/></personList>"#,
+            )],
+        );
+
+        assert_eq!(
+            parsed_thread_author(&package).as_deref(),
+            Some("Referenced Reviewer")
+        );
+    }
+
+    #[test]
+    fn ignores_unreferenced_conventional_persons_part_poison() {
+        let package = workbook_with_threaded_comment(
+            r#"<Relationship Id="rPersons" Type="http://schemas.microsoft.com/office/2017/10/relationships/person" Target="reviewers/custom-person-list.xml"/>"#,
+            &[
+                (
+                    "xl/reviewers/custom-person-list.xml",
+                    r#"<personList><person id="{p1}" displayName="Referenced Reviewer"/></personList>"#,
+                ),
+                (
+                    "xl/persons/person.xml",
+                    r#"<personList><person id="{p1}" displayName="Unreferenced Poison"/></personList>"#,
+                ),
+            ],
+        );
+
+        assert_eq!(
+            parsed_thread_author(&package).as_deref(),
+            Some("Referenced Reviewer")
+        );
+    }
+
+    #[test]
+    fn external_person_relationship_is_not_treated_as_a_package_part() {
+        let package = workbook_with_threaded_comment(
+            r#"<Relationship Id="rPersons" Type="http://schemas.microsoft.com/office/2017/10/relationships/person" Target="https://example.invalid/person-list.xml" TargetMode="External"/>"#,
+            &[(
+                "xl/persons/person.xml",
+                r#"<personList><person id="{p1}" displayName="Unreferenced Poison"/></personList>"#,
+            )],
+        );
+
+        assert_eq!(parsed_thread_author(&package), None);
     }
 
     /// MS-XLSX top-level comments retain their source identity and metadata.

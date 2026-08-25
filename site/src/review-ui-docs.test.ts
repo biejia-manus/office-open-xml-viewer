@@ -36,9 +36,21 @@ describe('Office comment UI integration guide', () => {
     expect(page).toContain('fixed blue values deliberately replace per-author accents');
     expect(page).toContain('omit them to keep automatic author colors');
     expect(page).toContain('Optional DOCX/PPTX connectors');
-    expect(page).toContain('Theme the built-in UI');
+    expect(page).toContain('Style the built-in UI');
+    expect(page).toContain('Two complementary styling surfaces are available');
+    expect(page).toContain('Stable classes');
+    expect(page).toContain('Control the complete appearance');
+    expect(page).toContain('CSS variables');
+    expect(page).toContain('Switch common theme tokens');
+    expect(page).toContain('does not mirror every CSS property');
     expect(page).toContain('updates mounted cards, highlights, and markers without recreating the Viewer');
     expect(page).toContain('font size, font family, or padding are measured again');
+    expect(page).toContain(
+      '<tr><th><code>data-active</code>, <code>data-focused</code></th><td>DOCX, PPTX</td>',
+    );
+    expect(page).not.toContain(
+      '<tr><th><code>data-active</code>, <code>data-focused</code></th><td>DOCX, PPTX, XLSX</td>',
+    );
     expect(page).toContain('var(--review-connector)');
     expect(page).toContain("side: 'auto'");
     expect(page).toContain("route: 'bezier'");
@@ -80,14 +92,15 @@ describe('Office comment UI integration guide', () => {
     expect(page).toContain('DOCX anchored example');
     expect(example).toContain('doc.commentAnchorRanges()');
     expect(example).toContain('onTextRun: (run) => runs.push(run)');
-    expect(example).toContain('resolveDocxCommentThreads(doc.comments, doc.commentAnchorRanges(), runs)');
+    expect(example).toContain('resolveDocxCommentThreads(');
+    expect(example).toContain('{ includeResolved: false }');
     const apiReference = read('./lib/api-reference.ts');
-    expect(apiReference).toContain('get comments(): DocComment[]');
-    expect(apiReference).toContain('get revisions(): DocRevision[]');
+    expect(apiReference).toContain('get comments(): readonly Readonly<DocComment>[]');
+    expect(apiReference).toContain('get revisions(): readonly Readonly<DocRevision>[]');
     expect(apiReference).toContain('commentAnchorRanges(): readonly CommentAnchorRange[]');
     expect(apiReference).toContain('revisionAnchorRanges(): readonly RevisionAnchorRange[]');
-    expect(apiReference).toContain('resolveDocxCommentThreads(comments, anchors, runs, options?)');
-    expect(apiReference).toContain('resolveCommentAnchorRuns()');
+    expect(page).toContain('standalone export from <code>@silurus/ooxml/docx</code>');
+    expect(apiReference).not.toContain("{ sig: 'resolveDocxCommentThreads");
     expect(apiReference).toContain('collectPageRuns(index');
     expect(apiReference).toContain("detailsHref: '/review-ui', detailsLabel: 'Comment UI guide'");
   });
@@ -115,7 +128,7 @@ describe('Office comment UI integration guide', () => {
     expect(page).toContain('font: 600 12px var(--mono);');
   });
 
-  it('keeps the overview short while linking the DOCX demo and complete source', () => {
+  it('keeps the overview short while linking the DOCX demo and reusable source', () => {
     const core = read('./examples/review-margin/core.ts');
     const markup = read('./examples/review-margin/index.html');
     const controller = read('./examples/review-margin/index.ts');
@@ -131,11 +144,12 @@ describe('Office comment UI integration guide', () => {
     expect(page).toContain('Complete DOCX custom UI');
     const sourcePage = read('./pages/review-ui/source.astro');
     expect(sourcePage).toContain('<ReviewDemo showCode={false} />');
-    expect(sourcePage).toContain("core.ts?raw");
-    expect(sourcePage).toContain("index.ts?raw");
-    expect(sourcePage).toContain("index.html?raw");
-    expect(sourcePage).toContain("styles.css?raw");
-    expect(sourcePage).toContain('<CodeTabs id="review-example-complete-source"');
+    expect(sourcePage).toContain('blob/main/site/src/components/ReviewDemo.astro');
+    expect(sourcePage).toContain('blob/main/site/src/lib/review-demo.ts');
+    expect(sourcePage).not.toContain("ReviewDemo.astro?raw");
+    expect(sourcePage).not.toContain('<CodeTabs id="review-example-complete-source"');
+    expect(sourcePage).toContain('<CodeTabs id="review-example-portable-source"');
+    expect(sourcePage).toContain('uses only <code>@silurus/ooxml/docx</code>');
     expect(controller).toContain('export async function mountReviewExample(root: HTMLElement, signal?: AbortSignal)');
     expect(controller).toContain('const pageIndex = Math.max(0, Math.min(requestedPage, doc.pageCount - 1))');
     expect(controller).toContain('await doc.renderPage(stage, pageIndex');
@@ -159,7 +173,7 @@ describe('Office comment UI integration guide', () => {
     expect(page).toContain('Canvas content needs an accessible transcript');
     expect(page).toContain('href="/production#rendering-mode"');
     expect(page).not.toContain('href="/production#ownership"');
-    expect(page).toContain('Open the finished custom UI and its complete portable implementation.');
+    expect(page).toContain('Open the finished custom UI, its exact source, and a portable starter.');
     expect(page).toContain('Look up comment records, anchor ranges, text runs, and method signatures.');
     expect(page).toContain('Choose main-thread or Worker rendering for your application.');
     expect(page).not.toContain('Manage a loaded document when it is shared by more than one view.');
@@ -260,6 +274,8 @@ describe('Office comment UI integration guide', () => {
     expect(controller).toContain("canvas.style.width = '100%'");
     expect(controller).toContain("canvas.style.height = 'auto'");
     expect(controller).toContain('new ResizeObserver(layoutMargin)');
+    expect(controller).toContain('const upwardShift = Math.min(');
+    expect(controller).toContain('const top = unshiftedTop - upwardShift');
     expect(controller).toContain('path.dataset.reviewId = entry.id');
     expect(controller).not.toContain('index % 3');
     expect(component).toContain('<strong>sample-1.docx</strong>');

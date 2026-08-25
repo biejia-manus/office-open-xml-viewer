@@ -62,6 +62,7 @@ export class SheetOverlayHost {
   readonly selection: HTMLDivElement;
   readonly find: HTMLDivElement;
   readonly comment: HTMLDivElement;
+  readonly commentStatus: HTMLDivElement;
   readonly validation: HTMLDivElement;
 
   constructor(
@@ -81,10 +82,24 @@ export class SheetOverlayHost {
 
     this.comment = ownerDocument.createElement('div');
     this.comment.dataset.ooxmlCommentUi = 'popup';
+    this.comment.setAttribute('role', 'note');
+    this.comment.setAttribute('aria-hidden', 'true');
     this.comment.style.cssText =
       `position:absolute;z-index:3;pointer-events:none;display:none;` +
       `max-width:${options.commentMaxWidth}px;max-height:${options.commentMaxHeight}px;overflow:hidden;` +
       `font:13px/1.45 var(--ooxml-comment-font-family,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);`;
+
+    // Keep an empty live region mounted before any popup opens. Updating a
+    // stable status node is announced reliably; adding/showing the visual note
+    // and its contents in the same operation is not consistently announced.
+    this.commentStatus = ownerDocument.createElement('div');
+    this.commentStatus.setAttribute('role', 'status');
+    this.commentStatus.setAttribute('aria-live', 'polite');
+    this.commentStatus.setAttribute('aria-atomic', 'true');
+    this.commentStatus.setAttribute('data-xlsx-comment-status', '');
+    this.commentStatus.style.cssText =
+      'position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;' +
+      'clip:rect(0 0 0 0);white-space:nowrap;border:0;';
 
     this.validation = ownerDocument.createElement('div');
     this.validation.setAttribute('data-xlsx-validation-panel', '');
@@ -103,6 +118,7 @@ export class SheetOverlayHost {
     area.appendChild(this.find);
     area.appendChild(input);
     area.appendChild(this.comment);
+    area.appendChild(this.commentStatus);
     area.appendChild(this.validation);
   }
 
@@ -111,11 +127,17 @@ export class SheetOverlayHost {
   clearFind(): void { this.find.textContent = ''; }
   appendFind(element: HTMLElement): void { this.find.appendChild(element); }
 
-  hideComment(): void { this.comment.style.display = 'none'; }
+  hideComment(): void {
+    this.comment.style.display = 'none';
+    this.comment.setAttribute('aria-hidden', 'true');
+    this.commentStatus.textContent = '';
+  }
+  announceComment(message: string): void { this.commentStatus.textContent = message; }
   showComment(left: number, top: number): void {
     this.comment.style.left = `${left}px`;
     this.comment.style.top = `${top}px`;
     this.comment.style.display = 'block';
+    this.comment.setAttribute('aria-hidden', 'false');
   }
 
   hideValidation(): void { this.validation.style.display = 'none'; }

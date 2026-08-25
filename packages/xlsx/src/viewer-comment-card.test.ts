@@ -12,12 +12,8 @@ describe('XlsxViewer comment UI contract', () => {
   it('returns detached comments for application-owned current-sheet UI', () => {
     installDom();
     const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
-    const internals = viewer as unknown as { currentWorksheet: Worksheet };
-    internals.currentWorksheet = {
-      name: 'Sheet 1', rows: [], colWidths: {}, rowHeights: {},
-      defaultColWidth: 64, defaultRowHeight: 20, mergeCells: [],
-      comments: [{ cellRef: 'A1', author: 'Ada', text: 'Review this' }],
-    } as unknown as Worksheet;
+    const internals = viewer as unknown as { currentSourceComments: readonly XlsxComment[] };
+    internals.currentSourceComments = [{ cellRef: 'A1', author: 'Ada', text: 'Review this' }];
 
     const comments = viewer.getComments();
     expect(comments).toEqual([{ cellRef: 'A1', author: 'Ada', text: 'Review this' }]);
@@ -62,6 +58,7 @@ describe('XlsxViewer comment UI contract', () => {
       canvasArea: FakeEl;
       scrollHost: FakeEl;
       commentPopup: FakeEl;
+      overlayHost: { commentStatus: FakeEl };
     };
     internals.currentSheet = 0;
     internals.canvasArea.clientWidth = 800;
@@ -89,6 +86,14 @@ describe('XlsxViewer comment UI contract', () => {
     expect(styles?.textContent).toContain('.ooxml-comment-card[data-active="true"]');
 
     expect(internals.commentPopup.dataset.ooxmlCommentUi).toBe('popup');
+    expect(internals.commentPopup.getAttribute('role')).toBe('note');
+    expect(internals.commentPopup.getAttribute('aria-live')).toBeNull();
+    expect(internals.commentPopup.getAttribute('aria-hidden')).toBe('false');
+    expect(internals.overlayHost.commentStatus.getAttribute('role')).toBe('status');
+    expect(internals.overlayHost.commentStatus.getAttribute('aria-live')).toBe('polite');
+    expect(internals.overlayHost.commentStatus.getAttribute('aria-atomic')).toBe('true');
+    expect(internals.overlayHost.commentStatus.textContent)
+      .toBe('Comment on B2 by Ada: Review; 1 reply');
     expect(internals.commentPopup.dataset.ooxmlCommentCard).toBe('');
     expect(internals.commentPopup.getAttribute('class')).toBe('ooxml-comment-card');
     expect(internals.commentPopup.style.cssText).toContain('--ooxml-comment-author-accent:');
@@ -115,6 +120,55 @@ describe('XlsxViewer comment UI contract', () => {
     viewer.destroy();
   });
 
+  it('reaches and announces a commented cell from viewport focus and keyboard navigation', () => {
+    installDom();
+    const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
+    const comment: XlsxComment = { cellRef: 'B2', author: 'Ada', text: 'Keyboard review' };
+    const internals = viewer as unknown as {
+      currentWorksheet: Worksheet;
+      commentMap: Map<string, XlsxComment>;
+      canvasArea: FakeEl;
+      scrollHost: FakeEl;
+      commentPopup: FakeEl;
+      overlayHost: { commentStatus: FakeEl };
+    };
+    internals.currentWorksheet = {
+      name: 'Sheet 1', rows: [], colWidths: {}, rowHeights: {},
+      defaultColWidth: 64, defaultRowHeight: 20, mergeCells: [],
+    } as unknown as Worksheet;
+    internals.commentMap = new Map([['2:2', comment]]);
+    internals.canvasArea.clientWidth = 800;
+    internals.canvasArea.clientHeight = 600;
+    expect(internals.scrollHost.getAttribute('role')).toBe('region');
+    expect(internals.scrollHost.getAttribute('aria-label')).toContain('Use Arrow keys');
+    const keyboardEvent = (key: string) => ({
+      key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false,
+      defaultPrevented: false, isComposing: false, preventDefault: vi.fn(),
+      target: internals.scrollHost,
+    });
+
+    internals.scrollHost.dispatch('focus');
+    expect(viewer.selectionState?.activeCell).toEqual({ row: 1, col: 1 });
+    const right = keyboardEvent('ArrowRight');
+    internals.scrollHost.dispatch('keydown', right);
+    expect(viewer.selectionState?.activeCell).toEqual({ row: 1, col: 2 });
+    expect(right.preventDefault).toHaveBeenCalledOnce();
+    const down = keyboardEvent('ArrowDown');
+    internals.scrollHost.dispatch('keydown', down);
+    expect(viewer.selectionState?.activeCell).toEqual({ row: 2, col: 2 });
+    expect(down.preventDefault).toHaveBeenCalledOnce();
+    const enter = keyboardEvent('Enter');
+    internals.scrollHost.dispatch('keydown', enter);
+
+    expect(enter.preventDefault).toHaveBeenCalledOnce();
+    expect(internals.commentPopup.children[0]?.children[0]?.children[1]?.textContent)
+      .toBe('Keyboard review');
+    expect(internals.commentPopup.getAttribute('aria-hidden')).toBe('false');
+    expect(internals.overlayHost.commentStatus.textContent)
+      .toBe('Comment on B2 by Ada: Keyboard review');
+    viewer.destroy();
+  });
+
   it('applies the same authored visibility policy to popup data and markers', () => {
     installDom();
     const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement, {
@@ -122,6 +176,7 @@ describe('XlsxViewer comment UI contract', () => {
     });
     const internals = viewer as unknown as {
       createVisibleSheetView(source: Worksheet): Worksheet;
+      currentSourceComments: readonly XlsxComment[];
     };
     const source = {
       name: 'Sheet 1', rows: [], colWidths: {}, rowHeights: {},
@@ -134,8 +189,34 @@ describe('XlsxViewer comment UI contract', () => {
     } as unknown as Worksheet;
 
     const visible = internals.createVisibleSheetView(source);
+    internals.currentSourceComments = source.comments ?? [];
     expect(visible.commentRefs).toEqual(['A1']);
     expect(visible.comments?.map((comment) => comment.cellRef)).toEqual(['A1']);
+    expect(viewer.getComments().map((comment) => comment.cellRef)).toEqual(['A1', 'B2']);
+    viewer.destroy();
+  });
+
+  it('keeps authored comment data when built-in presentation is disabled', () => {
+    installDom();
+    const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement, {
+      comments: false,
+    });
+    const internals = viewer as unknown as {
+      createVisibleSheetView(source: Worksheet): Worksheet;
+      currentSourceComments: readonly XlsxComment[];
+    };
+    const source = {
+      name: 'Sheet 1', rows: [], colWidths: {}, rowHeights: {},
+      defaultColWidth: 64, defaultRowHeight: 20, mergeCells: [],
+      commentRefs: ['A1'],
+      comments: [{ cellRef: 'A1', author: 'Ada', text: 'Review this' }],
+    } as unknown as Worksheet;
+
+    const visible = internals.createVisibleSheetView(source);
+    internals.currentSourceComments = source.comments ?? [];
+    expect(visible.commentRefs).toEqual([]);
+    expect(visible.comments).toEqual([]);
+    expect(viewer.getComments()).toEqual(source.comments);
     viewer.destroy();
   });
 

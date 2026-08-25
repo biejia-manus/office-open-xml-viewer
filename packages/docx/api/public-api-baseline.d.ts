@@ -1096,8 +1096,8 @@ export class DocxDocument {
     get pageCount(): number;
     get mode(): 'main' | 'worker';
     get document(): DocxDocumentModel;
-    get comments(): DocComment[];
-    get revisions(): DocRevision[];
+    get comments(): readonly Readonly<DocComment>[];
+    get revisions(): readonly Readonly<DocRevision>[];
     commentAnchorRanges(): readonly CommentAnchorRange[];
     revisionAnchorRanges(): readonly RevisionAnchorRange[];
     get footnotes(): DocNote[];

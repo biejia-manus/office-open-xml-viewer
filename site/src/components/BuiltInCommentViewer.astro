@@ -5,6 +5,7 @@ interface Props {
 }
 const formats = Astro.props.formats ?? ['docx', 'xlsx', 'pptx'];
 const initialFormat = formats[0] ?? 'docx';
+const demoId = `built-in-comment-${formats.join('-')}`;
 ---
 
 <div
@@ -24,7 +25,10 @@ const initialFormat = formats[0] ?? 'docx';
       <button
         type="button"
         role="tab"
+        id={`${demoId}-tab-${format}`}
+        aria-controls={`${demoId}-panel`}
         aria-selected={String(index === 0)}
+        tabindex={index === 0 ? 0 : -1}
         data-comment-demo-format={format}
       >{format.toUpperCase()}</button>
     ))}
@@ -36,8 +40,10 @@ const initialFormat = formats[0] ?? 'docx';
     <p class="built-in-comment-demo__status" data-built-in-comment-status>Loading sample-1.{initialFormat}…</p>
     <div
       class="built-in-comment-demo__viewer"
+      id={`${demoId}-panel`}
       data-built-in-comment-viewer
       role="tabpanel"
+      aria-labelledby={`${demoId}-tab-${initialFormat}`}
       aria-label={`${initialFormat.toUpperCase()} with the built-in read-only comment UI`}
     ></div>
   </div>
@@ -93,6 +99,11 @@ const initialFormat = formats[0] ?? 'docx';
         'aria-selected',
         String(tab.dataset.commentDemoFormat === format),
       ));
+      tabs.forEach((tab) => {
+        const selected = tab.dataset.commentDemoFormat === format;
+        tab.tabIndex = selected ? 0 : -1;
+        if (selected) host.setAttribute('aria-labelledby', tab.id);
+      });
       file.textContent = samples[format];
       hint.textContent = hints[format];
       host.setAttribute('aria-label', `${format.toUpperCase()} with the built-in read-only comment UI`);
@@ -130,6 +141,17 @@ const initialFormat = formats[0] ?? 'docx';
     tabs.forEach((tab) => tab.addEventListener('click', () => {
       const format = tab.dataset.commentDemoFormat as DemoFormat | undefined;
       if (format) void show(format);
+    }));
+    tabs.forEach((tab, index) => tab.addEventListener('keydown', (event) => {
+      let next = index;
+      if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+      else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = tabs.length - 1;
+      else return;
+      event.preventDefault();
+      tabs[next]?.focus();
+      tabs[next]?.click();
     }));
     const initial = root.dataset.initialFormat as DemoFormat | undefined;
     void show(initial ?? 'docx');

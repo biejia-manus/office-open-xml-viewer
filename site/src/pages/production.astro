@@ -4,7 +4,7 @@ import Base from '../layouts/Base.astro';
 import Nav from '../components/Nav.astro';
 import SiteFooter from '../components/SiteFooter.astro';
 import { codeThemes } from '../lib/code-theme';
-import { optionalChartRenderers } from '../lib/api-reference';
+import { optionalRenderers } from '../lib/api-reference';
 
 const sharedDocumentExample = `import { DocxDocument, DocxScrollViewer } from '@silurus/ooxml/docx';
 
@@ -18,11 +18,13 @@ second.destroy();
 document.destroy();`;
 
 const optionalRendererExample = `import { XlsxViewer } from '@silurus/ooxml/xlsx';
+import { math } from '@silurus/ooxml/math';
 import { chartEx } from '@silurus/ooxml/chart-ex';
 import { threeD } from '@silurus/ooxml/three-d';
 import { regionMap } from '@silurus/ooxml/region-map';
 
 const viewer = new XlsxViewer(container, {
+  math,
   chartEx,
   threeD,
   regionMap,
@@ -103,10 +105,11 @@ const viewer = new XlsxViewer(container, {
 
       <section id="optional-renderers">
         <p class="section-label">Optional renderers</p>
-        <h2>Add only the chart families a product needs.</h2>
+        <h2>Add only the rendering modules a product needs.</h2>
         <p>
-          Classic 2-D charts are included with each format. ChartEx, 3-D charts, and Region Maps
-          use separate package entries and the same Viewer options across DOCX, XLSX, and PPTX.
+          Equations, ChartEx, 3-D charts, and Region Maps use separate package entries and the same
+          Viewer options across DOCX, XLSX, and PPTX. Classic 2-D charts remain included with each
+          format.
         </p>
         <div class="code-card">
           <Code code={optionalRendererExample} lang="ts" themes={codeThemes} defaultColor={false} />
@@ -115,7 +118,7 @@ const viewer = new XlsxViewer(container, {
           <table>
             <thead><tr><th>Capability</th><th>Import</th><th>Viewer option</th></tr></thead>
             <tbody>
-              {optionalChartRenderers.map((renderer) => (
+              {optionalRenderers.map((renderer) => (
                 <tr>
                   <th>{renderer.name}</th>
                   <td><code>{renderer.entry}</code></td>

@@ -218,6 +218,15 @@ describe('render worker canonical layout parity', () => {
 
     expect(worker.comments).toEqual(main.comments);
     expect(worker.revisions).toEqual(main.revisions);
+    expect(worker.comments).toBe(worker.comments);
+    expect(main.revisions).toBe(main.revisions);
+    expect(Object.isFrozen(worker.comments)).toBe(true);
+    expect(Object.isFrozen(worker.comments[0])).toBe(true);
+    expect(Object.isFrozen(main.revisions)).toBe(true);
+    expect(() => {
+      (worker.comments[0] as { text: string }).text = 'caller mutation';
+    }).toThrow(TypeError);
+    expect(worker.comments[0]?.text).toBe('Check field');
     expect(worker.commentAnchorRanges()).toEqual(main.commentAnchorRanges());
     expect(worker.revisionAnchorRanges()).toEqual(main.revisionAnchorRanges());
   });

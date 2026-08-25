@@ -7,8 +7,8 @@ the corresponding minor release.
 
 ## Unreleased
 
-- **Word tracked changes:** parse recorded insertions, deletions, and moves and
-  expose accepted-final and markup rendering modes.
+- **Word tracked changes:** retain body-story insertion, deletion, and move
+  records as detached data while rendering the accepted final state.
 - **read-only comments:** add built-in DOCX/PPTX comment margins and XLSX cell
   popups. The default UI is themed with CSS custom properties; applications
   that need different structure use the existing comment, anchor, and rendered

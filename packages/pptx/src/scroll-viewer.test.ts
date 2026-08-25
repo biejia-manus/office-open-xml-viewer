@@ -197,7 +197,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
       '_scheduleCommentGeometry',
     );
     dom.resizeCb()?.();
-    expect(geometry).toHaveBeenCalledWith(0, expect.anything());
+    expect(geometry).not.toHaveBeenCalled();
     const frame = card.children.find((child) => child.dataset.ooxmlCommentPart === 'frame')!;
     expect(card.className).toBe('ooxml-comment-card');
     expect(card.style.cssText).toContain('--ooxml-comment-author-accent:');
@@ -227,7 +227,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     viewer.destroy();
   });
 
-  it('adds the connector layer only when explicitly requested', () => {
+  it('updates only connector geometry when the comment margin scrolls', async () => {
     installDom();
     const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
     engine.commentsBySlide = [[{
@@ -244,6 +244,34 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     const slide = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
     expect(slide.children.some((child) =>
       child.dataset.ooxmlCommentConnectors !== undefined)).toBe(true);
+    const margin = slide.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
+    const markerLayer = slide.children.find((child) => child.style.cssText.includes('inset:0'))!;
+    // Let the initial presentation-handle commit settle before counting the
+    // margin-scroll path below.
+    await Promise.resolve();
+    await Promise.resolve();
+    const marker = markerLayer.children.find((child) =>
+      child.dataset.ooxmlCommentMarker !== undefined)!;
+    const card = margin.children[0]!.children[0]!;
+    const fullRedraw = vi.spyOn(
+      viewer as unknown as { _redrawSlotComments(slide: number, slot: unknown): void },
+      '_redrawSlotComments',
+    );
+    const connectorRedraw = vi.spyOn(
+      viewer as unknown as { _redrawSlotCommentConnectors(slide: number, slot: unknown): void },
+      '_redrawSlotCommentConnectors',
+    );
+    margin.scrollTop = 24;
+    margin.dispatch('scroll');
+    await Promise.resolve();
+
+    expect(fullRedraw).toHaveBeenCalledTimes(0);
+    expect(connectorRedraw).toHaveBeenCalledTimes(1);
+    expect(markerLayer.children.filter((child) =>
+      child.dataset.ooxmlCommentMarker !== undefined)).toHaveLength(1);
+    expect(markerLayer.children.find((child) =>
+      child.dataset.ooxmlCommentMarker !== undefined)).toBe(marker);
+    expect(margin.children[0]!.children[0]).toBe(card);
     viewer.destroy();
   });
 
@@ -587,9 +615,14 @@ describe('PptxScrollViewer — rendering (T3)', () => {
     scrollHost.clientWidth = 200;
     v.relayout();
     const before = engine.renderCalls.length;
+    const position = vi.spyOn(
+      v as unknown as { _positionSlot(slot: unknown, slide: number, range: unknown): void },
+      '_positionSlot',
+    );
     scrollHost.scrollTop = 0; // unchanged window
     scrollHost.dispatch('scroll');
     expect(engine.renderCalls.length).toBe(before); // no duplicate renders
+    expect(position).not.toHaveBeenCalled(); // retained geometry is scroll-invariant
     v.destroy();
   });
 

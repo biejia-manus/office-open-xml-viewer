@@ -1,3 +1,5 @@
+import { intersectElementRects } from './dom-geometry.js';
+
 /** Internal geometry used by the built-in DOCX/PPTX comment connectors. */
 export interface ReadOnlyCommentRect {
   readonly x: number;
@@ -11,6 +13,38 @@ export interface ReadOnlyCommentThreadGeometry {
   readonly active: boolean;
   readonly anchorRects: readonly ReadOnlyCommentRect[];
   readonly cardRect?: ReadOnlyCommentRect;
+}
+
+/** Geometry captured by a full comment projection. Card rectangles are stored
+ * before margin clipping so a scroll-only update can reveal a previously
+ * clipped card without rebuilding comment DOM. */
+export interface ReadOnlyCommentMarginGeometry {
+  readonly threads: readonly ReadOnlyCommentThreadGeometry[];
+  readonly cardClipBounds?: ReadOnlyCommentRect;
+  readonly scrollTop: number;
+}
+
+/** Project cached card geometry through the current margin scroll offset. */
+export function projectReadOnlyCommentMarginScroll(
+  geometry: ReadOnlyCommentMarginGeometry,
+  scrollTop: number,
+): readonly ReadOnlyCommentThreadGeometry[] {
+  const deltaY = geometry.scrollTop - scrollTop;
+  return Object.freeze(geometry.threads.map((thread) => {
+    if (!thread.cardRect) return thread;
+    const shifted = Object.freeze({
+      ...thread.cardRect,
+      y: thread.cardRect.y + deltaY,
+    });
+    const cardRect = geometry.cardClipBounds
+      ? intersectElementRects(shifted, geometry.cardClipBounds)
+      : shifted;
+    const { cardRect: _cachedCardRect, ...rest } = thread;
+    return Object.freeze({
+      ...rest,
+      ...(cardRect ? { cardRect } : {}),
+    });
+  }));
 }
 
 export interface ReadOnlyCommentDecorationSnapshot {

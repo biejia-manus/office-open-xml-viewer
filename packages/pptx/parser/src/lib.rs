@@ -1473,6 +1473,32 @@ pub(crate) fn find_rel_target_by_type(rels_xml: &str, type_suffix: &str) -> Opti
     None
 }
 
+const CLASSIC_COMMENT_AUTHOR_RELATIONSHIP_TYPES: &[&str] = &[
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/commentAuthors",
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/commentAuthors",
+];
+const MODERN_COMMENT_AUTHOR_RELATIONSHIP_TYPES: &[&str] =
+    &["http://schemas.microsoft.com/office/2018/10/relationships/authors"];
+
+/// Resolve an internal package part by one of the exact relationship Type URIs.
+/// ECMA-376 Part 2 §9.3: omitted TargetMode is Internal; External targets do not
+/// identify parts in the package.
+fn find_internal_rel_target_by_types(
+    rels_xml: &str,
+    relationship_types: &[&str],
+) -> Option<String> {
+    let doc = parse_preflighted_pptx_xml(rels_xml).ok()?;
+    doc.root_element()
+        .children()
+        .filter(|node| node.is_element() && node.tag_name().name() == "Relationship")
+        .filter(|node| matches!(attr(node, "TargetMode").as_deref(), None | Some("Internal")))
+        .find_map(|node| {
+            attr(&node, "Type")
+                .filter(|rel_type| relationship_types.contains(&rel_type.as_str()))
+                .and_then(|_| attr(&node, "Target"))
+        })
+}
+
 /// Resolve a relative path against a base directory inside the ZIP.
 ///
 /// Thin alias for the shared [`ooxml_common::rels::resolve_target`], which
@@ -1510,6 +1536,7 @@ fn slide_is_hidden(root: roxmltree::Node) -> bool {
 fn parse_slide(
     xml: &str,
     slide_dir: &str,
+    slide_rels_xml: &str,
     // The layout's single-pass extraction (placeholders + layout bg + layout
     // showMasterSp), built/cached by the caller against this slide's effective
     // theme (D4). `layout_xml` is still passed for the per-slide DECORATIVE walk
@@ -1525,6 +1552,7 @@ fn parse_slide(
     rels: &HashMap<String, String>,
     smartart_drawings: &HashMap<String, String>,
     comment_authors: &mut Option<HashMap<String, String>>,
+    comment_authors_path: Option<&str>,
     modern_comment_authors: &mut Option<HashMap<String, String>>,
     modern_comment_authors_path: Option<&str>,
     zip: &mut PptxZip,
@@ -1766,8 +1794,9 @@ fn parse_slide(
     let comments = load_pptx_comments(
         zip,
         slide_dir,
-        rels,
+        slide_rels_xml,
         comment_authors,
+        comment_authors_path,
         modern_comment_authors,
         modern_comment_authors_path,
     );
@@ -1908,9 +1937,7 @@ fn modern_comment_anchor_element(
         .unwrap_or((None, None))
 }
 
-fn parse_modern_comment_anchors(
-    comment: roxmltree::Node<'_, '_>,
-) -> Vec<PptxCommentAnchor> {
+fn parse_modern_comment_anchors(comment: roxmltree::Node<'_, '_>) -> Vec<PptxCommentAnchor> {
     let mut anchors = Vec::new();
     for list in comment.children().filter(|node| node.is_element()) {
         match list.tag_name().name() {
@@ -1950,22 +1977,75 @@ fn parse_modern_comment_anchors(
 fn load_pptx_comments(
     zip: &mut PptxZip,
     slide_dir: &str,
-    rels: &HashMap<String, String>,
+    rels_xml: &str,
     legacy_authors: &mut Option<HashMap<String, String>>,
+    legacy_authors_path: Option<&str>,
     modern_authors: &mut Option<HashMap<String, String>>,
     modern_authors_path: Option<&str>,
 ) -> Vec<PptxComment> {
-    let Some(target) = rels.values().find(|t| t.contains("comments/")) else {
-        return Vec::new();
+    let (classic_target, modern_target) = comment_relationship_targets(rels_xml);
+    let mut comments = Vec::new();
+    // Fixed order makes classic/modern coexistence independent of relationship
+    // XML order and HashMap iteration. Each relationship identifies its part;
+    // no target-directory or filename convention is inferred.
+    for target in [classic_target, modern_target].into_iter().flatten() {
+        let path = resolve_path(slide_dir, &target);
+        let Ok(xml) = read_zip_str(zip, &path) else {
+            continue;
+        };
+        comments.extend(parse_pptx_comments_part(
+            zip,
+            &xml,
+            legacy_authors,
+            legacy_authors_path,
+            modern_authors,
+            modern_authors_path,
+        ));
+    }
+    comments
+}
+
+fn comment_relationship_targets(rels_xml: &str) -> (Option<String>, Option<String>) {
+    const CLASSIC: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
+    const STRICT_CLASSIC: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships/comments";
+    const MODERN: &str = "http://schemas.microsoft.com/office/2018/10/relationships/comments";
+    let Ok(doc) = parse_preflighted_pptx_xml(rels_xml) else {
+        return (None, None);
     };
-    let path = if target.starts_with('/') {
-        target.trim_start_matches('/').to_string()
-    } else {
-        resolve_path(slide_dir, target)
-    };
-    let Ok(xml) = read_zip_str(zip, &path) else {
-        return Vec::new();
-    };
+    let mut classic = None;
+    let mut modern = None;
+    for rel in doc
+        .root_element()
+        .children()
+        .filter(|node| node.is_element() && node.tag_name().name() == "Relationship")
+    {
+        if !matches!(attr(&rel, "TargetMode").as_deref(), None | Some("Internal")) {
+            continue;
+        }
+        let Some(rel_type) = attr(&rel, "Type") else {
+            continue;
+        };
+        let Some(target) = attr(&rel, "Target") else {
+            continue;
+        };
+        match rel_type.as_str() {
+            CLASSIC | STRICT_CLASSIC if classic.is_none() => classic = Some(target),
+            MODERN if modern.is_none() => modern = Some(target),
+            _ => {}
+        }
+    }
+    (classic, modern)
+}
+
+fn parse_pptx_comments_part(
+    zip: &mut PptxZip,
+    xml: &str,
+    legacy_authors: &mut Option<HashMap<String, String>>,
+    legacy_authors_path: Option<&str>,
+    modern_authors: &mut Option<HashMap<String, String>>,
+    modern_authors_path: Option<&str>,
+) -> Vec<PptxComment> {
     let Ok(doc) = parse_preflighted_pptx_xml(&xml) else {
         return Vec::new();
     };
@@ -2039,7 +2119,7 @@ fn load_pptx_comments(
     // it without retaining a roxmltree Document.
     if legacy_authors.is_none() {
         note_comment_authors_load();
-        let author_xml = read_zip_str(zip, "ppt/commentAuthors.xml").ok();
+        let author_xml = legacy_authors_path.and_then(|path| read_zip_str(zip, path).ok());
         *legacy_authors = Some(parse_comment_authors(author_xml.as_deref()));
     }
     let empty_authors = HashMap::new();
@@ -2372,6 +2452,7 @@ struct PresentationShared {
     pres_rels: HashMap<String, String>,
     theme: PptxTheme,
     comment_authors: Option<HashMap<String, String>>,
+    comment_authors_path: Option<String>,
     modern_comment_authors: Option<HashMap<String, String>>,
     modern_comment_authors_path: Option<String>,
     pres_master_path: Option<String>,
@@ -2464,8 +2545,14 @@ fn bootstrap_presentation(
     // their behavior is unchanged from before per-slide resolution existed.
     let pres_master_path: Option<String> =
         find_rel_target_by_type(&pres_rels_xml, "/slideMaster").map(|t| resolve_path("ppt", &t));
-    let modern_comment_authors_path = find_rel_target_by_type(&pres_rels_xml, "/authors")
-        .map(|target| resolve_path("ppt", &target));
+    let comment_authors_path = find_internal_rel_target_by_types(
+        &pres_rels_xml,
+        CLASSIC_COMMENT_AUTHOR_RELATIONSHIP_TYPES,
+    )
+    .map(|target| resolve_path("ppt", &target));
+    let modern_comment_authors_path =
+        find_internal_rel_target_by_types(&pres_rels_xml, MODERN_COMMENT_AUTHOR_RELATIONSHIP_TYPES)
+            .map(|target| resolve_path("ppt", &target));
 
     // This is a serialization-shaped projection of retained bootstrap state,
     // measured by a streaming writer without allocating a JSON buffer. It is a
@@ -2477,6 +2564,7 @@ fn bootstrap_presentation(
         &pres_rels,
         &theme,
         &pres_master_path,
+        &comment_authors_path,
         &modern_comment_authors_path,
     ))?
     .json_bytes;
@@ -2517,6 +2605,7 @@ fn bootstrap_presentation(
         pres_rels,
         theme,
         comment_authors: None,
+        comment_authors_path,
         modern_comment_authors: None,
         modern_comment_authors_path,
         pres_master_path,
@@ -2535,6 +2624,7 @@ struct SlideRaw {
     slide_path: String,
     slide_dir: String,
     slide_xml: Result<String, String>,
+    slide_rels_xml: String,
     slide_rels: HashMap<String, String>,
     smartart_drawings: HashMap<String, String>,
     layout_path: Option<String>,
@@ -2587,6 +2677,7 @@ fn produce_slide_unit_with_journal(
         pres_rels,
         theme,
         comment_authors,
+        comment_authors_path,
         modern_comment_authors,
         modern_comment_authors_path,
         pres_master_path,
@@ -2688,6 +2779,7 @@ fn produce_slide_unit_with_journal(
             slide_path,
             slide_dir,
             slide_xml,
+            slide_rels_xml,
             slide_rels,
             smartart_drawings,
             layout_path,
@@ -2941,6 +3033,7 @@ fn produce_slide_unit_with_journal(
         let slide = match parse_slide(
             slide_xml,
             &raw.slide_dir,
+            &raw.slide_rels_xml,
             parsed_layout,
             layout_xml,
             layout_rels,
@@ -2951,6 +3044,7 @@ fn produce_slide_unit_with_journal(
             &raw.slide_rels,
             &raw.smartart_drawings,
             comment_authors,
+            comment_authors_path.as_deref(),
             modern_comment_authors,
             modern_comment_authors_path.as_deref(),
             zip,
@@ -2964,7 +3058,7 @@ fn produce_slide_unit_with_journal(
                 let reporter = zip.operation()?.limit_reporter()?;
                 observe_shared_cache_candidate(
                     &reporter,
-                    Some("ppt/commentAuthors.xml"),
+                    comment_authors_path.as_deref(),
                     authors,
                     cache_usage,
                     journal.as_deref_mut(),
@@ -10801,6 +10895,28 @@ mod tests {
         output
     }
 
+    fn append_zip_part(full: Vec<u8>, path: &str, body: &str) -> Vec<u8> {
+        use std::io::{Cursor, Read, Write};
+        let mut source = zip::ZipArchive::new(Cursor::new(full)).unwrap();
+        let mut output = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(Cursor::new(&mut output));
+            let options = zip::write::SimpleFileOptions::default();
+            for index in 0..source.len() {
+                let mut entry = source.by_index(index).unwrap();
+                let name = entry.name().to_owned();
+                let mut bytes = Vec::new();
+                entry.read_to_end(&mut bytes).unwrap();
+                writer.start_file(name, options).unwrap();
+                writer.write_all(&bytes).unwrap();
+            }
+            writer.start_file(path, options).unwrap();
+            writer.write_all(body.as_bytes()).unwrap();
+            writer.finish().unwrap();
+        }
+        output
+    }
+
     fn build_comment_deck(
         referenced: [bool; 2],
         comment_xml: [Option<&str>; 2],
@@ -10833,6 +10949,15 @@ mod tests {
                             )
                             .into_bytes();
                     }
+                }
+                if name == "ppt/_rels/presentation.xml.rels" {
+                    let xml = String::from_utf8(body).unwrap();
+                    body = xml
+                        .replace(
+                            "</Relationships>",
+                            r#"<Relationship Id="rCommentAuthors" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/commentAuthors" Target="commentAuthors.xml"/></Relationships>"#,
+                        )
+                        .into_bytes();
                 }
                 writer.start_file(name, options).unwrap();
                 writer.write_all(&body).unwrap();
@@ -10897,6 +11022,58 @@ mod tests {
             writer.write_all(comment_xml.as_bytes()).unwrap();
             writer.start_file("ppt/authors.xml", options).unwrap();
             writer.write_all(author_xml.as_bytes()).unwrap();
+            writer.finish().unwrap();
+        }
+        output
+    }
+
+    fn build_typed_comment_deck(
+        slide_relationships: &str,
+        parts: &[(&str, &str)],
+        modern_author_xml: &str,
+    ) -> Vec<u8> {
+        use std::io::{Read, Write};
+        let base = build_comment_deck(
+            [false, false],
+            [None, None],
+            r#"<p:cmAuthorLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cmAuthor id="0" name="Classic Author"/></p:cmAuthorLst>"#,
+        );
+        let mut source = zip::ZipArchive::new(Cursor::new(base)).expect("base deck opens");
+        let mut output = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(Cursor::new(&mut output));
+            let options = zip::write::SimpleFileOptions::default();
+            for index in 0..source.len() {
+                let mut entry = source.by_index(index).unwrap();
+                let name = entry.name().to_owned();
+                let mut body = Vec::new();
+                entry.read_to_end(&mut body).unwrap();
+                if name == "ppt/slides/_rels/slide1.xml.rels" {
+                    body = String::from_utf8(body)
+                        .unwrap()
+                        .replace(
+                            "</Relationships>",
+                            &format!("{slide_relationships}</Relationships>"),
+                        )
+                        .into_bytes();
+                } else if name == "ppt/_rels/presentation.xml.rels" {
+                    body = String::from_utf8(body)
+                        .unwrap()
+                        .replace(
+                            "</Relationships>",
+                            r#"<Relationship Id="rModernAuthors" Type="http://schemas.microsoft.com/office/2018/10/relationships/authors" Target="authors.xml"/></Relationships>"#,
+                        )
+                        .into_bytes();
+                }
+                writer.start_file(name, options).unwrap();
+                writer.write_all(&body).unwrap();
+            }
+            for (path, xml) in parts {
+                writer.start_file(*path, options).unwrap();
+                writer.write_all(xml.as_bytes()).unwrap();
+            }
+            writer.start_file("ppt/authors.xml", options).unwrap();
+            writer.write_all(modern_author_xml.as_bytes()).unwrap();
             writer.finish().unwrap();
         }
         output
@@ -11007,6 +11184,89 @@ mod tests {
     }
 
     #[test]
+    fn legacy_comment_authors_follow_the_presentation_relationship() {
+        let comments = valid_comment_xml("Relationship author");
+        let poison = r#"<p:cmAuthorLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cmAuthor id="0" name="Poison"/></p:cmAuthorLst>"#;
+        let actual = r#"<p:cmAuthorLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cmAuthor id="0" name="Actual Author"/></p:cmAuthorLst>"#;
+        let data = build_comment_deck([true, false], [Some(&comments), None], poison);
+        let data = rewrite_deck_xml(data, "ppt/_rels/presentation.xml.rels", |xml| {
+            xml.replace(
+                "Target=\"commentAuthors.xml\"",
+                "Target=\"review/authors.xml\"",
+            )
+        });
+        let data = append_zip_part(data, "ppt/review/authors.xml", actual);
+
+        let presentation = parse_presentation_from_bytes(&data).expect("commented deck parses");
+        assert_eq!(
+            presentation.slides[0].comments[0].author.as_deref(),
+            Some("Actual Author")
+        );
+    }
+
+    #[test]
+    fn legacy_comment_authors_require_the_exact_internal_relationship_type() {
+        let comments = valid_comment_xml("Relationship author");
+        let poison = r#"<p:cmAuthorLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cmAuthor id="0" name="Poison"/></p:cmAuthorLst>"#;
+        let actual = r#"<p:cmAuthorLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cmAuthor id="0" name="Actual Author"/></p:cmAuthorLst>"#;
+        let data = build_comment_deck([true, false], [Some(&comments), None], poison);
+        let data = rewrite_deck_xml(data, "ppt/_rels/presentation.xml.rels", |xml| {
+            xml.replace(
+                r#"<Relationship Id="rCommentAuthors" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/commentAuthors" Target="commentAuthors.xml"/>"#,
+                r#"<Relationship Id="rExternalAuthors" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/commentAuthors" Target="commentAuthors.xml" TargetMode="External"/><Relationship Id="rPoisonAuthors" Type="urn:example/relationships/commentAuthors" Target="commentAuthors.xml"/><Relationship Id="rCommentAuthors" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/commentAuthors" Target="review/classic-authors.xml"/>"#,
+            )
+        });
+        let data = append_zip_part(data, "ppt/review/classic-authors.xml", actual);
+
+        let presentation = parse_presentation_from_bytes(&data).expect("commented deck parses");
+        assert_eq!(
+            presentation.slides[0].comments[0].author.as_deref(),
+            Some("Actual Author")
+        );
+    }
+
+    #[test]
+    fn comment_author_relationship_ignores_external_targets() {
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="external" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/commentAuthors" Target="https://example.invalid/authors.xml" TargetMode="External"/><Relationship Id="internal" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/commentAuthors" Target="review/authors.xml"/></Relationships>"#;
+        assert_eq!(
+            find_internal_rel_target_by_types(rels, CLASSIC_COMMENT_AUTHOR_RELATIONSHIP_TYPES,)
+                .as_deref(),
+            Some("review/authors.xml"),
+        );
+    }
+
+    #[test]
+    fn strict_classic_comment_author_relationship_type_is_allowlisted() {
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="strict" Type="http://purl.oclc.org/ooxml/officeDocument/relationships/commentAuthors" Target="review/authors.xml"/></Relationships>"#;
+        assert_eq!(
+            find_internal_rel_target_by_types(rels, CLASSIC_COMMENT_AUTHOR_RELATIONSHIP_TYPES,)
+                .as_deref(),
+            Some("review/authors.xml"),
+        );
+    }
+
+    #[test]
+    fn modern_comment_authors_require_the_exact_internal_relationship_type() {
+        let comments = r#"<p188:cmLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p188:cm id="{ROOT}" authorId="{ADA}"><p188:txBody><a:p><a:r><a:t>Modern</a:t></a:r></a:p></p188:txBody></p188:cm></p188:cmLst>"#;
+        let poison = r#"<p188:authorLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><p188:author id="{ADA}" name="Poison"/></p188:authorLst>"#;
+        let actual = r#"<p188:authorLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><p188:author id="{ADA}" name="Actual Author"/></p188:authorLst>"#;
+        let data = build_modern_comment_deck(comments, poison);
+        let data = rewrite_deck_xml(data, "ppt/_rels/presentation.xml.rels", |xml| {
+            xml.replace(
+                r#"<Relationship Id="rModernAuthors" Type="http://schemas.microsoft.com/office/2018/10/relationships/authors" Target="authors.xml"/>"#,
+                r#"<Relationship Id="rExternalModernAuthors" Type="http://schemas.microsoft.com/office/2018/10/relationships/authors" Target="authors.xml" TargetMode="External"/><Relationship Id="rPoisonModernAuthors" Type="urn:example/relationships/authors" Target="authors.xml"/><Relationship Id="rModernAuthors" Type="http://schemas.microsoft.com/office/2018/10/relationships/authors" Target="review/modern-authors.xml"/>"#,
+            )
+        });
+        let data = append_zip_part(data, "ppt/review/modern-authors.xml", actual);
+
+        let presentation = parse_presentation_from_bytes(&data).expect("modern comments parse");
+        assert_eq!(
+            presentation.slides[0].comments[0].author.as_deref(),
+            Some("Actual Author")
+        );
+    }
+
+    #[test]
     fn modern_comment_preserves_thread_author_status_text_and_position() {
         let comments = r#"<p188:cmLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pc="http://schemas.microsoft.com/office/powerpoint/2013/main/command" xmlns:ac="http://schemas.microsoft.com/office/drawing/2013/main/command"><p188:cm id="{ROOT}" authorId="{ADA}" status="active" created="2026-08-24T12:00:00Z"><ac:deMkLst><pc:docMk/><pc:sldMk sldId="256"/><ac:spMk id="3" creationId="{SHAPE}"/></ac:deMkLst><p188:pos x="120000" y="240000"/><p188:replyLst><p188:reply id="{REPLY}" authorId="{BOB}" status="resolved" created="2026-08-24T12:01:00Z"><p188:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Reply</a:t></a:r></a:p></p188:txBody></p188:reply></p188:replyLst><p188:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>First line</a:t></a:r></a:p><a:p><a:r><a:t>Second line</a:t></a:r></a:p></p188:txBody></p188:cm></p188:cmLst>"#;
         let authors = r#"<p188:authorLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><p188:author id="{ADA}" name="Ada" initials="AL"/><p188:author id="{BOB}" name="Bob" initials="B"/></p188:authorLst>"#;
@@ -11036,6 +11296,55 @@ mod tests {
         assert_eq!(comment.replies[0].author.as_deref(), Some("Bob"));
         assert_eq!(comment.replies[0].status.as_deref(), Some("resolved"));
         assert_eq!(comment.replies[0].text, "Reply");
+    }
+
+    #[test]
+    fn comment_relationship_type_not_target_path_selects_the_part() {
+        let modern = r#"<p188:cmLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p188:cm id="{ROOT}" authorId="{ADA}"><p188:txBody><a:p><a:r><a:t>Typed target</a:t></a:r></a:p></p188:txBody></p188:cm></p188:cmLst>"#;
+        let decoy = valid_comment_xml("Wrong decoy");
+        let rels = r#"<Relationship Id="rInvalidMode" Type="http://schemas.microsoft.com/office/2018/10/relationships/comments" Target="../comments/decoy.xml" TargetMode="Invalid"/><Relationship Id="rDecoy" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../comments/decoy.xml"/><Relationship Id="rModern" Type="http://schemas.microsoft.com/office/2018/10/relationships/comments" Target="../review/thread.xml"/>"#;
+        let data = build_typed_comment_deck(
+            rels,
+            &[
+                ("ppt/comments/decoy.xml", &decoy),
+                ("ppt/review/thread.xml", modern),
+            ],
+            r#"<p188:authorLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><p188:author id="{ADA}" name="Ada"/></p188:authorLst>"#,
+        );
+
+        let presentation = parse_presentation_from_bytes(&data).expect("typed target parses");
+        assert_eq!(presentation.slides[0].comments.len(), 1);
+        assert_eq!(presentation.slides[0].comments[0].text, "Typed target");
+    }
+
+    #[test]
+    fn classic_and_modern_comment_parts_have_order_independent_precedence() {
+        let classic = valid_comment_xml("Classic");
+        let modern = r#"<p188:cmLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p188:cm id="{ROOT}" authorId="{ADA}"><p188:txBody><a:p><a:r><a:t>Modern</a:t></a:r></a:p></p188:txBody></p188:cm></p188:cmLst>"#;
+        let classic_rel = r#"<Relationship Id="rClassic" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../review/classic.xml"/>"#;
+        let modern_rel = r#"<Relationship Id="rModern" Type="http://schemas.microsoft.com/office/2018/10/relationships/comments" Target="../review/modern.xml"/>"#;
+        for rels in [
+            format!("{classic_rel}{modern_rel}"),
+            format!("{modern_rel}{classic_rel}"),
+        ] {
+            let data = build_typed_comment_deck(
+                &rels,
+                &[
+                    ("ppt/review/classic.xml", &classic),
+                    ("ppt/review/modern.xml", modern),
+                ],
+                r#"<p188:authorLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><p188:author id="{ADA}" name="Ada"/></p188:authorLst>"#,
+            );
+            let presentation = parse_presentation_from_bytes(&data).expect("mixed comments parse");
+            assert_eq!(
+                presentation.slides[0]
+                    .comments
+                    .iter()
+                    .map(|comment| comment.text.as_str())
+                    .collect::<Vec<_>>(),
+                ["Classic", "Modern"],
+            );
+        }
     }
 
     fn oversized_comment_authors_xml() -> String {

@@ -904,7 +904,7 @@ describe('XlsxSheetViewer canvas mount', () => {
     const viewer = new XlsxSheetViewer(canvas as unknown as HTMLCanvasElement);
     const engine = (viewer as unknown as { engine: {
       currentWorksheet: Worksheet;
-      commentMap: Map<string, XlsxComment>;
+      sourceCommentMap: Map<string, XlsxComment>;
     } }).engine;
     const comment = {
       kind: 'thread' as const,
@@ -922,7 +922,7 @@ describe('XlsxSheetViewer canvas mount', () => {
       comments: [comment],
       rows: [{ index: 1, cells: [{ row: 1, col: 1, value: { type: 'empty' } }] }],
     } as unknown as Worksheet;
-    engine.commentMap = new Map([['1:1', comment]]);
+    engine.sourceCommentMap = new Map([['1:1', comment]]);
     viewer.setSelection('A1');
 
     const context = viewer.getSelectionContext();
@@ -1120,7 +1120,9 @@ describe('XlsxSheetViewer canvas mount', () => {
     expect(viewerStyle?.textContent).toContain(
       '[data-xlsx-viewport-input]:focus{outline:none}',
     );
-    expect(viewerStyle?.textContent).not.toContain(':focus-visible');
+    expect(viewerStyle?.textContent).toContain(
+      '[data-xlsx-viewport-input]:focus-visible{outline:2px solid var(--ooxml-xlsx-focus-ring,#2563eb);outline-offset:-2px}',
+    );
     expect(openerDocument.head.querySelector('style[data-xlsx-viewer-styles]')).toBeNull();
     const viewportInput = mounted.find((element) => element.hasAttribute('data-xlsx-viewport-input')) as FakeEl;
     viewportInput.dispatch('pointerdown', {

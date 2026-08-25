@@ -21,6 +21,9 @@ const classAnchor = (name: string): string => name
   <p class="api-desc">
     Public options and methods. Types omitted for brevity are exported from the package.
   </p>
+  <p class="api-related-guide">
+    Building selection-aware UI or an AI handoff? <a href="/selection-context">Read the selection context guide →</a>
+  </p>
 
   {groupedClasses.map((c) => (
     <div id={classAnchor(c.name)} class="api-class">
@@ -112,6 +115,8 @@ const classAnchor = (name: string): string => name
   .api { padding: 0 0 8px; }
   .api-title { font-size: 24px; font-weight: 700; margin: 0 0 8px; }
   .api-desc { color: var(--text-dim); font-size: 16px; max-width: 70ch; margin: 0 0 8px; }
+  .api-related-guide { margin: 10px 0 0; color: var(--text-dim); font-size: 14px; }
+  .api-related-guide a { color: var(--accent); font-weight: 700; }
   .api-detail-link { color: var(--accent); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
 
   .api-class { margin-top: 30px; }

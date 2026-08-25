@@ -49,6 +49,7 @@ import {
   type LayoutSourceStore,
 } from './layout/layout-source-store.js';
 import type { DeepReadonly, DocumentLayout } from './layout/types.js';
+import { snapshotPlainData } from './layout/plain-data.js';
 import type {
   DocumentMeta,
   RenderWorkerRequest,
@@ -111,11 +112,33 @@ export type RenderPageToBitmapOptions = Omit<RenderPageOptions, 'onTextRun'> & {
   onTextRun?: (run: DocxTextRunInfo) => void;
 };
 
+interface ReviewSnapshot {
+  readonly comments: readonly Readonly<DocComment>[];
+  readonly revisions: readonly Readonly<DocRevision>[];
+}
+
+const EMPTY_REVIEW_SNAPSHOT: ReviewSnapshot = Object.freeze({
+  comments: Object.freeze([]),
+  revisions: Object.freeze([]),
+});
+
+function snapshotReviewData(
+  comments: readonly DocComment[],
+  revisions: readonly DocRevision[],
+): ReviewSnapshot {
+  // Runtime sealing is recursive; the public type stays shallowly readonly so
+  // existing consumers can read nested paragraph arrays without a new type.
+  return snapshotPlainData({ comments, revisions }, 'DOCX review metadata') as unknown as ReviewSnapshot;
+}
+
 export class DocxDocument {
   private _metrics: OoxmlResourceMetricsSession | null = null;
   private _document: DocxDocumentModel | null = null;
   private _source: LayoutSourceStore | null = null;
   private _meta: DocumentMeta | null = null;
+  /** One immutable review snapshot backs both the public detached records and
+   * lazy anchor projections. It is captured once per load in both render modes. */
+  private _review: ReviewSnapshot = EMPTY_REVIEW_SNAPSHOT;
   /** Lazily-built `bookmarkName → 0-based page index` map for internal hyperlink
    *  anchors (IX-nav). Built on first {@link getBookmarkPage} from the paginated
    *  pages (main) or the worker meta's `bookmarkPages` (worker). Nulled by
@@ -402,6 +425,10 @@ export class DocxDocument {
       this._source = adapted.source;
       this._document = adapted.document;
     }
+    this._review = snapshotReviewData(
+      this._meta?.comments ?? this._document?.comments ?? [],
+      this._meta?.revisions ?? this._document?.revisions ?? [],
+    );
   }
 
   destroy(): void {
@@ -409,6 +436,7 @@ export class DocxDocument {
     this._document = null;
     this._source = null;
     this._meta = null;
+    this._review = EMPTY_REVIEW_SNAPSHOT;
     documentLayoutRuntimeOf(this).services = null;
     this._bookmarkPages = null;
     this._commentAnchorRanges = null;
@@ -555,15 +583,15 @@ export class DocxDocument {
    * provide an opt-in read-only margin. Returns `[]` when the document has no
    * comments part. The same data is also reachable via `document.comments`.
    */
-  get comments(): DocComment[] {
-    return this._meta?.comments ?? this._document?.comments ?? [];
+  get comments(): readonly Readonly<DocComment>[] {
+    return this._reviewSnapshot().comments;
   }
 
-  /** ECMA-376 §17.13.5 revision events in document order. Available in both
-   * main and worker modes; rendering always projects the accepted final state.
-   * Consumers may use these detached records in their own review UI. */
-  get revisions(): DocRevision[] {
-    return this._meta?.revisions ?? this._document?.revisions ?? [];
+  /** ECMA-376 §17.13.5 body-story revision events in document order. Available
+   * in both main and worker modes; rendering always projects the accepted final
+   * state. Consumers may use these detached records in their own review UI. */
+  get revisions(): readonly Readonly<DocRevision>[] {
+    return this._reviewSnapshot().revisions;
   }
 
   /**
@@ -585,7 +613,7 @@ export class DocxDocument {
     if (!layout) throw new Error('Document layout variant store is not initialized');
     this._reviewTextRunSourceIndex ??= textRunSourceIndexForDocument(layout);
     this._commentAnchorRanges ??= collectLayoutSourceCommentRangesIfPresent(
-      this._document.comments,
+      this._reviewSnapshot().comments,
       this._source,
       this._reviewTextRunSourceIndex,
     );
@@ -607,11 +635,22 @@ export class DocxDocument {
     if (!layout) throw new Error('Document layout variant store is not initialized');
     this._reviewTextRunSourceIndex ??= textRunSourceIndexForDocument(layout);
     this._revisionAnchorRanges ??= collectLayoutSourceRevisionRangesIfPresent(
-      this._document.revisions,
+      this._reviewSnapshot().revisions,
       this._source,
       this._reviewTextRunSourceIndex,
     );
     return this._revisionAnchorRanges;
+  }
+
+  /** Object.create-based focused tests and older deserialized instances can
+   * bypass field initializers; preserve the same one-time immutable contract. */
+  private _reviewSnapshot(): ReviewSnapshot {
+    if (this._review) return this._review;
+    this._review = snapshotReviewData(
+      this._meta?.comments ?? this._document?.comments ?? [],
+      this._meta?.revisions ?? this._document?.revisions ?? [],
+    );
+    return this._review;
   }
 
   /**

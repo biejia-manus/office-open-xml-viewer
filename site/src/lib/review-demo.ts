@@ -5,7 +5,7 @@ import {
   type DocComment,
   type DocRevision,
   type DocxTextRunInfo,
-} from '@silurus/ooxml-docx';
+} from '@silurus/ooxml/docx';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PAGE_WIDTH = 760;
@@ -131,8 +131,12 @@ function revisionCard(revision: Readonly<DocRevision>): HTMLElement {
   return card;
 }
 
-export function mountReviewDemo(root: HTMLElement, url: string): void {
-  if (root.dataset.mounted === '1') return;
+export interface ReviewDemoController {
+  destroy(): void;
+}
+
+export function mountReviewDemo(root: HTMLElement, url: string): ReviewDemoController {
+  if (root.dataset.mounted === '1') return { destroy() {} };
   root.dataset.mounted = '1';
   const canvas = root.querySelector<HTMLCanvasElement>('[data-review-canvas]');
   const highlightSvg = root.querySelector<SVGSVGElement>('[data-review-highlights]');
@@ -143,22 +147,29 @@ export function mountReviewDemo(root: HTMLElement, url: string): void {
   const count = root.querySelector<HTMLElement>('[data-review-count]');
   const changeCount = root.querySelector<HTMLElement>('[data-review-change-count]');
   const pageLabel = root.querySelector<HTMLElement>('[data-review-page-label]');
-  if (!canvas || !highlightSvg || !connectorSvg || !layoutRoot || !threadList || !status) return;
+  if (!canvas || !highlightSvg || !connectorSvg || !layoutRoot || !threadList || !status) {
+    throw new Error('Review demo markup is incomplete.');
+  }
 
   let loaded: DocxDocument | undefined;
   let resizeObserver: ResizeObserver | undefined;
+  let destroyed = false;
   const marginQuery = matchMedia(MOBILE_MARGIN_QUERY);
   let onMarginQueryChange: (() => void) | undefined;
   const cleanup = () => {
+    if (destroyed) return;
+    destroyed = true;
     resizeObserver?.disconnect();
     if (onMarginQueryChange) marginQuery.removeEventListener('change', onMarginQueryChange);
     loaded?.destroy();
     loaded = undefined;
   };
-  window.addEventListener('pagehide', cleanup, { once: true });
-  document.addEventListener('astro:before-swap', cleanup, { once: true });
 
   void DocxDocument.load(url, { useGoogleFonts: true }).then(async (documentModel) => {
+    if (destroyed) {
+      documentModel.destroy();
+      return;
+    }
     loaded = documentModel;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const comments = documentModel.comments;
@@ -235,7 +246,7 @@ export function mountReviewDemo(root: HTMLElement, url: string): void {
       || left.bands[0]!.x - right.bands[0]!.x
       || left.id.localeCompare(right.id));
 
-    if (count) count.textContent = `${roots.length} threads`;
+    if (count) count.textContent = `${commentEntries.length} visible threads`;
     if (changeCount) changeCount.textContent = `${documentModel.revisions.length} changes`;
 
     for (const entry of anchored) {
@@ -334,6 +345,13 @@ export function mountReviewDemo(root: HTMLElement, url: string): void {
 
       let nextTop = 6;
       const gap = 12;
+      const placements: Array<{
+        entry: AnchoredReviewEntry;
+        card: HTMLElement;
+        band: ReviewHighlightRect;
+        anchorY: number;
+        top: number;
+      }> = [];
       for (const [index, entry] of anchored.entries()) {
         const card = cards[index];
         const band = entry.bands[0];
@@ -342,8 +360,28 @@ export function mountReviewDemo(root: HTMLElement, url: string): void {
           + (band.y + band.h / 2) / pageHeight * pageRect.height;
         const desiredTop = anchorY - (threadRect.top - layoutRect.top) - 18;
         const top = Math.max(nextTop, desiredTop);
-        card.style.top = `${top}px`;
+        placements.push({ entry, card, band, anchorY, top });
         nextTop = top + card.offsetHeight + gap;
+      }
+
+      // Preserve anchor alignment when the stack fits. If it would extend past
+      // the page, move the complete stack upward until its first card reaches
+      // the page top. This keeps dense narrow layouts close to their document
+      // rather than allowing every late card to drift below it.
+      const lastPlacement = placements[placements.length - 1];
+      const stackBottom = lastPlacement
+        ? lastPlacement.top + lastPlacement.card.offsetHeight
+        : 0;
+      const pageBottom = pageRect.bottom - threadRect.top;
+      const availableUpwardShift = Math.max(0, (placements[0]?.top ?? 6) - 6);
+      const upwardShift = Math.min(
+        Math.max(0, stackBottom - pageBottom),
+        availableUpwardShift,
+      );
+
+      for (const { entry, card, band, anchorY, top: unshiftedTop } of placements) {
+        const top = unshiftedTop - upwardShift;
+        card.style.top = `${top}px`;
 
         const startX = pageRect.left - layoutRect.left
           + (band.x + band.w) / PAGE_WIDTH * pageRect.width;
@@ -376,4 +414,5 @@ export function mountReviewDemo(root: HTMLElement, url: string): void {
     status.dataset.error = '1';
     cleanup();
   });
+  return { destroy: cleanup };
 }

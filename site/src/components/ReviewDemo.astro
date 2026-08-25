@@ -85,9 +85,13 @@ const { showCode = true } = Astro.props;
   import { mountReviewDemo } from '../lib/review-demo';
   const base = import.meta.env.BASE_URL;
   const url = `${base}samples/sample-1.docx`.replace(/([^:])\/\/+/g, '$1/');
+  const controllers = [];
   for (const root of document.querySelectorAll<HTMLElement>('[data-review-demo]')) {
-    mountReviewDemo(root, url);
+    controllers.push(mountReviewDemo(root, url));
   }
+  const destroy = () => controllers.forEach((controller) => controller.destroy());
+  window.addEventListener('pagehide', destroy, { once: true });
+  document.addEventListener('astro:before-swap', destroy, { once: true });
 </script>
 
 <style>

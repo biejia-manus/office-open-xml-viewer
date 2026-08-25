@@ -1512,35 +1512,27 @@ fn finish_document(
         parse_embedded_fonts(&font_table_xml, &font_rels, &format!("{dir}/"))
     };
 
-    let comments = find_rel_target(&environment.rels_xml, "comments")
-        .map(|target| {
-            if target.starts_with('/') {
-                target.trim_start_matches('/').to_string()
-            } else {
-                format!("word/{target}")
-            }
-        })
-        .and_then(|p| read_zip_string(zip, &p).ok())
-        .map(|xml| {
-            // [MS-DOCX] §2.5.3.1 — reply threading and resolved state live in
-            // the separate word/commentsExtended.xml part. Its relationship
-            // Type suffix "/commentsExtended" cannot false-match the plain
-            // "/comments" lookup above. A missing part simply leaves every
-            // comment an unresolved top-level entry.
-            let extended = find_rel_target(&environment.rels_xml, "commentsExtended")
-                .map(|target| {
-                    if target.starts_with('/') {
-                        target.trim_start_matches('/').to_string()
-                    } else {
-                        format!("word/{target}")
-                    }
-                })
+    let comments =
+        find_internal_rel_target_by_types(&environment.rels_xml, COMMENTS_RELATIONSHIP_TYPES)
+            .map(|target| ooxml_common::rels::resolve_target("word/", &target))
+            .and_then(|p| read_zip_string(zip, &p).ok())
+            .map(|xml| {
+                // [MS-DOCX] §2.5.3.1 — reply threading and resolved state live in
+                // the separate word/commentsExtended.xml part. Its relationship
+                // has one Microsoft-defined exact Type. OPC external relationships
+                // never identify package parts. A missing part simply leaves every
+                // comment an unresolved top-level entry.
+                let extended = find_internal_rel_target_by_types(
+                    &environment.rels_xml,
+                    COMMENTS_EXTENDED_RELATIONSHIP_TYPES,
+                )
+                .map(|target| ooxml_common::rels::resolve_target("word/", &target))
                 .and_then(|p| read_zip_string(zip, &p).ok())
                 .map(|extended_xml| parse_comments_extended(&extended_xml))
                 .unwrap_or_default();
-            parse_comments_with_extended(&xml, &extended)
-        })
-        .unwrap_or_default();
+                parse_comments_with_extended(&xml, &extended)
+            })
+            .unwrap_or_default();
     let footnotes_path = find_rel_target(&environment.rels_xml, "footnotes").map(|target| {
         if target.starts_with('/') {
             target.trim_start_matches('/').to_string()
@@ -2474,6 +2466,38 @@ fn find_rel_target(rels_xml: &str, type_suffix: &str) -> Option<String> {
         }
     }
     None
+}
+
+const COMMENTS_RELATIONSHIP_TYPES: &[&str] = &[
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/comments",
+];
+const COMMENTS_EXTENDED_RELATIONSHIP_TYPES: &[&str] =
+    &["http://schemas.microsoft.com/office/2011/relationships/commentsExtended"];
+
+/// Resolve a package-owned relationship only when its Type is one of the exact
+/// format-defined URIs. ECMA-376 Part 2 §9.3 makes TargetMode part of relationship
+/// semantics; absent TargetMode defaults to Internal, while External targets do
+/// not name package parts.
+fn find_internal_rel_target_by_types(
+    rels_xml: &str,
+    relationship_types: &[&str],
+) -> Option<String> {
+    if rels_xml.is_empty() {
+        return None;
+    }
+    let doc = parse_guarded(rels_xml).ok()?;
+    doc.root_element()
+        .children()
+        .filter(|node| node.is_element() && node.tag_name().name() == "Relationship")
+        .filter(|node| matches!(node.attribute("TargetMode"), None | Some("Internal")))
+        .find_map(|node| {
+            let relationship_type = node.attribute("Type")?;
+            relationship_types
+                .contains(&relationship_type)
+                .then_some(())?;
+            node.attribute("Target").map(str::to_owned)
+        })
 }
 
 /// Parse `word/fontTable.xml` and build maps from font name to family class and pitch.
@@ -28464,6 +28488,98 @@ mod comment_anchor_tests {
     }
 
     #[test]
+    fn comment_relationship_targets_are_opc_normalized() {
+        let mut parts = comment_parts(true);
+        parts[1].1 = parts[1]
+            .1
+            .replace(
+                "Target=\"comments.xml\"",
+                "Target=\"./review/../comments.xml\"",
+            )
+            .replace(
+                "Target=\"commentsExtended.xml\"",
+                "Target=\"./metadata/../commentsExtended.xml\"",
+            );
+        let borrowed: Vec<(&str, &str)> = parts
+            .iter()
+            .map(|(path, content)| (*path, content.as_str()))
+            .collect();
+
+        let doc = parse_parts(&borrowed);
+
+        assert_eq!(doc.comments.len(), 3);
+        assert_eq!(doc.comments[1].parent_id.as_deref(), Some("1"));
+        assert_eq!(doc.comments[2].resolved, Some(true));
+    }
+
+    #[test]
+    fn comment_relationships_require_exact_internal_types() {
+        let mut parts = comment_parts(true);
+        parts[1].1 = parts[1]
+            .1
+            .replace(
+                r#"<Relationship Id="rCom" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>"#,
+                r#"<Relationship Id="rExternalComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml" TargetMode="External"/>
+                      <Relationship Id="rPoisonComments" Type="urn:example/relationships/comments" Target="comments.xml"/>
+                      <Relationship Id="rCom" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="review/actual-comments.xml"/>"#,
+            )
+            .replace(
+                r#"<Relationship Id="rExt" Type="http://schemas.microsoft.com/office/2011/relationships/commentsExtended" Target="commentsExtended.xml"/>"#,
+                r#"<Relationship Id="rExternalExtended" Type="http://schemas.microsoft.com/office/2011/relationships/commentsExtended" Target="commentsExtended.xml" TargetMode="External"/>
+                      <Relationship Id="rPoisonExtended" Type="urn:example/relationships/commentsExtended" Target="commentsExtended.xml"/>
+                      <Relationship Id="rExt" Type="http://schemas.microsoft.com/office/2011/relationships/commentsExtended" Target="review/actual-comments-extended.xml"/>"#,
+            );
+        parts[2].0 = "word/review/actual-comments.xml";
+        parts[3].0 = "word/review/actual-comments-extended.xml";
+        parts.push((
+            "word/comments.xml",
+            format!(
+                r#"<w:comments xmlns:w="{W}"><w:comment w:id="99" w:author="Poison"><w:p><w:r><w:t>Unreferenced poison</w:t></w:r></w:p></w:comment></w:comments>"#,
+            ),
+        ));
+        parts.push((
+            "word/commentsExtended.xml",
+            format!(
+                r#"<w15:commentsEx xmlns:w15="{W15}"><w15:commentEx w15:paraId="AAAA2222" w15:done="1"/></w15:commentsEx>"#,
+            ),
+        ));
+        let borrowed: Vec<(&str, &str)> = parts
+            .iter()
+            .map(|(path, content)| (*path, content.as_str()))
+            .collect();
+
+        let doc = parse_parts(&borrowed);
+
+        assert_eq!(
+            doc.comments
+                .iter()
+                .map(|comment| comment.id.as_str())
+                .collect::<Vec<_>>(),
+            ["1", "2", "3"],
+        );
+        assert_eq!(doc.comments[0].resolved, Some(false));
+        assert_eq!(doc.comments[1].parent_id.as_deref(), Some("1"));
+        assert_eq!(doc.comments[2].resolved, Some(true));
+    }
+
+    #[test]
+    fn strict_comment_relationship_type_is_allowlisted() {
+        let mut parts = comment_parts(false);
+        parts[1].1 = parts[1].1.replace(
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
+            "http://purl.oclc.org/ooxml/officeDocument/relationships/comments",
+        );
+        let borrowed: Vec<(&str, &str)> = parts
+            .iter()
+            .map(|(path, content)| (*path, content.as_str()))
+            .collect();
+
+        let doc = parse_parts(&borrowed);
+
+        assert_eq!(doc.comments.len(), 3);
+    }
+
+    #[test]
     fn missing_comments_extended_part_leaves_flat_unresolved_comments() {
         let parts = comment_parts(false);
         let borrowed: Vec<(&str, &str)> = parts
@@ -28515,15 +28631,15 @@ mod comment_anchor_tests {
             r#"<w15:commentsEx xmlns:w15="{W15}" xmlns:f="urn:foreign">
               <f:commentEx f:paraId="FOREIGN" f:done="1"/>
               <w15:commentEx f:paraId="MISSING" f:done="1"/>
-              <w15:commentEx w15:paraId="REAL" w15:done="0" f:done="1"
-                 w15:paraIdParent="PARENT" f:paraIdParent="WRONG"/>
+              <w15:commentEx w15:paraId="A1B2C3D4" w15:done="0" f:done="1"
+                 w15:paraIdParent="11223344" f:paraIdParent="WRONG"/>
             </w15:commentsEx>"#
         );
         let extended = parse_comments_extended(&xml);
         assert_eq!(extended.len(), 1);
-        let real = extended.get("REAL").expect("real w15 entry");
+        let real = extended.get("A1B2C3D4").expect("real w15 entry");
         assert!(!real.done);
-        assert_eq!(real.parent_para_id.as_deref(), Some("PARENT"));
+        assert_eq!(real.parent_para_id.as_deref(), Some("11223344"));
     }
 }
 

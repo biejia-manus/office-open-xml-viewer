@@ -41,7 +41,14 @@ export const formatRenderModeGuidance: Readonly<Record<'docx' | 'xlsx' | 'pptx',
   pptx: 'PPTX keeps slide navigation, virtualized scrolling, selection, find, hyperlinks, media playback, equations, ChartEx, 3-D charts and Region Maps in both modes. Worker mode moves slide paint away from the UI thread; media controls and overlays remain interactive in the Viewer.',
 };
 
-export const optionalChartRenderers: readonly OptionalRendererReference[] = [
+export const optionalRenderers: readonly OptionalRendererReference[] = [
+  {
+    name: 'Equation renderer',
+    entry: '@silurus/ooxml/math',
+    exportName: 'math',
+    contract: 'MathRenderer',
+    desc: 'Renders OMML equations with the separately loaded MathJax and STIX Two Math asset. The asset is fetched lazily only when an equation is present.',
+  },
   {
     name: 'Microsoft ChartEx renderer',
     entry: '@silurus/ooxml/chart-ex',
@@ -315,14 +322,11 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
       options: [GFONTS, PASSWORD, WASM_URL, ZIP, RESOURCE_LIMITS, RESOURCE_METRICS, DEBUG, WORKER_TIMEOUT, MATH, THREE_D, REGION_MAP, CHART_EX, MODE],
       methods: [
         { sig: 'static load(source, options?): Promise<DocxDocument>', desc: 'Parse a document from a URL or ArrayBuffer.' },
-        { sig: 'get comments(): DocComment[]', desc: 'Detached comments and replies stored in the document.' },
-        { sig: 'get revisions(): DocRevision[]', desc: 'Detached insertion, deletion, and move records stored in the document.' },
+        { sig: 'get comments(): readonly Readonly<DocComment>[]', desc: 'Immutable detached comments and replies stored in the document.' },
+        { sig: 'get revisions(): readonly Readonly<DocRevision>[]', desc: 'Immutable detached body-story insertion, deletion, and move records.' },
         { sig: 'commentAnchorRanges(): readonly CommentAnchorRange[]', desc: 'Logical comment ranges that can be joined to rendered text runs.' },
         { sig: 'revisionAnchorRanges(): readonly RevisionAnchorRange[]', desc: 'Logical tracked-change ranges that can be joined to rendered text runs.' },
         { sig: 'collectPageRuns(index, options?): Promise<DocxTextRunInfo[]>', desc: 'Collect the same immutable text-run geometry emitted while rendering one page.' },
-        { sig: 'resolveDocxCommentThreads(comments, anchors, runs, options?)', desc: 'Group top-level comments with replies and resolve their anchors into continuous page highlight rectangles.' },
-        { sig: 'resolveCommentAnchorRuns()', desc: 'Package helper that resolves one comment anchor against collected page runs.' },
-        { sig: 'resolveRevisionAnchorRuns()', desc: 'Package helper that resolves one revision anchor against collected page runs.' },
         { sig: 'get pageCount(): number', desc: 'Total pages.' },
         { sig: 'pageSize(pageIndex: number): { widthPt, heightPt }', desc: 'Page size in pt for a page (ECMA-376 §17.6.13 / §17.6.11 — per section, so a mixed portrait/landscape document returns different sizes per page). Available in both modes; index is clamped. `{ 0, 0 }` means "not loaded". Returns a fresh object per call.', emphasis: '`{ 0, 0 }` means "not loaded".' },
         { sig: 'get mode(): "main" | "worker"', desc: 'The render mode this engine was loaded with. A borrowed engine’s mode decides whether pages render via renderPage (main) or renderPageToBitmap (worker).' },

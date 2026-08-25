@@ -70,8 +70,9 @@ pub(crate) struct Slide {
     /// the slide has no notes part. Renderer ignores this; surfaced for tools.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) notes: Option<String>,
-    /// Legacy slide comments (`ppt/comments/commentN.xml`). Modern Office365
-    /// "threaded comments" are not yet parsed.
+    /// Classic ECMA-376 comments and modern threaded comments related from this
+    /// slide. The part target is relationship-defined and need not use the
+    /// conventional `ppt/comments/` directory.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) comments: Vec<PptxComment>,
     /// `<p:sld show="0">` — slide is hidden in the slide show (§19.3.1.38).

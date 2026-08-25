@@ -12,13 +12,11 @@ import {
   type ReadOnlyCommentThread,
 } from '@silurus/ooxml-core/internal/read-only-comment-margin';
 import type {
+  ReadOnlyCommentMarginGeometry,
   ReadOnlyCommentRect,
   ReadOnlyCommentThreadGeometry,
 } from '@silurus/ooxml-core/internal/read-only-comment-decoration';
-import {
-  intersectElementRects,
-  relativeElementRect,
-} from '@silurus/ooxml-core/internal/dom-geometry';
+import { relativeElementRect } from '@silurus/ooxml-core/internal/dom-geometry';
 import { resolveCommentAnchorRuns, type CommentAnchorRange } from './comments.js';
 import type { DocxTextRunInfo } from './renderer.js';
 import type { DocComment } from './types.js';
@@ -157,7 +155,8 @@ export function buildDocxCommentMargin(
   showMarkers: boolean,
   includeResolved = false,
   onGeometryChange?: () => void,
-): readonly ReadOnlyCommentThreadGeometry[] {
+  onScrollGeometryChange?: () => void,
+): ReadOnlyCommentMarginGeometry {
   margin.dataset.ooxmlCommentZoom = String(zoom);
   tintLayer.innerHTML = '';
   const threads = commentThreads(model.comments, includeResolved);
@@ -218,6 +217,7 @@ export function buildDocxCommentMargin(
     logicalWidth: logicalMarginWidth,
     onSetActive,
     onGeometryChange,
+    onScrollGeometryChange,
     preferredTopById: new Map(cardThreads.map((thread) => {
       const first = anchorRects.get(thread.occurrenceKey)?.[0];
       return [thread.occurrenceKey, first?.y ?? 0] as const;
@@ -256,21 +256,21 @@ export function buildDocxCommentMargin(
       tintLayer.appendChild(marker);
     }
   }
-  if (!onGeometryChange) {
-    return Object.freeze(cardThreads.map((thread): ReadOnlyCommentThreadGeometry => Object.freeze({
-      occurrenceKey: thread.occurrenceKey,
-      active: activeId === thread.occurrenceKey,
-      anchorRects: Object.freeze(anchorRects.get(thread.occurrenceKey) ?? []),
-    })));
+  if (!onGeometryChange && !onScrollGeometryChange) {
+    return Object.freeze({
+      threads: Object.freeze(cardThreads.map((thread): ReadOnlyCommentThreadGeometry => Object.freeze({
+        occurrenceKey: thread.occurrenceKey,
+        active: activeId === thread.occurrenceKey,
+        anchorRects: Object.freeze(anchorRects.get(thread.occurrenceKey) ?? []),
+      }))),
+      scrollTop: margin.scrollTop,
+    });
   }
   const marginRect = surface ? relativeElementRect(margin, surface) : undefined;
-  return Object.freeze(cardThreads.map((thread): ReadOnlyCommentThreadGeometry => {
+  const geometry = Object.freeze(cardThreads.map((thread): ReadOnlyCommentThreadGeometry => {
     const cardHost = cardHosts.get(thread.occurrenceKey);
-    const measuredCardRect = cardHost && surface
+    const cardRect = cardHost && surface
       ? relativeElementRect(cardHost, surface)
-      : undefined;
-    const cardRect = measuredCardRect && marginRect
-      ? intersectElementRects(measuredCardRect, marginRect)
       : undefined;
     return Object.freeze({
       occurrenceKey: thread.occurrenceKey,
@@ -279,4 +279,9 @@ export function buildDocxCommentMargin(
       ...(cardRect ? { cardRect } : {}),
     });
   }));
+  return Object.freeze({
+    threads: geometry,
+    ...(marginRect ? { cardClipBounds: marginRect } : {}),
+    scrollTop: margin.scrollTop,
+  });
 }

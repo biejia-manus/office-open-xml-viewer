@@ -25,7 +25,12 @@ interface ReviewController {
 }
 
 function reviewItems(doc: DocxDocument, runs: readonly Readonly<DocxTextRunInfo>[]): ReviewItem[] {
-  return resolveDocxCommentThreads(doc.comments, doc.commentAnchorRanges(), runs).map((thread) => {
+  return resolveDocxCommentThreads(
+    doc.comments,
+    doc.commentAnchorRanges(),
+    runs,
+    { includeResolved: false },
+  ).map((thread) => {
     const kinds = thread.anchors.map(({ kind }) => kind);
     const marker = kinds.includes('range') ? 'range'
       : kinds.includes('point') ? 'point' : 'fallback';

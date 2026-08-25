@@ -13,9 +13,8 @@ and application-specific review workflows remain application responsibilities.
 `XlsxViewer` and `XlsxSheetViewer` can show cell-anchored comment popups. These
 Viewers own placement, zoom updates, page or sheet lifecycle, and cleanup.
 
-The built-in structure is intentionally fixed. Applications use CSS custom
-properties for simple token changes and stable classes for presentation changes
-that do not replace the structure:
+The built-in structure is intentionally fixed. Stable classes are the primary
+presentation contract for changes that do not replace the structure:
 
 - `.ooxml-comment-card`;
 - `.ooxml-comment-card__author`;
@@ -23,6 +22,10 @@ that do not replace the structure:
 - `.ooxml-comment-card__body`;
 - `.ooxml-comment-card__reply`;
 - `.ooxml-comment-marker`.
+
+CSS custom properties remain a smaller convenience layer for common theme
+tokens such as colors, card borders, and corner radius. They do not mirror every
+CSS property and do not replace the class contract.
 
 Cards expose `data-active` and `data-focused` styling states. Defaults use
 low-specificity `:where(...)` selectors. Inline styles are reserved for dynamic
@@ -68,7 +71,9 @@ The formats deliberately do not pretend their geometry is identical:
 - DOCX comments attach to logical text ranges that are resolved against one
   rendered page's text runs;
 - PPTX comments attach to slide coordinates;
-- XLSX comments attach to cells and use a hover or touch popup.
+- XLSX comments attach to cells and use a pointer or keyboard popup. Focusing
+  the viewport establishes a cell selection, Arrow keys move it, Enter opens
+  the selected cell's comment, and a polite live status announces its content.
 
 Core owns the small built-in card style vocabulary. Each format owns projection
 from its OOXML model into its UI geometry.
