@@ -1737,7 +1737,16 @@ export class DocxScrollViewer implements ZoomableViewer {
 
   /** §17.13.4 — toggle the comment margin at runtime. The gutter participates
    *  in the fit width, so the layout refits and every mounted page rebuilds
-   *  (turning it off simply removes the comment DOM and returns the space). */
+   *  (turning it off simply removes the comment DOM and returns the space).
+   *
+   *  The re-fit goes through {@link _refitPreservingZoom}, NOT `relayout()` or
+   *  `fitWidth()` alone: once the base scale is established `_relayout` no longer
+   *  touches `_scale`/`_prevBase`/`_lastFitWidth`, so a bare relayout would leave
+   *  those describing the pre-gutter geometry and the next `_onResize` would read
+   *  the mismatch back as a user zoom multiplier (the ratchet — a second shrink
+   *  with the gutter on, a page left too large with it off). Re-fitting here also
+   *  makes the toggle itself apply the new base immediately instead of waiting
+   *  for a resize. */
   setShowComments(value: boolean): void {
     if (this._showComments === value) return;
     this._showComments = value;
@@ -1745,8 +1754,19 @@ export class DocxScrollViewer implements ZoomableViewer {
     for (const slot of [...this._slots.values(), ...this._free]) {
       this._ensureSlotCommentLayers(slot);
     }
+    if (this._scaleEstablished) {
+      if (this._opts.refitOnResize === false) {
+        // Fixed-scale hosts keep their absolute scale (same contract as the
+        // resize path); only the recorded fit width follows the gutter.
+        this._lastFitWidth = this._fitWidthPx();
+      } else {
+        // Re-fit to the gutter-adjusted base, preserving the user's zoom.
+        this._refitPreservingZoom();
+      }
+    }
     // The gutter changes _padH → the fit width and spacer extent; a full
-    // relayout re-fits and re-mounts the visible window.
+    // relayout re-fits (when the base was still deferred) and re-mounts the
+    // visible window at the geometry the re-fit above established.
     this.relayout();
     if (value) {
       // Slots mounted before the toggle rendered without collecting run
@@ -1892,18 +1912,15 @@ export class DocxScrollViewer implements ZoomableViewer {
    * established a scale (`_scaleEstablished` is false), so the first non-zero
    * resize establishes it here via `relayout()` — completing the T2 deferral.
    *
-   * Re-fit math (zoom multiplier preserved):
-   *   mult      = _scale / _prevBase            (the user's zoom over the old base)
-   *   newScale  = newBase × mult
-   * Routing through `setScale(newScale)` bumps `_renderEpoch` (resize IS an epoch
-   * event — T4 banner) and re-anchors + CSS-previews + debounces a settle re-render
-   * of every slot at the new geometry, exactly like a zoom (design §7 flicker-free
-   * path — a rapid ResizeObserver burst therefore also coalesces into one settle).
-   * `setScale`'s clamp/no-op guards apply: an unchanged newScale (identical width)
-   * is a no-op there — so we short-circuit BEFORE it when the fit-width is
-   * unchanged (mounting the revealed window without a needless re-render), and
-   * after it we call `_mountVisible` again to cover the case where the clamp made
-   * `setScale` no-op yet the viewport still grew.
+   * The re-fit math (and the zoomMin ratchet caveat) lives in
+   * {@link _refitPreservingZoom}, shared with the `_padH` change in
+   * {@link setShowComments}; resize IS an epoch event (T4 banner) because that
+   * helper routes through `setScale`. `setScale`'s clamp/no-op guards apply: an
+   * unchanged newScale (identical width) is short-circuited BEFORE it by the
+   * helper's `'unchanged'` result (we mount the revealed window without a
+   * needless re-render), and after a re-fit we call `_mountVisible` again to
+   * cover the case where the clamp made `setScale` no-op yet the viewport still
+   * grew.
    */
   private _onResize(): void {
     if (!this._doc || this._doc.pageCount === 0) return;
@@ -1920,10 +1937,9 @@ export class DocxScrollViewer implements ZoomableViewer {
       this._mountVisible();
       return;
     }
-    const newBase = this._baseScale();
-    if (newBase <= 0) return; // still unlaid-out — wait for the next resize
-    const newFitWidth = this._fitWidthPx();
-    if (newFitWidth === this._lastFitWidth) {
+    const outcome = this._refitPreservingZoom();
+    if (outcome === 'deferred') return; // still unlaid-out — wait for the next resize
+    if (outcome === 'unchanged') {
       // Height-only change (or any resize that leaves the fit-width identical):
       // the base scale is unchanged, so there is no re-fit to do — but a taller
       // viewport now exposes rows that were below the fold. `_mountVisible`
@@ -1935,29 +1951,60 @@ export class DocxScrollViewer implements ZoomableViewer {
       this._mountVisible();
       return;
     }
-    this._lastFitWidth = newFitWidth;
-    // Preserve the zoom multiplier across the re-fit: newScale = newBase × mult.
-    const mult = this._prevBase > 0 ? this._scale / this._prevBase : 1;
-    this._prevBase = newBase;
-    // Route through setScale so the epoch bumps and the re-anchor/force-re-render
-    // path runs identically to a zoom.
-    //
-    // zoomMin RATCHET (design §8.1 caveat, see setScale JSDoc): `zoomMin`/`zoomMax`
-    // are ABSOLUTE px-per-pt bounds, but the re-fit base (`newBase × mult`) is
-    // computed UNCLAMPED. A resize that transits the scale below `zoomMin × pageWidth`
-    // (a wide page in a container that briefly narrows) is clamped UP by `setScale`,
-    // which permanently inflates the implied multiplier even with zero user zoom —
-    // the next re-fit reads back the clamped `_scale` as `mult`. This is bounded and
-    // converges (the clamp floor is fixed), but it means the preserved multiplier can
-    // drift above 1 purely from resize transits below the floor. Accepted consequence
-    // of using absolute bounds (§8.1) with an unclamped relayout base.
-    this.setScale(newBase * mult);
     // `setScale` no-ops when the clamped scale is unchanged (e.g. already pinned at
     // a clamp boundary), which would skip its preview + settle. A width+height
     // growth that ends up clamped to the same scale must still reveal the taller
     // viewport's rows, so mount here too. Idempotent when `setScale` ran: the
     // window is already mounted and every present slot is a re-position no-op.
     this._mountVisible();
+  }
+
+  /**
+   * Re-fit the established base scale to the CURRENT fit width while preserving
+   * the user's zoom multiplier, and stamp the new base/fit-width pair:
+   *
+   *   mult      = _scale / _prevBase            (the user's zoom over the old base)
+   *   newScale  = newBase × mult
+   *
+   * Shared by the container re-fit ({@link _onResize}) and by every host action
+   * that changes `_padH` — today {@link setShowComments}, whose comment gutter is
+   * part of the fit width. Any such action MUST route through here rather than
+   * calling `relayout()`/`fitWidth()` alone: `_relayout` only sets `_scale` while
+   * establishing the base, so leaving `_prevBase`/`_lastFitWidth` describing the
+   * old geometry makes the next resize read the mismatch back as user zoom and
+   * ratchet the scale (shrinking twice with the gutter on, staying too large with
+   * it off).
+   *
+   * Returns what happened: `'deferred'` (no positive base — container unlaid-out,
+   * retried on the next resize), `'unchanged'` (identical fit width, nothing to
+   * re-fit), or `'refit'` (a new scale was routed through `setScale`). Callers
+   * that need the visible window mounted must do so themselves.
+   *
+   * Routing through `setScale` bumps `_renderEpoch` and re-anchors + CSS-previews
+   * + debounces a settle re-render of every slot at the new geometry, exactly like
+   * a zoom (design §7 flicker-free path — a rapid ResizeObserver burst therefore
+   * also coalesces into one settle).
+   *
+   * zoomMin RATCHET (design §8.1 caveat, see setScale JSDoc): `zoomMin`/`zoomMax`
+   * are ABSOLUTE px-per-pt bounds, but the re-fit base (`newBase × mult`) is
+   * computed UNCLAMPED. A resize that transits the scale below `zoomMin × pageWidth`
+   * (a wide page in a container that briefly narrows) is clamped UP by `setScale`,
+   * which permanently inflates the implied multiplier even with zero user zoom —
+   * the next re-fit reads back the clamped `_scale` as `mult`. This is bounded and
+   * converges (the clamp floor is fixed), but it means the preserved multiplier can
+   * drift above 1 purely from resize transits below the floor. Accepted consequence
+   * of using absolute bounds (§8.1) with an unclamped relayout base.
+   */
+  private _refitPreservingZoom(): 'deferred' | 'unchanged' | 'refit' {
+    const newBase = this._baseScale();
+    if (newBase <= 0) return 'deferred'; // still unlaid-out — wait for the next resize
+    const newFitWidth = this._fitWidthPx();
+    if (newFitWidth === this._lastFitWidth) return 'unchanged';
+    this._lastFitWidth = newFitWidth;
+    const mult = this._prevBase > 0 ? this._scale / this._prevBase : 1;
+    this._prevBase = newBase;
+    this.setScale(newBase * mult);
+    return 'refit';
   }
 
   get topVisiblePage(): number {

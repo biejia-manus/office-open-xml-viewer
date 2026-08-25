@@ -38,6 +38,15 @@ the corresponding minor release.
   clipping them. Comment data also grows `DocComment.parentId` / `resolved`
   / `paragraphs` and `DocxDocument.commentAnchorRanges()`; both features
   work in main and worker render modes.
+- **Word comment gutter fit (scroll viewer):** `setShowComments` now re-fits the
+  base scale to the gutter-adjusted fit width instead of only relaying out.
+  Because the comment gutter is part of the horizontal padding, toggling it
+  changed the fit width without updating the stored base/fit-width pair, so the
+  next container resize read the mismatch back as a user zoom and ratcheted the
+  scale — the page shrank a second time with comments on, and stayed too large
+  with them off. The toggle now applies the new base immediately and preserves
+  any user zoom multiplier across it (fixed-scale hosts, `refitOnResize: false`,
+  keep their absolute scale as before).
 
 ## 0.80.2 — 2026-08-18
 
