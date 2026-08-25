@@ -705,6 +705,10 @@ class XlsxViewerEngine implements ZoomableViewer {
   /** Authored comments for the selected sheet. Presentation filtering must not
    * erase the application-owned data and selection-context contracts. */
   private currentSourceComments: readonly XlsxComment[] = [];
+  /** Latest application-owned comment-list navigation. `scrollToCell()` awaits
+   * a render, so an older click must not restore its selection after a newer
+   * click or after the current sheet has changed. */
+  private commentNavigationGeneration = 0;
   private sourceCommentMap = new Map<string, XlsxComment>();
   /** Viewer-owned projections of workbook-cached worksheets. Only view-mutable
    * size/outline state is copied; immutable cell/content graphs stay shared. */
@@ -2302,7 +2306,18 @@ class XlsxViewerEngine implements ZoomableViewer {
       const cell = parseA1(comment.cellRef);
       return cell?.row === target.row && cell.col === target.col;
     })) return false;
+    const generation = ++this.commentNavigationGeneration;
+    const sheetGeneration = this.sheetRequestGeneration;
+    const sheet = this.currentSheet;
+    const worksheet = this.currentWorksheet;
     await this.scrollToCell(cellRef, options);
+    if (this._destroyed) throw this.destroyedError();
+    if (
+      generation !== this.commentNavigationGeneration ||
+      sheetGeneration !== this.sheetRequestGeneration ||
+      sheet !== this.currentSheet ||
+      worksheet !== this.currentWorksheet
+    ) return false;
     this.setSelection(cellRef);
     return true;
   }

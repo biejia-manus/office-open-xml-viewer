@@ -26,6 +26,66 @@ describe('XlsxViewer comment UI contract', () => {
     viewer.destroy();
   });
 
+  it('lets the latest overlapping comment-list navigation own the selection', async () => {
+    installDom();
+    const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
+    const internals = viewer as unknown as {
+      currentSourceComments: readonly XlsxComment[];
+    };
+    internals.currentSourceComments = [
+      { cellRef: 'A1', author: 'Ada', text: 'First' },
+      { cellRef: 'B2', author: 'Grace', text: 'Second' },
+    ];
+    let resolveFirst!: () => void;
+    let resolveSecond!: () => void;
+    const first = new Promise<void>((resolve) => { resolveFirst = resolve; });
+    const second = new Promise<void>((resolve) => { resolveSecond = resolve; });
+    vi.spyOn(viewer, 'scrollToCell').mockImplementation((cellRef) =>
+      cellRef === 'A1' ? first : second);
+    const setSelection = vi.spyOn(viewer, 'setSelection');
+
+    const older = viewer.goToComment('A1');
+    const newer = viewer.goToComment('B2');
+    resolveSecond();
+    await expect(newer).resolves.toBe(true);
+    resolveFirst();
+    await expect(older).resolves.toBe(false);
+
+    expect(setSelection).toHaveBeenCalledTimes(1);
+    expect(setSelection).toHaveBeenCalledWith('B2');
+    viewer.destroy();
+  });
+
+  it('does not select the same address on a sheet entered while navigation awaits', async () => {
+    installDom();
+    const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
+    const firstSheet = { name: 'First' } as Worksheet;
+    const internals = viewer as unknown as {
+      currentSheet: number;
+      currentWorksheet: Worksheet | null;
+      currentSourceComments: readonly XlsxComment[];
+      sheetRequestGeneration: number;
+    };
+    internals.currentSheet = 0;
+    internals.currentWorksheet = firstSheet;
+    internals.currentSourceComments = [{ cellRef: 'A1', author: 'Ada', text: 'First' }];
+    let resolveScroll!: () => void;
+    vi.spyOn(viewer, 'scrollToCell').mockReturnValue(
+      new Promise<void>((resolve) => { resolveScroll = resolve; }),
+    );
+    const setSelection = vi.spyOn(viewer, 'setSelection');
+
+    const navigation = viewer.goToComment('A1');
+    internals.sheetRequestGeneration++;
+    internals.currentSheet = 1;
+    internals.currentWorksheet = { name: 'Second' } as Worksheet;
+    resolveScroll();
+
+    await expect(navigation).resolves.toBe(false);
+    expect(setSelection).not.toHaveBeenCalled();
+    viewer.destroy();
+  });
+
   it('returns detached comments for application-owned current-sheet UI', () => {
     installDom();
     const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
