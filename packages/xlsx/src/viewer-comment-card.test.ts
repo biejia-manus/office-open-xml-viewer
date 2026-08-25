@@ -65,12 +65,12 @@ describe('XlsxViewer comment UI contract', () => {
     viewer.destroy();
   });
 
-  it('renders a structured, themeable built-in popup', () => {
+  it('renders a structured, themeable built-in popup', async () => {
     const dom = installDom();
     const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
     const internals = viewer as unknown as {
       currentSheet: number;
-      renderCommentPopup(cell: { row: number; col: number }, comment: XlsxComment): void;
+      renderCommentPopup(cell: { row: number; col: number }, comment: XlsxComment): Promise<void>;
       _cellRect(row: number, col: number): { x: number; y: number; w: number; h: number };
       canvasArea: FakeEl;
       scrollHost: FakeEl;
@@ -95,7 +95,7 @@ describe('XlsxViewer comment UI contract', () => {
       }],
     };
 
-    internals.renderCommentPopup({ row: 2, col: 2 }, comment);
+    await internals.renderCommentPopup({ row: 2, col: 2 }, comment);
 
     const styles = dom.head.querySelector('style[data-ooxml-comment-styles]');
     expect(styles?.textContent).toContain(':where(.ooxml-comment-card)');
@@ -131,13 +131,13 @@ describe('XlsxViewer comment UI contract', () => {
     expect(internals.commentPopup.dataset.standalone).toBe('true');
     expect(internals.commentPopup.style.pointerEvents).toBe('');
     expect(internals.commentPopup.style.display).toBe('block');
-    internals.renderCommentPopup({ row: 2, col: 2 }, comment);
+    await internals.renderCommentPopup({ row: 2, col: 2 }, comment);
     expect(dom.head.children.filter((child) =>
       child.dataset.ooxmlCommentStyles !== undefined)).toHaveLength(1);
     viewer.destroy();
   });
 
-  it('reaches and announces a commented cell from viewport focus and keyboard navigation', () => {
+  it('reaches and announces a commented cell from viewport focus and keyboard navigation', async () => {
     installDom();
     const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
     const comment: XlsxComment = { cellRef: 'B2', author: 'Ada', text: 'Keyboard review' };
@@ -178,8 +178,10 @@ describe('XlsxViewer comment UI contract', () => {
     internals.scrollHost.dispatch('keydown', enter);
 
     expect(enter.preventDefault).toHaveBeenCalledOnce();
-    expect(internals.commentPopup.children[0]?.children[0]?.children[1]?.textContent)
-      .toBe('Keyboard review');
+    await vi.waitFor(() => {
+      expect(internals.commentPopup.children[0]?.children[0]?.children[1]?.textContent)
+        .toBe('Keyboard review');
+    });
     expect(internals.commentPopup.getAttribute('aria-hidden')).toBe('false');
     expect(internals.overlayHost.commentStatus.textContent)
       .toBe('Comment on B2 by Ada: Keyboard review');

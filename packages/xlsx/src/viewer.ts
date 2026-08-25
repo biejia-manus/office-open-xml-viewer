@@ -13,10 +13,7 @@ import {
   resolveCanvasViewerMode,
   type CanvasViewerRenderMode,
 } from '@silurus/ooxml-core/internal/canvas-viewer-mechanics';
-import {
-  paintReadOnlyCommentCard,
-  type ReadOnlyCommentThread,
-} from '@silurus/ooxml-core/internal/read-only-comment-margin';
+import type { ReadOnlyCommentThread } from '@silurus/ooxml-core/internal/read-only-comment-contract';
 import {
   HEADER_W,
   HEADER_H,
@@ -101,6 +98,12 @@ import { selectionAutoScrollVelocity } from './selection-auto-scroll.js';
 import { worksheetContentBounds } from './internal/worksheet-content-bounds.js';
 
 const borrowedWorkbookOption = Symbol('XlsxViewer.borrowedWorkbook');
+type XlsxCommentUiRuntime = typeof import('./comment-ui-runtime.js');
+let xlsxCommentUiRuntimePromise: Promise<XlsxCommentUiRuntime> | undefined;
+
+function loadXlsxCommentUiRuntime(): Promise<XlsxCommentUiRuntime> {
+  return xlsxCommentUiRuntimePromise ??= import('./comment-ui-runtime.js');
+}
 
 // Re-exported for the existing xlsx zoom tests (resize-zoom.test.ts imports it
 // from this module) and any consumer that referenced it here before it moved to
@@ -840,6 +843,8 @@ class XlsxViewerEngine implements ZoomableViewer {
   private commentPopupCell: CellAddress | null = null;
   private commentPopupPositionScheduled = false;
   private commentPopupResizeObserver: ResizeObserver | null = null;
+  private commentUi: XlsxCommentUiRuntime | null = null;
+  private commentPopupRenderGeneration = 0;
 
   // ─── List data-validation dropdown panel (display-only) ───────────────────
   /** DOM overlay listing a list-validated cell's allowed values. Lives in
@@ -1317,6 +1322,9 @@ class XlsxViewerEngine implements ZoomableViewer {
     this.currentSheet = index;
     this.currentWorksheet = worksheet;
     this.currentSourceComments = sourceWorksheet.comments ?? [];
+    if (this.opts.comments !== false && this.currentSourceComments.length > 0) {
+      void this.loadCommentUi().catch((error) => this._reportRenderError(error));
+    }
     this.sourceCommentMap = this.createCommentMap(this.currentSourceComments);
     this.setElementContext(null);
     this.pendingElementClick = null;
@@ -3617,13 +3625,23 @@ class XlsxViewerEngine implements ZoomableViewer {
     this.commentPopupKey = key;
     this.commentPopupTimer = setTimeout(() => {
       this.commentPopupTimer = null;
-      this.renderCommentPopup(cell, comment);
+      void this.renderCommentPopup(cell, comment).catch((error) => this._reportRenderError(error));
     }, COMMENT_POPUP_DELAY_MS);
+  }
+
+  private async loadCommentUi(): Promise<XlsxCommentUiRuntime> {
+    const commentUi = this.commentUi ?? await loadXlsxCommentUiRuntime();
+    if (!this._destroyed) this.commentUi = commentUi;
+    return commentUi;
   }
 
   /** Immediately render the popup for `comment` anchored to `cell` (used by the
    *  hover-dwell timer and by touch selection, which has no hover). */
-  private renderCommentPopup(cell: CellAddress, comment: XlsxComment): void {
+  private async renderCommentPopup(cell: CellAddress, comment: XlsxComment): Promise<void> {
+    if (!this._cellRect(cell.row, cell.col)) return;
+    const generation = ++this.commentPopupRenderGeneration;
+    const commentUi = await this.loadCommentUi();
+    if (this._destroyed || generation !== this.commentPopupRenderGeneration) return;
     if (!this._cellRect(cell.row, cell.col)) return;
     this.commentPopupCell = cell;
 
@@ -3649,7 +3667,7 @@ class XlsxViewerEngine implements ZoomableViewer {
         status: reply.resolved ? 'resolved' : 'active',
       })),
     };
-    paintReadOnlyCommentCard(this.commentPopup, thread, {
+    commentUi.paintReadOnlyCommentCard(this.commentPopup, thread, {
       interactive: false,
       standalone: true,
     });
@@ -3705,6 +3723,7 @@ class XlsxViewerEngine implements ZoomableViewer {
   /** Hide the popup and cancel any pending show. Called on cell-out, scroll,
    *  sheet switch and destroy. */
   private hideCommentPopup(): void {
+    this.commentPopupRenderGeneration++;
     if (this.commentPopupTimer !== null) {
       clearTimeout(this.commentPopupTimer);
       this.commentPopupTimer = null;
@@ -4212,7 +4231,8 @@ class XlsxViewerEngine implements ZoomableViewer {
             const comment = this.commentMap.get(key);
             if (comment) {
               this.hideCommentPopup();
-              this.renderCommentPopup(this.activeCell, comment);
+              void this.renderCommentPopup(this.activeCell, comment)
+                .catch((error) => this._reportRenderError(error));
             } else {
               this.hideCommentPopup();
             }
@@ -4368,7 +4388,8 @@ class XlsxViewerEngine implements ZoomableViewer {
         if (comment) {
           e.preventDefault();
           this.hideCommentPopup();
-          this.renderCommentPopup(this.activeCell, comment);
+          void this.renderCommentPopup(this.activeCell, comment)
+            .catch((error) => this._reportRenderError(error));
         }
       }
     };

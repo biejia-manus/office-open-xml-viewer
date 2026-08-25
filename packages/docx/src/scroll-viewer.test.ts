@@ -11,6 +11,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+async function waitForBuiltInCommentUi(viewer: unknown): Promise<void> {
+  await vi.waitFor(() => {
+    expect((viewer as { _commentUi: unknown })._commentUi).not.toBeNull();
+  });
+}
+
 describe('DocxScrollViewer — skeleton (T1)', () => {
   it('builds the wrapper → scrollHost → spacer DOM inside the container', () => {
     installDom();
@@ -175,6 +181,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
       { comments: { cards: false, markers: false } },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
+    await waitForBuiltInCommentUi(viewer);
 
     const scrollHost = container.children[0]!.children[0]!;
     const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
@@ -305,6 +312,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
       { comments: true },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
+    await waitForBuiltInCommentUi(viewer);
 
     const scrollHost = container.children[0]!.children[0]!;
     const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
@@ -375,6 +383,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
       { comments: { connectors: {} } },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
+    await waitForBuiltInCommentUi(viewer);
     const scrollHost = container.children[0]!.children[0]!;
     const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
     expect(page.children.some((child) =>
@@ -432,6 +441,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
       { comments: { side: 'auto', connectors: {} } },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
+    await waitForBuiltInCommentUi(rtlViewer);
     const rtlHost = rtlContainer.children[0]!.children[0]!;
     const rtlPage = rtlHost.children.find((child) => child !== rtlHost.children[0])!;
     const rtlMargin = rtlPage.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
@@ -450,6 +460,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
       { comments: { side: 'right', connectors: {} } },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(2));
+    await waitForBuiltInCommentUi(rightViewer);
     const rightHost = rightContainer.children[0]!.children[0]!;
     const rightPage = rightHost.children.find((child) => child !== rightHost.children[0])!;
     const rightMargin = rightPage.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
@@ -483,6 +494,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
       { comments: { connectors: {} } },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
+    await waitForBuiltInCommentUi(viewer);
 
     const scrollHost = container.children[0]!.children[0]!;
     const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
@@ -557,6 +569,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
       { comments: true },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
+    await waitForBuiltInCommentUi(viewer);
 
     const scrollHost = container.children[0]!.children[0]!;
     const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
@@ -602,6 +615,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
       { comments: { markers: false } },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
+    await waitForBuiltInCommentUi(viewer);
 
     const scrollHost = container.children[0]!.children[0]!;
     const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;

@@ -10,17 +10,8 @@ import {
   StaticCanvasRenderDispatcher,
   TerminalResourceOwner,
 } from '@silurus/ooxml-core/internal/canvas-viewer-mechanics';
-import {
-  disposeReadOnlyCommentMargin,
-  previewReadOnlyCommentMargin,
-} from '@silurus/ooxml-core/internal/read-only-comment-margin';
 import { eventTargetsDataAttributeWithin } from '@silurus/ooxml-core/internal/dom-interaction-boundary';
-import {
-  buildReadOnlyCommentDecoration,
-  disposeReadOnlyCommentDecoration,
-  projectReadOnlyCommentMarginScroll,
-  type ReadOnlyCommentMarginGeometry,
-} from '@silurus/ooxml-core/internal/read-only-comment-decoration';
+import type { ReadOnlyCommentMarginGeometry } from '@silurus/ooxml-core/internal/read-only-comment-decoration';
 import { PptxPresentation, type LoadOptions, type RenderSlideOptions } from './presentation';
 import type { PresentationHandle } from './presentation-handle';
 import type { PptxTextRunInfo } from './renderer';
@@ -41,11 +32,8 @@ import {
   limitPptxElementContext,
   MAX_ELEMENT_TEXT_CHARACTERS,
 } from './element-selection';
-import {
-  buildPptxCommentMargin,
-  pptxCommentOccurrenceKey,
-  type PptxCommentsOptions,
-} from './comment-margin';
+import type { PptxCommentsOptions } from './comment-margin';
+import { pptxCommentOccurrenceKey } from './comment-occurrence';
 import type { PptxComment } from './types';
 
 /**
@@ -71,6 +59,12 @@ const ZOOM_SETTLE_MS = 150;
  */
 const DEFAULT_PAGE_SHADOW = '0 1px 3px rgba(0,0,0,0.2)';
 const COMMENT_MARGIN_GAP_PX = 12;
+type PptxCommentUiRuntime = typeof import('./comment-ui-runtime.js');
+let pptxCommentUiRuntimePromise: Promise<PptxCommentUiRuntime> | undefined;
+
+function loadPptxCommentUiRuntime(): Promise<PptxCommentUiRuntime> {
+  return pptxCommentUiRuntimePromise ??= import('./comment-ui-runtime.js');
+}
 // Presentation slides have a wider natural canvas than a DOCX page. Give the
 // built-in PPTX review margin its own baseline so it does not become
 // disproportionately small when the composite slide + margin is fit to width.
@@ -328,6 +322,7 @@ export class PptxScrollViewer implements ZoomableViewer {
   private _elementContext: PptxElementContext | null = null;
   private _activeCommentId: string | null = null;
   private _activeCommentSlide: number | null = null;
+  private _commentUi: PptxCommentUiRuntime | null = null;
   private _commentGeometryScheduled = false;
   private _commentGeometryFrame: number | null = null;
   private readonly _pendingCommentGeometry = new Map<number, {
@@ -476,6 +471,14 @@ export class PptxScrollViewer implements ZoomableViewer {
     this._scrollHost.appendChild(this._spacer);
     this._wrapper.appendChild(this._scrollHost);
     this._container.appendChild(this._wrapper);
+
+    if (this._commentsEnabled()) {
+      void loadPptxCommentUiRuntime().then((commentUi) => {
+        if (this._destroyed) return;
+        this._commentUi = commentUi;
+        for (const [slide, slot] of this._slots) this._redrawSlotComments(slide, slot);
+      }).catch((error) => this._reportRenderError(error));
+    }
 
     if (opts.enableTextSelection && (opts.onSelectionContextChange || opts.enableElementSelection)) {
       this._selectionChangeListener = () => this._emitSelectionContextChange();
@@ -1066,11 +1069,13 @@ export class PptxScrollViewer implements ZoomableViewer {
       slot.commentMarkerLayer.style.visibility = '';
     }
     if (slot.commentMargin) {
-      disposeReadOnlyCommentMargin(slot.commentMargin);
+      this._commentUi?.disposeReadOnlyCommentMargin(slot.commentMargin);
+      if (!this._commentUi) slot.commentMargin.replaceChildren();
       slot.commentMargin.style.visibility = '';
     }
     if (slot.commentDecorationLayer) {
-      disposeReadOnlyCommentDecoration(slot.commentDecorationLayer);
+      this._commentUi?.disposeReadOnlyCommentDecoration(slot.commentDecorationLayer);
+      if (!this._commentUi) slot.commentDecorationLayer.replaceChildren();
       slot.commentDecorationLayer.style.visibility = '';
     }
     slot.commentElementBounds = Object.freeze([]);
@@ -1790,7 +1795,7 @@ export class PptxScrollViewer implements ZoomableViewer {
     if (slot.renderedScale > 0) {
       const ratio = this._scale / slot.renderedScale;
       const previewScale = Math.round(ratio * 1_000_000) / 1_000_000;
-      if (slot.commentMargin) previewReadOnlyCommentMargin(slot.commentMargin, ratio);
+      if (slot.commentMargin) this._commentUi?.previewReadOnlyCommentMargin(slot.commentMargin, ratio);
       for (const marker of slot.commentMarkerLayer?.children ?? []) {
         if ((marker as HTMLElement).dataset.ooxmlCommentMarker === undefined) continue;
         (marker as HTMLElement).style.transform = `translate(-50%,-50%) scale(${previewScale})`;
@@ -2208,7 +2213,15 @@ export class PptxScrollViewer implements ZoomableViewer {
 
   private _redrawSlotComments(slide: number, slot: SlideSlot): void {
     if (!this._pres || !slot.commentMarkerLayer) return;
-    slot.commentGeometry = buildPptxCommentMargin(
+    const commentUi = this._commentUi;
+    if (!commentUi) {
+      slot.commentMarkerLayer.replaceChildren();
+      slot.commentMargin?.replaceChildren();
+      slot.commentDecorationLayer?.replaceChildren();
+      slot.commentGeometry = null;
+      return;
+    }
+    slot.commentGeometry = commentUi.buildPptxCommentMargin(
       slot.commentMarkerLayer,
       slot.commentMargin,
       this._pres.getComments(slide),
@@ -2252,7 +2265,9 @@ export class PptxScrollViewer implements ZoomableViewer {
     const height = this._slideHeightPx();
     const side = this._commentSide();
     const marginExtent = this._commentMarginExtent();
-    buildReadOnlyCommentDecoration(
+    const commentUi = this._commentUi;
+    if (!commentUi) return;
+    commentUi.buildReadOnlyCommentDecoration(
       layer,
       Object.freeze({
         surfaceBounds: Object.freeze({
@@ -2263,7 +2278,7 @@ export class PptxScrollViewer implements ZoomableViewer {
         }),
         contentBounds: Object.freeze({ x: 0, y: 0, width, height }),
         side,
-        threads: projectReadOnlyCommentMarginScroll(geometry, margin.scrollTop),
+        threads: commentUi.projectReadOnlyCommentMarginScroll(geometry, margin.scrollTop),
       }),
       {
         route: connectorOptions.route ?? 'bezier',

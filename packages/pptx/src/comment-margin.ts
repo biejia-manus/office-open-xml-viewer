@@ -20,6 +20,7 @@ import type {
 import { relativeElementRect } from '@silurus/ooxml-core/internal/dom-geometry';
 import type { PptxElementBounds } from './element-selection.js';
 import type { PptxComment, PptxCommentReply } from './types.js';
+import { pptxCommentOccurrenceKey } from './comment-occurrence.js';
 
 export interface PptxCommentsOptions extends ViewerCommentsOptions {
   /** Show the built-in margin cards. Set false for an application-owned list. Default true. */
@@ -30,15 +31,6 @@ export interface PptxCommentsOptions extends ViewerCommentsOptions {
   readonly markers?: boolean;
   /** Draw marker-to-card connectors with the requested geometry. Default none. */
   readonly connectors?: ViewerCommentConnectorOptions;
-}
-
-export function pptxCommentOccurrenceKey(
-  comment: Readonly<PptxComment>,
-  index: number,
-  slideIndex: number,
-): string {
-  const source = comment.id ?? `classic:${comment.authorId ?? 'unknown'}:${comment.index ?? index}`;
-  return `slide:${slideIndex}:${source}`;
 }
 
 function toReplyCard(

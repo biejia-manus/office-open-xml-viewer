@@ -9,6 +9,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+async function waitForBuiltInCommentUi(viewer: unknown): Promise<void> {
+  await vi.waitFor(() => {
+    expect((viewer as { _commentUi: unknown })._commentUi).not.toBeNull();
+  });
+}
+
 describe('PptxScrollViewer — skeleton (T1)', () => {
   it('builds the wrapper → scrollHost → spacer DOM inside the container', () => {
     installDom();
@@ -153,7 +159,7 @@ describe('PptxScrollViewer — skeleton (T1)', () => {
 });
 
 describe('PptxScrollViewer — opt-in comment cards', () => {
-  it('can highlight a selected coordinate comment while an application owns the list', () => {
+  it('can highlight a selected coordinate comment while an application owns the list', async () => {
     installDom();
     const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
     engine.commentsBySlide = [[{
@@ -166,6 +172,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
       engine.asPres(),
       { comments: { cards: false, markers: false } },
     );
+    await waitForBuiltInCommentUi(viewer);
 
     const scrollHost = container.children[0]!.children[0]!;
     const slide = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
@@ -225,7 +232,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     viewer.destroy();
   });
 
-  it('renders themeable built-in cards, replies, and markers without connectors', () => {
+  it('renders themeable built-in cards, replies, and markers without connectors', async () => {
     const dom = installDom();
     const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
     engine.commentsBySlide = [[{
@@ -239,6 +246,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
       engine.asPres(),
       { comments: true },
     );
+    await waitForBuiltInCommentUi(viewer);
 
     const scrollHost = container.children[0]!.children[0]!;
     const slide = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
@@ -293,6 +301,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
       engine.asPres(),
       { comments: { connectors: {} } },
     );
+    await waitForBuiltInCommentUi(viewer);
     const scrollHost = container.children[0]!.children[0]!;
     const slide = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
     expect(slide.children.some((child) =>
@@ -328,7 +337,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     viewer.destroy();
   });
 
-  it('can hide authored markers without hiding comment cards', () => {
+  it('can hide authored markers without hiding comment cards', async () => {
     installDom();
     const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
     engine.commentsBySlide = [[{
@@ -341,6 +350,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
       engine.asPres(),
       { comments: { markers: false } },
     );
+    await waitForBuiltInCommentUi(viewer);
     const scrollHost = container.children[0]!.children[0]!;
     const slide = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
     const markerLayer = slide.children.find((child) => child.style.cssText.includes('inset:0'))!;
@@ -351,7 +361,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     viewer.destroy();
   });
 
-  it('places the margin on the requested side', () => {
+  it('places the margin on the requested side', async () => {
     installDom();
     const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
     engine.commentsBySlide = [[{
@@ -364,6 +374,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
       engine.asPres(),
       { comments: { side: 'left', connectors: {} } },
     );
+    await waitForBuiltInCommentUi(viewer);
     const scrollHost = container.children[0]!.children[0]!;
     const slide = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
     const margin = slide.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
@@ -388,6 +399,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
       engine.asPres(),
       { comments: { connectors: {} } },
     );
+    await waitForBuiltInCommentUi(viewer);
     const scrollHost = container.children[0]!.children[0]!;
     const slide = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
     const margin = slide.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
@@ -426,7 +438,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     viewer.destroy();
   });
 
-  it('uses slide-scoped occurrence keys when source comment ids repeat', () => {
+  it('uses slide-scoped occurrence keys when source comment ids repeat', async () => {
     installDom();
     const engine = new FakePptxEngine(2, SLIDE_W_EMU, SLIDE_H_EMU);
     engine.commentsBySlide = [0, 1].map(() => [{
@@ -439,6 +451,7 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
       engine.asPres(),
       { comments: true },
     );
+    await waitForBuiltInCommentUi(viewer);
     const scrollHost = container.children[0]!.children[0]!;
     const keys = scrollHost.children
       .flatMap((slide) => slide.children)

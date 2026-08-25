@@ -13,18 +13,9 @@ import {
   StaticCanvasRenderDispatcher,
   TerminalResourceOwner,
 } from '@silurus/ooxml-core/internal/canvas-viewer-mechanics';
-import {
-  disposeReadOnlyCommentMargin,
-  previewReadOnlyCommentMargin,
-  READ_ONLY_COMMENT_MARGIN_WIDTH_PX,
-} from '@silurus/ooxml-core/internal/read-only-comment-margin';
+import { READ_ONLY_COMMENT_MARGIN_WIDTH_PX } from '@silurus/ooxml-core/internal/read-only-comment-contract';
 import { eventTargetsDataAttributeWithin } from '@silurus/ooxml-core/internal/dom-interaction-boundary';
-import {
-  buildReadOnlyCommentDecoration,
-  disposeReadOnlyCommentDecoration,
-  projectReadOnlyCommentMarginScroll,
-  type ReadOnlyCommentMarginGeometry,
-} from '@silurus/ooxml-core/internal/read-only-comment-decoration';
+import type { ReadOnlyCommentMarginGeometry } from '@silurus/ooxml-core/internal/read-only-comment-decoration';
 import { DocxDocument } from './document';
 import type { LoadOptions } from './document';
 import type { DocxTextRunInfo } from './renderer';
@@ -43,10 +34,7 @@ import {
   limitDocxElementContext,
   MAX_DOCX_ELEMENT_TEXT_CHARACTERS,
 } from './element-context';
-import {
-  buildDocxCommentMargin,
-  type DocxCommentsOptions,
-} from './comment-margin';
+import type { DocxCommentsOptions } from './comment-margin';
 import { resolveCommentAnchorRuns } from './comments';
 
 /**
@@ -74,6 +62,13 @@ const DEFAULT_PAGE_SHADOW = '0 1px 3px rgba(0,0,0,0.2)';
 const COMMENT_MARGIN_GAP_PX = 12;
 const COMMENT_MARGIN_FONT_SIZE_PX = 13;
 const borrowedDocumentOption = Symbol('DocxScrollViewer.borrowedDocument');
+type DocxCommentUiRuntime = typeof import('./comment-ui-runtime.js');
+let docxCommentUiRuntimePromise: Promise<DocxCommentUiRuntime> | undefined;
+
+function loadDocxCommentUiRuntime(): Promise<DocxCommentUiRuntime> {
+  return docxCommentUiRuntimePromise ??= import('./comment-ui-runtime.js');
+}
+
 type InternalDocxScrollViewerOptions = DocxScrollViewerOptions & {
   [borrowedDocumentOption]?: DocxDocument;
 };
@@ -294,6 +289,7 @@ export class DocxScrollViewer implements ZoomableViewer {
   private _elementContext: DocxElementContext | null = null;
   private _activeCommentId: string | null = null;
   private _activeCommentPage: number | null = null;
+  private _commentUi: DocxCommentUiRuntime | null = null;
   private readonly _commentPageById = new Map<string, number>();
   private _commentAnchorRangesForMargin: ReturnType<DocxDocument['commentAnchorRanges']> | null = null;
   private _commentAnchorIds: ReadonlySet<string> = new Set();
@@ -438,6 +434,14 @@ export class DocxScrollViewer implements ZoomableViewer {
     this._scrollHost.appendChild(this._spacer);
     this._wrapper.appendChild(this._scrollHost);
     this._container.appendChild(this._wrapper);
+
+    if (this._commentsEnabled()) {
+      void loadDocxCommentUiRuntime().then((commentUi) => {
+        if (this._destroyed) return;
+        this._commentUi = commentUi;
+        for (const [page, slot] of this._slots) this._redrawSlotComments(page, slot);
+      }).catch((error) => this._reportRenderError(error));
+    }
 
     if (opts.enableTextSelection && (opts.onSelectionContextChange || opts.enableElementSelection)) {
       this._selectionChangeListener = () => this._emitSelectionContextChange();
@@ -1021,11 +1025,13 @@ export class DocxScrollViewer implements ZoomableViewer {
       slot.commentTintLayer.style.visibility = '';
     }
     if (slot.commentMargin) {
-      disposeReadOnlyCommentMargin(slot.commentMargin);
+      this._commentUi?.disposeReadOnlyCommentMargin(slot.commentMargin);
+      if (!this._commentUi) slot.commentMargin.replaceChildren();
       slot.commentMargin.style.visibility = '';
     }
     if (slot.commentDecorationLayer) {
-      disposeReadOnlyCommentDecoration(slot.commentDecorationLayer);
+      this._commentUi?.disposeReadOnlyCommentDecoration(slot.commentDecorationLayer);
+      if (!this._commentUi) slot.commentDecorationLayer.replaceChildren();
     }
     slot.commentRuns = Object.freeze([]);
     slot.commentGeometry = null;
@@ -1671,7 +1677,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         slot.textLayer.style.transformOrigin = '0 0';
         slot.textLayer.style.transform = `scale(${ratio})`;
       }
-      if (slot.commentMargin) previewReadOnlyCommentMargin(slot.commentMargin, ratio);
+      if (slot.commentMargin) this._commentUi?.previewReadOnlyCommentMargin(slot.commentMargin, ratio);
       for (const marker of slot.commentTintLayer?.children ?? []) {
         if ((marker as HTMLElement).dataset.ooxmlCommentMarker === undefined) continue;
         (marker as HTMLElement).style.transform = `translate(-50%,-50%) scale(${ratio})`;
@@ -2036,7 +2042,15 @@ export class DocxScrollViewer implements ZoomableViewer {
 
   private _redrawSlotComments(page: number, slot: PageSlot): void {
     if (!this._doc || !slot.commentTintLayer) return;
-    slot.commentGeometry = buildDocxCommentMargin(
+    const commentUi = this._commentUi;
+    if (!commentUi) {
+      slot.commentTintLayer.replaceChildren();
+      slot.commentMargin?.replaceChildren();
+      slot.commentDecorationLayer?.replaceChildren();
+      slot.commentGeometry = null;
+      return;
+    }
+    slot.commentGeometry = commentUi.buildDocxCommentMargin(
       slot.commentTintLayer,
       slot.commentMargin,
       slot.commentRuns,
@@ -2079,7 +2093,9 @@ export class DocxScrollViewer implements ZoomableViewer {
     const height = this._pageHeightPx(page);
     const side = this._commentSide();
     const marginExtent = this._commentMarginExtent();
-    buildReadOnlyCommentDecoration(
+    const commentUi = this._commentUi;
+    if (!commentUi) return;
+    commentUi.buildReadOnlyCommentDecoration(
       layer,
       Object.freeze({
         surfaceBounds: Object.freeze({
@@ -2090,7 +2106,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         }),
         contentBounds: Object.freeze({ x: 0, y: 0, width, height }),
         side,
-        threads: projectReadOnlyCommentMarginScroll(geometry, margin.scrollTop),
+        threads: commentUi.projectReadOnlyCommentMarginScroll(geometry, margin.scrollTop),
       }),
       {
         route: connectorOptions.route ?? 'bezier',

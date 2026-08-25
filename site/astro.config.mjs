@@ -50,6 +50,9 @@ export default defineConfig({
         '@silurus/ooxml-core/internal/comment-context': fileURLToPath(
           new URL('../packages/core/src/internal/comment-context.ts', import.meta.url),
         ),
+        '@silurus/ooxml-core/internal/read-only-comment-contract': fileURLToPath(
+          new URL('../packages/core/src/internal/read-only-comment-contract.ts', import.meta.url),
+        ),
         '@silurus/ooxml-core/internal/read-only-comment-margin': fileURLToPath(
           new URL('../packages/core/src/internal/read-only-comment-margin.ts', import.meta.url),
         ),
