@@ -276,3 +276,59 @@ describe('DocxScrollViewer — showComments option', () => {
     v.destroy();
   });
 });
+
+/**
+ * §17.13.4 gutter ↔ fit-width contract. The comment gutter is part of `_padH`,
+ * so toggling it changes BOTH the fit width and the base fit scale. If
+ * `setShowComments` only relayouts, the stored `_prevBase` / `_lastFitWidth`
+ * keep describing the pre-toggle geometry, and the next resize re-fit reads the
+ * stale pair back as a user zoom multiplier — a ratchet that shrinks the page a
+ * second time with comments on, and leaves it too large with comments off.
+ * The toggle must therefore re-fit exactly like `_onResize` does: preserve the
+ * user's zoom multiplier over the NEW base, and stamp the new base/fit width.
+ */
+describe('DocxScrollViewer — showComments gutter re-fit', () => {
+  it('re-fits to the gutter-adjusted base and a following resize is a no-op', async () => {
+    const { v } = await setupScroll();
+    const fitBase = v.baseScaleForTest();
+    expect(v.scaleForTest()).toBeCloseTo(fitBase, 10);
+
+    v.setShowComments(true);
+    // The gutter shrank the fit width, so the page re-fits to the NEW base.
+    const gutterBase = v.baseScaleForTest();
+    expect(gutterBase).toBeLessThan(fitBase);
+    expect(v.scaleForTest()).toBeCloseTo(gutterBase, 10);
+
+    // The re-fit already stamped the new base/fit width, so the resize observer
+    // firing afterwards must not move the scale again (no second shrink).
+    v.resizeForTest();
+    expect(v.scaleForTest()).toBeCloseTo(gutterBase, 10);
+
+    v.setShowComments(false);
+    expect(v.baseScaleForTest()).toBeCloseTo(fitBase, 10);
+    expect(v.scaleForTest()).toBeCloseTo(fitBase, 10);
+    v.resizeForTest();
+    expect(v.scaleForTest()).toBeCloseTo(fitBase, 10);
+    v.destroy();
+  });
+
+  it('preserves a user zoom multiplier across both toggles', async () => {
+    // zoomMax is an ABSOLUTE px-per-pt bound; 2× the 3.0 base fit needs headroom.
+    const { v } = await setupScroll({ zoomMax: 16 });
+    const fitBase = v.baseScaleForTest();
+    v.setScale(fitBase * 2);
+    expect(v.scaleForTest()).toBeCloseTo(fitBase * 2, 10);
+
+    v.setShowComments(true);
+    expect(v.scaleForTest()).toBeCloseTo(v.baseScaleForTest() * 2, 10);
+    v.resizeForTest();
+    expect(v.scaleForTest()).toBeCloseTo(v.baseScaleForTest() * 2, 10);
+
+    v.setShowComments(false);
+    expect(v.scaleForTest()).toBeCloseTo(fitBase * 2, 10);
+    expect(v.scaleForTest()).toBeCloseTo(v.baseScaleForTest() * 2, 10);
+    v.resizeForTest();
+    expect(v.scaleForTest()).toBeCloseTo(fitBase * 2, 10);
+    v.destroy();
+  });
+});
