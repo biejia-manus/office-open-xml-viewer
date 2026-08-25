@@ -40,8 +40,6 @@ export interface BorderSpec {
     color: string | null;
     style: string;
 }
-export function buildCommentThreads(comments: readonly DocComment[]): CommentThread[];
-export function buildDocxCommentLayer(tintLayer: HTMLDivElement, gutterLayer: HTMLDivElement, runs: readonly DocxTextRunInfo[], model: DocxCommentLayerModel, geometry: DocxCommentLayerGeometry, selectedCommentId: string | null, onSelect: (commentId: string | null) => void): void;
 export function buildDocxHighlightLayer(layer: HTMLDivElement, runs: DocxTextRunInfo[], matches: DocxHighlightMatch[], cssWidth: number, cssHeight: number, measureForFont: (font: string) => (s: string) => number, colors?: DocxHighlightColors): void;
 export function buildDocxTextLayer(layer: HTMLDivElement, runs: DocxTextRunInfo[], cssWidth: number, cssHeight: number, onHyperlinkClick?: (target: HyperlinkTarget) => void, measureForFont?: (font: string) => (s: string) => number, pageIndex?: number): void;
 export interface CellBorders {
@@ -130,15 +128,9 @@ export interface ChartDataTable {
     fontColor?: string | null;
     fontBold?: boolean | null;
     fontItalic?: boolean | null;
-    /** Resolved solid compatibility projection of `<c:dTable><c:spPr>`. */
     fillColor?: string | null;
-    /** Direct DrawingML fill recipe. Preserved even where Office's application-
-     * defined data-table paint extent has not been established for that recipe. */
     fill?: SolidFill | GradientFill | PatternFill | null;
-    /** Explicit `<a:noFill>` on the data-table shape properties. */
     fillHidden?: boolean | null;
-    /** True when `spPr` authored any DrawingML fill child, including one whose
-     * paint recipe this implementation cannot resolve. */
     fillPaintAuthored?: boolean | null;
     lineColor?: string | null;
     lineWidthEmu?: number | null;
@@ -473,12 +465,10 @@ export interface ChartModel {
     catAxisLineColor?: string | null;
     catAxisLineWidthEmu?: number | null;
     catAxisLineDash?: string | null;
-    /** A direct `<c:catAx><c:spPr><a:ln>` paint was authored. */
     catAxisLinePaintAuthored?: boolean | null;
     valAxisLineColor?: string | null;
     valAxisLineWidthEmu?: number | null;
     valAxisLineDash?: string | null;
-    /** A direct `<c:valAx><c:spPr><a:ln>` paint was authored. */
     valAxisLinePaintAuthored?: boolean | null;
     catAxisFormatCode?: string | null;
     catAxisMin?: number | null;
@@ -645,9 +635,11 @@ export interface ChartSeries {
     automaticNegativeStyle?: boolean | null;
     invertedFill?: SolidFill | GradientFill | PatternFill | null;
     invertedFillHidden?: boolean | null;
+    invertedFillAuthored?: boolean | null;
     invertedLineColor?: string | null;
     invertedLineWidthEmu?: number | null;
     invertedLineHidden?: boolean | null;
+    invertedLineAuthored?: boolean | null;
     chartexStyle?: ChartExElementStyle | null;
     lineColor?: string | null;
     lineWidthEmu?: number | null;
@@ -675,7 +667,6 @@ export interface ChartSeries {
     catFormatBuiltinId?: number | null;
     catFormatCodes?: (string | null)[] | null;
     markerSymbol?: string | null;
-    /** Host-resolved automatic scatter marker when no `<c:marker>` symbol is authored. */
     automaticMarkerSymbol?: string | null;
     markerSize?: number | null;
     markerFill?: string | null;
@@ -832,7 +823,6 @@ export interface ChartThreeDSeriesAxis {
     tickLabelSkip?: number | null;
     tickMarkSkip?: number | null;
     majorTickMark: string;
-    /** `<c:serAx><c:minorTickMark>`; omission means no minor tick marks. */
     minorTickMark?: string | null;
     fontColor?: string | null;
     fontSizeHpt?: number | null;
@@ -842,7 +832,6 @@ export interface ChartThreeDSeriesAxis {
     lineColor?: string | null;
     lineWidthEmu?: number | null;
     lineDash?: string | null;
-    /** A direct `<c:serAx><c:spPr><a:ln>` paint was authored. */
     linePaintAuthored?: boolean | null;
     lineHidden: boolean;
     titleFontSizeHpt?: number | null;
@@ -906,8 +895,7 @@ export interface ChartTrendline {
     lineHidden?: boolean | null;
 }
 export type ChartType = 'line' | 'stackedLine' | 'stackedLinePct' | 'clusteredBar' | 'clusteredBarH' | 'stackedBar' | 'stackedBarH' | 'stackedBarPct' | 'stackedBarHPct' | 'area' | 'stackedArea' | 'stackedAreaPct' | 'pie' | 'doughnut' | 'scatter' | 'bubble' | 'radar' | 'waterfall' | 'stock' | 'surface' | 'surface3D' | 'boxWhisker' | 'sunburst' | 'treemap' | string;
-export function collectDocumentCommentRanges(body: readonly BodyElement[]): CommentAnchorRange[];
-export type CollectPageRunsOptions = Pick<RenderPageOptions, 'width' | 'currentDate' | 'showTrackedChanges'>;
+export type CollectPageRunsOptions = Pick<RenderPageOptions, 'width' | 'currentDate'>;
 export interface ColSpec {
     widthPt: number;
     spacePt: number;
@@ -919,39 +907,31 @@ export interface ColumnsSpec {
     sep: boolean;
     cols: ColSpec[];
 }
+export interface CommentAnchorGeometryFallback {
+    readonly source: Readonly<DocxStorySource>;
+    readonly sourceRunIndex: number;
+}
+export interface CommentAnchorPoint {
+    readonly source: Readonly<DocxStorySource>;
+    readonly runIndex: number;
+    readonly affinity: 'following' | 'preceding';
+}
 export interface CommentAnchorRange {
     readonly commentId: string;
-    readonly paragraphPath: readonly number[];
+    readonly source: Readonly<DocxStorySource>;
     readonly startRunIndex: number;
     readonly endRunIndex: number;
+    readonly reference: CommentAnchorPoint;
+    readonly geometryFallback?: CommentAnchorGeometryFallback;
 }
-export interface CommentBalloonLayoutInput {
-    readonly balloons: readonly CommentBalloonRequest[];
-    readonly pageHeightPx: number;
-    readonly lineHeightPx: number;
-    readonly headerHeightPx: number;
-    readonly gapPx: number;
-    readonly maxLines?: number;
+export type DocxCommentAnchorKind = 'range' | 'point' | 'fallback';
+export interface DocxCommentHighlightRect {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+    readonly transform?: string;
 }
-export interface CommentBalloonPlacement {
-    readonly commentId: string;
-    readonly yPx: number;
-    readonly heightPx: number;
-    readonly visibleLines: number;
-    readonly collapsed: boolean;
-    readonly selected: boolean;
-}
-export interface CommentBalloonRequest {
-    readonly commentId: string;
-    readonly anchorYPx: number;
-    readonly contentLines: number;
-    readonly selected?: boolean;
-}
-export interface CommentThread {
-    readonly root: DocComment;
-    readonly replies: readonly DocComment[];
-}
-export function computeCommentBalloonLayout(input: CommentBalloonLayoutInput): CommentBalloonPlacement[];
 export interface DocComment {
     id: string;
     author?: string;
@@ -1000,12 +980,16 @@ export interface DocParagraph {
     framePr?: FramePr;
 }
 export interface DocRevision {
-    kind: 'insertion' | 'deletion' | string;
+    kind: 'insertion' | 'deletion' | 'moveFrom' | 'moveTo' | string;
+    id?: string;
     author?: string;
     date?: string;
     text: string;
 }
-export type DocRun = ({
+export type DocRun = DocRunContent & {
+    revision?: RunRevision;
+};
+type DocRunContent = ({
     type: 'text';
 } & DocxTextRun) | ({
     type: 'anchorHost';
@@ -1080,20 +1064,28 @@ export interface DocTableRow {
     isHeader: boolean;
     cantSplit?: boolean;
 }
-export interface DocxCommentLayerGeometry {
-    readonly cssWidth: number;
-    readonly cssHeight: number;
-    readonly gutterWidthPx: number;
-}
-export interface DocxCommentLayerModel {
-    readonly threads: readonly CommentThread[];
-    readonly ranges: readonly CommentAnchorRange[];
-}
 export interface DocxCommentMark {
     id: string;
     kind: 'rangeStart' | 'rangeEnd' | 'reference' | string;
     runIndex: number;
-    prevRunUtf16Len?: number;
+}
+export interface DocxCommentSelectionContext {
+    readonly format: 'docx';
+    readonly kind: 'comment';
+    readonly pageIndex: number;
+    readonly commentId: string;
+    readonly source?: DocxSelectionSourceLocator;
+    readonly thread: ViewerCommentThreadContext;
+    readonly truncated: boolean;
+    readonly truncationReasons: readonly 'text'[];
+    readonly textCharacters: number;
+    readonly maxTextCharacters: number;
+}
+export interface DocxCommentsOptions extends ViewerCommentsOptions {
+    readonly cards?: boolean;
+    readonly side?: 'auto' | 'left' | 'right';
+    readonly markers?: boolean;
+    readonly connectors?: ViewerCommentConnectorOptions;
 }
 export class DocxDocument {
     static load(source: string | ArrayBuffer, opts?: LoadOptions): Promise<DocxDocument>;
@@ -1105,8 +1097,10 @@ export class DocxDocument {
     get pageCount(): number;
     get mode(): 'main' | 'worker';
     get document(): DocxDocumentModel;
-    get comments(): DocComment[];
+    get comments(): readonly Readonly<DocComment>[];
+    get revisions(): readonly Readonly<DocRevision>[];
     commentAnchorRanges(): readonly CommentAnchorRange[];
+    revisionAnchorRanges(): readonly RevisionAnchorRange[];
     get footnotes(): DocNote[];
     get endnotes(): DocNote[];
     getBookmarkPage(bookmarkName: string): number | undefined;
@@ -1161,7 +1155,6 @@ export interface DocxElementContext {
 export interface DocxElementContextOptions {
     readonly maxTextCharacters?: number;
     readonly currentDate?: Date | number;
-    readonly showTrackedChanges?: boolean;
 }
 export type DocxHighlightColors = FindHighlightColors;
 export interface DocxHighlightMatch {
@@ -1193,11 +1186,12 @@ export class DocxScrollViewer implements ZoomableViewer {
     zoomOut(): void;
     fitWidth(): void;
     fitPage(): void;
-    setShowTrackedChanges(value: boolean): void;
-    setShowComments(value: boolean): void;
     scrollToPage(index: number, opts?: {
         behavior?: 'auto' | 'smooth';
     }): void;
+    goToComment(commentId: string, opts?: {
+        behavior?: 'auto' | 'smooth';
+    }): Promise<boolean>;
     findText(query: string, opts?: FindMatchesOptions): Promise<FindMatch<DocxMatchLocation>[]>;
     findNext(): Promise<FindMatch<DocxMatchLocation> | null>;
     findPrev(): Promise<FindMatch<DocxMatchLocation> | null>;
@@ -1217,6 +1211,7 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
     paddingRight?: number;
     overscan?: number;
     enableTextSelection?: boolean;
+    comments?: boolean | DocxCommentsOptions;
     enableElementSelection?: boolean;
     onSelectionContextChange?: (context: DocxSelectionContext | null) => void;
     onContextMenu?: (event: ViewerContextMenuEvent<DocxSelectionContext>) => void;
@@ -1231,11 +1226,9 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
     onScaleChange?: (scale: number) => void;
     onHyperlinkClick?: (target: HyperlinkTarget) => void;
     enableHyperlinks?: boolean;
-    showComments?: boolean;
-    commentsGutterWidth?: number;
     onError?: (err: Error) => void;
 }
-export type DocxSelectionContext = DocxTextSelectionContext | DocxElementContext;
+export type DocxSelectionContext = DocxTextSelectionContext | DocxElementContext | DocxCommentSelectionContext;
 export type DocxSelectionContextOptions = TextSelectionContextOptions;
 export interface DocxSelectionRunLocator {
     readonly pageIndex: number;
@@ -1247,6 +1240,11 @@ export interface DocxSelectionSourceLocator {
     readonly story: 'body' | 'header' | 'footer' | 'footnote' | 'endnote' | 'textbox';
     readonly storyInstance: string;
     readonly path: readonly number[];
+}
+export interface DocxStorySource {
+    story: 'body' | 'header' | 'footer' | 'footnote' | 'endnote' | 'textbox';
+    storyInstance: string;
+    path: readonly number[];
 }
 export interface DocxTextRun {
     text: string;
@@ -1295,18 +1293,21 @@ export interface DocxTextRun {
     noteRef?: NoteRef;
 }
 export interface DocxTextRunInfo {
-    source?: Readonly<{
-        story: 'body' | 'header' | 'footer' | 'footnote' | 'endnote' | 'textbox';
-        storyInstance: string;
-        path: readonly number[];
-    }>;
+    source?: Readonly<DocxStorySource>;
     paragraphId?: string;
     sourceRunIndex?: number;
+    direction?: 'ltr' | 'rtl';
     text: string;
     x: number;
     y: number;
     w: number;
     h: number;
+    highlightBounds?: Readonly<{
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    }>;
     fontSize: number;
     font: string;
     letterSpacingPx?: number;
@@ -1350,8 +1351,6 @@ export class DocxViewer implements ZoomableViewer {
     getResourceMetrics(): Promise<OoxmlResourceMetrics>;
     getSelectionContext(options?: DocxSelectionContextOptions): DocxSelectionContext | null;
     destroy(): void;
-    setShowTrackedChanges(value: boolean): Promise<void>;
-    setShowComments(value: boolean): Promise<void>;
     private __privatePresence;
 }
 export interface DocxViewerOptions extends Omit<RenderPageOptions, 'onTextRun'>, LoadOptions {
@@ -1367,8 +1366,6 @@ export interface DocxViewerOptions extends Omit<RenderPageOptions, 'onTextRun'>,
     onScaleChange?: (scale: number) => void;
     onHyperlinkClick?: (target: HyperlinkTarget) => void;
     enableHyperlinks?: boolean;
-    showComments?: boolean;
-    commentsGutterWidth?: number;
     onError?: (err: Error) => void;
 }
 export interface DrawingMLCustomDashSegment {
@@ -1878,11 +1875,37 @@ export interface RenderPageOptions {
     defaultTextColor?: string;
     onTextRun?: (run: DocxTextRunInfo) => void;
     currentDate?: Date | number;
-    showTrackedChanges?: boolean;
 }
 export type RenderPageToBitmapOptions = Omit<RenderPageOptions, 'onTextRun'> & {
     onTextRun?: (run: DocxTextRunInfo) => void;
 };
+export function resolveCommentAnchorRuns(anchor: Readonly<CommentAnchorRange>, runs: readonly Readonly<DocxTextRunInfo>[]): readonly Readonly<DocxTextRunInfo>[];
+export function resolveDocxCommentThreads(comments: readonly Readonly<DocComment>[], anchors: readonly Readonly<CommentAnchorRange>[], runs: readonly Readonly<DocxTextRunInfo>[], options?: ResolveDocxCommentThreadsOptions): readonly Readonly<ResolvedDocxCommentThread>[];
+export function resolveRevisionAnchorRuns(anchor: Readonly<RevisionAnchorRange>, runs: readonly Readonly<DocxTextRunInfo>[]): readonly Readonly<DocxTextRunInfo>[];
+export interface ResolvedDocxCommentAnchor {
+    readonly anchor: Readonly<CommentAnchorRange>;
+    readonly kind: DocxCommentAnchorKind;
+    readonly rects: readonly Readonly<DocxCommentHighlightRect>[];
+}
+export interface ResolvedDocxCommentThread {
+    readonly root: Readonly<DocComment>;
+    readonly replies: readonly Readonly<DocComment>[];
+    readonly anchors: readonly Readonly<ResolvedDocxCommentAnchor>[];
+}
+export interface ResolveDocxCommentThreadsOptions {
+    readonly includeResolved?: boolean;
+}
+export interface RevisionAnchorGeometryFallback {
+    readonly source: Readonly<DocxStorySource>;
+    readonly sourceRunIndex: number;
+}
+export interface RevisionAnchorRange {
+    readonly revisionIndex: number;
+    readonly source: Readonly<DocxStorySource>;
+    readonly startRunIndex: number;
+    readonly endRunIndex: number;
+    readonly geometryFallback?: RevisionAnchorGeometryFallback;
+}
 export interface RubyAnnotation {
     text: string;
     fontSizePt: number;
@@ -1890,6 +1913,7 @@ export interface RubyAnnotation {
 }
 export interface RunRevision {
     kind: 'insertion' | 'deletion' | 'moveFrom' | 'moveTo' | string;
+    id?: string;
     author?: string;
     date?: string;
 }
@@ -2176,6 +2200,28 @@ export interface TileInfo {
     sy?: number;
     flip?: string;
     algn?: string;
+}
+export interface ViewerCommentConnectorOptions {
+    readonly route?: ViewerCommentConnectorRoute;
+    readonly stroke?: ViewerCommentConnectorStroke;
+    readonly color?: string;
+    readonly activeColor?: string;
+}
+export type ViewerCommentConnectorRoute = 'bezier' | 'orthogonal';
+export type ViewerCommentConnectorStroke = 'solid' | 'dashed';
+export interface ViewerCommentMessageContext {
+    readonly id?: string;
+    readonly author?: string;
+    readonly date?: string;
+    readonly text: string;
+    readonly status?: 'active' | 'resolved' | 'closed';
+}
+interface ViewerCommentsOptions {
+    readonly includeResolved?: boolean;
+}
+export interface ViewerCommentThreadContext {
+    readonly root: ViewerCommentMessageContext;
+    readonly replies: readonly ViewerCommentMessageContext[];
 }
 export interface ViewerContextMenuEvent<TContext> {
     readonly originalEvent: MouseEvent;

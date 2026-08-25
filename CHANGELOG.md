@@ -7,37 +7,50 @@ the corresponding minor release.
 
 ## Unreleased
 
-- **Word tracked changes (ECMA-376 §17.13.5):** the default render is now the
-  document's FINAL state — deleted (`w:del`) and moved-away (`w:moveFrom`)
-  text is hidden, and moved-in (`w:moveTo`) text renders at its destination.
-  Previously deleted text was drawn as ordinary body text and moved text
-  disappeared entirely (`w:moveFrom`/`w:moveTo` were unparsed; inserted text
-  inside text boxes was also dropped). The new opt-in markup view —
-  `showTrackedChanges` on `RenderPageOptions` and both viewers, with runtime
-  `setShowTrackedChanges` — draws insertions/moveTo with an author-coloured
-  underline, deletions/moveFrom with an author-coloured strikethrough (the
-  stable eight-colour palette, first-appearance author indexing), and a
-  vertical change bar in the margin beside every changed line. Each view is a
-  separately cached layout variant; documents without revisions lay out
-  byte-identically in both. This supersedes the non-functional
-  `showTrackChanges` render option removed in 0.77 (the retained paint
-  pipeline never consulted it) with a functional, differently-named switch.
-- **Word comments (ECMA-376 §17.13.4):** comment anchors
-  (`commentRangeStart`/`End`, `commentReference`) are now parsed as
-  zero-effect paragraph marks, `word/commentsExtended.xml` supplies reply
-  threading and resolved state, and the opt-in `showComments` viewer option
-  (with `commentsGutterWidth` and runtime `setShowComments`) draws Word-style
-  margin balloons to the right of the page: commented ranges tinted,
-  connector lines, threaded replies nested in the parent balloon, resolved
-  threads hidden, balloons capped at ten lines with anchor-ordered stacking,
-  and truncation toward the next balloon. Selecting a thread — by clicking
-  its balloon or its tinted range on the page — expands the balloon up to a
-  page-full of lines and makes its body scrollable beyond that. The scroll
-  viewer centres page + comment gutter as one unit, so toggling comments
-  shifts the page left and keeps the balloons inside the viewport instead of
-  clipping them. Comment data also grows `DocComment.parentId` / `resolved`
-  / `paragraphs` and `DocxDocument.commentAnchorRanges()`; both features
-  work in main and worker render modes.
+- **Word tracked changes:** retain body-story insertion, deletion, and move
+  records as detached data while rendering the accepted final state.
+- **read-only comments:** add built-in DOCX/PPTX comment margins and XLSX cell
+  popups. The default UI is themed with CSS custom properties; applications
+  that need different structure use the existing comment, anchor, and rendered
+  geometry APIs.
+
+## 0.81.0 — 2026-08-25
+
+Minor release expanding Microsoft ChartEx support and improving chart fidelity
+across Word, Excel, and PowerPoint. Applications that display ChartEx charts
+must opt in to the new module; classic charts remain built in.
+
+- **ChartEx migration:** move waterfall, histogram, Pareto, funnel,
+  box-and-whisker, treemap, and sunburst rendering to the tree-shakeable
+  `@silurus/ooxml/chart-ex` entry. Pass `chartEx` to DOCX, XLSX, or PPTX viewers
+  that need these chart families.
+- **chart fidelity:** preserve more authored Chart Style, Chart Color, fill,
+  line, marker, axis, legend, label, data-table, visible-source, and plot-area
+  semantics through the shared classic and ChartEx pipeline.
+- **3-D charts:** improve Bubble3D material and series precedence, axis and
+  gridline ownership, Surface wireframes, and projected picture fills,
+  including crop, tile, stack, wall, and reversed-axis behavior.
+- **host integration:** apply the shared chart behavior consistently in DOCX,
+  XLSX, and PPTX main and worker rendering, while keeping ChartEx outside the
+  default main-mode import closure.
+- **Word layout:** exclude truly empty unnumbered cell paragraphs from AutoFit
+  content width while retaining authored spaces and non-breaking spaces, and
+  end horizontal snap-grid underlines at the terminal glyph ink.
+- **documentation:** add the ChartEx migration announcement and maintain current
+  bundle-size measurements on the independent bundle-size page.
+
+## 0.80.3 — 2026-08-25
+
+Patch release improving Word list resilience and production worker compatibility
+without changing the 0.80 public integration contract.
+
+- **Word numbering resilience:** keep list bodies at the authored paragraph
+  start when `nothing` or `space` suffixes remain inside a hanging-indent region,
+  avoiding a non-negative layout invariant failure. (#1366)
+- **production worker compatibility:** resolve the optional MathJax asset in the
+  main realm so emitted render-worker assets contain no inner `import.meta`,
+  including when rebundled by Next.js 14 and webpack. (#1367)
+- **compatibility:** no application or API migration is required from 0.80.2.
 
 ## 0.80.2 — 2026-08-18
 

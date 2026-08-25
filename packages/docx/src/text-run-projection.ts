@@ -19,9 +19,6 @@ export interface SelectedTextRunsForPageOptions {
   readonly defaultCurrentDateMs: number;
   readonly currentDate?: Date | number;
   readonly width?: number;
-  /** ECMA-376 §17.13.5 tracked-change view — selects the same keyed layout
-   *  variant as paint (see RenderPageOptions.showTrackedChanges). */
-  readonly showTrackedChanges?: boolean;
 }
 
 function projectTextRun(
@@ -30,6 +27,9 @@ function projectTextRun(
 ): DocxTextRunInfo {
   const { placement } = geometry;
   const origin = mapAffinePoint(pointToCss, placement.bounds);
+  const highlightOrigin = placement.highlightBounds
+    ? mapAffinePoint(pointToCss, placement.highlightBounds)
+    : undefined;
   const inlineScale = Math.hypot(pointToCss.a, pointToCss.b);
   const blockScale = Math.hypot(pointToCss.c, pointToCss.d);
   const transform = cssTransformFor(pointToCss);
@@ -46,11 +46,20 @@ function projectTextRun(
     ...(placement.sourceRunIndex !== undefined
       ? { sourceRunIndex: placement.sourceRunIndex }
       : {}),
+    direction: placement.direction,
     text: placement.text,
     x: origin.xPt,
     y: origin.yPt,
     w: placement.bounds.widthPt * inlineScale,
     h: placement.bounds.heightPt * blockScale,
+    ...(placement.highlightBounds && highlightOrigin ? {
+      highlightBounds: Object.freeze({
+        x: highlightOrigin.xPt,
+        y: highlightOrigin.yPt,
+        width: placement.highlightBounds.widthPt * inlineScale,
+        height: placement.highlightBounds.heightPt * blockScale,
+      }),
+    } : {}),
     fontSize: placement.fontSizePt * blockScale,
     font: canvasFontString(
       placement.fontRoute,
@@ -93,7 +102,6 @@ export function textRunsForSelectedPage(
   const selected = selectDocumentLayoutPage(services, {
     currentDate: options.currentDate,
     defaultCurrentDateMs: options.defaultCurrentDateMs,
-    showTrackedChanges: options.showTrackedChanges,
   }, pageIndex);
   const scale = (
     options.width ?? selected.page.geometry.widthPt * PT_TO_PX

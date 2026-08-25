@@ -27,7 +27,6 @@ import {
   widthBalanceSpaceAdjustmentForTextPt,
 } from '../line-layout.js';
 import { calcEffectiveFontPx, EAST_ASIAN_RE, shapeRunToDocRun } from './text.js';
-import { wordTrackChangeDecoration } from './paint-compatibility.js';
 import type { DocParagraph, DocRun, ShapeRun } from '../types.js';
 import {
   computeLineVisualOrder,
@@ -186,6 +185,9 @@ export type MeasuredTextPlanSegment = Readonly<
     /** Acquisition-only authority used to shape the final contextual kashida string. */
     textLayoutService?: import('./text.js').TextLayoutService;
     textShapeRequest?: import('./text.js').TextShapeRequest;
+    /** Selected face's font box, retained independently of authored decoration
+     * so application overlays can use the same character-height rectangle. */
+    selectedFaceFontBox?: Readonly<{ ascentPt: number; descentPt: number }>;
     retainedGeometry?: RetainedTextGeometryPlan;
   }
 >;
@@ -206,9 +208,6 @@ interface RetainedTextGeometryPlan {
     double: boolean;
     probe: RetainedInkMetric;
     doubleProbe?: RetainedInkMetric;
-    /** Stroke colour override (markup-view revision strikes are painted in
-     *  the stable author colour, not the run text colour). */
-    color?: string;
   }>;
   readonly emphasis?: Readonly<{
     authored: string;
@@ -883,6 +882,7 @@ export function planLine(input: PlanLineInput): LineLayout {
         decorationTerminalAdvancePt,
         textLayoutService: _textLayoutService,
         textShapeRequest: _textShapeRequest,
+        selectedFaceFontBox,
         retainedGeometry,
         direction: _direction,
         ...style
@@ -930,11 +930,24 @@ export function planLine(input: PlanLineInput): LineLayout {
           scaleX: segment.basePaintOps[0]?.scaleX ?? 1,
         }),
       } : undefined;
+      const highlightFontBox = selectedFaceFontBox ?? retainedGeometry?.base;
+      const highlightBounds = highlightFontBox ? {
+        xPt,
+        yPt: line.baselinePt + baselineOffsetPt - highlightFontBox.ascentPt,
+        widthPt: widthPt + ownedTrailingSlackPt,
+        heightPt: highlightFontBox.ascentPt + highlightFontBox.descentPt,
+      } : {
+        xPt,
+        yPt: line.topPt,
+        widthPt: widthPt + ownedTrailingSlackPt,
+        heightPt: line.advancePt,
+      };
       const placed: TextPlacement = {
         ...style,
         kind: 'text',
         origin,
         bounds: { xPt, yPt: line.topPt, widthPt, heightPt: line.advancePt },
+        highlightBounds,
         advancePt: widthPt,
         clusters: textGeometry.clusters,
         paintOps: paintOps.map((operation) => ({ ...operation, direction })),
@@ -944,15 +957,11 @@ export function planLine(input: PlanLineInput): LineLayout {
         ...(ownedTrailingSlackPt !== 0 ? { ownedTrailingSlackPt } : {}),
         ...((style.highlight || style.background) ? {
           highlightFragments: [{
-            rect: style.highlight && retainedGeometry ? {
+            // ECMA-376 §17.3.2.15 applies highlighting behind the run
+            // contents, not across the paragraph's authored line advance.
+            rect: style.highlight ? highlightBounds : {
               xPt,
-              // ECMA-376 §17.3.2.15 applies highlighting behind the run
-              // contents, not across the paragraph's authored line advance.
-              yPt: line.baselinePt + baselineOffsetPt - retainedGeometry.base.ascentPt,
-              widthPt: widthPt + ownedTrailingSlackPt,
-              heightPt: retainedGeometry.base.ascentPt + retainedGeometry.base.descentPt,
-            } : {
-              xPt, yPt: line.topPt,
+              yPt: line.topPt,
               widthPt: widthPt + ownedTrailingSlackPt,
               heightPt: line.advancePt,
             },
@@ -1671,15 +1680,8 @@ function retainedGeometryPlan(
   sourceOffset: number,
   color: TextPlacement['color'],
 ): RetainedTextGeometryPlan | undefined {
-  // ECMA-376 §17.13.5 markup view (`word-track-change-decoration`): an
-  // insertion/moveTo segment gains an author-coloured underline, a
-  // deletion/moveFrom segment an author-coloured strikethrough. Authored
-  // run decoration wins over the synthesized revision decoration on its axis.
-  const markup = segment.trackChangesMarkup;
-  const markupDecoration = wordTrackChangeDecoration(markup?.kind);
   if (!(segment.highlight || segment.underline || segment.strikethrough
-    || segment.doubleStrikethrough || segment.emphasisMark
-    || markupDecoration.underline || markupDecoration.strike)) return undefined;
+    || segment.doubleStrikethrough || segment.emphasisMark)) return undefined;
   const service = segment.textLayoutService;
   const request = segment.textShapeRequest;
   if (!service || !request) {
@@ -1713,18 +1715,11 @@ function retainedGeometryPlan(
     color: segment.underlineColor && segment.underlineColor !== 'auto'
       ? `#${segment.underlineColor}` : textColor,
     probe: glyphProbe('_'),
-  } : markup && markupDecoration.underline ? {
-    color: markup.authorColor,
-    probe: glyphProbe('_'),
   } : undefined;
   const strike = segment.strikethrough || segment.doubleStrikethrough ? {
     double: segment.doubleStrikethrough === true,
     probe: glyphProbe('-'),
     ...(segment.doubleStrikethrough ? { doubleProbe: glyphProbe('=') } : {}),
-  } : markup && markupDecoration.strike ? {
-    double: false,
-    probe: glyphProbe('-'),
-    color: markup.authorColor,
   } : undefined;
   const emphasis = segment.emphasisMark ? (() => {
     const glyph = emphasisGlyph(segment.emphasisMark);
@@ -1856,6 +1851,7 @@ function textPlanSegment(
   const snapLeadingPadPt = segment.snapGridLeadingPadPx ?? 0;
   let decorationTerminalAdvancePt = segment.measuredWidth
     - (segment.snapGridTrailingPadPx ?? 0);
+  let griddedTerminalInkAdvancePt: number | undefined;
   if (segment.snapGridClass === 'eastAsia' && segment.snapGridCellPitchPx) {
     const cellPitchPt = segment.snapGridCellPitchPx;
     let precedingCells = 0;
@@ -1869,16 +1865,29 @@ function textPlanSegment(
         cellPitchPt,
       );
       const allocatedAdvancePt = cells * cellPitchPt;
+      const centeredOffsetPt = precedingCells * cellPitchPt
+        + (allocatedAdvancePt - cluster.advancePt) / 2;
       if (index === clusters.length - 1) {
-        decorationTerminalAdvancePt = precedingCells * cellPitchPt
-          + (allocatedAdvancePt - cluster.advancePt) / 2
-          + cluster.advancePt;
+        decorationTerminalAdvancePt = centeredOffsetPt + cluster.advancePt;
+        const naturalClusterOffsetPt = shapedClusters?.[index]?.offsetPt;
+        if (
+          segment.selectedFaceInkBounds
+          && naturalClusterOffsetPt !== undefined
+          && !/\s$/u.test(segment.text)
+        ) {
+          // The selected-face ink bounds describe the whole unsnapped segment.
+          // Translate the terminal glyph's tight extent from its natural
+          // cluster origin to the independently centered final grid cell.
+          griddedTerminalInkAdvancePt = centeredOffsetPt + Math.max(
+            0,
+            (segment.selectedFaceInkBounds.xMaxPt - naturalClusterOffsetPt) * scaleX,
+          );
+        }
       }
       const placed = {
         ...cluster,
         offset: {
-          xPt: precedingCells * cellPitchPt
-            + (allocatedAdvancePt - cluster.advancePt) / 2,
+          xPt: centeredOffsetPt,
           yPt: cluster.offset.yPt,
         },
         advancePt: allocatedAdvancePt,
@@ -2039,11 +2048,15 @@ function textPlanSegment(
     characterGrid?.type === 'snapToChars'
     && segment.underline
     && !segment.verticalRun
-    && basePaintOps.length === 1
+    && paragraph.bidi !== true
     && segment.selectedFaceInkBounds
-      ? basePaintOps[0]!.offset.xPt
-        + (basePaintOps[0]!.glyphOffsetPt?.xPt ?? 0)
-        + segment.selectedFaceInkBounds.xMaxPt * (basePaintOps[0]!.scaleX ?? 1)
+      ? griddedTerminalInkAdvancePt ?? (
+          basePaintOps.length === 1
+            ? basePaintOps[0]!.offset.xPt
+              + (basePaintOps[0]!.glyphOffsetPt?.xPt ?? 0)
+              + segment.selectedFaceInkBounds.xMaxPt * (basePaintOps[0]!.scaleX ?? 1)
+            : decorationTerminalAdvancePt
+        )
       : decorationTerminalAdvancePt;
   return {
     ...style,
@@ -2086,6 +2099,7 @@ function textPlanSegment(
       ? { decorationTerminalAdvancePt: retainedDecorationTerminalAdvancePt }
       : {}),
     ...(retainedGeometry ? { retainedGeometry } : {}),
+    ...(segment.selectedFaceFontBox ? { selectedFaceFontBox: segment.selectedFaceFontBox } : {}),
     ...(segment.textLayoutService ? { textLayoutService: segment.textLayoutService } : {}),
     ...(segment.textShapeRequest ? { textShapeRequest: segment.textShapeRequest } : {}),
   };

@@ -186,6 +186,17 @@ function forbidOption(api, interfaceName, optionName) {
   }
 }
 
+function requireOption(api, interfaceName, optionName, expectedType) {
+  const member = interfaceMembers(api, interfaceName).get(optionName);
+  if (!member || !ts.isPropertySignature(member)) {
+    fail(`${interfaceName}.${optionName} is missing`);
+  }
+  const actual = member.type?.getText(api.file);
+  if (actual !== expectedType) {
+    fail(`${interfaceName}.${optionName} is ${actual ?? 'untyped'}, expected ${expectedType}`);
+  }
+}
+
 function requireBorrowedFactory(api, className, factoryName, targetType, engineType, optionsType) {
   const member = classMembers(api, className).get(factoryName);
   if (!member || !ts.isMethodDeclaration(member)) fail(`${className}.${factoryName}() is missing`);
@@ -258,8 +269,28 @@ for (const format of formats) {
   forbidOption(api, format.canvasOptions, format.borrowedOption);
   forbidOption(api, format.containerOptions, format.borrowedOption);
 
+  const commentsType = `${format.label[0]}${format.label.slice(1).toLowerCase()}CommentsOptions`;
+  const commentsOptionType = `boolean | ${commentsType}`;
+  if (format.label === 'XLSX') {
+    for (const options of [format.canvasOptions, format.containerOptions]) {
+      requireOption(api, options, 'comments', commentsOptionType);
+    }
+  } else {
+    forbidOption(api, format.canvasOptions, 'comments');
+    requireOption(api, format.containerOptions, 'comments', commentsOptionType);
+  }
+  const commentsMembers = interfaceMembers(api, commentsType);
+  if (!commentsMembers.has('includeResolved')) {
+    fail(`${format.label} comment UI must expose the shared resolved-thread policy`);
+  }
+
   if (format.label === 'XLSX' && classMembers(api, format.engine).has('renderSheet')) {
     fail('XlsxWorkbook.renderSheet() must not imply that an unbounded worksheet is one finite canvas unit');
+  }
+  if (format.label === 'XLSX') {
+    for (const viewer of [format.canvasViewer, format.containerViewer]) {
+      requireMethod(api, viewer, 'getCellViewportRect', 'XlsxCellViewportRect | null');
+    }
   }
 }
 
@@ -281,21 +312,18 @@ for (const relativePath of ['docs/api-architecture-0.76.md']) {
   }
 }
 
-const publicGuide = readFileSync(path.join(root, 'site/src/components/ApiReference.astro'), 'utf8');
+const publicGuide = readFileSync(path.join(root, 'site/src/pages/production.astro'), 'utf8');
 for (const token of [
-  'Load once for one Viewer or share one document',
-  'For most applications',
-  'When several views need the same document',
-  'viewer.load(source)',
+  'id="ownership"',
+  'one Viewer own one document',
+  'several views must share one parse',
   'DocxDocument',
   'PptxPresentation',
   'XlsxWorkbook',
-  "factory: 'fromDocument()'",
-  "factory: 'fromPresentation()'",
-  "factory: 'fromWorkbook()'",
-  'Those Viewers cannot replace the file',
-  'your application must destroy the shared engine',
-  "engine's mode is authoritative",
+  'fromDocument()',
+  'fromPresentation()',
+  'fromWorkbook()',
+  'Destroy every view before the shared document',
 ]) {
   if (!publicGuide.includes(token)) fail(`official-site ownership guide is missing: ${token}`);
 }

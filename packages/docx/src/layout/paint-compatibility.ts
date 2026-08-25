@@ -1,14 +1,5 @@
 import { defineCompatibilityRule } from './compatibility.js';
 
-export const WORD_TRACK_CHANGE_AUTHOR_PALETTE = defineCompatibilityRule({
-  id: 'word-track-change-author-palette',
-  evidence: {
-    kind: 'regression-test',
-    reference: 'packages/docx/src/layout/compatibility.test.ts#pins the eight track-change author colors independently of author indexing',
-  },
-  description: 'Use the established eight-color revision-author palette while keeping the renderer deterministic author-index policy outside this compatibility claim.',
-});
-
 export const WORD_PARAGRAPH_SHADING_BORDER_BOX = defineCompatibilityRule({
   id: 'word-paragraph-shading-border-box',
   evidence: {
@@ -16,15 +7,6 @@ export const WORD_PARAGRAPH_SHADING_BORDER_BOX = defineCompatibilityRule({
     reference: 'packages/docx/src/layout/paragraph.test.ts#extends paragraph shading through visible border spacing',
   },
   description: 'Extend paragraph shading through each visible paragraph-border spacing interval so the fill reaches the painted border box.',
-});
-
-export const WORD_TRACK_CHANGE_DECORATION = defineCompatibilityRule({
-  id: 'word-track-change-decoration',
-  evidence: {
-    kind: 'regression-test',
-    reference: 'packages/docx/src/layout/compatibility.test.ts#maps visible track-change kinds to their revision decorations',
-  },
-  description: 'When revision markup is visible, underline inserted text and strike through deleted text in the selected revision-author color.',
 });
 
 export const WORD_AUTO_TEXT_CONTRAST_EFFECTIVE_BACKGROUND = defineCompatibilityRule({
@@ -48,10 +30,13 @@ export const WORD_RUN_DECORATION_JUSTIFIED_ADVANCE = defineCompatibilityRule({
 export const WORD_SNAP_TO_CHARS_TERMINAL_UNDERLINE = defineCompatibilityRule({
   id: 'word-snap-to-chars-terminal-underline',
   evidence: {
-    kind: 'regression-test',
-    reference: 'packages/docx/src/snap-to-chars-underline.test.ts#ends a soft-wrapped underline at the final glyph instead of the unused cell edge',
+    kind: 'office-observation',
+    syntheticFixtureId: 'snap-to-chars-terminal-underline-boundaries',
+    application: 'Microsoft Word',
+    version: '16.111.1',
+    platform: 'macOS 26.5.2',
   },
-  description: 'For horizontal LTR snapToChars text, retain trailing character-cell slack in line advance while ending a terminal underline at the retained final-glyph extent.',
+  description: 'In the observed horizontal LTR snapToChars matrix, retain trailing character-cell slack in line advance while ending a terminal underline at the retained final-glyph ink extent. Authored trailing spaces remain content, and RTL/vertical text stays outside this rule.',
 });
 
 export const WORD_PARAGRAPH_BORDER_FLOW_RESERVATION = defineCompatibilityRule({
@@ -62,46 +47,3 @@ export const WORD_PARAGRAPH_BORDER_FLOW_RESERVATION = defineCompatibilityRule({
   },
   description: 'Reserve a visible bottom paragraph border through its spacing interval and half stroke width so following flow begins below its painted outer edge.',
 });
-
-export const WORD_TRACK_CHANGE_AUTHOR_COLORS = Object.freeze([
-  '#C00000',
-  '#0070C0',
-  '#00B050',
-  '#7030A0',
-  '#E97132',
-  '#196B24',
-  '#9E480E',
-  '#525252',
-] as const);
-
-export const WORD_TRACK_CHANGE_BAR = defineCompatibilityRule({
-  id: 'word-track-change-bar',
-  evidence: {
-    kind: 'regression-test',
-    reference: 'packages/docx/src/track-changes-markup-layout.test.ts#emits one margin change bar per line containing revision text in the markup view',
-  },
-  description: 'In the markup view, draw a vertical change bar in the margin beside every line that contains tracked-change content, matching the Word reviewing-pane convention (an app convention; ECMA-376 defines no bar geometry).',
-});
-
-const NO_TRACK_CHANGE_DECORATION = Object.freeze({
-  underline: false,
-  strike: false,
-});
-const INSERTION_TRACK_CHANGE_DECORATION = Object.freeze({
-  underline: true,
-  strike: false,
-});
-const DELETION_TRACK_CHANGE_DECORATION = Object.freeze({
-  underline: false,
-  strike: true,
-});
-
-export function wordTrackChangeDecoration(
-  kind: string | null | undefined,
-): Readonly<{ underline: boolean; strike: boolean }> {
-  // ECMA-376 §17.13.5.22 / §17.13.5.25 — a move renders as a deletion at its
-  // source and an insertion at its destination.
-  if (kind === 'insertion' || kind === 'moveTo') return INSERTION_TRACK_CHANGE_DECORATION;
-  if (kind === 'deletion' || kind === 'moveFrom') return DELETION_TRACK_CHANGE_DECORATION;
-  return NO_TRACK_CHANGE_DECORATION;
-}
