@@ -27,28 +27,58 @@ const viewer = new DocxScrollViewer(container, {
 
 await viewer.load(source);`;
 
-const customCardExample = `const viewer = new DocxScrollViewer(container, {
-  showComments: true,
-  commentUi: {
-    mountCard(host, initial) {
-      const card = document.createElement('button');
-      let context = initial;
-      const paint = () => {
-        card.className = context.active ? 'comment is-active' : 'comment';
-        card.textContent =
-          (context.thread.root.author ?? 'Comment') + ': ' + context.thread.root.text;
-      };
-      const activate = () => context.setActive(!context.active);
-      card.addEventListener('click', activate);
-      host.append(card);
-      paint();
-      return {
-        update(next) { context = next; paint(); },
-        destroy() { card.removeEventListener('click', activate); },
-      };
-    },
-  },
-});`;
+const themeExample = `#viewer {
+  --ooxml-comment-card-background: #ffffff;
+  --ooxml-comment-card-active-background: #dbeafe;
+  --ooxml-comment-card-radius: 10px;
+  --ooxml-comment-highlight: rgba(59, 130, 246, 0.18);
+  --ooxml-comment-highlight-active: rgba(37, 99, 235, 0.34);
+  --ooxml-comment-connector: #94a3b8;
+  --ooxml-comment-connector-active: #2563eb;
+}`;
+
+const themeReference = `#viewer {
+  /* DOCX, XLSX, and PPTX */
+  --ooxml-comment-font-family: system-ui, sans-serif;
+  --ooxml-comment-author-color: #0f172a;
+  --ooxml-comment-body-color: #334155;
+  --ooxml-comment-card-background: #fff;
+  --ooxml-comment-card-border: 1px solid rgba(148, 163, 184, .24);
+  --ooxml-comment-card-radius: .62em;
+  --ooxml-comment-card-shadow: 0 .08em .16em rgba(15, 23, 42, .12);
+  --ooxml-comment-card-padding: .78em .92em;
+  --ooxml-comment-reply-border: rgba(100, 116, 139, .2);
+
+  /* DOCX and PPTX margins */
+  --ooxml-comment-content-gap: .65em;
+  --ooxml-comment-avatar-background: #2563eb;
+  --ooxml-comment-avatar-color: #fff;
+  --ooxml-comment-avatar-radius: .7em;
+  --ooxml-comment-date-font-family: ui-monospace, monospace;
+  --ooxml-comment-muted-color: #64748b;
+  --ooxml-comment-card-gap: .62em;
+  --ooxml-comment-card-active-background: #dbeafe;
+  --ooxml-comment-card-active-border: 1px solid rgba(37, 99, 235, .45);
+  --ooxml-comment-card-active-shadow: 0 0 0 .12em rgba(37, 99, 235, .28);
+  --ooxml-comment-card-focus-shadow: inset 0 0 0 .14em rgba(37, 99, 235, .7);
+  --ooxml-comment-connector: #94a3b8;
+  --ooxml-comment-connector-active: #2563eb;
+  --ooxml-comment-connector-width: 1px;
+  --ooxml-comment-connector-active-width: 1.5px;
+  --ooxml-comment-connector-opacity: .45;
+  --ooxml-comment-connector-active-opacity: .9;
+
+  /* DOCX */
+  --ooxml-comment-highlight: rgba(59, 130, 246, .18);
+  --ooxml-comment-highlight-active: rgba(37, 99, 235, .34);
+
+  /* PPTX */
+  --ooxml-comment-marker-background: #2563eb;
+  --ooxml-comment-marker-color: #fff;
+  --ooxml-comment-marker-border: #fff;
+  --ooxml-comment-marker-shadow: 0 1px 3px rgba(15, 23, 42, .28);
+  --ooxml-comment-marker-active-shadow: 0 0 0 3px rgba(37, 99, 235, .35);
+}`;
 
 const anchoredExample = `import {
   DocxDocument,
@@ -112,11 +142,16 @@ showReviewMargin({ canvas, anchoredComments });
           <Code code={scrollViewerExample} lang="ts" themes={codeThemes} defaultColor={false} />
         </article>
         <article>
-          <h3>Replace a card</h3>
-          <p class="code-intro">Change card contents while the Viewer retains placement and virtualization.</p>
-          <Code code={customCardExample} lang="ts" themes={codeThemes} defaultColor={false} />
+          <h3>Theme the default</h3>
+          <p class="code-intro">Set CSS custom properties on the Viewer container. The structure and lifecycle stay Viewer-owned.</p>
+          <Code code={themeExample} lang="css" themes={codeThemes} defaultColor={false} />
         </article>
       </div>
+      <details class="theme-reference">
+        <summary>All comment theme properties</summary>
+        <p>Defaults are shown below. Set only the properties your product theme needs.</p>
+        <Code code={themeReference} lang="css" themes={codeThemes} defaultColor={false} />
+      </details>
       <div class="built-in-preview">
         <h3>Default appearance</h3>
         <p>The document keeps its page surface; the right margin contains only neutral cards, without a background band.</p>
@@ -258,6 +293,9 @@ showReviewMargin({ canvas, anchoredComments });
   .implementation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
   .implementation-grid article { min-width: 0; padding: 0; overflow: hidden; }
   .implementation-grid h3 { padding: 20px 20px 0; }
+  .theme-reference { margin-top: 16px; border: 1px solid var(--border); background: var(--panel); }
+  .theme-reference summary { padding: 14px 16px; cursor: pointer; font-weight: 700; }
+  .theme-reference p { margin: 0; padding: 0 16px 14px; color: var(--text-dim); }
   .code-intro { padding: 0 20px; }
   .implementation-grid ol { min-height: 116px; margin: 14px 20px 20px; padding-left: 20px; color: var(--text-dim); }
   .implementation-grid li + li { margin-top: 6px; }

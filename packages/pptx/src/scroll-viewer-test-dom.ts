@@ -311,6 +311,7 @@ export function installDom(): {
   const listeners = new Map<string, Array<(event: unknown) => void>>();
   vi.stubGlobal('document', {
     createElement: (t: string) => makeEl(t),
+    createElementNS: (_namespace: string, t: string) => makeEl(t),
     getSelection: () => currentSelection,
     addEventListener: (type: string, listener: (event: unknown) => void) => {
       listeners.set(type, [...(listeners.get(type) ?? []), listener]);

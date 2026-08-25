@@ -10,20 +10,12 @@ export type {
   XlsxViewerOptions,
   XlsxSheetViewerOptions,
   XlsxViewportOffset,
+  XlsxCellViewportRect,
   XlsxScrollToCellOptions,
   HiddenSheetMode,
   XlsxCopyResult,
 } from './viewer.js';
-export type { XlsxCommentCardContext, XlsxCommentUiOptions } from './comment-card.js';
-export type {
-  ViewerCommentCardBaseContext,
-  ViewerCommentCardMount,
-  ViewerCommentMessage,
-  ViewerCommentThread,
-  ViewerCommentUiOptions,
-  ViewerDomMount,
-  ViewerDomMountHandle,
-} from '@silurus/ooxml-core';
+export type { XlsxCommentUiOptions } from './comment-card.js';
 export type {
   CellAddress,
   XlsxSelectionArea,

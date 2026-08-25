@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { XlsxViewer } from './viewer.js';
 import type { XlsxComment, Worksheet } from './types.js';
-import type { XlsxCommentCardContext } from './comment-card.js';
 import { installDom, makeContainer, type FakeEl } from './viewer-destroy-test-dom.js';
 
 afterEach(() => {
@@ -10,48 +9,47 @@ afterEach(() => {
 });
 
 describe('XlsxViewer comment UI contract', () => {
-  it('mounts a custom framework root once and updates it with a structured thread', () => {
+  it.each([
+    { direction: 'LTR', rightToLeft: false },
+    { direction: 'RTL', rightToLeft: true },
+  ])('exposes $direction forward cell geometry for an application-owned anchored UI', ({ rightToLeft }) => {
     installDom();
-    let mounts = 0;
-    let updates = 0;
-    let destroys = 0;
-    let latest: XlsxCommentCardContext | undefined;
-    let portal: FakeEl | undefined;
-    const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement, {
-      commentUi: {
-        mountCard(host, context) {
-          mounts++;
-          expect(host.parentElement?.parentElement).not.toBeNull();
-          latest = context;
-          portal = host.ownerDocument.createElement('div') as unknown as FakeEl;
-          context.registerInteractiveRoot(portal as unknown as Node);
-          host.textContent = context.thread.root.text;
-          return {
-            update(next) {
-              updates++;
-              latest = next;
-              host.textContent = next.thread.root.text;
-            },
-            destroy() {
-              destroys++;
-            },
-          };
-        },
-      },
-    });
+    const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
+    const internals = viewer as unknown as { currentWorksheet: Worksheet; canvasArea: FakeEl };
+    internals.currentWorksheet = {
+      name: 'Sheet 1', rows: [], colWidths: {}, rowHeights: {},
+      defaultColWidth: 64, defaultRowHeight: 20, mergeCells: [],
+      rightToLeft,
+    } as unknown as Worksheet;
+    internals.canvasArea.clientWidth = 800;
+
+    const rect = viewer.getCellViewportRect('B2');
+    expect(rect).not.toBeNull();
+    expect(rect?.width).toBeGreaterThan(0);
+    expect(rect?.height).toBeGreaterThan(0);
+    expect(viewer.getCellAt(
+      (rect?.x ?? 0) + (rect?.width ?? 0) / 2,
+      (rect?.y ?? 0) + (rect?.height ?? 0) / 2,
+    )).toEqual({ row: 2, col: 2 });
+    expect(viewer.getCellViewportRect('not-a-cell')).toBeNull();
+    viewer.destroy();
+  });
+
+  it('renders a structured, themeable built-in popup', () => {
+    installDom();
+    const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
     const internals = viewer as unknown as {
       currentSheet: number;
       renderCommentPopup(cell: { row: number; col: number }, comment: XlsxComment): void;
-      getCellRect(row: number, col: number): { x: number; y: number; w: number; h: number };
+      _cellRect(row: number, col: number): { x: number; y: number; w: number; h: number };
       canvasArea: FakeEl;
       scrollHost: FakeEl;
       commentPopup: FakeEl;
     };
     internals.currentSheet = 0;
-    Object.defineProperty(viewer, 'sheetNames', { value: ['Sheet 1'] });
     internals.canvasArea.clientWidth = 800;
     internals.canvasArea.clientHeight = 600;
-    internals.getCellRect = () => ({ x: 20, y: 30, w: 80, h: 20 });
+    internals._cellRect = () => ({ x: 20, y: 30, w: 80, h: 20 });
     const comment: XlsxComment = {
       kind: 'thread',
       cellRef: 'B2',
@@ -66,29 +64,17 @@ describe('XlsxViewer comment UI contract', () => {
     };
 
     internals.renderCommentPopup({ row: 2, col: 2 }, comment);
-    internals.renderCommentPopup({ row: 2, col: 2 }, comment);
 
-    expect(mounts).toBe(1);
-    expect(updates).toBe(1);
-    expect(latest?.thread.occurrenceKey).toBe('sheet:0:{root}:B2');
-    expect(latest?.thread.root.messageKey).toBe('sheet:0:{root}:B2:root');
-    expect(latest?.thread.root.text).toBe('Review');
-    expect(latest?.thread.replies[0]?.messageKey).toBe('sheet:0:{root}:B2:reply:{reply}');
-    expect(latest?.thread.replies.map((reply) => reply.text)).toEqual(['Done']);
-    expect(latest?.sheetName).toBe('Sheet 1');
-    expect(latest?.cellRef).toBe('B2');
-    expect(internals.commentPopup.style.pointerEvents).toBe('auto');
+    expect(internals.commentPopup.dataset.ooxmlCommentUi).toBe('popup');
+    expect(internals.commentPopup.style.background).toContain('--ooxml-comment-card-background');
+    expect(internals.commentPopup.children[0]?.dataset.ooxmlCommentPart).toBe('author');
+    expect(internals.commentPopup.children[1]?.dataset.ooxmlCommentPart).toBe('body');
+    expect(internals.commentPopup.children[2]?.dataset.ooxmlCommentPart).toBe('reply');
+    expect(internals.commentPopup.children[2]?.children[0]?.textContent).toBe('Grace');
+    expect(internals.commentPopup.children[2]?.children[1]?.textContent).toBe('Done');
+    expect(internals.commentPopup.style.cssText).toContain('pointer-events:none');
     expect(internals.commentPopup.style.display).toBe('block');
-
-    // A framework-owned button must remain usable while the pointer crosses
-    // from the worksheet into the popup, then close when that surface is left.
-    internals.scrollHost.dispatch('pointerleave', { relatedTarget: portal });
-    expect(internals.commentPopup.style.display).toBe('block');
-    portal?.dispatch('pointerleave', { relatedTarget: null });
-    expect(internals.commentPopup.style.display).toBe('none');
     viewer.destroy();
-    expect(destroys).toBe(1);
-    expect(latest?.signal.aborted).toBe(true);
   });
 
   it('applies the same authored visibility policy to popup data and markers', () => {

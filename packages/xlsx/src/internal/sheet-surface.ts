@@ -80,13 +80,17 @@ export class SheetOverlayHost {
       `position:absolute;top:0;left:0;z-index:1;pointer-events:none;overflow:hidden;width:100%;height:100%;`;
 
     this.comment = ownerDocument.createElement('div');
+    this.comment.dataset.ooxmlCommentUi = 'popup';
     this.comment.style.cssText =
       `position:absolute;z-index:3;pointer-events:none;display:none;` +
       `max-width:${options.commentMaxWidth}px;max-height:${options.commentMaxHeight}px;overflow:hidden;` +
-      `box-sizing:border-box;padding:6px 8px;` +
-      `background:#fffbcc;border:1px solid #b8b8a0;` +
-      `box-shadow:1px 2px 5px rgba(0,0,0,0.25);` +
-      `font:12px/1.4 sans-serif;color:#222;white-space:pre-wrap;word-break:break-word;`;
+      `box-sizing:border-box;padding:var(--ooxml-comment-card-padding,.78em .92em);` +
+      `background:var(--ooxml-comment-card-background,#fff);` +
+      `border:var(--ooxml-comment-card-border,1px solid rgba(148,163,184,.24));` +
+      `border-radius:var(--ooxml-comment-card-radius,.62em);` +
+      `box-shadow:var(--ooxml-comment-card-shadow,0 .08em .16em rgba(15,23,42,.12));` +
+      `font:12px/1.45 var(--ooxml-comment-font-family,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);` +
+      `color:var(--ooxml-comment-body-color,#334155);white-space:pre-wrap;word-break:break-word;`;
 
     this.validation = ownerDocument.createElement('div');
     this.validation.setAttribute('data-xlsx-validation-panel', '');

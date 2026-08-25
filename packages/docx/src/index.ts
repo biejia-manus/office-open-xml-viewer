@@ -6,26 +6,7 @@ export {
 } from './document';
 export { DocxViewer, type DocxViewerOptions } from './viewer';
 export { DocxScrollViewer, type DocxScrollViewerOptions } from './scroll-viewer';
-export type {
-  DocxCommentCardContext,
-  DocxCommentCardMount,
-  DocxCommentUiOptions,
-} from './comment-margin';
-export type {
-  ViewerCommentMessage,
-  ViewerCommentThread,
-  ViewerCommentCardBaseContext,
-  ViewerSelectableCommentCardContext,
-  ViewerCommentCardMount,
-  ViewerCommentDecorationBaseContext,
-  DocxCommentDecorationContext,
-  ViewerCommentDecorationMount,
-  ViewerCommentRect,
-  ViewerCommentThreadGeometry,
-  ViewerCommentUiOptions,
-  ViewerDomMount,
-  ViewerDomMountHandle,
-} from '@silurus/ooxml-core';
+export type { DocxCommentUiOptions } from './comment-margin';
 export { buildDocxTextLayer } from './text-layer';
 export {
   readDocxTextSelectionContext,
@@ -133,7 +114,7 @@ export {
   type DocxHighlightMatch,
   type DocxHighlightColors,
 } from './find-highlight-layer';
-// ECMA-376 §17.13.4 comment data projections. UI is intentionally consumer-owned.
+// ECMA-376 §17.13.4 comment data projections for application-owned review UIs.
 export {
   resolveCommentAnchorRuns,
   type CommentAnchorPoint,

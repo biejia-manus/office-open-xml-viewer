@@ -1,18 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { DomInteractionBoundary } from './dom-interaction-boundary.js';
+import { eventTargetsDataAttributeWithin } from './dom-interaction-boundary.js';
 
-describe('DomInteractionBoundary', () => {
-  it('reference-counts a portal root shared by multiple mounted cards', () => {
-    const boundary = new DomInteractionBoundary();
-    const child = {} as Node;
-    const root = { contains: (candidate: Node) => candidate === child } as Node;
-    const unregisterFirst = boundary.register(root);
-    const unregisterSecond = boundary.register(root);
+describe('eventTargetsDataAttributeWithin', () => {
+  it('accepts a marked target only inside the owning Viewer root', () => {
+    const ownRoot = {} as Node;
+    const otherRoot = {} as Node;
+    const ownCard = { dataset: { ooxmlCommentId: 'own' } } as unknown as Node;
+    const otherCard = { dataset: { ooxmlCommentId: 'other' } } as unknown as Node;
+    Object.assign(ownRoot, { contains: (candidate: Node) => candidate === ownCard });
 
-    expect(boundary.containsNode(child)).toBe(true);
-    unregisterFirst();
-    expect(boundary.containsNode(child)).toBe(true);
-    unregisterSecond();
-    expect(boundary.containsNode(child)).toBe(false);
+    expect(eventTargetsDataAttributeWithin({
+      target: ownCard,
+      composedPath: () => [ownCard, ownRoot],
+    } as unknown as Event, ownRoot, 'ooxmlCommentId')).toBe(true);
+    expect(eventTargetsDataAttributeWithin({
+      target: otherCard,
+      composedPath: () => [otherCard, otherRoot],
+    } as unknown as Event, ownRoot, 'ooxmlCommentId')).toBe(false);
   });
 });

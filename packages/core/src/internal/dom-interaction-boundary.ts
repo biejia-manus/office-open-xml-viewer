@@ -1,45 +1,31 @@
-/** Viewer-owned interaction boundary that also accepts Portal/Teleport roots. */
-export class DomInteractionBoundary {
-  private readonly roots = new Map<Node, number>();
+function hasDataAttribute(candidate: EventTarget, dataAttribute: string): boolean {
+  return (candidate as { dataset?: DOMStringMap }).dataset?.[dataAttribute] !== undefined;
+}
 
-  register(root: Node): () => void {
-    this.roots.set(root, (this.roots.get(root) ?? 0) + 1);
-    let registered = true;
-    return () => {
-      if (!registered) return;
-      registered = false;
-      const count = this.roots.get(root) ?? 0;
-      if (count <= 1) this.roots.delete(root);
-      else this.roots.set(root, count - 1);
-    };
-  }
-
-  contains(event: Event, dataAttribute: string): boolean {
-    const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+/** Return true only when the event targets a marked element owned by `root`.
+ * The root scope prevents one Viewer from treating another Viewer's comment UI
+ * as its own interaction boundary. */
+export function eventTargetsDataAttributeWithin(
+  event: Event,
+  root: Node,
+  dataAttribute: string,
+): boolean {
+  const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+  if (path.length > 0) {
+    let marked = false;
     for (const candidate of path) {
-      if (this.roots.has(candidate as Node)) return true;
-      const dataset = (candidate as { dataset?: DOMStringMap }).dataset;
-      if (dataset?.[dataAttribute] !== undefined) return true;
+      if (candidate === root) return marked;
+      if (hasDataAttribute(candidate, dataAttribute)) marked = true;
     }
-
-    const target = event.target as Node | null;
-    if (this.containsNode(target)) return true;
-    let element = target as HTMLElement | null;
-    while (element) {
-      if (element.dataset?.[dataAttribute] !== undefined) return true;
-      element = element.parentElement;
-    }
-    return false;
   }
 
-  containsNode(target: Node | null): boolean {
-    for (const root of this.roots.keys()) {
-      if (root === target || (target !== null && root.contains(target))) return true;
-    }
-    return false;
+  const target = event.target as Node | null;
+  if (!target || !root.contains(target)) return false;
+  let element = target as HTMLElement | null;
+  while (element) {
+    if (hasDataAttribute(element, dataAttribute)) return true;
+    if (element === root) break;
+    element = element.parentElement;
   }
-
-  clear(): void {
-    this.roots.clear();
-  }
+  return false;
 }

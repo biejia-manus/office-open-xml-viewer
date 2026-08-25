@@ -1056,23 +1056,12 @@ export interface DocTableRow {
     isHeader: boolean;
     cantSplit?: boolean;
 }
-export interface DocxCommentCardContext extends ViewerSelectableCommentCardContext {
-    readonly comment: Readonly<DocComment>;
-    readonly replies: readonly Readonly<DocComment>[];
-}
-export type DocxCommentCardMount = ViewerCommentCardMount<DocxCommentCardContext>;
-export interface DocxCommentDecorationContext extends ViewerCommentDecorationBaseContext {
-    readonly format: 'docx';
-    readonly pageIndex: number;
-    readonly layoutComplete: boolean;
-}
 export interface DocxCommentMark {
     id: string;
     kind: 'rangeStart' | 'rangeEnd' | 'reference' | string;
     runIndex: number;
 }
-export interface DocxCommentUiOptions extends ViewerCommentUiOptions<DocxCommentCardContext> {
-    readonly mountDecoration?: ViewerCommentDecorationMount<DocxCommentDecorationContext>;
+export interface DocxCommentUiOptions extends ViewerCommentUiOptions {
 }
 export class DocxDocument {
     static load(source: string | ArrayBuffer, opts?: LoadOptions): Promise<DocxDocument>;
@@ -2165,64 +2154,12 @@ export interface TileInfo {
     flip?: string;
     algn?: string;
 }
-export interface ViewerCommentCardBaseContext {
-    readonly thread: ViewerCommentThread;
-    readonly zoom: number;
-    readonly signal: AbortSignal;
-    readonly registerInteractiveRoot: (root: Node) => () => void;
-}
-export type ViewerCommentCardMount<Context extends ViewerCommentCardBaseContext = ViewerCommentCardBaseContext> = ViewerDomMount<Context>;
-export interface ViewerCommentDecorationBaseContext {
-    readonly layoutGeneration: number;
-    readonly geometryRevision: number;
-    readonly zoom: number;
-    readonly surfaceBounds: ViewerCommentRect;
-    readonly contentBounds: ViewerCommentRect;
-    readonly threads: readonly ViewerCommentThreadGeometry[];
-    readonly signal: AbortSignal;
-}
-export type ViewerCommentDecorationMount<Context extends ViewerCommentDecorationBaseContext = ViewerCommentDecorationBaseContext> = ViewerDomMount<Context>;
-export interface ViewerCommentMessage {
-    readonly messageKey: string;
-    readonly sourceId?: string;
-    readonly author?: string;
-    readonly date?: string;
-    readonly text: string;
-    readonly status?: 'active' | 'resolved' | 'closed';
-}
-export interface ViewerCommentRect {
-    readonly x: number;
-    readonly y: number;
-    readonly width: number;
-    readonly height: number;
-}
-export interface ViewerCommentThread {
-    readonly occurrenceKey: string;
-    readonly root: ViewerCommentMessage;
-    readonly replies: readonly ViewerCommentMessage[];
-}
-export interface ViewerCommentThreadGeometry {
-    readonly occurrenceKey: string;
-    readonly active: boolean;
-    readonly anchorRects: readonly ViewerCommentRect[];
-    readonly cardRect?: ViewerCommentRect;
-}
-export interface ViewerCommentUiOptions<Context extends ViewerCommentCardBaseContext = ViewerCommentCardBaseContext> {
+interface ViewerCommentUiOptions {
     readonly includeResolved?: boolean;
-    readonly mountCard?: ViewerCommentCardMount<Context>;
 }
 export interface ViewerContextMenuEvent<TContext> {
     readonly originalEvent: MouseEvent;
     getContext(): Promise<TContext | null>;
-}
-export type ViewerDomMount<Context> = (host: HTMLElement, initialContext: Context) => ViewerDomMountHandle<Context>;
-export interface ViewerDomMountHandle<Context> {
-    update(context: Context): void;
-    destroy(): void;
-}
-export interface ViewerSelectableCommentCardContext extends ViewerCommentCardBaseContext {
-    readonly active: boolean;
-    readonly setActive: (active: boolean) => void;
 }
 export interface ZoomableViewer {
     getScale(): number;

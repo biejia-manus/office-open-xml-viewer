@@ -1849,38 +1849,12 @@ export interface TileInfo {
     flip?: string;
     algn?: string;
 }
-export interface ViewerCommentCardBaseContext {
-    readonly thread: ViewerCommentThread;
-    readonly zoom: number;
-    readonly signal: AbortSignal;
-    readonly registerInteractiveRoot: (root: Node) => () => void;
-}
-export type ViewerCommentCardMount<Context extends ViewerCommentCardBaseContext = ViewerCommentCardBaseContext> = ViewerDomMount<Context>;
-export interface ViewerCommentMessage {
-    readonly messageKey: string;
-    readonly sourceId?: string;
-    readonly author?: string;
-    readonly date?: string;
-    readonly text: string;
-    readonly status?: 'active' | 'resolved' | 'closed';
-}
-export interface ViewerCommentThread {
-    readonly occurrenceKey: string;
-    readonly root: ViewerCommentMessage;
-    readonly replies: readonly ViewerCommentMessage[];
-}
-export interface ViewerCommentUiOptions<Context extends ViewerCommentCardBaseContext = ViewerCommentCardBaseContext> {
+interface ViewerCommentUiOptions {
     readonly includeResolved?: boolean;
-    readonly mountCard?: ViewerCommentCardMount<Context>;
 }
 export interface ViewerContextMenuEvent<TContext> {
     readonly originalEvent: MouseEvent;
     getContext(): Promise<TContext | null>;
-}
-export type ViewerDomMount<Context> = (host: HTMLElement, initialContext: Context) => ViewerDomMountHandle<Context>;
-export interface ViewerDomMountHandle<Context> {
-    update(context: Context): void;
-    destroy(): void;
 }
 export interface ViewportRange {
     row: number;
@@ -1949,6 +1923,12 @@ export interface WorksheetCellRange {
     bottom: number;
     right: number;
 }
+export interface XlsxCellViewportRect {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+}
 export interface XlsxComment {
     kind?: 'note' | 'thread';
     cellRef: string;
@@ -1961,14 +1941,6 @@ export interface XlsxComment {
     resolved?: boolean;
     replies?: XlsxCommentReply[];
 }
-export interface XlsxCommentCardContext extends ViewerCommentCardBaseContext {
-    readonly comment: Readonly<XlsxComment>;
-    readonly replies: readonly Readonly<XlsxCommentReply>[];
-    readonly sheetIndex: number;
-    readonly sheetName: string;
-    readonly cellRef: string;
-    readonly dismiss: () => void;
-}
 export interface XlsxCommentReply {
     id: string;
     parentId: string;
@@ -1978,7 +1950,8 @@ export interface XlsxCommentReply {
     text: string;
     resolved?: boolean;
 }
-export type XlsxCommentUiOptions = ViewerCommentUiOptions<XlsxCommentCardContext>;
+export interface XlsxCommentUiOptions extends ViewerCommentUiOptions {
+}
 export type XlsxCopyResult = Readonly<{
     status: 'copied';
     cellCount: number;
@@ -2127,6 +2100,7 @@ export class XlsxSheetViewer implements ZoomableViewer {
     fitWidth(): void;
     fitPage(): void;
     getCellAt(clientX: number, clientY: number): CellAddress | null;
+    getCellViewportRect(cell: CellAddress | string): XlsxCellViewportRect | null;
     get selectionState(): XlsxSelectionState | null;
     setSelection(selection: XlsxSelectionInput): void;
     getSelectionContext(options?: XlsxSelectionContextOptions): XlsxSelectionContext | null;
@@ -2194,6 +2168,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     relayout(): Promise<void>;
     scrollToCell(ref: string, options?: XlsxScrollToCellOptions): Promise<void>;
     getCellAt(clientX: number, clientY: number): CellAddress | null;
+    getCellViewportRect(cell: CellAddress | string): XlsxCellViewportRect | null;
     get selectionState(): XlsxSelectionState | null;
     setSelection(input: XlsxSelectionInput): void;
     getSelectionContext(options?: XlsxSelectionContextOptions): XlsxSelectionContext | null;

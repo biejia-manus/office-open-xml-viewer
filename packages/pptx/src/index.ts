@@ -1,25 +1,6 @@
 export { PptxViewer, type PptxViewerOptions, type HiddenSlideMode } from './viewer';
 export { PptxScrollViewer, type PptxScrollViewerOptions } from './scroll-viewer';
-export type {
-  PptxCommentCardContext,
-  PptxCommentCardMount,
-  PptxCommentUiOptions,
-} from './comment-margin';
-export type {
-  ViewerCommentMessage,
-  ViewerCommentThread,
-  ViewerCommentCardBaseContext,
-  ViewerSelectableCommentCardContext,
-  ViewerCommentCardMount,
-  ViewerCommentDecorationBaseContext,
-  PptxCommentDecorationContext,
-  ViewerCommentDecorationMount,
-  ViewerCommentRect,
-  ViewerCommentThreadGeometry,
-  ViewerCommentUiOptions,
-  ViewerDomMount,
-  ViewerDomMountHandle,
-} from '@silurus/ooxml-core';
+export type { PptxCommentUiOptions } from './comment-margin';
 export {
   PptxPresentation,
   type LoadOptions,

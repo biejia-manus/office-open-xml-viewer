@@ -1,25 +1,23 @@
 import {
   overlayPercent,
-  type DocxCommentDecorationContext,
-  type ViewerSelectableCommentCardContext,
-  type ViewerCommentCardMount,
-  type ViewerCommentMessage,
-  type ViewerCommentRect,
-  type ViewerCommentThreadGeometry,
-  type ViewerCommentDecorationMount,
   type ViewerCommentUiOptions,
 } from '@silurus/ooxml-core';
 import {
   buildReadOnlyCommentMargin,
+  type ReadOnlyCommentMessage,
   type ReadOnlyCommentThread,
 } from '@silurus/ooxml-core/internal/read-only-comment-margin';
-import { relativeElementRect } from '@silurus/ooxml-core/internal/dom-geometry';
+import type {
+  ReadOnlyCommentRect,
+  ReadOnlyCommentThreadGeometry,
+} from '@silurus/ooxml-core/internal/read-only-comment-decoration';
+import {
+  intersectElementRects,
+  relativeElementRect,
+} from '@silurus/ooxml-core/internal/dom-geometry';
 import { resolveCommentAnchorRuns, type CommentAnchorRange } from './comments.js';
 import type { DocxTextRunInfo } from './renderer.js';
 import type { DocComment } from './types.js';
-
-const COMMENT_TINT = 'rgba(59, 130, 246, 0.18)';
-const ACTIVE_COMMENT_TINT = 'rgba(37, 99, 235, 0.34)';
 
 interface CommentThread {
   readonly root: DocComment;
@@ -31,18 +29,7 @@ export interface DocxCommentMarginModel {
   readonly anchors: readonly CommentAnchorRange[];
 }
 
-/** Context supplied when a consumer replaces the built-in comment card.
- * ScrollViewer still owns placement, virtualization, activation, and cleanup. */
-export interface DocxCommentCardContext extends ViewerSelectableCommentCardContext {
-  readonly comment: Readonly<DocComment>;
-  readonly replies: readonly Readonly<DocComment>[];
-}
-
-export type DocxCommentCardMount = ViewerCommentCardMount<DocxCommentCardContext>;
-export interface DocxCommentUiOptions extends ViewerCommentUiOptions<DocxCommentCardContext> {
-  /** Mount connector lines or other transparent page-to-margin decoration. */
-  readonly mountDecoration?: ViewerCommentDecorationMount<DocxCommentDecorationContext>;
-}
+export interface DocxCommentUiOptions extends ViewerCommentUiOptions {}
 
 function commentThreads(comments: readonly DocComment[], includeResolved: boolean): CommentThread[] {
   const byId = new Map(comments.map((comment) => [comment.id, comment]));
@@ -71,7 +58,7 @@ function commentThreads(comments: readonly DocComment[], includeResolved: boolea
     .map((root) => ({ root, replies: Object.freeze(replies.get(root.id) ?? []) }));
 }
 
-function toMessage(comment: DocComment, occurrenceKey: string, index: number): ViewerCommentMessage {
+function toMessage(comment: DocComment, occurrenceKey: string, index: number): ReadOnlyCommentMessage {
   return {
     messageKey: index === 0
       ? `${occurrenceKey}:root`
@@ -96,7 +83,11 @@ function createTint(
     'position:absolute;pointer-events:none;' +
     `left:${overlayPercent(run.x, cssWidth)};top:${overlayPercent(run.y, cssHeight)};` +
     `width:${overlayPercent(run.w, cssWidth)};height:${overlayPercent(run.h, cssHeight)};` +
-    `background:${active ? ACTIVE_COMMENT_TINT : COMMENT_TINT};`;
+    `background:${active
+      ? 'var(--ooxml-comment-highlight-active,rgba(37,99,235,.34))'
+      : 'var(--ooxml-comment-highlight,rgba(59,130,246,.18))'};`;
+  tint.dataset.ooxmlCommentHighlight = '';
+  tint.dataset.ooxmlCommentActive = String(active);
   if (run.transform) {
     tint.style.transform = run.transform;
     tint.style.transformOrigin = 'top left';
@@ -143,17 +134,14 @@ export function buildDocxCommentMargin(
   activeId: string | null,
   onSetActive: (id: string, active: boolean) => void,
   zoom: number,
-  mountCard?: DocxCommentCardMount,
   includeResolved = false,
-  registerInteractiveRoot?: (root: Node) => () => void,
   onGeometryChange?: () => void,
-  onError?: (error: Error) => void,
-): readonly ViewerCommentThreadGeometry[] {
+): readonly ReadOnlyCommentThreadGeometry[] {
   margin.dataset.ooxmlCommentZoom = String(zoom);
   tintLayer.innerHTML = '';
   const threads = commentThreads(model.comments, includeResolved);
   const firstAnchor = new Map<string, CommentAnchorRange>();
-  const anchorRects = new Map<string, ViewerCommentRect[]>();
+  const anchorRects = new Map<string, ReadOnlyCommentRect[]>();
   const surface = tintLayer.parentElement;
   for (const anchor of model.anchors) {
     if (!firstAnchor.has(anchor.commentId)) firstAnchor.set(anchor.commentId, anchor);
@@ -168,11 +156,9 @@ export function buildDocxCommentMargin(
       list.push(rect ?? Object.freeze({ x: run.x, y: run.y, width: run.w, height: run.h }));
     }
   }
-  const visibleThreads = new Map<string, CommentThread>();
   const cardThreads = threads.flatMap((thread): ReadOnlyCommentThread[] => {
     const anchor = firstAnchor.get(thread.root.id);
     if (!anchor || resolveCommentAnchorRuns(anchor, runs).length === 0) return [];
-    visibleThreads.set(thread.root.id, thread);
     return [{
       occurrenceKey: thread.root.id,
       root: toMessage(thread.root, thread.root.id, 0),
@@ -183,21 +169,17 @@ export function buildDocxCommentMargin(
     activeId,
     zoom,
     onSetActive,
-    mountCard,
-    registerInteractiveRoot,
     onGeometryChange,
-    onError,
-    contextFor(cardThread, common, selection) {
-      const thread = visibleThreads.get(cardThread.occurrenceKey);
-      if (!thread) {
-        throw new Error(`Missing DOCX comment thread for ${cardThread.occurrenceKey}`);
-      }
-      return { ...common, ...selection, comment: thread.root, replies: thread.replies };
-    },
   });
-  return Object.freeze(cardThreads.map((thread): ViewerCommentThreadGeometry => {
+  const marginRect = surface ? relativeElementRect(margin, surface) : undefined;
+  return Object.freeze(cardThreads.map((thread): ReadOnlyCommentThreadGeometry => {
     const cardHost = cardHosts.get(thread.occurrenceKey);
-    const cardRect = cardHost && surface ? relativeElementRect(cardHost, surface) : undefined;
+    const measuredCardRect = cardHost && surface
+      ? relativeElementRect(cardHost, surface)
+      : undefined;
+    const cardRect = measuredCardRect && marginRect
+      ? intersectElementRects(measuredCardRect, marginRect)
+      : undefined;
     return Object.freeze({
       occurrenceKey: thread.occurrenceKey,
       active: activeId === thread.occurrenceKey,

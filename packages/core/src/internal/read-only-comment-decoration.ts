@@ -1,117 +1,103 @@
-import type {
-  ViewerCommentDecorationContext,
-  ViewerCommentDecorationMount,
-} from '../comment-decoration.js';
-import type { ViewerDomMountHandle } from '../dom-mount.js';
+/** Internal geometry used by the built-in DOCX/PPTX comment connectors. */
+export interface ReadOnlyCommentRect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface ReadOnlyCommentThreadGeometry {
+  readonly occurrenceKey: string;
+  readonly active: boolean;
+  readonly anchorRects: readonly ReadOnlyCommentRect[];
+  readonly cardRect?: ReadOnlyCommentRect;
+}
+
+export interface ReadOnlyCommentDecorationSnapshot {
+  readonly surfaceBounds: ReadOnlyCommentRect;
+  readonly contentBounds: ReadOnlyCommentRect;
+  readonly threads: readonly ReadOnlyCommentThreadGeometry[];
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
 
 interface DecorationState {
-  readonly abort: AbortController;
-  readonly mount: unknown;
-  readonly handle: ViewerDomMountHandle<ViewerCommentDecorationContext>;
+  readonly svg: SVGSVGElement;
+  readonly paths: Map<string, SVGPathElement>;
 }
 
 const stateByLayer = new WeakMap<HTMLDivElement, DecorationState>();
 
-function asError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
-}
-
-function report(error: unknown, onError?: (error: Error) => void): void {
-  const normalized = asError(error);
-  if (!onError) throw normalized;
-  try {
-    onError(normalized);
-  } catch (callbackError) {
-    console.error('[ooxml] comment decoration error handler failed:', callbackError);
-  }
-}
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return (typeof value === 'object' || typeof value === 'function') && value !== null &&
-    'then' in value && typeof (value as { then?: unknown }).then === 'function';
-}
-
-function isMountHandle(value: unknown): value is ViewerDomMountHandle<ViewerCommentDecorationContext> {
-  return typeof value === 'object' && value !== null &&
-    typeof (value as { update?: unknown }).update === 'function' &&
-    typeof (value as { destroy?: unknown }).destroy === 'function';
-}
-
-export function disposeReadOnlyCommentDecoration(
-  layer: HTMLDivElement,
-  onError?: (error: Error) => void,
-): void {
-  const state = stateByLayer.get(layer);
+export function disposeReadOnlyCommentDecoration(layer: HTMLDivElement): void {
   stateByLayer.delete(layer);
-  if (!state) {
-    layer.replaceChildren();
-    return;
-  }
-  state.abort.abort();
-  try {
-    state.handle.destroy();
-  } catch (error) {
-    report(error, onError);
-  } finally {
-    layer.replaceChildren();
-  }
+  layer.replaceChildren();
 }
 
-/** Reconcile one transparent decoration surface without replacing its host. */
-type WithoutSignal<Context> = Context extends unknown ? Omit<Context, 'signal'> : never;
-
-export function buildReadOnlyCommentDecoration<Context extends ViewerCommentDecorationContext>(
+/** Draw the built-in page/slide-to-card connectors in surface CSS pixels. */
+export function buildReadOnlyCommentDecoration(
   layer: HTMLDivElement,
-  snapshot: WithoutSignal<Context>,
-  mount: ViewerCommentDecorationMount<Context> | undefined,
-  onError?: (error: Error) => void,
+  snapshot: ReadOnlyCommentDecorationSnapshot,
 ): void {
+  layer.dataset.ooxmlCommentConnectors = '';
   let state = stateByLayer.get(layer);
-  if (!mount) {
-    if (state) disposeReadOnlyCommentDecoration(layer, onError);
-    return;
-  }
-  if (state && state.mount !== mount) {
-    disposeReadOnlyCommentDecoration(layer, onError);
-    state = undefined;
-  }
   if (!state) {
-    const host = layer.ownerDocument.createElement('div');
-    host.style.cssText = 'position:absolute;inset:0;overflow:visible;pointer-events:none;';
-    // React/Vue adapters may synchronously require a connected mount point.
-    layer.replaceChildren(host);
-    const abort = new AbortController();
-    const context = Object.freeze({ ...snapshot, signal: abort.signal }) as unknown as Context;
-    let result: unknown;
-    try {
-      result = mount(host, context);
-      if (isPromiseLike(result)) {
-        throw new TypeError(
-          'commentUi.mountDecoration must return synchronously; start async work from the supplied AbortSignal',
-        );
-      }
-      if (!isMountHandle(result)) {
-        throw new TypeError('commentUi.mountDecoration must return an object with update() and destroy()');
-      }
-    } catch (error) {
-      abort.abort();
-      host.remove();
-      report(error, onError);
-      return;
-    }
-    state = {
-      abort,
-      mount,
-      handle: result as unknown as ViewerDomMountHandle<ViewerCommentDecorationContext>,
-    };
+    const svg = layer.ownerDocument.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.style.cssText =
+      'position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;';
+    state = { svg, paths: new Map() };
     stateByLayer.set(layer, state);
-    return;
+    layer.replaceChildren(svg);
   }
-  try {
-    state.handle.update(
-      Object.freeze({ ...snapshot, signal: state.abort.signal }) as unknown as Context,
+  state.svg.setAttribute(
+    'viewBox',
+    `0 0 ${snapshot.surfaceBounds.width} ${snapshot.surfaceBounds.height}`,
+  );
+
+  const orderedPaths: SVGPathElement[] = [];
+  const desired = new Set<string>();
+  for (const thread of snapshot.threads) {
+    const anchor = thread.anchorRects.at(-1);
+    const card = thread.cardRect;
+    if (!anchor || !card) continue;
+    desired.add(thread.occurrenceKey);
+
+    const startX = anchor.x + anchor.width;
+    const startY = anchor.y + anchor.height / 2;
+    const endX = card.x;
+    const endY = card.y + Math.min(card.height / 2, 25);
+    const control = Math.max(14, Math.abs(endX - startX) * 0.5);
+    let path = state.paths.get(thread.occurrenceKey);
+    if (!path) {
+      path = layer.ownerDocument.createElementNS(SVG_NS, 'path');
+      state.paths.set(thread.occurrenceKey, path);
+    }
+    path.dataset.ooxmlCommentConnector = thread.occurrenceKey;
+    path.dataset.ooxmlCommentActive = String(thread.active);
+    path.setAttribute(
+      'd',
+      `M ${startX} ${startY} C ${startX + control} ${startY}, ${endX - control} ${endY}, ${endX} ${endY}`,
     );
-  } catch (error) {
-    report(error, onError);
+    path.style.cssText =
+      'fill:none;vector-effect:non-scaling-stroke;' +
+      `stroke:${thread.active
+        ? 'var(--ooxml-comment-connector-active,#2563eb)'
+        : 'var(--ooxml-comment-connector,#94a3b8)'};` +
+      `stroke-width:${thread.active
+        ? 'var(--ooxml-comment-connector-active-width,1.5px)'
+        : 'var(--ooxml-comment-connector-width,1px)'};` +
+      `opacity:${thread.active
+        ? 'var(--ooxml-comment-connector-active-opacity,.9)'
+        : 'var(--ooxml-comment-connector-opacity,.45)'};`;
+    orderedPaths.push(path);
   }
+
+  for (const [key, path] of [...state.paths]) {
+    if (desired.has(key)) continue;
+    state.paths.delete(key);
+    path.remove();
+  }
+  const orderChanged = orderedPaths.length !== state.svg.children.length ||
+    orderedPaths.some((path, index) => state.svg.children[index] !== path);
+  if (orderChanged) state.svg.replaceChildren(...orderedPaths);
 }

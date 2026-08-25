@@ -281,29 +281,18 @@ for (const format of formats) {
     requireOption(api, format.containerOptions, 'showComments', 'boolean');
     requireOption(api, format.containerOptions, 'commentUi', commentUiType);
   }
-  for (const commonType of [
-    'ViewerCommentMessage',
-    'ViewerCommentThread',
-    'ViewerCommentCardBaseContext',
-    'ViewerCommentUiOptions',
-  ]) {
-    if (!api.interfaces.has(commonType)) fail(`${format.label} does not expose ${commonType}`);
-  }
-  const formatContext = `${format.label[0]}${format.label.slice(1).toLowerCase()}CommentCardContext`;
-  const contextMembers = interfaceMembers(api, formatContext);
-  if (format.label === 'XLSX') {
-    if (!contextMembers.has('dismiss')) fail('XLSX comment cards must expose dismiss()');
-    if (contextMembers.has('active') || contextMembers.has('setActive')) {
-      fail('XLSX hover cards must not masquerade as selected margin cards');
-    }
-  } else if (!contextMembers.has('active') || !contextMembers.has('setActive')) {
-    fail(`${format.label} margin cards must expose idempotent active selection`);
-  } else if (!api.interfaces.has('ViewerSelectableCommentCardContext')) {
-    fail(`${format.label} does not expose ViewerSelectableCommentCardContext`);
+  const commentUiMembers = interfaceMembers(api, commentUiType);
+  if (!commentUiMembers.has('includeResolved')) {
+    fail(`${format.label} comment UI must expose the shared resolved-thread policy`);
   }
 
   if (format.label === 'XLSX' && classMembers(api, format.engine).has('renderSheet')) {
     fail('XlsxWorkbook.renderSheet() must not imply that an unbounded worksheet is one finite canvas unit');
+  }
+  if (format.label === 'XLSX') {
+    for (const viewer of [format.canvasViewer, format.containerViewer]) {
+      requireMethod(api, viewer, 'getCellViewportRect', 'XlsxCellViewportRect | null');
+    }
   }
 }
 
