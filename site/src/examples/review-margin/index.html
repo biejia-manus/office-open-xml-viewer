@@ -2,9 +2,15 @@
   <p class="review-example__status" data-review-status role="status">Loading review data…</p>
   <div class="review-example__content" data-review-content hidden>
     <div class="review-example__toolbar" aria-label="Document page">
-      <button type="button" data-review-previous>Previous</button>
+      <button type="button" data-review-previous>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6l-6 6l6 6" /></svg>
+        <span>Previous</span>
+      </button>
       <span data-review-page-status></span>
-      <button type="button" data-review-next>Next</button>
+      <button type="button" data-review-next>
+        <span>Next</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6l6 6l-6 6" /></svg>
+      </button>
     </div>
     <div class="review-example__layout">
       <div class="review-example__page">

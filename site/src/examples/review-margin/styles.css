@@ -4,6 +4,7 @@
   --review-panel: var(--panel, #fff);
   --review-text: var(--text, #172333);
   --review-text-dim: var(--text-dim, #516071);
+  --review-accent: var(--accent, #2563eb);
   container-type: inline-size;
   padding: 16px;
   border: 1px solid var(--review-border);
@@ -34,13 +35,42 @@
   font-size: 12px;
 }
 .review-example__toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  inline-size: 104px;
+  min-block-size: 34px;
   border: 1px solid var(--review-border);
-  border-radius: 7px;
-  padding: 6px 10px;
+  border-radius: 9px;
+  padding: 6px 12px;
   background: var(--review-panel);
   color: var(--review-text);
+  box-shadow: 0 1px 2px rgb(15 23 42 / .08);
+  font: 600 12px/1 system-ui, sans-serif;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, color .16s ease, box-shadow .16s ease;
 }
-.review-example__toolbar button:disabled { opacity: .45; }
+.review-example__toolbar button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.review-example__toolbar button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--review-accent) 48%, var(--review-border));
+  background: color-mix(in srgb, var(--review-accent) 7%, var(--review-panel));
+  color: var(--review-accent);
+  box-shadow: 0 3px 8px rgb(15 23 42 / .1);
+}
+.review-example__toolbar button:focus-visible {
+  outline: 2px solid var(--review-accent);
+  outline-offset: 2px;
+}
+.review-example__toolbar button:disabled { opacity: .42; cursor: default; box-shadow: none; }
 
 .review-example__layout {
   display: grid;

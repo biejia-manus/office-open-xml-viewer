@@ -80,8 +80,6 @@ export function buildReadOnlyCommentDecoration(
     );
     path.style.cssText =
       'fill:none;vector-effect:non-scaling-stroke;' +
-      'stroke-dasharray:var(--ooxml-comment-connector-dasharray,none);' +
-      'stroke-linecap:var(--ooxml-comment-connector-linecap,butt);' +
       `stroke:${thread.active
         ? 'var(--ooxml-comment-connector-active,#2563eb)'
         : 'var(--ooxml-comment-connector,#94a3b8)'};` +
