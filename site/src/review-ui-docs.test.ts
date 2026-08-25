@@ -18,6 +18,7 @@ describe('DOCX review UI integration guide', () => {
     expect(page).toContain('Highlights or markers');
     expect(page).toContain('showComments: true');
     expect(page).toContain('--ooxml-comment-card-background');
+    expect(page).toContain('--ooxml-comment-avatar-display: grid');
     expect(page).toContain('--ooxml-comment-avatar-radius: 999px');
     expect(page).toContain('Theme the default');
     expect(page).toContain('All comment theme properties');
@@ -27,6 +28,7 @@ describe('DOCX review UI integration guide', () => {
 
   it('documents the built-in avatar styling token used at runtime', () => {
     const margin = read('../../packages/core/src/internal/read-only-comment-margin.ts');
+    expect(margin).toContain('--ooxml-comment-avatar-display');
     expect(margin).toContain('--ooxml-comment-avatar-radius');
   });
 

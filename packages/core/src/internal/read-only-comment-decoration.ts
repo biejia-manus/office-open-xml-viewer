@@ -66,7 +66,7 @@ export function buildReadOnlyCommentDecoration(
     const startY = anchor.y + anchor.height / 2;
     const endX = card.x;
     const endY = card.y + Math.min(card.height / 2, 25);
-    const control = Math.max(14, Math.abs(endX - startX) * 0.5);
+    const elbowX = startX + (endX - startX) * 0.55;
     let path = state.paths.get(thread.occurrenceKey);
     if (!path) {
       path = layer.ownerDocument.createElementNS(SVG_NS, 'path');
@@ -76,7 +76,7 @@ export function buildReadOnlyCommentDecoration(
     path.dataset.ooxmlCommentActive = String(thread.active);
     path.setAttribute(
       'd',
-      `M ${startX} ${startY} C ${startX + control} ${startY}, ${endX - control} ${endY}, ${endX} ${endY}`,
+      `M ${startX} ${startY} H ${elbowX} V ${endY} H ${endX}`,
     );
     path.style.cssText =
       'fill:none;vector-effect:non-scaling-stroke;' +

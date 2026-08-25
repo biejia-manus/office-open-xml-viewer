@@ -31,6 +31,7 @@ const themeExample = `#viewer {
   --ooxml-comment-card-background: #ffffff;
   --ooxml-comment-card-active-background: #dbeafe;
   --ooxml-comment-card-radius: 10px;
+  --ooxml-comment-avatar-display: grid;
   --ooxml-comment-avatar-radius: 999px;
   --ooxml-comment-highlight: rgba(59, 130, 246, 0.18);
   --ooxml-comment-highlight-active: rgba(37, 99, 235, 0.34);
@@ -44,24 +45,25 @@ const themeReference = `#viewer {
   --ooxml-comment-author-color: #0f172a;
   --ooxml-comment-body-color: #334155;
   --ooxml-comment-card-background: #fff;
-  --ooxml-comment-card-border: 1px solid rgba(148, 163, 184, .24);
-  --ooxml-comment-card-radius: .62em;
-  --ooxml-comment-card-shadow: 0 .08em .16em rgba(15, 23, 42, .12);
-  --ooxml-comment-card-padding: .78em .92em;
-  --ooxml-comment-reply-border: rgba(100, 116, 139, .2);
+  --ooxml-comment-card-border: 1px solid rgba(148, 163, 184, .34);
+  --ooxml-comment-card-radius: .3em;
+  --ooxml-comment-card-shadow: none;
+  --ooxml-comment-card-padding: .56em .68em;
+  --ooxml-comment-reply-border: rgba(100, 116, 139, .24);
 
   /* DOCX and PPTX margins */
-  --ooxml-comment-content-gap: .65em;
+  --ooxml-comment-content-gap: .5em;
+  --ooxml-comment-avatar-display: none;
   --ooxml-comment-avatar-background: #2563eb;
   --ooxml-comment-avatar-color: #fff;
   --ooxml-comment-avatar-radius: .7em;
   --ooxml-comment-date-font-family: ui-monospace, monospace;
   --ooxml-comment-muted-color: #64748b;
-  --ooxml-comment-card-gap: .62em;
-  --ooxml-comment-card-active-background: #dbeafe;
-  --ooxml-comment-card-active-border: 1px solid rgba(37, 99, 235, .45);
-  --ooxml-comment-card-active-shadow: 0 0 0 .12em rgba(37, 99, 235, .28);
-  --ooxml-comment-card-focus-shadow: inset 0 0 0 .14em rgba(37, 99, 235, .7);
+  --ooxml-comment-card-gap: .42em;
+  --ooxml-comment-card-active-background: #eff6ff;
+  --ooxml-comment-card-active-border: 1px solid rgba(37, 99, 235, .5);
+  --ooxml-comment-card-active-shadow: none;
+  --ooxml-comment-card-focus-shadow: inset 0 0 0 .12em rgba(37, 99, 235, .65);
   --ooxml-comment-connector: #94a3b8;
   --ooxml-comment-connector-active: #2563eb;
   --ooxml-comment-connector-width: 1px;
@@ -166,7 +168,7 @@ showReviewMargin({ canvas, anchoredComments });
       </details>
       <div class="built-in-preview">
         <h3>Default appearance</h3>
-        <p>The document keeps its page surface; the right margin contains only neutral cards, without a background band.</p>
+        <p>Compact margin balloons keep the document primary. The themed example above shows how to opt into larger avatar cards.</p>
         <BuiltInCommentViewer />
       </div>
     </section>

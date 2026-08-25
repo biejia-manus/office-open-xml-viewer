@@ -110,14 +110,14 @@ function appendCommentBody(host: HTMLElement, comment: ReadOnlyCommentMessage, r
   const owner = host.ownerDocument;
   const block = createDiv(
     owner,
-    `display:flex;gap:var(--ooxml-comment-content-gap,.65em);${reply
-      ? 'margin:.78em 0 0;padding-top:.72em;border-top:.08em solid var(--ooxml-comment-reply-border,rgba(100,116,139,.2));'
+    `display:flex;align-items:flex-start;gap:var(--ooxml-comment-content-gap,.5em);${reply
+      ? 'margin:.55em 0 0 .45em;padding:.08em 0 0 .65em;border-left:.08em solid var(--ooxml-comment-reply-border,rgba(100,116,139,.24));'
       : ''}`,
   );
   block.dataset.ooxmlCommentPart = reply ? 'reply' : 'comment';
   const avatar = createDiv(
     owner,
-    `display:grid;place-items:center;flex:0 0 auto;width:${reply ? '1.8em' : '2.3em'};height:${reply ? '1.8em' : '2.3em'};` +
+    `display:var(--ooxml-comment-avatar-display,none);place-items:center;flex:0 0 auto;width:${reply ? '1.8em' : '2.1em'};height:${reply ? '1.8em' : '2.1em'};` +
       'border-radius:var(--ooxml-comment-avatar-radius,.7em);' +
       'background:var(--ooxml-comment-avatar-background,#2563eb);' +
       'color:var(--ooxml-comment-avatar-color,#fff);' +
@@ -126,10 +126,10 @@ function appendCommentBody(host: HTMLElement, comment: ReadOnlyCommentMessage, r
   avatar.dataset.ooxmlCommentPart = 'avatar';
   avatar.textContent = (comment.author || 'C').trim().slice(0, 1).toUpperCase();
   const content = createDiv(owner, 'min-width:0;flex:1;');
-  const identity = createDiv(owner, 'min-width:0;');
+  const identity = createDiv(owner, 'display:flex;align-items:baseline;gap:.48em;min-width:0;');
   const author = createDiv(
     owner,
-    'min-width:0;font:700 .96em/1.3 var(--ooxml-comment-font-family,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);' +
+    'min-width:0;font:700 .84em/1.3 var(--ooxml-comment-font-family,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);' +
       'color:var(--ooxml-comment-author-color,#0f172a);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;',
   );
   author.dataset.ooxmlCommentPart = 'author';
@@ -139,7 +139,7 @@ function appendCommentBody(host: HTMLElement, comment: ReadOnlyCommentMessage, r
   if (formattedDate) {
     const date = createDiv(
       owner,
-      'margin-top:.08em;font:500 .72em/1.35 var(--ooxml-comment-date-font-family,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);' +
+      'font:500 .66em/1.35 var(--ooxml-comment-date-font-family,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);' +
         'color:var(--ooxml-comment-muted-color,#64748b);white-space:nowrap;',
     );
     date.dataset.ooxmlCommentPart = 'date';
@@ -149,7 +149,7 @@ function appendCommentBody(host: HTMLElement, comment: ReadOnlyCommentMessage, r
   }
   const body = createDiv(
     owner,
-    'margin-top:.62em;font:400 .92em/1.5 var(--ooxml-comment-font-family,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);' +
+    'margin-top:.28em;font:400 .84em/1.45 var(--ooxml-comment-font-family,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);' +
       'color:var(--ooxml-comment-body-color,#334155);white-space:pre-wrap;overflow-wrap:anywhere;',
   );
   body.dataset.ooxmlCommentPart = 'body';
@@ -169,20 +169,20 @@ function paintCard(
   card.dataset.ooxmlCommentActive = String(active);
   card.setAttribute('aria-pressed', String(active));
   card.style.cssText =
-    'display:block;width:100%;box-sizing:border-box;margin:0 0 var(--ooxml-comment-card-gap,.62em);' +
-    'padding:var(--ooxml-comment-card-padding,.78em .92em);' +
+    'display:block;width:100%;box-sizing:border-box;margin:0 0 var(--ooxml-comment-card-gap,.42em);' +
+    'padding:var(--ooxml-comment-card-padding,.56em .68em);' +
     `border:${active
-      ? 'var(--ooxml-comment-card-active-border,1px solid rgba(37,99,235,.45))'
-      : 'var(--ooxml-comment-card-border,1px solid rgba(148,163,184,.24))'};` +
-    'border-radius:var(--ooxml-comment-card-radius,.62em);text-align:left;cursor:pointer;font:inherit;outline:none;' +
+      ? 'var(--ooxml-comment-card-active-border,1px solid rgba(37,99,235,.5))'
+      : 'var(--ooxml-comment-card-border,1px solid rgba(148,163,184,.34))'};` +
+    'border-radius:var(--ooxml-comment-card-radius,.3em);text-align:left;cursor:pointer;font:inherit;outline:none;' +
     `background:${active
-      ? 'var(--ooxml-comment-card-active-background,#dbeafe)'
+      ? 'var(--ooxml-comment-card-active-background,#eff6ff)'
       : 'var(--ooxml-comment-card-background,#fff)'};` +
     `box-shadow:${focused
-      ? 'var(--ooxml-comment-card-focus-shadow,inset 0 0 0 .14em rgba(37,99,235,.7))'
+      ? 'var(--ooxml-comment-card-focus-shadow,inset 0 0 0 .12em rgba(37,99,235,.65))'
       : active
-        ? 'var(--ooxml-comment-card-active-shadow,0 0 0 .12em rgba(37,99,235,.28))'
-        : 'var(--ooxml-comment-card-shadow,0 .08em .16em rgba(15,23,42,.12))'};`;
+        ? 'var(--ooxml-comment-card-active-shadow,none)'
+        : 'var(--ooxml-comment-card-shadow,none)'};`;
   card.replaceChildren();
   appendCommentBody(card, thread.root, false);
   for (const reply of thread.replies) appendCommentBody(card, reply, true);
@@ -251,13 +251,13 @@ export function buildReadOnlyCommentMargin(
         onFocus: () => {
           created.focused = true;
           created.card.style.boxShadow =
-            'var(--ooxml-comment-card-focus-shadow,inset 0 0 0 .14em rgba(37,99,235,.7))';
+            'var(--ooxml-comment-card-focus-shadow,inset 0 0 0 .12em rgba(37,99,235,.65))';
         },
         onBlur: () => {
           created.focused = false;
           created.card.style.boxShadow = created.active
-            ? 'var(--ooxml-comment-card-active-shadow,0 0 0 .12em rgba(37,99,235,.28))'
-            : 'var(--ooxml-comment-card-shadow,0 .08em .16em rgba(15,23,42,.12))';
+            ? 'var(--ooxml-comment-card-active-shadow,none)'
+            : 'var(--ooxml-comment-card-shadow,none)';
         },
       };
       card.addEventListener('click', created.onClick);
