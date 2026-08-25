@@ -45,17 +45,22 @@ export function resolvePageCommentAnchors(
   anchors: readonly Readonly<CommentAnchorRange>[],
   runs: readonly Readonly<DocxTextRunInfo>[],
 ): readonly ResolvedPageCommentAnchor[] {
-  const pageSources = new Set(runs.flatMap((run) => run.source ? [sourceKey(run.source)] : []));
+  const pageSources = new Set<string>();
+  for (const run of runs) {
+    if (run.source) pageSources.add(sourceKey(run.source));
+  }
   if (pageSources.size === 0) return [];
-  return anchors.flatMap((anchor): ResolvedPageCommentAnchor[] => {
+  const pageAnchors: ResolvedPageCommentAnchor[] = [];
+  for (const anchor of anchors) {
     const mayResolve = pageSources.has(sourceKey(anchor.source)) ||
       pageSources.has(sourceKey(anchor.reference.source)) ||
       (anchor.geometryFallback !== undefined &&
         pageSources.has(sourceKey(anchor.geometryFallback.source)));
-    if (!mayResolve) return [];
+    if (!mayResolve) continue;
     const resolved = resolveCommentAnchorRuns(anchor, runs);
-    return resolved.length > 0 ? [{ anchor, runs: resolved }] : [];
-  });
+    if (resolved.length > 0) pageAnchors.push({ anchor, runs: resolved });
+  }
+  return pageAnchors;
 }
 
 export interface DocxCommentsOptions extends ViewerCommentsOptions {
