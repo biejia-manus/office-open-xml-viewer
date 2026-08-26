@@ -576,6 +576,10 @@ export class DocxDocument {
           const progressiveDocument = doc;
           const abort = new AbortController();
           progressiveDocument._layoutAbort = abort;
+          // The opening preview is itself laid out in scheduler slices, so the
+          // first publication arrives asynchronously — this deferred is what
+          // load() resolves on, exactly as the worker path's firstPublication.
+          const firstPublication = deferred<void>();
           let published = false;
           const full = layoutDocumentProgressively(
             doc._source.bodyLayoutInput,
@@ -596,6 +600,7 @@ export class DocxDocument {
                 } else {
                   progressiveDocument._layoutComplete = false;
                   published = true;
+                  firstPublication.resolve();
                 }
               },
             },
@@ -607,28 +612,34 @@ export class DocxDocument {
             progressiveDocument._bookmarkPages = null;
             progressiveDocument._layoutComplete = true;
             opts.onLayoutComplete?.();
+            // Nothing was published: there was nothing to show early, so
+            // load() resolves here, on the layout that would have been built
+            // anyway. Resolving an already-resolved deferred is a no-op.
+            firstPublication.resolve();
           });
-          // Nothing was published, so there is nothing to show early and no
-          // reason to resolve load() before the layout that would have been
-          // built anyway. Failures still reject load() on this path.
-          if (!published) await full;
-          else {
-            // load() is about to resolve, so a later failure can no longer
-            // reject it. Retain it for whenLayoutComplete() and report it once,
-            // rather than surfacing as an unhandled rejection.
-            progressiveDocument._layoutCompletion = full.catch((error: unknown) => {
-              // An aborted drain means the document was destroyed or replaced,
-              // not that layout failed. Settle quietly: there is nobody left to
-              // tell, and `whenLayoutComplete` must not reject for it.
-              if (error instanceof PaginationAbortError) {
-                progressiveDocument._layoutComplete = true;
-                return;
-              }
-              progressiveDocument._layoutError = error;
+          // Never awaited raw: once a publication resolves load(), a later
+          // failure can no longer reject it and must surface through
+          // whenLayoutComplete() instead of as an unhandled rejection.
+          progressiveDocument._layoutCompletion = full.catch((error: unknown) => {
+            if (!published) {
+              // Nothing was shown early, so this is still load()'s own
+              // rejection — including an abort, which for an un-resolved
+              // load() means the caller's await must not hang forever.
+              firstPublication.reject(error);
+              return;
+            }
+            // An aborted drain means the document was destroyed or replaced,
+            // not that layout failed. Settle quietly: there is nobody left to
+            // tell, and `whenLayoutComplete` must not reject for it.
+            if (error instanceof PaginationAbortError) {
               progressiveDocument._layoutComplete = true;
-              opts.onLayoutComplete?.(error);
-            });
-          }
+              return;
+            }
+            progressiveDocument._layoutError = error;
+            progressiveDocument._layoutComplete = true;
+            opts.onLayoutComplete?.(error);
+          });
+          await firstPublication.promise;
         } else if (deferrable && (opts.sliceLayout || opts.onLayoutProgress)) {
           const layout = await layoutDocumentInputAsync(
             doc._source.bodyLayoutInput,

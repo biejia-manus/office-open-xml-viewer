@@ -54,12 +54,14 @@ import { setDocumentLayoutValidation } from './validation-policy.js';
  * the same by construction and measuring both would just be measuring twice.
  *
  * The mode decides whose thread pays that cost, which is what `pre-paint
- * block`, `longest block` and `yields` are for. `pre-paint block` is the one
- * worth arguing from: `emitPreview` builds the opening preview with the
- * blocking `paginateBody` rather than the sliced generator, so in main mode the
- * UI is frozen for that entire stretch BEFORE the first page can be painted —
- * progressive layout shortens the wait to first paint but does not make it
- * interactive. Worker mode is what removes the freeze. In main mode the totals above are time the UI thread is
+ * block`, `longest block` and `yields` are for. With the opening preview
+ * drained through the same scheduler as the rest, `pre-paint block` should sit
+ * near the slice budget: main mode stays interactive throughout, paying the
+ * totals above in slice-sized installments of UI-thread time. `longest block`
+ * is bounded below by the slowest single body entry — the scheduler can only
+ * release the thread BETWEEN entries. Worker mode moves all of it off the UI
+ * thread entirely; what remains unpriceable in-process is its spin-up, parse
+ * and per-page bitmap transfer. In main mode the totals above are time the UI thread is
  * occupied — spread over `yields` slices, none longer than `longest block`
  * (and, for a non-progressive load, one single block as long as the whole
  * `blocking` column). In worker mode the UI thread pays none of it. That
@@ -134,10 +136,11 @@ describe.skipIf(!ENABLED)('progressive layout latency', () => {
       // a main-mode UI would be frozen for. This is the only column that
       // distinguishes the two render modes at all — see the header.
       let longestBlockMs = 0;
-      // The block up to the FIRST release. `emitPreview` produces the opening
-      // preview with the blocking `paginateBody`, not the sliced generator, so
-      // this is one uninterrupted stretch — the UI freeze a main-mode reader
-      // actually experiences before the first page appears.
+      // The block up to the FIRST release — the longest a main-mode UI can be
+      // frozen before layout first lets go of the thread. Since the opening
+      // preview drains through the same scheduler as everything else, this
+      // should sit near the slice budget; a large value here means slicing
+      // regressed somewhere on the way to first paint.
       let prePaintBlockMs = 0;
       let yields = 0;
       let lastYield = performance.now();
@@ -251,9 +254,10 @@ describe.skipIf(!ENABLED)('progressive layout latency', () => {
       'it and stays free for the whole duration, at the cost of spin-up, parse',
       'and per-page bitmap transfer that this harness does not measure.',
       '',
-      '`pre-paint block` is the sharpest difference: the opening preview is',
-      'built with the blocking paginateBody, so in main mode the UI is frozen',
-      'for that long BEFORE the first page appears. In worker mode it is not.',
+      '`pre-paint block` is the longest the UI can freeze before layout first',
+      'releases the thread; with the preview sliced it should sit near the',
+      '16ms budget. `longest block` is bounded by the slowest single body',
+      'entry — the scheduler only yields between entries.',
       '',
     ];
     const report = lines.join('\n');
