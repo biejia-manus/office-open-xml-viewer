@@ -178,7 +178,7 @@ describe('framework integration guides', () => {
     expect(packageJson.stackblitz?.startCommand).toBe(false);
   });
 
-  it.each(exampleFrameworks)('uses the current library release in the %s example', (framework) => {
+  it.each(exampleFrameworks)('uses the current library minor line in the %s example', (framework) => {
     const rootPackage = JSON.parse(readFileSync(new URL('package.json', repositoryRoot), 'utf8')) as {
       version: string;
     };
@@ -186,7 +186,8 @@ describe('framework integration guides', () => {
       dependencies?: Record<string, string>;
     };
 
-    expect(packageJson.dependencies?.['@silurus/ooxml']).toBe(`^${rootPackage.version}`);
+    const [major, minor] = rootPackage.version.split('.');
+    expect(packageJson.dependencies?.['@silurus/ooxml']).toBe(`^${major}.${minor}.0`);
   });
 
   it.each(exampleFrameworks)(
