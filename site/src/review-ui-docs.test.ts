@@ -94,6 +94,13 @@ describe('Office comment UI integration guide', () => {
     expect(builtIn).not.toContain('min-height: 640px');
   });
 
+  it('keeps the built-in viewer alive while the page is stored in the back-forward cache', () => {
+    const builtIn = read('./components/BuiltInCommentViewer.astro');
+    expect(builtIn).toContain("window.addEventListener('pagehide', (event) => {");
+    expect(builtIn).toContain('if (event.persisted) return;');
+    expect(builtIn).not.toContain("window.addEventListener('pagehide', destroy, { once: true });");
+  });
+
   it('maps concepts to public APIs and distinguishes transcript from anchored UI', () => {
     const example = read('./examples/review-margin/index.ts');
     for (const api of ['doc.comments', 'getCommentThreads(pageIndex', 'workbook.getComments(sheetIndex)', 'getElementBoundsByIds']) {
