@@ -46,6 +46,28 @@ import { setDocumentLayoutValidation } from './validation-policy.js';
  *   - main-thread frame contention, which is the entire point of worker mode
  *     and the one thing an in-process harness structurally cannot show
  *
+ * ## main mode vs worker mode
+ *
+ * This harness deliberately reports ONE set of layout numbers, because there is
+ * only one engine: `mode: 'main'` and `mode: 'worker'` run the identical
+ * `layoutDocumentProgressively` over identical services, so their layout cost is
+ * the same by construction and measuring both would just be measuring twice.
+ *
+ * The mode decides whose thread pays that cost, which is what `pre-paint
+ * block`, `longest block` and `yields` are for. `pre-paint block` is the one
+ * worth arguing from: `emitPreview` builds the opening preview with the
+ * blocking `paginateBody` rather than the sliced generator, so in main mode the
+ * UI is frozen for that entire stretch BEFORE the first page can be painted —
+ * progressive layout shortens the wait to first paint but does not make it
+ * interactive. Worker mode is what removes the freeze. In main mode the totals above are time the UI thread is
+ * occupied — spread over `yields` slices, none longer than `longest block`
+ * (and, for a non-progressive load, one single block as long as the whole
+ * `blocking` column). In worker mode the UI thread pays none of it. That
+ * difference is architectural rather than empirical; what an in-process harness
+ * genuinely cannot price is worker spin-up, a second WASM instantiation, font
+ * preload in the worker, and per-page `ImageBitmap` transfer. For those, the
+ * browser is the only honest instrument.
+ *
  * The stub canvas also substitutes arithmetic glyph widths for real shaping.
  * Since measurement dominates the block loop, the absolute milliseconds are
  * optimistic and the progressive:blocking RATIO is the portable finding. For an
@@ -71,6 +93,9 @@ interface Row {
   progressiveMs: number;
   unslicedMs: number;
   blockingMs: number;
+  longestBlockMs: number;
+  prePaintBlockMs: number;
+  yields: number;
   pages: number;
   measureCalls: number;
 }
@@ -105,7 +130,31 @@ describe.skipIf(!ENABLED)('progressive layout latency', () => {
       // 1. Progressive: timestamp the first publication, then run to completion.
       const progressive = fixture(shape, paragraphs);
       const callsBefore = measureTextCalls();
+      // Instrumented yield: the gap between releases IS the uninterrupted block
+      // a main-mode UI would be frozen for. This is the only column that
+      // distinguishes the two render modes at all — see the header.
+      let longestBlockMs = 0;
+      // The block up to the FIRST release. `emitPreview` produces the opening
+      // preview with the blocking `paginateBody`, not the sliced generator, so
+      // this is one uninterrupted stretch — the UI freeze a main-mode reader
+      // actually experiences before the first page appears.
+      let prePaintBlockMs = 0;
+      let yields = 0;
+      let lastYield = performance.now();
+      const yieldToHost = async (): Promise<void> => {
+        const block = performance.now() - lastYield;
+        longestBlockMs = Math.max(longestBlockMs, block);
+        if (yields === 0) prePaintBlockMs = block;
+        yields += 1;
+        await new Promise<void>((resolve) => {
+          const channel = new MessageChannel();
+          channel.port1.onmessage = () => { channel.port1.close(); resolve(); };
+          channel.port2.postMessage(null);
+        });
+        lastYield = performance.now();
+      };
       const started = performance.now();
+      lastYield = started;
       let firstPreviewMs: number | null = null;
       let previewPages = 0;
       const full = await layoutDocumentProgressively(
@@ -114,6 +163,7 @@ describe.skipIf(!ENABLED)('progressive layout latency', () => {
         options,
         {
           hasPaginationFields: progressive.source.hasPaginationFields,
+          scheduler: { yieldToHost },
           onPreview: (preview) => {
             firstPreviewMs ??= performance.now() - started;
             if (previewPages === 0) previewPages = preview.layout.pages.length;
@@ -164,14 +214,17 @@ describe.skipIf(!ENABLED)('progressive layout latency', () => {
         unslicedMs,
         blockingMs,
         pages: full.pages.length,
+        longestBlockMs,
+        prePaintBlockMs,
+        yields,
         measureCalls,
       });
     }
 
     const lines = [
       '',
-      '| shape | body | pages | first preview | progressive total | unsliced | blocking | speedup to 1st page | repeated work | slicing |',
-      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| shape | body | pages | first preview | progressive total | unsliced | blocking | speedup to 1st page | repeated work | slicing | pre-paint block | longest block | yields |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
       ...rows.map((row) => {
         const first = row.firstPreviewMs === null ? 'none' : `${fixed(row.firstPreviewMs)}ms`;
         const speedup = row.firstPreviewMs === null
@@ -181,11 +234,26 @@ describe.skipIf(!ENABLED)('progressive layout latency', () => {
           + `${fixed(row.progressiveMs)}ms | ${fixed(row.unslicedMs)}ms | `
           + `${fixed(row.blockingMs)}ms | ${speedup} | `
           + `${fixed(row.unslicedMs / row.blockingMs, 2)}× | `
-          + `${fixed(row.progressiveMs / row.unslicedMs, 2)}× |`;
+          + `${fixed(row.progressiveMs / row.unslicedMs, 2)}× | `
+          + `${fixed(row.prePaintBlockMs)}ms | ${fixed(row.longestBlockMs)}ms | `
+          + `${row.yields} |`;
       }),
       '',
       'Layout cost only — excludes worker spin-up, WASM parse, font preload,',
       'wire transfer and paint. See this file’s header before quoting these.',
+      '',
+      'main vs worker: every column except the last three is IDENTICAL in both',
+      'render modes — it is one engine, and these run it in-process. What the',
+      'mode changes is WHOSE thread pays. In `main` the numbers above are time',
+      'the UI thread is occupied, in slices of at most `longest block`; a',
+      'blocking (non-progressive) main-mode load makes that one block as long',
+      'as the whole `blocking` column. In `worker` the UI thread pays none of',
+      'it and stays free for the whole duration, at the cost of spin-up, parse',
+      'and per-page bitmap transfer that this harness does not measure.',
+      '',
+      '`pre-paint block` is the sharpest difference: the opening preview is',
+      'built with the blocking paginateBody, so in main mode the UI is frozen',
+      'for that long BEFORE the first page appears. In worker mode it is not.',
       '',
     ];
     const report = lines.join('\n');

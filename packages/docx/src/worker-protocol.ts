@@ -84,7 +84,13 @@ export type WireRenderPageOptions = Omit<RenderPageOptions, 'onTextRun'>;
 // `init` arm is copied verbatim from `WorkerRequest`.
 export type RenderWorkerRequest =
   | { type: 'init'; wasmUrl: string }
-  | { type: 'parse'; id: number; data: ArrayBuffer; resourcePolicy: NormalizedOoxmlResourcePolicy; useGoogleFonts?: boolean; defaultCurrentDateMs: number; renderers?: WorkerRendererDescriptors; progressiveLayout?: boolean }
+  // `currentDateMs` / `showTrackedChanges` select the layout VARIANT the worker
+  // paginates and reports metadata for. They are acquisition inputs, not paint
+  // flags: hiding deletions changes line breaking, and DATE/TIME field text
+  // changes measured widths, so each combination is a genuinely different
+  // pagination with its own page count. Omitted means the document's default
+  // view, which is what every load selected before these existed.
+  | { type: 'parse'; id: number; data: ArrayBuffer; resourcePolicy: NormalizedOoxmlResourcePolicy; useGoogleFonts?: boolean; defaultCurrentDateMs: number; currentDateMs?: number; showTrackedChanges?: boolean; renderers?: WorkerRendererDescriptors; progressiveLayout?: boolean }
   | { type: 'renderPage'; id: number; pageIndex: number; opts: WireRenderPageOptions }
   // IX6 — collect a page's text-run geometry WITHOUT transferring a bitmap. The
   // find controller scans every page for its runs; a bitmap per page would be

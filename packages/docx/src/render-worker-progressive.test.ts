@@ -10,7 +10,7 @@ import {
 import { paginateBody } from './layout/body-paginator.js';
 import { PaginationAbortError } from './layout/pagination-scheduler.js';
 import { layoutFingerprint } from './layout/invariants.js';
-import { layoutOptionsForRender } from './layout/options.js';
+import { layoutOptionsForRender, normalizeLayoutOptions } from './layout/options.js';
 import { setDocumentLayoutValidation } from './layout/validation-policy.js';
 import type { DocumentLayout } from './layout/types.js';
 import {
@@ -35,6 +35,8 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DEFAULT_CURRENT_DATE_MS = 1_700_000_000_000;
+const DEFAULT_VIEW = layoutOptionsForRender({ defaultCurrentDateMs: DEFAULT_CURRENT_DATE_MS });
+const MARKUP_VIEW = normalizeLayoutOptions(undefined, DEFAULT_CURRENT_DATE_MS, true);
 
 function retain(shape: SyntheticDocumentShape, paragraphs: number) {
   const source = layoutSourceStore(syntheticDocxModel(shape, { paragraphs }));
@@ -85,6 +87,7 @@ describe('render worker progressive layout', () => {
       retained,
       source,
       recorder.publisher,
+      DEFAULT_VIEW,
     );
 
     expect(recorder.publications.length).toBeGreaterThan(0);
@@ -123,7 +126,8 @@ describe('render worker progressive layout', () => {
     const { source, retained } = retain('plain', 300);
     const recorder = recordingPublisher(() => retained.layoutVariants.defaultLayout.pages.length);
 
-    await paginateRenderWorkerDocumentProgressively(retained, source, recorder.publisher);
+    await paginateRenderWorkerDocumentProgressively(
+      retained, source, recorder.publisher, DEFAULT_VIEW);
 
     expect(recorder.progress.length).toBeGreaterThan(0);
   }, 300_000);
@@ -132,7 +136,8 @@ describe('render worker progressive layout', () => {
     const { source, retained } = retain('plain', 300);
     const recorder = recordingPublisher(() => retained.layoutVariants.defaultLayout.pages.length);
 
-    await paginateRenderWorkerDocumentProgressively(retained, source, recorder.publisher);
+    await paginateRenderWorkerDocumentProgressively(
+      retained, source, recorder.publisher, DEFAULT_VIEW);
 
     for (const publication of recorder.publications) {
       // A prefix map may be empty, but it may never name a page that prefix
@@ -158,6 +163,7 @@ describe('render worker progressive layout', () => {
         publish: () => { published += 1; abort.abort(); },
         progress: () => {},
       },
+      DEFAULT_VIEW,
       abort.signal,
     );
 
@@ -167,6 +173,64 @@ describe('render worker progressive layout', () => {
     expect(store.defaultLayout.pages.length).toBeGreaterThan(0);
   }, 300_000);
 
+  it('previews and primes the variant the load selected, not the default one', async () => {
+    // The markup view genuinely paginates differently — deletions stay visible,
+    // so line breaking and page breaks move. Priming under the default key
+    // would leave the progressive pass unread AND make the worker build a
+    // second full layout for the view it actually paints.
+    const source = layoutSourceStore(syntheticDocxModel('tracked-fields', { paragraphs: 200 }));
+    const services = createLayoutServices(source);
+    const retained = retainRenderWorkerDocumentLayout(source, services, DEFAULT_CURRENT_DATE_MS);
+    const store = retained.layoutVariants;
+    const recorder = recordingPublisher(() => store.layoutFor(MARKUP_VIEW).pages.length);
+
+    await paginateRenderWorkerDocumentProgressively(
+      retained, source, recorder.publisher, MARKUP_VIEW);
+
+    expect(recorder.publications.length).toBeGreaterThan(0);
+    // Every publication was primed under the markup key, so the store served
+    // exactly the announced pages for THAT view.
+    recorder.publications.forEach((publication, index) => {
+      expect(recorder.servedAtPublish[index]).toBe(publication.pageCount);
+    });
+
+    // The markup layout is now cached, so the worker's metadata route reads it
+    // back rather than paginating again...
+    expect(store.hasLayoutFor(MARKUP_VIEW)).toBe(true);
+    const markupPages = store.layoutFor(MARKUP_VIEW).pages.length;
+    // ...and it is a genuinely different pagination from the final view, which
+    // is what makes reporting the default variant a real bug rather than a
+    // stylistic one.
+    expect(store.layoutFor(DEFAULT_VIEW).pages.length).not.toBe(markupPages);
+
+    const fresh = layoutSourceStore(syntheticDocxModel('tracked-fields', { paragraphs: 200 }));
+    const blocking = paginateBody(
+      fresh.bodyLayoutInput,
+      createLayoutServices(fresh),
+      MARKUP_VIEW,
+    );
+    expect(layoutFingerprint(store.layoutFor(MARKUP_VIEW) as DocumentLayout))
+      .toBe(layoutFingerprint(blocking));
+  }, 300_000);
+
+  it('honours an explicit currentDate as its own variant', async () => {
+    // DATE/TIME field text changes measured widths, so the date is an
+    // acquisition input with its own pagination — not a paint-time detail.
+    const { source, retained } = retain('fields', 200);
+    const dated = normalizeLayoutOptions(DEFAULT_CURRENT_DATE_MS + 86_400_000 * 400, DEFAULT_CURRENT_DATE_MS);
+    const store = retained.layoutVariants;
+    const recorder = recordingPublisher(() => store.layoutFor(dated).pages.length);
+
+    await paginateRenderWorkerDocumentProgressively(
+      retained, source, recorder.publisher, dated);
+
+    expect(store.hasLayoutFor(dated)).toBe(true);
+    const fresh = layoutSourceStore(syntheticDocxModel('fields', { paragraphs: 200 }));
+    const blocking = paginateBody(fresh.bodyLayoutInput, createLayoutServices(fresh), dated);
+    expect(layoutFingerprint(store.layoutFor(dated) as DocumentLayout))
+      .toBe(layoutFingerprint(blocking));
+  }, 300_000);
+
   it('still deposits the authoritative layout when no preview is publishable', async () => {
     // A document short enough that previewing is pointless publishes nothing —
     // but the store must still end up primed, or the worker's metadata route
@@ -174,7 +238,8 @@ describe('render worker progressive layout', () => {
     const { source, retained } = retain('plain', 6);
     const recorder = recordingPublisher(() => retained.layoutVariants.defaultLayout.pages.length);
 
-    await paginateRenderWorkerDocumentProgressively(retained, source, recorder.publisher);
+    await paginateRenderWorkerDocumentProgressively(
+      retained, source, recorder.publisher, DEFAULT_VIEW);
 
     expect(recorder.publications).toHaveLength(0);
     expect(retained.layoutVariants.defaultLayout.pages.length).toBeGreaterThan(0);

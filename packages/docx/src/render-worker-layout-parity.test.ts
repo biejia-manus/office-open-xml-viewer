@@ -550,6 +550,8 @@ describe('render worker canonical layout parity', () => {
       type: 'parse', id: 5, data: new ArrayBuffer(0), useGoogleFonts: false,
       resourcePolicy: DEFAULT_OOXML_RESOURCE_LIMITS,
       defaultCurrentDateMs: 10,
+      currentDateMs: 20,
+      showTrackedChanges: true,
       progressiveLayout: true,
     } satisfies RenderWorkerRequest;
     // Uncorrelated pushes: `forId`, never `id`. The bridge resolves a pending
@@ -590,8 +592,8 @@ describe('render worker canonical layout parity', () => {
     expect(Object.keys(pageRendered).sort()).toEqual(['bitmap', 'id', 'runs', 'type']);
     expect(Object.keys(runsCollected).sort()).toEqual(['id', 'runs', 'type']);
     expect(Object.keys(progressiveParse).sort()).toEqual([
-      'data', 'defaultCurrentDateMs', 'id', 'progressiveLayout', 'resourcePolicy',
-      'type', 'useGoogleFonts',
+      'currentDateMs', 'data', 'defaultCurrentDateMs', 'id', 'progressiveLayout',
+      'resourcePolicy', 'showTrackedChanges', 'type', 'useGoogleFonts',
     ]);
     expect(Object.keys(layoutPartial).sort()).toEqual(['forId', 'partial', 'type']);
     expect(Object.keys(layoutPartial.partial).sort()).toEqual([

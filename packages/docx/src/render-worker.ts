@@ -51,6 +51,7 @@ import {
 } from './render-worker-layout.js';
 import { paginateRenderWorkerDocumentProgressively } from './render-worker-progressive.js';
 import { PaginationAbortError } from './layout/pagination-scheduler.js';
+import { normalizeLayoutOptions } from './layout/options.js';
 import { textRunsForSelectedPage } from './text-run-projection.js';
 import { textRunSourceIndexForDocument } from './layout/text-index.js';
 import { hitTestSelectedDocxElementContext } from './element-context.js';
@@ -260,6 +261,16 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest>) => {
         layoutServices,
         req.defaultCurrentDateMs,
       );
+      // The variant this load will actually be viewed as. Everything below —
+      // the progressive prefix, the authoritative layout, and the metadata the
+      // host's geometry accessors read — is built for THIS view, so a
+      // tracked-changes or explicit-date load no longer reports a page count
+      // belonging to a pagination nobody is going to paint.
+      const layoutOptions = normalizeLayoutOptions(
+        req.currentDateMs,
+        req.defaultCurrentDateMs,
+        req.showTrackedChanges,
+      );
       // Progressive layout: publish the opening pages long before the whole
       // document is paginated, so the host can resolve load() and paint while
       // the rest is still being laid out. Every publication primes the variant
@@ -298,13 +309,14 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest>) => {
             lastProgressMs = now;
             post({ type: 'layoutProgress', forId: id, committedPages });
           },
-        }, abort.signal);
+        }, layoutOptions, abort.signal);
         if (layoutAbort === abort) layoutAbort = null;
       }
-      // Unchanged, and now usually a cache hit: the progressive drive above
-      // primed this exact variant, so this reads the authoritative layout back
-      // rather than paginating a second time.
-      const layout = doc.layoutVariants.defaultLayout;
+      // Usually a cache hit: the progressive drive above primed this exact
+      // variant, so this reads the authoritative layout back rather than
+      // paginating a second time. Without progressive layout it is the
+      // blocking build, as it always was.
+      const layout = doc.layoutVariants.layoutFor(layoutOptions);
       const pageSizes = layout.pages.map((page) => ({
         widthPt: page.geometry.widthPt,
         heightPt: page.geometry.heightPt,

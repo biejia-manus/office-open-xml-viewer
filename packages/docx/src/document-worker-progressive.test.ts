@@ -64,6 +64,7 @@ function fullMeta(pageCount: number): DocumentMeta {
  */
 function progressiveDocument(opts: {
   timeoutMs?: number;
+  view?: { currentDateMs?: number; showTrackedChanges?: boolean };
   onPartial?: (p: { pageCount: number; exact: boolean }) => void;
   onComplete?: (error?: unknown) => void;
   onProgress?: (p: { committedPages: number }) => void;
@@ -95,6 +96,14 @@ function progressiveDocument(opts: {
     },
   });
   attachDocumentLayoutRuntime(document, 0);
+  if (opts.view) {
+    // load() records the active variant before parsing; the parse request is
+    // derived from that same record.
+    (document as unknown as { setLayoutView(v: unknown): void }).setLayoutView({
+      currentDate: opts.view.currentDateMs,
+      showTrackedChanges: opts.view.showTrackedChanges,
+    });
+  }
 
   const progressive = {
     onPartial: opts.onPartial,
@@ -196,6 +205,32 @@ describe('worker-mode progressive load', () => {
     expect(harness.document.layoutComplete).toBe(true);
     expect(harness.document.getBookmarkPage('outro')).toBe(39);
     expect(completed).toBe(1);
+  });
+
+  it('sends the default view as no view fields at all', async () => {
+    // Keeps the wire shape identical to what pre-variant builds sent, so a
+    // default load cannot accidentally select a different key.
+    const harness = progressiveDocument();
+    const parse = harness.requests[0];
+
+    expect(parse && 'currentDateMs' in parse).toBe(false);
+    expect(parse && 'showTrackedChanges' in parse).toBe(false);
+  });
+
+  it('carries the selected variant to the worker so metadata describes the painted view', async () => {
+    // Before this, a worker-mode markup load reported the FINAL view's page
+    // count while painting the markup one — the two genuinely differ.
+    const harness = progressiveDocument({ view: { showTrackedChanges: true } });
+    const parse = harness.requests[0];
+
+    expect(parse && 'showTrackedChanges' in parse && parse.showTrackedChanges).toBe(true);
+  });
+
+  it('carries an explicit currentDate as a variant axis', async () => {
+    const harness = progressiveDocument({ view: { currentDateMs: 5_000 } });
+    const parse = harness.requests[0];
+
+    expect(parse && 'currentDateMs' in parse && parse.currentDateMs).toBe(5_000);
   });
 
   it('ignores a push naming a parse this document has moved past', async () => {

@@ -24,18 +24,23 @@
  * `pageSizes` / `meta` declaration, so the partials' geometry has to be built
  * somewhere else.
  *
- * ## Why the worker's existing metadata route still works unchanged
+ * ## Why the worker's metadata route stays a single line
  *
  * This primes the AUTHORITATIVE layout into the variant store before it
- * returns, under the same options key `defaultLayout` selects. The worker's
- * `const layout = doc.layoutVariants.defaultLayout` therefore becomes a cache
- * hit rather than a second pagination: identical bytes, no repeated work, and
- * the canonical route stays spelled exactly as the boundary checker requires.
+ * returns, under the very options key the caller passed. The worker's
+ * `const layout = doc.layoutVariants.layoutFor(layoutOptions)` therefore
+ * becomes a cache hit rather than a second pagination: identical bytes, no
+ * repeated work, and one spelling of "the layout this parse is reporting on".
+ *
+ * `layoutOptions` is supplied rather than derived here precisely so it cannot
+ * drift from the one the metadata route selects. Priming under a key nothing
+ * reads would be worse than not previewing at all: the whole progressive pass
+ * would be discarded AND a second full layout built.
  */
 import { buildBookmarkPageMap } from './bookmark-nav.js';
-import { layoutOptionsForRender } from './layout/options.js';
 import { layoutDocumentProgressively } from './layout/progressive.js';
 import type { DeepReadonly, DocumentLayout } from './layout/types.js';
+import type { LayoutOptions } from './layout/options.js';
 import type { LayoutSourceStore } from './layout/layout-source-store.js';
 import type { RetainedRenderWorkerDocumentLayout } from './render-worker-layout.js';
 import type { DocumentLayoutPartial } from './worker-protocol.js';
@@ -97,16 +102,9 @@ export async function paginateRenderWorkerDocumentProgressively(
   doc: RetainedRenderWorkerDocumentLayout,
   source: LayoutSourceStore,
   publisher: RenderWorkerLayoutPublisher,
+  layoutOptions: LayoutOptions,
   signal?: AbortSignal,
 ): Promise<void> {
-  // The same helper `attachDocumentLayoutVariants` uses to derive the store's
-  // default options, so the key this primes under is provably the key
-  // `defaultLayout` selects. Worker mode paginates the default variant today;
-  // building the prefix for any other one would publish pages the worker is not
-  // going to paint.
-  const layoutOptions = layoutOptionsForRender({
-    defaultCurrentDateMs: doc.defaultCurrentDateMs,
-  });
   const store = doc.layoutVariants;
   let published = false;
   const layout = await layoutDocumentProgressively(

@@ -153,13 +153,12 @@ export interface LoadOptions extends CoreLoadOptions {
    * whole document: page-count-sensitive UI, text search, bookmark navigation,
    * printing or export.
    *
-   * Works in BOTH `mode: 'main'` and `mode: 'worker'`. In worker mode the
-   * pagination stays in the render worker, so the opening pages arrive without
-   * a blank wait AND the remaining layout never competes for main-thread
-   * frames. One limitation there: the worker paginates the document's default
-   * view, so a load that also selects a variant — `showTrackedChanges: true`,
-   * or an explicit {@link currentDate} — falls back to a blocking parse rather
-   * than publish pages for a view it is not going to paint.
+   * Works in BOTH `mode: 'main'` and `mode: 'worker'`, and for any layout
+   * variant: `showTrackedChanges` and an explicit {@link currentDate} each
+   * select their own pagination, and the worker previews, paginates and reports
+   * metadata for whichever one the load chose. In worker mode the pagination
+   * stays in the render worker, so the opening pages arrive without a blank
+   * wait AND the remaining layout never competes for main-thread frames.
    *
    * Off by default: `load()` resolving before the document is fully laid out is
    * a behaviour change existing callers should opt into.
@@ -433,21 +432,26 @@ export class DocxDocument {
         ? (await import('./render-worker-host')).createRenderWorker()
         : new InlineWorker();
     const rendererDescriptors = mode === 'worker' ? workerRendererDescriptors(opts) : undefined;
-    // The render worker paginates the DEFAULT layout variant — its metadata
-    // route reads `doc.layoutVariants.defaultLayout`. A load that selects
-    // another variant (the tracked-changes markup view, or an explicit
-    // `currentDate`) would therefore have its prefix primed under a key nothing
-    // reads: the progressive pass would be discarded AND a second full layout
-    // built. Such a load keeps today's blocking parse until the worker learns
-    // to paginate the variant actually being viewed.
-    const workerProgressive = mode === 'worker'
-      && !!opts.progressiveLayout
-      && opts.currentDate === undefined
-      && opts.showTrackedChanges !== true;
+    const workerProgressive = mode === 'worker' && !!opts.progressiveLayout;
     let doc: DocxDocument | undefined;
     try {
       doc = new DocxDocument(worker, mode, defaultCurrentDateMs, opts.wasmUrl);
       doc._metrics = metrics;
+      {
+        // The variant the caller will actually render, recorded for BOTH render
+        // modes and recorded BEFORE the parse: geometry accessors and the
+        // per-call option fill-in (`_withActiveView`) read it, the wire options
+        // for every render/collect/hit-test request are filled from it, and in
+        // worker mode the parse itself now carries it so the worker paginates
+        // — and reports metadata for — this same variant rather than the
+        // default one.
+        const runtime = documentLayoutRuntimeOf(doc);
+        runtime.activeLayoutOptions = normalizeLayoutOptions(
+          opts.currentDate,
+          runtime.defaultCurrentDateMs,
+          opts.showTrackedChanges === true,
+        );
+      }
       // In worker mode the worker preloads fonts before paginating (pagination
       // measures text), so the flag is forwarded; in main mode fonts are loaded
       // here after parse, before the lazy first pagination.
@@ -527,19 +531,6 @@ export class DocxDocument {
       let preparedMath;
       if (doc._mode === 'main' && opts.math && doc._document && documentHasMath(doc._document)) {
         preparedMath = await prepareMathRuns(doc._document, opts.math);
-      }
-      {
-        // The variant the caller will actually render, recorded for BOTH
-        // render modes: geometry accessors and the per-call option fill-in
-        // (`_withActiveView`) read it, and in worker mode the wire options for
-        // every render/collect/hit-test request are filled from it so the
-        // worker selects the same variant the load primed.
-        const runtime = documentLayoutRuntimeOf(doc);
-        runtime.activeLayoutOptions = normalizeLayoutOptions(
-          opts.currentDate,
-          runtime.defaultCurrentDateMs,
-          opts.showTrackedChanges === true,
-        );
       }
       if (doc._mode === 'main' && doc._document && doc._source) {
         const runtime = documentLayoutRuntimeOf(doc);
@@ -699,7 +690,7 @@ export class DocxDocument {
     const res = await this._bridge.request(
       (id) =>
         this._mode === 'worker'
-          ? ({ type: 'parse', id, data: buffer, resourcePolicy, useGoogleFonts, defaultCurrentDateMs: documentLayoutRuntimeOf(this).defaultCurrentDateMs, renderers } satisfies RenderWorkerRequest)
+          ? ({ type: 'parse', id, data: buffer, resourcePolicy, useGoogleFonts, defaultCurrentDateMs: documentLayoutRuntimeOf(this).defaultCurrentDateMs, ...this._parseViewFields(), renderers } satisfies RenderWorkerRequest)
           : ({ type: 'parse', id, data: buffer, resourcePolicy } satisfies WorkerRequest),
       [buffer],
       { timeoutMs },
@@ -858,6 +849,26 @@ export class DocxDocument {
     this._bridge.terminate();
   }
 
+  /** The variant fields the worker `parse` carries, derived from the SAME
+   *  recorded active options every render request is filled from — so the
+   *  worker cannot end up paginating one view and painting another. Omitted
+   *  when the load selects the document's default view, keeping the wire shape
+   *  identical to what pre-variant builds sent. */
+  private _parseViewFields(): Pick<
+    Extract<RenderWorkerRequest, { type: 'parse' }>,
+    'currentDateMs' | 'showTrackedChanges'
+  > {
+    const runtime = documentLayoutRuntimeOf(this);
+    const active = runtime.activeLayoutOptions;
+    if (!active) return {};
+    return {
+      ...(active.currentDateMs === runtime.defaultCurrentDateMs
+        ? {}
+        : { currentDateMs: active.currentDateMs }),
+      ...(active.showTrackedChanges === true ? { showTrackedChanges: true } : {}),
+    };
+  }
+
   /**
    * Worker-mode progressive parse: resolve as soon as the worker publishes a
    * paintable prefix, and let the authoritative layout land in the background.
@@ -891,6 +902,7 @@ export class DocxDocument {
           resourcePolicy,
           useGoogleFonts,
           defaultCurrentDateMs: documentLayoutRuntimeOf(this).defaultCurrentDateMs,
+          ...this._parseViewFields(),
           renderers,
           progressiveLayout: true,
         } satisfies RenderWorkerRequest;
