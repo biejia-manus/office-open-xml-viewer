@@ -93,6 +93,46 @@ their own list virtualization strategy from the primitive data APIs.
 No public identity or geometry type is introduced solely to predict a future
 virtualization implementation.
 
+## Change-history boundary and future API symmetry
+
+Comments and change history are related review features, but they are not one
+OOXML model. The public API must not combine them into a shared `ReviewItem`
+union merely to make the three formats look alike.
+
+The formats currently have different source models:
+
+| Format | Persisted source | Current library support |
+| --- | --- | --- |
+| DOCX | WordprocessingML revision containers such as `w:ins`, `w:del`, `w:moveFrom`, and `w:moveTo` | Detached body-story records and logical revision ranges |
+| XLSX | SpreadsheetML revision headers and revision logs, including cell, row/column, move, formatting, sheet, name, and comment changes | Not parsed or exposed |
+| PPTX | PresentationML has no general revision-log model equivalent to WordprocessingML tracked changes. PowerPoint comparison results and cloud collaboration indicators have different lifecycles and are not assumed to be self-contained revision records in every `.pptx` package. | Not parsed or exposed |
+
+Future change-history work follows the same three-layer architecture as comments
+without forcing the record shapes to match:
+
+1. The owned engine exposes immutable, format-specific source records at their
+   natural scope: a DOCX document, an XLSX workbook with sheet identity on its
+   records, or a PPTX presentation/slide only when a persisted PowerPoint source
+   model has been identified.
+2. A separate format-specific projection resolves a source record to the
+   rendered surface: page occurrences for DOCX, sheet references or ranges for
+   XLSX, and slide coordinates or element identity for PPTX when available.
+3. A composite Viewer may present those projections, while primitive engine and
+   focused-Viewer APIs remain sufficient for an application-owned UI.
+
+The query pattern should remain recognizable across engines (`getRevisions` or
+an equally explicit final name for source records, plus a separate
+surface-occurrence query), but record and geometry types remain format-specific.
+The exact public names are fixed only when the first XLSX implementation and a
+real PPTX persisted model are backed by specification references and
+Office-produced boundary samples. This avoids freezing a DOCX-shaped abstraction
+before the other domains are understood.
+
+Unsupported formats expose no placeholder method. Returning `[]` would conflate
+"the package contains no changes" with "this source model is not implemented".
+Likewise, comparing two presentation files is a separate comparison API; it must
+not masquerade as revision records read from one presentation.
+
 ## Non-goals
 
 - comment or revision editing;

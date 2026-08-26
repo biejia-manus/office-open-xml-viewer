@@ -2291,22 +2291,47 @@ class XlsxViewerEngine implements ZoomableViewer {
   }
 
   /**
-   * Reveal and select the cell that owns a current-sheet comment. This deliberately owns
+   * Reveal and select the cell that owns a comment on an explicit sheet. This deliberately owns
    * no list UI: applications render detached records from `getComments()` and
    * call this navigation primitive from their own rows.
    *
-   * Returns `false` when `cellRef` does not identify a current-sheet comment.
+   * Returns `false` when the sheet index is invalid or `cellRef` does not
+   * identify a comment on that sheet.
    */
   async goToComment(
+    sheetIndex: number,
     cellRef: string,
     options?: XlsxScrollToCellOptions,
   ): Promise<boolean> {
     const target = parseA1(cellRef);
-    if (!target || !this.currentSourceComments.some((comment) => {
+    const workbook = this.wb;
+    if (
+      !target || !workbook || !Number.isInteger(sheetIndex) ||
+      sheetIndex < 0 || sheetIndex >= workbook.sheetCount
+    ) {
+      return false;
+    }
+    const generation = ++this.commentNavigationGeneration;
+    const comments = sheetIndex === this.currentSheet && this.currentWorksheet !== null
+      ? this.currentSourceComments
+      : await workbook.getComments(sheetIndex);
+    if (this._destroyed) throw this.destroyedError();
+    if (generation !== this.commentNavigationGeneration || workbook !== this.wb) return false;
+    if (!comments.some((comment) => {
       const cell = parseA1(comment.cellRef);
       return cell?.row === target.row && cell.col === target.col;
     })) return false;
-    const generation = ++this.commentNavigationGeneration;
+
+    if (sheetIndex !== this.currentSheet || this.currentWorksheet === null) {
+      await this.goToSheet(sheetIndex);
+      if (this._destroyed) throw this.destroyedError();
+      if (
+        generation !== this.commentNavigationGeneration || workbook !== this.wb ||
+        sheetIndex !== this.currentSheet
+      ) {
+        return false;
+      }
+    }
     const sheetGeneration = this.sheetRequestGeneration;
     const sheet = this.currentSheet;
     const worksheet = this.currentWorksheet;
@@ -2314,6 +2339,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     if (this._destroyed) throw this.destroyedError();
     if (
       generation !== this.commentNavigationGeneration ||
+      workbook !== this.wb ||
       sheetGeneration !== this.sheetRequestGeneration ||
       sheet !== this.currentSheet ||
       worksheet !== this.currentWorksheet
@@ -5255,11 +5281,12 @@ export class XlsxSheetViewer implements ZoomableViewer {
   }
 
   async goToComment(
+    sheetIndex: number,
     cellRef: string,
     options?: XlsxScrollToCellOptions,
   ): Promise<boolean> {
     this.assertOpen();
-    const found = await this.engine.goToComment(cellRef, options);
+    const found = await this.engine.goToComment(sheetIndex, cellRef, options);
     this.assertOpen();
     this.captureSnapshot();
     return found;

@@ -13,16 +13,20 @@ describe('XlsxViewer comment UI contract', () => {
     installDom();
     const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
     const internals = viewer as unknown as {
+      wb: { sheetCount: number };
+      currentWorksheet: Worksheet | null;
       currentSourceComments: readonly XlsxComment[];
     };
+    internals.wb = { sheetCount: 1 };
+    internals.currentWorksheet = { name: 'First' } as Worksheet;
     internals.currentSourceComments = [{ cellRef: 'B2', author: 'Ada', text: 'Review this' }];
     const scrollToCell = vi.spyOn(viewer, 'scrollToCell').mockResolvedValue();
-    const setSelection = vi.spyOn(viewer, 'setSelection');
+    const setSelection = vi.spyOn(viewer, 'setSelection').mockImplementation(() => undefined);
 
-    await expect(viewer.goToComment('B2', { align: 'center' })).resolves.toBe(true);
+    await expect(viewer.goToComment(0, 'B2', { align: 'center' })).resolves.toBe(true);
     expect(scrollToCell).toHaveBeenCalledWith('B2', { align: 'center' });
     expect(setSelection).toHaveBeenCalledWith('B2');
-    await expect(viewer.goToComment('C3')).resolves.toBe(false);
+    await expect(viewer.goToComment(0, 'C3')).resolves.toBe(false);
     viewer.destroy();
   });
 
@@ -30,8 +34,12 @@ describe('XlsxViewer comment UI contract', () => {
     installDom();
     const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
     const internals = viewer as unknown as {
+      wb: { sheetCount: number };
+      currentWorksheet: Worksheet | null;
       currentSourceComments: readonly XlsxComment[];
     };
+    internals.wb = { sheetCount: 1 };
+    internals.currentWorksheet = { name: 'First' } as Worksheet;
     internals.currentSourceComments = [
       { cellRef: 'A1', author: 'Ada', text: 'First' },
       { cellRef: 'B2', author: 'Grace', text: 'Second' },
@@ -42,10 +50,10 @@ describe('XlsxViewer comment UI contract', () => {
     const second = new Promise<void>((resolve) => { resolveSecond = resolve; });
     vi.spyOn(viewer, 'scrollToCell').mockImplementation((cellRef) =>
       cellRef === 'A1' ? first : second);
-    const setSelection = vi.spyOn(viewer, 'setSelection');
+    const setSelection = vi.spyOn(viewer, 'setSelection').mockImplementation(() => undefined);
 
-    const older = viewer.goToComment('A1');
-    const newer = viewer.goToComment('B2');
+    const older = viewer.goToComment(0, 'A1');
+    const newer = viewer.goToComment(0, 'B2');
     resolveSecond();
     await expect(newer).resolves.toBe(true);
     resolveFirst();
@@ -61,11 +69,16 @@ describe('XlsxViewer comment UI contract', () => {
     const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
     const firstSheet = { name: 'First' } as Worksheet;
     const internals = viewer as unknown as {
+      wb: { sheetCount: number };
       currentSheet: number;
       currentWorksheet: Worksheet | null;
       currentSourceComments: readonly XlsxComment[];
       sheetRequestGeneration: number;
     };
+    internals.wb = {
+      sheetCount: 2,
+      getComments: vi.fn().mockResolvedValue([{ cellRef: 'A1', text: 'Second sheet' }]),
+    } as never;
     internals.currentSheet = 0;
     internals.currentWorksheet = firstSheet;
     internals.currentSourceComments = [{ cellRef: 'A1', author: 'Ada', text: 'First' }];
@@ -75,7 +88,7 @@ describe('XlsxViewer comment UI contract', () => {
     );
     const setSelection = vi.spyOn(viewer, 'setSelection');
 
-    const navigation = viewer.goToComment('A1');
+    const navigation = viewer.goToComment(0, 'A1');
     internals.sheetRequestGeneration++;
     internals.currentSheet = 1;
     internals.currentWorksheet = { name: 'Second' } as Worksheet;
@@ -83,6 +96,129 @@ describe('XlsxViewer comment UI contract', () => {
 
     await expect(navigation).resolves.toBe(false);
     expect(setSelection).not.toHaveBeenCalled();
+    viewer.destroy();
+  });
+
+  it('uses an explicit sheet index when the same cell is commented on multiple sheets', async () => {
+    installDom();
+    const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
+    const internals = viewer as unknown as {
+      wb: {
+        sheetCount: number;
+        getComments(sheet: number): Promise<readonly XlsxComment[]>;
+      };
+      currentSheet: number;
+      currentWorksheet: Worksheet | null;
+      currentSourceComments: readonly XlsxComment[];
+    };
+    internals.wb = {
+      sheetCount: 2,
+      getComments: vi.fn().mockResolvedValue([{ cellRef: 'A1', text: 'Second sheet' }]),
+    };
+    internals.currentSheet = 0;
+    internals.currentWorksheet = { name: 'First' } as Worksheet;
+    internals.currentSourceComments = [{ cellRef: 'A1', text: 'First sheet' }];
+    const goToSheet = vi.spyOn(viewer, 'goToSheet').mockImplementation(async (sheetIndex) => {
+      internals.currentSheet = sheetIndex;
+      internals.currentWorksheet = { name: 'Second' } as Worksheet;
+      internals.currentSourceComments = [{ cellRef: 'A1', text: 'Second sheet' }];
+    });
+    vi.spyOn(viewer, 'scrollToCell').mockResolvedValue();
+    const setSelection = vi.spyOn(viewer, 'setSelection').mockImplementation(() => undefined);
+
+    await expect(viewer.goToComment(1, 'A1')).resolves.toBe(true);
+    expect(goToSheet).toHaveBeenCalledWith(1);
+    expect(setSelection).toHaveBeenCalledWith('A1');
+    const callsBeforeInvalidSheet = goToSheet.mock.calls.length;
+    await expect(viewer.goToComment(2, 'A1')).resolves.toBe(false);
+    expect(goToSheet).toHaveBeenCalledTimes(callsBeforeInvalidSheet);
+    viewer.destroy();
+  });
+
+  it('does not change sheets when the requested sheet has no matching comment', async () => {
+    installDom();
+    const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
+    const internals = viewer as unknown as {
+      wb: { sheetCount: number; getComments(sheet: number): Promise<readonly XlsxComment[]> };
+      currentSheet: number;
+      currentWorksheet: Worksheet | null;
+    };
+    internals.wb = {
+      sheetCount: 2,
+      getComments: vi.fn().mockResolvedValue([{ cellRef: 'B2', text: 'Another cell' }]),
+    };
+    internals.currentSheet = 0;
+    internals.currentWorksheet = { name: 'First' } as Worksheet;
+    const goToSheet = vi.spyOn(viewer, 'goToSheet');
+
+    await expect(viewer.goToComment(1, 'A1')).resolves.toBe(false);
+    expect(goToSheet).not.toHaveBeenCalled();
+    expect(viewer.sheetIndex).toBe(0);
+    viewer.destroy();
+  });
+
+  it('abandons comment navigation when the workbook changes during lookup', async () => {
+    installDom();
+    const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
+    let resolveComments!: (comments: readonly XlsxComment[]) => void;
+    const pendingComments = new Promise<readonly XlsxComment[]>((resolve) => {
+      resolveComments = resolve;
+    });
+    const internals = viewer as unknown as {
+      wb: {
+        sheetCount: number;
+        getComments(sheet: number): Promise<readonly XlsxComment[]>;
+        destroy(): void;
+      };
+      currentSheet: number;
+      currentWorksheet: Worksheet | null;
+    };
+    internals.wb = {
+      sheetCount: 2,
+      getComments: vi.fn(() => pendingComments),
+      destroy: vi.fn(),
+    };
+    internals.currentSheet = 0;
+    internals.currentWorksheet = { name: 'First' } as Worksheet;
+    const goToSheet = vi.spyOn(viewer, 'goToSheet');
+
+    const navigation = viewer.goToComment(1, 'A1');
+    internals.wb = {
+      sheetCount: 2,
+      getComments: vi.fn().mockResolvedValue([{ cellRef: 'A1', text: 'New workbook' }]),
+      destroy: vi.fn(),
+    };
+    resolveComments([{ cellRef: 'A1', text: 'Old workbook' }]);
+
+    await expect(navigation).resolves.toBe(false);
+    expect(goToSheet).not.toHaveBeenCalled();
+    viewer.destroy();
+  });
+
+  it('materializes the requested sheet when a borrowed sheet viewer has not opened it yet', async () => {
+    installDom();
+    const viewer = new XlsxViewer(makeContainer() as unknown as HTMLElement);
+    const internals = viewer as unknown as {
+      wb: { sheetCount: number };
+      currentSheet: number;
+      currentWorksheet: Worksheet | null;
+      currentSourceComments: readonly XlsxComment[];
+    };
+    internals.wb = {
+      sheetCount: 1,
+      getComments: vi.fn().mockResolvedValue([{ cellRef: 'A1', text: 'First sheet' }]),
+    } as never;
+    internals.currentSheet = 0;
+    internals.currentWorksheet = null;
+    const goToSheet = vi.spyOn(viewer, 'goToSheet').mockImplementation(async () => {
+      internals.currentWorksheet = { name: 'First' } as Worksheet;
+      internals.currentSourceComments = [{ cellRef: 'A1', text: 'First sheet' }];
+    });
+    vi.spyOn(viewer, 'scrollToCell').mockResolvedValue();
+    vi.spyOn(viewer, 'setSelection').mockImplementation(() => undefined);
+
+    await expect(viewer.goToComment(0, 'A1')).resolves.toBe(true);
+    expect(goToSheet).toHaveBeenCalledWith(0);
     viewer.destroy();
   });
 

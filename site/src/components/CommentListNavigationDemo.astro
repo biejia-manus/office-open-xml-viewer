@@ -180,6 +180,7 @@ const demoId = 'comment-list-navigation';
   const xlsxThreads = (
     comments: readonly Readonly<XlsxComment>[],
     viewer: XlsxViewer,
+    sheetIndex: number,
   ): ListThread[] => comments
     .filter((comment) => !comment.resolved)
     .map((comment, index) => ({
@@ -187,7 +188,7 @@ const demoId = 'comment-list-navigation';
       location: comment.cellRef,
       root: { author: comment.author, date: comment.date, text: comment.rootText ?? comment.text },
       replies: comment.replies ?? [],
-      reveal: () => viewer.goToComment(comment.cellRef, { align: 'center' }),
+      reveal: () => viewer.goToComment(sheetIndex, comment.cellRef, { align: 'center' }),
     }));
 
   for (const root of document.querySelectorAll<HTMLElement>('[data-comment-list-demo]')) {
@@ -269,7 +270,7 @@ const demoId = 'comment-list-navigation';
           viewer = next;
           await next.load(sampleUrl(format));
           if (request !== generation || disposed) return;
-          threads = xlsxThreads(next.getComments(), next);
+          threads = xlsxThreads(next.getComments(), next, next.sheetIndex);
         }
 
         if (request !== generation || disposed) return;

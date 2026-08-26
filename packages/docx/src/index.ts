@@ -1,6 +1,7 @@
 export {
   DocxDocument,
   type CollectPageRunsOptions,
+  type DocxPageCommentThreadsOptions,
   type LoadOptions,
   type RenderPageToBitmapOptions,
 } from './document';

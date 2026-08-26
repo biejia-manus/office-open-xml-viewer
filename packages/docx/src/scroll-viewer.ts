@@ -36,6 +36,7 @@ import {
 } from './element-context';
 import type { DocxCommentsOptions } from './comment-margin';
 import { resolveCommentAnchorRuns } from './comments';
+import { renderDocxFocusedPage } from './focused-view-runtime';
 
 /**
  * Debounce window (ms) after the last `setScale` in a zoom burst before the
@@ -1147,7 +1148,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     const onTextRun = wantRuns ? (r: DocxTextRunInfo) => runs.push(r) : undefined;
     let render: Promise<void>;
     try {
-      render = this._doc.renderPage(slot.canvas, i, {
+      render = renderDocxFocusedPage(this._doc, slot.canvas, i, 'main', {
         width: widthPx, // this page's own px width → uniform px-per-pt scale (§7)
         dpr,
         defaultTextColor: this._opts.defaultTextColor,
@@ -1319,7 +1320,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     const wantRuns = wantOverlay || this._findActive || !!slot.commentTintLayer;
     const runs: DocxTextRunInfo[] = [];
     try {
-      const bmp = await this._doc!.renderPageToBitmap(i, {
+      const bmp = await renderDocxFocusedPage(this._doc!, slot.canvas, i, 'worker', {
         width: widthPx,
         dpr,
         defaultTextColor: this._opts.defaultTextColor,
@@ -1777,14 +1778,13 @@ export class DocxScrollViewer implements ZoomableViewer {
     const wantOverlay = !!this._opts.enableTextSelection && !!slot.textLayer;
     const wantRuns = wantOverlay || this._findActive || !!slot.commentTintLayer;
     const onTextRun = wantRuns ? (r: DocxTextRunInfo) => runs.push(r) : undefined;
-    this._doc
-      .renderPage(spare, i, {
-        width: widthPx,
-        dpr,
-        defaultTextColor: this._opts.defaultTextColor,
-        currentDate: this._opts.currentDate,
-        onTextRun,
-      })
+    renderDocxFocusedPage(this._doc, spare, i, 'main', {
+      width: widthPx,
+      dpr,
+      defaultTextColor: this._opts.defaultTextColor,
+      currentDate: this._opts.currentDate,
+      onTextRun,
+    })
       .then(() => {
         // Discard if superseded: a later setScale bumped the epoch (this spare is
         // at a stale scale), or the slot recycled / moved to another page. Drop
@@ -2006,7 +2006,7 @@ export class DocxScrollViewer implements ZoomableViewer {
    */
   async goToComment(
     commentId: string,
-    opts?: { behavior?: 'auto' | 'smooth' },
+    opts?: { pageIndex?: number; behavior?: 'auto' | 'smooth' },
   ): Promise<boolean> {
     if (this._destroyed) throw new Error('DocxScrollViewer is destroyed');
     const doc = this._doc;
@@ -2016,9 +2016,14 @@ export class DocxScrollViewer implements ZoomableViewer {
     const anchors = doc.commentAnchorRanges().filter((anchor) => anchor.commentId === commentId);
     if (anchors.length === 0) return false;
 
-    let page = this._commentPageById.get(commentId);
+    const requestedPage = opts?.pageIndex;
+    if (requestedPage !== undefined && (
+      !Number.isInteger(requestedPage) || requestedPage < 0 || requestedPage >= doc.pageCount
+    )) return false;
+
+    let page = requestedPage ?? this._commentPageById.get(commentId);
     let targetRun: Readonly<DocxTextRunInfo> | undefined;
-    if (page === undefined) {
+    if (requestedPage === undefined && page === undefined) {
       const allAnchors = doc.commentAnchorRanges();
       while (page === undefined && this._commentScanFrontier < doc.pageCount) {
         const index = this._commentScanFrontier;

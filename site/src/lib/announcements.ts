@@ -74,7 +74,7 @@ await viewer.load(source);`,
       {
         title: 'Compose a different UI',
         paragraphs: [
-          'Applications that need a different structure can use detached comment data with format-specific anchor geometry. DOCX exposes comment ranges and rendered text runs, PPTX exposes slide comments and element bounds, and XLSX exposes cell references and viewport rectangles.',
+          'Applications that need a different structure can use format-scoped comment data and anchor geometry. DOCX resolves comment threads per rendered page, PPTX exposes comments per slide and element bounds, and XLSX exposes comments per sheet plus current-viewport cell rectangles.',
           'This lower-level path leaves framework components, interaction, list virtualization and editing workflows under application ownership.',
         ],
       },

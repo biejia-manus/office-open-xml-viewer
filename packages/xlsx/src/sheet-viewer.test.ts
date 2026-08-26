@@ -1384,7 +1384,7 @@ describe('XlsxSheetViewer canvas mount', () => {
     await expect(viewer.prevSheet()).rejects.toThrow(closed);
     await expect(viewer.setViewportOffset({ x: 0, y: 0 })).rejects.toThrow(closed);
     await expect(viewer.scrollToCell('A1')).rejects.toThrow(closed);
-    await expect(viewer.goToComment('A1')).rejects.toThrow(closed);
+    await expect(viewer.goToComment(0, 'A1')).rejects.toThrow(closed);
     await expect(viewer.relayout()).rejects.toThrow(closed);
     await expect(viewer.setHiddenSheetMode('show')).rejects.toThrow(closed);
     await expect(viewer.findText('x')).rejects.toThrow(closed);
