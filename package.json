@@ -102,6 +102,7 @@
     "vrt:worker": "pnpm --workspace-concurrency=1 --filter @silurus/ooxml-pptx --filter @silurus/ooxml-docx --filter @silurus/ooxml-xlsx vrt:worker",
     "smoke": "playwright test --config tests/smoke/playwright.config.ts layouts",
     "test": "vitest run && node --test tests/visual/private-corpus.test.mjs",
+    "bench:layout": "vitest bench --run packages/docx/src/layout/layout.bench.ts",
     "check:no-inline-wasm": "node scripts/check-no-inline-wasm.mjs dist",
     "check:production-render-workers": "node scripts/check-production-render-workers.mjs dist",
     "test:production-render-workers": "playwright test --config tests/worker-dist/playwright.config.ts",

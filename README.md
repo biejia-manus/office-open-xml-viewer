@@ -461,7 +461,7 @@ animation loops.
 Both viewers also expose `relayout()` (force a re-fit when the container resizes
 in a way a `ResizeObserver` cannot see — e.g. a late web-font load),
 `onVisiblePageChange` / `onVisibleSlideChange` (fires when the top-most visible
-page/slide changes), and `onError` (async per-page render failures are routed
+page/slide, or the page count, changes), and `onError` (async per-page render failures are routed
 here instead of crashing the scroll loop). The parse/render knobs from the
 headless engines (`mode`, `useGoogleFonts`, `resourceLimits`, the deprecated
 `maxZipEntryBytes` alias, `math`, `dpr`) are accepted too.

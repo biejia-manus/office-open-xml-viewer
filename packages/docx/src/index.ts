@@ -15,6 +15,11 @@ export type {
   ViewerCommentThreadContext,
 } from '@silurus/ooxml-core';
 export { buildDocxTextLayer } from './text-layer';
+// Retained-layout contract checks are a development-time guard: on under a test
+// runner, off in production, where they otherwise cost a large share of layout
+// time on big documents. Exposed so an embedder can re-enable them while
+// diagnosing a layout defect against a production build.
+export { setDocumentLayoutValidation } from './layout/validation-policy';
 export {
   readDocxTextSelectionContext,
   type DocxSelectionContext,

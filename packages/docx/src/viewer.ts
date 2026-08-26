@@ -248,6 +248,11 @@ export class DocxViewer implements ZoomableViewer {
         regionMap: this._opts.regionMap,
         chartEx: this._opts.chartEx,
         mode: this._mode,
+        // The variant this viewer renders, so load builds that one rather than
+        // paying for a second full pagination on the first render.
+        ...(this._opts.currentDate === undefined
+          ? {}
+          : { currentDate: this._opts.currentDate }),
       }), () => {
         // Invalidate operations owned by the old document before its worker is
         // terminated, so their expected rejection cannot surface as a reload

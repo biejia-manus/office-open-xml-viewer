@@ -1095,6 +1095,8 @@ export class DocxDocument {
     getResourceMetrics(): Promise<OoxmlResourceMetrics>;
     toMarkdown(): Promise<string>;
     get pageCount(): number;
+    get layoutComplete(): boolean;
+    whenLayoutComplete(): Promise<void>;
     get mode(): 'main' | 'worker';
     get document(): DocxDocumentModel;
     get comments(): readonly Readonly<DocComment>[];
@@ -1179,6 +1181,8 @@ export class DocxScrollViewer implements ZoomableViewer {
     constructor(container: HTMLElement, opts?: DocxScrollViewerOptions);
     load(source: string | ArrayBuffer): Promise<void>;
     get pageCount(): number;
+    get layoutComplete(): boolean;
+    whenLayoutComplete(): Promise<void>;
     relayout(): void;
     setScale(scale: number): void;
     getScale(): number;
@@ -1210,6 +1214,8 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
     paddingLeft?: number;
     paddingRight?: number;
     overscan?: number;
+    progressiveLayout?: boolean;
+    sliceLayout?: boolean;
     enableTextSelection?: boolean;
     comments?: boolean | DocxCommentsOptions;
     enableElementSelection?: boolean;
@@ -1222,7 +1228,7 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
     refitOnResize?: boolean;
     background?: string;
     pageShadow?: string | false;
-    onVisiblePageChange?: (topIndex: number, total: number) => void;
+    onVisiblePageChange?: (topIndex: number, total: number, layoutComplete: boolean) => void;
     onScaleChange?: (scale: number) => void;
     onHyperlinkClick?: (target: HyperlinkTarget) => void;
     enableHyperlinks?: boolean;
@@ -1553,6 +1559,17 @@ export interface LineSpacing {
 export interface LoadOptions extends LoadOptions__emitterCollision1 {
     math?: MathRenderer;
     mode?: 'main' | 'worker';
+    sliceLayout?: boolean;
+    onLayoutProgress?: (progress: Readonly<{
+        committedPages: number;
+    }>) => void;
+    progressiveLayout?: boolean;
+    onLayoutComplete?: (error?: unknown) => void;
+    onLayoutPartial?: (progress: Readonly<{
+        pageCount: number;
+        exact: boolean;
+    }>) => void;
+    currentDate?: Date | number;
 }
 interface LoadOptions__emitterCollision1 {
     useGoogleFonts?: boolean;
@@ -1995,6 +2012,7 @@ export interface SectionProps {
     lineNumbering?: LineNumbering | null;
     vAlign?: string | null;
 }
+export function setDocumentLayoutValidation(next: boolean): void;
 export type ShapeFill = {
     fillType: 'solid';
     color: string;

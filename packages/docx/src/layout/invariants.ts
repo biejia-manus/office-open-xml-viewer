@@ -30,6 +30,7 @@ import type {
 } from './types.js';
 import { unionLayoutRects } from './rect-union.js';
 
+import { documentLayoutValidationEnabled } from './validation-policy.js';
 const LAYOUT_DIAGNOSTIC_CODE_MEMBERS = {
   FLOW_OVERLAP: true,
   BOTTOM_MARGIN_INVASION: true,
@@ -1061,7 +1062,9 @@ export function deepFreezeDocumentLayout(layout: DocumentLayout): DeepReadonly<D
   if (frozenDocumentLayouts.has(layout)) {
     return layout as DeepReadonly<DocumentLayout>;
   }
-  assertPlainData(layout, 'layout');
+  // Freezing is unconditional; the plain-data traversal that precedes it is a
+  // development-time contract check (see validation-policy.ts).
+  if (documentLayoutValidationEnabled()) assertPlainData(layout, 'layout');
   return freezeDocumentLayout(layout);
 }
 
@@ -1073,6 +1076,11 @@ export function assertAndDeepFreezeDocumentLayout(
   if (verifiedFrozenDocumentLayouts.has(layout)) {
     return layout as DeepReadonly<DocumentLayout>;
   }
+  // The full invariant suite is a development-time contract check on
+  // engine-produced data (see validation-policy.ts); the freeze below is not,
+  // and always runs. Only a layout that was actually validated joins the
+  // verified set, so enabling validation later still checks it.
+  if (!documentLayoutValidationEnabled()) return freezeDocumentLayout(layout);
   assertDocumentLayout(layout);
   const frozen = freezeDocumentLayout(layout);
   verifiedFrozenDocumentLayouts.add(frozen);
