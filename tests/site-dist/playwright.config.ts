@@ -12,6 +12,7 @@ export default defineConfig({
     baseURL: `http://127.0.0.1:${port}`,
     channel: 'chrome',
     viewport: { width: 1440, height: 1000 },
+    deviceScaleFactor: 2,
   },
   webServer: {
     command: `./node_modules/.bin/astro preview --host 127.0.0.1 --port ${port}`,
