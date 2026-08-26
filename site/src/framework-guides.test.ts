@@ -178,6 +178,17 @@ describe('framework integration guides', () => {
     expect(packageJson.stackblitz?.startCommand).toBe(false);
   });
 
+  it.each(exampleFrameworks)('uses the current library release in the %s example', (framework) => {
+    const rootPackage = JSON.parse(readFileSync(new URL('package.json', repositoryRoot), 'utf8')) as {
+      version: string;
+    };
+    const packageJson = JSON.parse(exampleSource(`${framework}/package.json`)) as {
+      dependencies?: Record<string, string>;
+    };
+
+    expect(packageJson.dependencies?.['@silurus/ooxml']).toBe(`^${rootPackage.version}`);
+  });
+
   it.each(exampleFrameworks)(
     'keeps the %s viewer surface transparent and owns the desk background in CSS',
     (framework) => {
