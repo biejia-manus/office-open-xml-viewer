@@ -30,8 +30,7 @@ describe('Office comment UI integration guide', () => {
       page.indexOf('id="stable-classes-title"'),
     );
     expect(page).toContain('await workbook.getComments(sheetIndex)');
-    expect(page).toContain('comments: true');
-    expect(page).toContain('comments: false');
+    expect(page).toContain('<code>comments</code>');
     expect(page).toContain('<code>markers</code>');
     expect(page).toContain('<code>cards</code>');
     expect(page).toContain('Defaults to <code>true</code>');
@@ -74,6 +73,25 @@ describe('Office comment UI integration guide', () => {
     expect(page).not.toContain('--ooxml-comment-avatar');
     expect(page).not.toContain('mountCard');
     expect(page).not.toContain('commentRenderer');
+  });
+
+  it('presents built-in options as a cross-format support matrix', () => {
+    const match = page.match(/aria-label="Built-in comment options"[\s\S]*?<\/table>/);
+    expect(match).not.toBeNull();
+    const table = match?.[0] as string;
+
+    expect(table).toContain('<th scope="col">Option</th>');
+    for (const format of ['DOCX', 'XLSX', 'PPTX']) {
+      expect(table).toContain(`<th class="format-column" scope="col">${format}</th>`);
+    }
+    expect(table).toContain('<th scope="col">Behavior</th>');
+    expect(table.match(/<code>comments<\/code>/g)).toHaveLength(1);
+    expect(table).not.toContain('comments: true');
+    expect(table).not.toContain('comments: false');
+    expect(table).toContain('Set to <code>true</code>');
+    expect(table).toContain('or <code>false</code>');
+    expect(table).toContain('aria-label="Supported">✓</td>');
+    expect(table).toContain('aria-label="Not supported">—</td>');
   });
 
   it('keeps the built-in preview separated and gives its frame one height contract', () => {
