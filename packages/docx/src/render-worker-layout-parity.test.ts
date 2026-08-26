@@ -285,6 +285,9 @@ describe('render worker canonical layout parity', () => {
         },
       },
     });
+    // Real instances always carry the layout runtime (the constructor attaches
+    // it); the active-view fill-in reads it on every render/collect call.
+    attachDocumentLayoutRuntime(document, 0);
 
     await expect(document.renderPageToBitmap(1, { currentDate: 20 })).resolves.toBe(bitmap);
     await expect(document.collectPageRuns(1, { currentDate: 20 })).resolves.toEqual([]);

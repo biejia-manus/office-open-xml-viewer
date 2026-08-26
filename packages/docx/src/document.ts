@@ -447,6 +447,19 @@ export class DocxDocument {
       if (doc._mode === 'main' && opts.math && doc._document && documentHasMath(doc._document)) {
         preparedMath = await prepareMathRuns(doc._document, opts.math);
       }
+      {
+        // The variant the caller will actually render, recorded for BOTH
+        // render modes: geometry accessors and the per-call option fill-in
+        // (`_withActiveView`) read it, and in worker mode the wire options for
+        // every render/collect/hit-test request are filled from it so the
+        // worker selects the same variant the load primed.
+        const runtime = documentLayoutRuntimeOf(doc);
+        runtime.activeLayoutOptions = normalizeLayoutOptions(
+          opts.currentDate,
+          runtime.defaultCurrentDateMs,
+          opts.showTrackedChanges === true,
+        );
+      }
       if (doc._mode === 'main' && doc._document && doc._source) {
         const runtime = documentLayoutRuntimeOf(doc);
         runtime.services = createLayoutServices(doc._source, {
@@ -474,16 +487,12 @@ export class DocxDocument {
         // variant store's builder rather than being paginated at all; neither
         // slicing nor previewing may route around that substitution.
         const deferrable = doc._source.fatalParse === null;
-        // The variant the caller will actually render. Computed once and
-        // recorded as the active view BEFORE any geometry read (the metrics
-        // snapshot below reads `pageCount`), so that priming, the store lookup
-        // on first render, and every geometry accessor all agree on one key.
-        const layoutOptions = normalizeLayoutOptions(
-          opts.currentDate,
-          runtime.defaultCurrentDateMs,
-          opts.showTrackedChanges === true,
-        );
-        runtime.activeLayoutOptions = layoutOptions;
+        // The variant the caller will actually render, recorded as the active
+        // view above BEFORE any geometry read (the metrics snapshot below
+        // reads `pageCount`), so that priming, the store lookup on first
+        // render, and every geometry accessor all agree on one key.
+        const layoutOptions = runtime.activeLayoutOptions;
+        if (!layoutOptions) throw new Error('Active layout view was not recorded at load');
         const scheduler = {
           onProgress: opts.onLayoutProgress
             ? (committedPages: number) => opts.onLayoutProgress?.({ committedPages })
@@ -843,8 +852,14 @@ export class DocxDocument {
     const runtime = documentLayoutRuntimeOf(this);
     const services = runtime.services;
     if (!services) throw new Error('Document layout services are not initialized');
-    const layout = layoutVariantStoreOf(services)?.defaultLayout;
-    if (!layout) throw new Error('Document layout variant store is not initialized');
+    // The ACTIVE variant's layout: on a document loaded with an explicit
+    // `currentDate` or the markup view, reading `defaultLayout` here would
+    // silently build a whole variant nobody is rendering — and index text runs
+    // that do not match the visible ones.
+    const store = layoutVariantStoreOf(services);
+    if (!store) throw new Error('Document layout variant store is not initialized');
+    const active = runtime.activeLayoutOptions;
+    const layout = active ? store.layoutFor(active) : store.defaultLayout;
     this._reviewTextRunSourceIndex ??= textRunSourceIndexForDocument(layout);
     this._commentAnchorRanges ??= collectLayoutSourceCommentRangesIfPresent(
       this._reviewSnapshot().comments,
@@ -865,8 +880,11 @@ export class DocxDocument {
     const runtime = documentLayoutRuntimeOf(this);
     const services = runtime.services;
     if (!services) throw new Error('Document layout services are not initialized');
-    const layout = layoutVariantStoreOf(services)?.defaultLayout;
-    if (!layout) throw new Error('Document layout variant store is not initialized');
+    // Same active-variant selection as commentAnchorRanges above.
+    const store = layoutVariantStoreOf(services);
+    if (!store) throw new Error('Document layout variant store is not initialized');
+    const active = runtime.activeLayoutOptions;
+    const layout = active ? store.layoutFor(active) : store.defaultLayout;
     this._reviewTextRunSourceIndex ??= textRunSourceIndexForDocument(layout);
     this._revisionAnchorRanges ??= collectLayoutSourceRevisionRangesIfPresent(
       this._reviewSnapshot().revisions,
@@ -945,9 +963,12 @@ export class DocxDocument {
       runtime.defaultCurrentDateMs,
       view.showTrackedChanges === true,
     );
-    // Bookmark pages are derived from the layout, so they belong to the variant
-    // that produced them.
+    // Bookmark pages and the review anchor caches are derived from the
+    // layout, so they belong to the variant that produced them.
     this._bookmarkPages = null;
+    this._commentAnchorRanges = null;
+    this._revisionAnchorRanges = null;
+    this._reviewTextRunSourceIndex = null;
   }
 
   /** Lazily build (and cache) the `bookmarkName → page index` map from either
@@ -1009,6 +1030,31 @@ export class DocxDocument {
     return { widthPt: geometry.widthPt, heightPt: geometry.heightPt };
   }
 
+  /**
+   * Fill omitted view axes from the load-time active variant.
+   *
+   * `load({ currentDate, showTrackedChanges })` primes and records the variant
+   * the caller will render precisely so the first render does not synchronously
+   * repaginate; a per-call selection derived from omitted options would pick
+   * the DEFAULT variant instead, paying that repagination anyway and letting
+   * paint disagree with the geometry accessors (which follow the active
+   * variant). An explicitly passed value still wins — including
+   * `showTrackedChanges: false`, which selects the final view regardless of
+   * the loaded variant.
+   */
+  private _withActiveView<
+    T extends { currentDate?: Date | number; showTrackedChanges?: boolean },
+  >(opts: T): T {
+    const active = documentLayoutRuntimeOf(this).activeLayoutOptions;
+    if (!active) return opts;
+    const filled = { ...opts };
+    if (opts.currentDate === undefined) filled.currentDate = active.currentDateMs;
+    if (opts.showTrackedChanges === undefined && active.showTrackedChanges === true) {
+      filled.showTrackedChanges = true;
+    }
+    return filled;
+  }
+
   renderPage(
     target: HTMLCanvasElement | OffscreenCanvas,
     pageIndex: number,
@@ -1021,7 +1067,7 @@ export class DocxDocument {
     }
     if (!this._source) throw new Error('Document not loaded');
     return renderLayoutSourceToCanvas(this._source, target, pageIndex, {
-      ...opts,
+      ...this._withActiveView(opts),
       // Lazy image bytes: the renderer fetches each embedded blip on demand by
       // zip path (decoded only when drawn) instead of reading inlined base64.
       fetchImage: this._fetchImage,
@@ -1053,7 +1099,10 @@ export class DocxDocument {
     opts: RenderPageToBitmapOptions = {},
   ): Promise<ImageBitmap> {
     const { onTextRun, ...wire } = opts;
-    const wireOpts: WireRenderPageOptions = { ...wire, dpr: wire.dpr ?? defaultDpr() };
+    const wireOpts: WireRenderPageOptions = {
+      ...this._withActiveView(wire),
+      dpr: wire.dpr ?? defaultDpr(),
+    };
     if (this._mode === 'worker') {
       // The selected date variant may have a different page count than default
       // metadata, so the worker validates against the layout it actually paints.
@@ -1080,7 +1129,7 @@ export class DocxDocument {
     pageIndex: number,
     opts: CollectPageRunsOptions = {},
   ): Promise<DocxTextRunInfo[]> {
-    const wireOpts: WireRenderPageOptions = { ...opts };
+    const wireOpts: WireRenderPageOptions = { ...this._withActiveView(opts) };
     if (this._mode === 'worker') {
       // Keep collection validation on the same selected worker layout as paint.
       const res = await this._bridge.request(
@@ -1110,8 +1159,8 @@ export class DocxDocument {
     pageIndex: number,
     options: DocxPageCommentThreadsOptions = {},
   ): Promise<readonly Readonly<ResolvedDocxCommentThread>[]> {
-    const { includeResolved, width, currentDate } = options;
-    const runs = await this.collectPageRuns(pageIndex, { width, currentDate });
+    const { includeResolved, ...runOptions } = options;
+    const runs = await this.collectPageRuns(pageIndex, runOptions);
     return resolveDocxCommentThreads(
       this.comments,
       this.commentAnchorRanges(),
@@ -1131,9 +1180,10 @@ export class DocxDocument {
     point: DocxPagePoint,
     opts: DocxElementContextOptions = {},
   ): Promise<DocxElementContext | null> {
+    const viewOpts = this._withActiveView(opts);
     if (this._mode === 'worker') {
       const res = await this._bridge.request(
-        (id) => ({ type: 'hitTestElement', id, pageIndex, point, opts }) satisfies RenderWorkerRequest,
+        (id) => ({ type: 'hitTestElement', id, pageIndex, point, opts: viewOpts }) satisfies RenderWorkerRequest,
       );
       return (res as Extract<RenderWorkerResponse, { type: 'elementHit' }>).context;
     }
@@ -1141,7 +1191,7 @@ export class DocxDocument {
     const services = runtime.services;
     if (!services) throw new Error('Document layout services are not initialized');
     return hitTestSelectedDocxElementContext(services, pageIndex, point, {
-      ...opts,
+      ...viewOpts,
       defaultCurrentDateMs: runtime.defaultCurrentDateMs,
     });
   }
