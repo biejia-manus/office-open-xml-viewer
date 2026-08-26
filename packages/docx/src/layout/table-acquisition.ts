@@ -84,6 +84,37 @@ export interface NestedFloatingTableOccurrence {
   readonly acquiredTextOffsetPt?: Readonly<{ xPt: number; yPt: number }>;
 }
 
+/**
+ * Whether a retained acquisition can serve every page of a layout session
+ * unchanged at the same inline extent. Two classes of baked geometry vary by
+ * destination page:
+ *
+ * - PAGE-field (ECMA-376 §17.16.5.44) text. Blocks carrying it are flagged
+ *   `pageDependent` and re-acquired per destination page during pagination
+ *   (TableFragmentContext.reacquirePageDependentBlock), but only on paths that
+ *   provide that hook, so a reusable acquisition must not contain them.
+ * - Anchored drawings, whose reference frames (including page parity for
+ *   inside/outside alignment) are resolved against the acquisition-time page.
+ *
+ * Anything else the acquisition folds in (note numbers, numbering markers,
+ * current date, section geometry) is constant within one body layout session.
+ */
+export function retainedTableAcquisitionIsReusableAcrossPages(
+  acquisition: RetainedTableAcquisition,
+): boolean {
+  const rowsAreReusable = acquisition.input.rows.every((row) => (
+    row.cells.every((cell) => cell.blocks.every((block) => (
+      block.pageDependent !== true
+      && (block.layout.kind !== 'paragraph'
+        || block.layout.drawings.every((drawing) => drawing.anchorLayer === undefined))
+    )))
+  ));
+  return rowsAreReusable
+    && Object.values(acquisition.nestedById).every(
+      retainedTableAcquisitionIsReusableAcrossPages,
+    );
+}
+
 function nextRegularParagraphIndex(
   content: TableLayoutSource['rows'][number]['cells'][number]['content'],
   afterIndex: number,
