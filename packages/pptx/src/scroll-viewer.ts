@@ -35,6 +35,7 @@ import {
 import type { PptxCommentsOptions } from './comment-margin';
 import { pptxCommentOccurrenceKey } from './comment-occurrence';
 import type { PptxComment } from './types';
+import { renderPptxFocusedSlide } from './focused-view-runtime';
 
 /**
  * Debounce window (ms) after the last `setScale` in a zoom burst before the
@@ -322,6 +323,7 @@ export class PptxScrollViewer implements ZoomableViewer {
   private _elementContext: PptxElementContext | null = null;
   private _activeCommentId: string | null = null;
   private _activeCommentSlide: number | null = null;
+  private _commentNavigationGeneration = 0;
   private _commentUi: PptxCommentUiRuntime | null = null;
   private _commentGeometryScheduled = false;
   private _commentGeometryFrame: number | null = null;
@@ -1199,12 +1201,11 @@ export class PptxScrollViewer implements ZoomableViewer {
     const wantRuns = wantOverlay || this._findActive;
     const onTextRun = wantRuns ? (r: PptxTextRunInfo) => runs.push(r) : undefined;
     const canvas = slot.canvas;
-    return this._pres
-      .renderSlide(canvas, i, {
-        width: widthPx, // this slide's own px width → uniform px-per-EMU scale (§7)
-        dpr,
-        onTextRun,
-      })
+    return renderPptxFocusedSlide(this._pres, canvas, i, 'main', {
+      width: widthPx, // this slide's own px width → uniform px-per-EMU scale (§7)
+      dpr,
+      onTextRun,
+    })
       .then(() => {
         // Stale if the epoch moved (a setScale rescaled mid-flight — the run
         // geometry is at the old scale), or a recycle re-purposed this slot for a
@@ -1419,7 +1420,7 @@ export class PptxScrollViewer implements ZoomableViewer {
     const wantRuns = wantOverlay || this._findActive;
     const runs: PptxTextRunInfo[] = [];
     try {
-      const bmp = await this._pres!.renderSlideToBitmap(i, {
+      const bmp = await renderPptxFocusedSlide(this._pres!, canvas, i, 'worker', {
         width: widthPx,
         dpr,
         onTextRun: wantRuns ? (r) => runs.push(r) : undefined,
@@ -1893,12 +1894,11 @@ export class PptxScrollViewer implements ZoomableViewer {
     const wantOverlay = !!this._opts.enableTextSelection && !!slot.textLayer;
     const wantRuns = wantOverlay || this._findActive;
     const onTextRun = wantRuns ? (r: PptxTextRunInfo) => runs.push(r) : undefined;
-    this._pres
-      .renderSlide(spare, i, {
-        width: widthPx,
-        dpr,
-        onTextRun,
-      })
+    renderPptxFocusedSlide(this._pres, spare, i, 'main', {
+      width: widthPx,
+      dpr,
+      onTextRun,
+    })
       .then(() => {
         // Discard if superseded: a later setScale bumped the epoch (this spare is
         // at a stale scale), or the slot recycled / moved to another slide. Drop
@@ -2069,26 +2069,30 @@ export class PptxScrollViewer implements ZoomableViewer {
     slide: number,
     comment: Readonly<PptxComment>,
     opts?: { behavior?: 'auto' | 'smooth' },
-  ): void {
-    if (!this._pres) return;
+    resolvedBounds?: Readonly<{ x: number; y: number; width: number; height: number }>,
+  ): boolean {
+    if (!this._pres) return false;
     const slot = this._slots.get(slide);
     const boundsById = new Map(
       (slot?.commentElementBounds ?? []).map((entry) => [entry.elementId, entry.bounds]),
     );
-    const anchored = (comment.anchors ?? []).flatMap((anchor) => {
+    const anchored = resolvedBounds ?? (comment.anchors ?? []).flatMap((anchor) => {
       if ((anchor.type !== 'drawingElement' && anchor.type !== 'textRange') || !anchor.elementId) {
         return [];
       }
       const bounds = boundsById.get(anchor.elementId);
       return bounds ? [bounds] : [];
     })[0];
-    const hasPosition = Number.isFinite(comment.x) && Number.isFinite(comment.y);
-    if (!anchored && !hasPosition) return;
+    const anchors = comment.anchors ?? [];
+    const hasPosition = Number.isFinite(comment.x) && Number.isFinite(comment.y) && (
+      anchors.length === 0 || anchors.some((anchor) => anchor.type === 'slide')
+    );
+    if (!anchored && !hasPosition) return false;
     const x = anchored
-      ? anchored.x + anchored.width / 2
+      ? anchored.x + (hasPosition ? comment.x as number : anchored.width)
       : comment.x as number;
     const y = anchored
-      ? anchored.y + anchored.height / 2
+      ? anchored.y + (hasPosition ? comment.y as number : 0)
       : comment.y as number;
     const width = this._slideWidthPx();
     const marginExtent = this._commentMarginExtent();
@@ -2126,6 +2130,34 @@ export class PptxScrollViewer implements ZoomableViewer {
       this._scrollHost.scrollLeft = left;
     }
     this._mountVisible();
+    return true;
+  }
+
+  private async _resolveSlideCommentElementBounds(
+    slide: number,
+    comment: Readonly<PptxComment>,
+  ): Promise<Readonly<{ x: number; y: number; width: number; height: number }> | undefined> {
+    const presentation = this._pres;
+    if (!presentation) return undefined;
+    const elementIds = (comment.anchors ?? []).flatMap((anchor) =>
+      (anchor.type === 'drawingElement' || anchor.type === 'textRange') && anchor.elementId
+        ? [anchor.elementId]
+        : []);
+    if (elementIds.length === 0) return undefined;
+    const cached = new Map(
+      (this._slots.get(slide)?.commentElementBounds ?? [])
+        .map((entry) => [entry.elementId, entry.bounds]),
+    );
+    const cachedTarget = elementIds.flatMap((elementId) => {
+      const bounds = cached.get(elementId);
+      return bounds ? [bounds] : [];
+    })[0];
+    if (cachedTarget) return cachedTarget;
+    const bounds = await presentation.getElementBoundsByIds(slide, elementIds);
+    return elementIds.flatMap((elementId) => {
+      const entry = bounds.find((candidate) => candidate.elementId === elementId);
+      return entry ? [entry.bounds] : [];
+    })[0];
   }
 
   /**
@@ -2134,11 +2166,11 @@ export class PptxScrollViewer implements ZoomableViewer {
    * `commentIndex` is its index in `presentation.getComments(slideIndex)`.
    * Returns `false` when either index does not identify a comment.
    */
-  goToComment(
+  async goToComment(
     slideIndex: number,
     commentIndex: number,
     opts?: { behavior?: 'auto' | 'smooth' },
-  ): boolean {
+  ): Promise<boolean> {
     if (this._destroyed) throw new Error('PptxScrollViewer is destroyed');
     const presentation = this._pres;
     if (!presentation || !Number.isInteger(slideIndex) || !Number.isInteger(commentIndex)) {
@@ -2148,11 +2180,22 @@ export class PptxScrollViewer implements ZoomableViewer {
     const comment = presentation.getComments(slideIndex)[commentIndex];
     if (!comment) return false;
 
+    const generation = ++this._commentNavigationGeneration;
+    const bounds = await this._resolveSlideCommentElementBounds(slideIndex, comment);
+    if (this._destroyed) throw new Error('PptxScrollViewer is destroyed');
+    if (generation !== this._commentNavigationGeneration || presentation !== this._pres) {
+      return false;
+    }
+    const anchors = comment.anchors ?? [];
+    const hasSlidePoint = Number.isFinite(comment.x) && Number.isFinite(comment.y) && (
+      anchors.length === 0 || anchors.some((anchor) => anchor.type === 'slide')
+    );
+    if (!bounds && !hasSlidePoint) return false;
+    this.scrollToSlide(slideIndex, opts);
+    if (!this._scrollToSlideCommentTarget(slideIndex, comment, opts, bounds)) return false;
     this._activeCommentId = pptxCommentOccurrenceKey(comment, commentIndex, slideIndex);
     this._activeCommentSlide = slideIndex;
     this._elementContext = null;
-    this.scrollToSlide(slideIndex, opts);
-    this._scrollToSlideCommentTarget(slideIndex, comment, opts);
     for (const [mountedSlide, slot] of this._slots) {
       this._redrawSlotComments(mountedSlide, slot);
     }
@@ -2597,13 +2640,15 @@ export class PptxScrollViewer implements ZoomableViewer {
     if (this._destroyed) throw new Error('PptxScrollViewer is destroyed');
     if (this._pres && this._activeCommentId !== null && this._activeCommentSlide !== null) {
       const comments = this._pres.getComments(this._activeCommentSlide);
-      const entry = comments.find((comment, index) =>
+      const commentIndex = comments.findIndex((comment, index) =>
         pptxCommentOccurrenceKey(comment, index, this._activeCommentSlide as number) ===
           this._activeCommentId);
-      if (entry) {
+      const entry = comments[commentIndex];
+      if (entry && commentIndex >= 0) {
         return createPptxCommentSelectionContext(
           entry,
           this._activeCommentSlide,
+          commentIndex,
           this._activeCommentId,
           options,
         );

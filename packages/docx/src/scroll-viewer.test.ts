@@ -291,6 +291,38 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
     viewer.destroy();
   });
 
+  it('navigates to a requested rendered occurrence instead of the first page cache', async () => {
+    installDom();
+    const engine = new FakeDocxEngine(3, [{ widthPt: 612, heightPt: 792 }]);
+    const source = { story: 'header', storyInstance: 'default', path: [0] } as const;
+    engine.comments = [{ id: 'repeated', author: 'Ada', text: 'Repeated header' }];
+    engine.commentAnchors = [{
+      commentId: 'repeated',
+      source,
+      startRunIndex: 0,
+      endRunIndex: 1,
+      reference: { source, runIndex: 1, affinity: 'preceding' },
+    }] as CommentAnchorRange[];
+    const collectPageRuns = vi.fn(async (page: number) => page === 1 || page === 2 ? [{
+      text: 'header', source, sourceRunIndex: 0,
+      x: 20, y: 40, w: 80, h: 14, fontSize: 12, font: '12px sans-serif',
+    }] : []);
+    engine.collectPageRuns = collectPageRuns;
+    const viewer = DocxScrollViewer.fromDocument(
+      makeContainer() as unknown as HTMLElement,
+      engine.asDoc(),
+    );
+
+    await expect(viewer.goToComment('repeated')).resolves.toBe(true);
+    expect(viewer.getSelectionContext()).toMatchObject({ pageIndex: 1 });
+
+    await expect(viewer.goToComment('repeated', { pageIndex: 2 })).resolves.toBe(true);
+    expect(viewer.getSelectionContext()).toMatchObject({ pageIndex: 2 });
+    await expect(viewer.goToComment('repeated', { pageIndex: 0 })).resolves.toBe(false);
+    await expect(viewer.goToComment('repeated', { pageIndex: 99 })).resolves.toBe(false);
+    viewer.destroy();
+  });
+
   it('does not collect comment geometry or add comment DOM by default', async () => {
     installDom();
     const engine = new FakeDocxEngine(1, [{ widthPt: 612, heightPt: 792 }]);

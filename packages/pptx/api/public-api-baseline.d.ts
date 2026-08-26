@@ -1356,6 +1356,7 @@ export interface PptxCommentSelectionContext {
     readonly format: 'pptx';
     readonly kind: 'comment';
     readonly slideIndex: number;
+    readonly commentIndex: number;
     readonly occurrenceId: string;
     readonly commentId?: string;
     readonly point?: Readonly<{
@@ -1466,7 +1467,7 @@ export class PptxScrollViewer implements ZoomableViewer {
     }): void;
     goToComment(slideIndex: number, commentIndex: number, opts?: {
         behavior?: 'auto' | 'smooth';
-    }): boolean;
+    }): Promise<boolean>;
     findText(query: string, opts?: FindMatchesOptions): Promise<FindMatch<PptxMatchLocation>[]>;
     findNext(): Promise<FindMatch<PptxMatchLocation> | null>;
     findPrev(): Promise<FindMatch<PptxMatchLocation> | null>;

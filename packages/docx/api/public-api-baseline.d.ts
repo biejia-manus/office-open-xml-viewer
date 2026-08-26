@@ -896,6 +896,8 @@ export interface ChartTrendline {
 }
 export type ChartType = 'line' | 'stackedLine' | 'stackedLinePct' | 'clusteredBar' | 'clusteredBarH' | 'stackedBar' | 'stackedBarH' | 'stackedBarPct' | 'stackedBarHPct' | 'area' | 'stackedArea' | 'stackedAreaPct' | 'pie' | 'doughnut' | 'scatter' | 'bubble' | 'radar' | 'waterfall' | 'stock' | 'surface' | 'surface3D' | 'boxWhisker' | 'sunburst' | 'treemap' | string;
 export type CollectPageRunsOptions = Pick<RenderPageOptions, 'width' | 'currentDate'>;
+export interface DocxPageCommentThreadsOptions extends CollectPageRunsOptions, ResolveDocxCommentThreadsOptions {
+}
 export interface ColSpec {
     widthPt: number;
     spacePt: number;
@@ -1111,6 +1113,7 @@ export class DocxDocument {
     renderPage(target: HTMLCanvasElement | OffscreenCanvas, pageIndex: number, opts?: RenderPageOptions): Promise<void>;
     renderPageToBitmap(pageIndex: number, opts?: RenderPageToBitmapOptions): Promise<ImageBitmap>;
     collectPageRuns(pageIndex: number, opts?: CollectPageRunsOptions): Promise<DocxTextRunInfo[]>;
+    getCommentThreads(pageIndex: number, options?: DocxPageCommentThreadsOptions): Promise<readonly Readonly<ResolvedDocxCommentThread>[]>;
     getElementContextAt(pageIndex: number, point: DocxPagePoint, opts?: DocxElementContextOptions): Promise<DocxElementContext | null>;
     private __privatePresence;
     private constructor();
@@ -1190,6 +1193,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         behavior?: 'auto' | 'smooth';
     }): void;
     goToComment(commentId: string, opts?: {
+        pageIndex?: number;
         behavior?: 'auto' | 'smooth';
     }): Promise<boolean>;
     findText(query: string, opts?: FindMatchesOptions): Promise<FindMatch<DocxMatchLocation>[]>;

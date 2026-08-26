@@ -9,4 +9,12 @@ describe('API page layout', () => {
     expect(page).toContain('@media (max-width: 820px)');
     expect(page).toContain('.api-toc { position: static; }');
   });
+
+  it('puts change-history availability and usage with each API reference', () => {
+    expect(page).toContain('<a href="#review-data">Review data</a>');
+    expect(page).toContain('<ChangeHistoryApiGuide format={format} />');
+    expect(page.indexOf('<ApiReference format={format} />')).toBeLessThan(
+      page.indexOf('<ChangeHistoryApiGuide format={format} />'),
+    );
+  });
 });

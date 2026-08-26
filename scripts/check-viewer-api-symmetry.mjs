@@ -148,6 +148,18 @@ function requireMethod(api, className, methodName, returnType) {
   return member;
 }
 
+function requireMethodParameters(api, className, methodName, expectedTypes) {
+  const member = requireMethod(api, className, methodName);
+  const actual = member.parameters.map((parameter) => parameter.type?.getText(api.file));
+  if (actual.length !== expectedTypes.length || actual.some((type, index) => type !== expectedTypes[index])) {
+    fail(
+      `${className}.${methodName}() parameters are (${actual.join(', ')}), ` +
+        `expected (${expectedTypes.join(', ')})`,
+    );
+  }
+  return member;
+}
+
 function requireStaticLoad(api, className) {
   const declaration = classDeclaration(api, className);
   const load = declaration.members.find((member) => memberName(member) === 'load');
@@ -291,6 +303,49 @@ for (const format of formats) {
     for (const viewer of [format.canvasViewer, format.containerViewer]) {
       requireMethod(api, viewer, 'getCellViewportRect', 'XlsxCellViewportRect | null');
     }
+  }
+}
+
+// Comments use format-native locators, but their responsibilities stay
+// symmetric: source records live on the headless engine, navigation includes
+// the owning surface identity, and every navigation Promise settles only after
+// the authored target has been revealed.
+{
+  const api = loadApi('packages/docx/api/public-api-baseline.d.ts');
+  requireProperty(api, 'DocxDocument', 'comments');
+  requireMethod(
+    api,
+    'DocxDocument',
+    'getCommentThreads',
+    'Promise<readonly Readonly<ResolvedDocxCommentThread>[]>',
+  );
+  requireMethodParameters(api, 'DocxScrollViewer', 'goToComment', [
+    'string',
+    "{\n        pageIndex?: number;\n        behavior?: 'auto' | 'smooth';\n    }",
+  ]);
+  requireMethod(api, 'DocxScrollViewer', 'goToComment', 'Promise<boolean>');
+}
+{
+  const api = loadApi('packages/pptx/api/public-api-baseline.d.ts');
+  requireMethod(api, 'PptxPresentation', 'getComments', 'readonly Readonly<PptxComment>[]');
+  requireMethodParameters(api, 'PptxScrollViewer', 'goToComment', [
+    'number',
+    'number',
+    "{\n        behavior?: 'auto' | 'smooth';\n    }",
+  ]);
+  requireMethod(api, 'PptxScrollViewer', 'goToComment', 'Promise<boolean>');
+}
+{
+  const api = loadApi('packages/xlsx/api/public-api-baseline.d.ts');
+  requireMethod(api, 'XlsxWorkbook', 'getComments', 'Promise<readonly Readonly<XlsxComment>[]>');
+  for (const viewer of ['XlsxSheetViewer', 'XlsxViewer']) {
+    requireMethod(api, viewer, 'getComments', 'readonly Readonly<XlsxComment>[]');
+    requireMethodParameters(api, viewer, 'goToComment', [
+      'number',
+      'string',
+      'XlsxScrollToCellOptions',
+    ]);
+    requireMethod(api, viewer, 'goToComment', 'Promise<boolean>');
   }
 }
 
