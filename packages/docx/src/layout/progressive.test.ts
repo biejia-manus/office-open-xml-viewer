@@ -4,6 +4,7 @@ import { layoutSourceStore } from '../layout-source-model-adapter.js';
 import {
   installStubCanvas,
   syntheticDocxModel,
+  type SyntheticDocumentOptions,
   type SyntheticDocumentShape,
 } from '../testing/synthetic-document.js';
 import { paginateBody } from './body-paginator.js';
@@ -34,8 +35,12 @@ import type { DocumentLayout, LayoutPage } from './types.js';
 
 const CURRENT_DATE_MS = 1_700_000_000_000;
 
-function open(shape: SyntheticDocumentShape, paragraphs: number) {
-  const source = layoutSourceStore(syntheticDocxModel(shape, { paragraphs }));
+function open(
+  shape: SyntheticDocumentShape,
+  paragraphs: number,
+  model: Omit<SyntheticDocumentOptions, 'paragraphs'> = {},
+) {
+  const source = layoutSourceStore(syntheticDocxModel(shape, { ...model, paragraphs }));
   return {
     source,
     services: createLayoutServices(source),
@@ -113,7 +118,10 @@ describe('preview pages match the final layout', () => {
     // Every page of every publication must equal the page the finished layout
     // puts at that index — otherwise content would visibly move as it arrives.
     for (const preview of previews) {
-      expect(preview.exact).toBe(true);
+      // Publications are provisional even when, as here, they happen to match:
+      // exactness cannot be proven while the paginator's lookahead is
+      // unbounded (see the keepNext regression below).
+      expect(preview.exact).toBe(false);
       preview.layout.pages.forEach((page, index) => {
         expect(pageFingerprint(page as LayoutPage))
           .toBe(pageFingerprint(final.pages[index] as LayoutPage));
@@ -138,12 +146,46 @@ describe('preview pages match the final layout', () => {
 
     expect(previews.length).toBeGreaterThan(0);
     for (const preview of previews) {
-      expect(preview.exact).toBe(true);
+      expect(preview.exact).toBe(false);
       preview.layout.pages.forEach((page, index) => {
         expect(pageFingerprint(page as LayoutPage))
           .toBe(pageFingerprint(final.pages[index] as LayoutPage));
       });
     }
+  }, 300_000);
+
+  it('a keepNext chain crossing the truncation cut changes an already-published page', async () => {
+    // THE reason publications are provisional. Paragraphs 44-47 form a
+    // keepNext chain whose terminal block (48) sits just beyond the first
+    // 48-entry preview window. Inside the truncated preview the paginator
+    // never finds the chain's terminal block, so the keep-set decision at the
+    // page boundary resolves differently than in the authoritative layout —
+    // and the page that changes is NOT the dropped trailing page. If this
+    // fingerprint mismatch ever disappears, a stable-checkpoint mechanism has
+    // been built (or the paginator changed): only then may publications claim
+    // exactness again.
+    const previews: ProgressiveLayoutPreview[] = [];
+    const testCase = open('plain', 80, {
+      wordsPerParagraph: 20,
+      keepNextIndices: [44, 45, 46, 47],
+    });
+    const final = await layoutDocumentProgressively(
+      testCase.source.bodyLayoutInput,
+      testCase.services,
+      testCase.options,
+      {
+        hasPaginationFields: testCase.source.hasPaginationFields,
+        onPreview: (preview) => { previews.push(preview); },
+      },
+    );
+
+    expect(previews.length).toBeGreaterThan(0);
+    for (const preview of previews) expect(preview.exact).toBe(false);
+    const mismatched = previews.some((preview) =>
+      preview.layout.pages.some((page, index) =>
+        pageFingerprint(page as LayoutPage)
+          !== pageFingerprint(final.pages[index] as LayoutPage)));
+    expect(mismatched).toBe(true);
   }, 300_000);
 
   it('marks a PAGE/NUMPAGES document inexact', async () => {

@@ -55,6 +55,13 @@ export type SyntheticDocumentShape =
   | 'tracked-fields';
 
 export interface SyntheticDocumentOptions {
+  /** 0-based indices of body paragraphs to mark `w:keepNext` (§17.3.1.15).
+   *  A run of consecutive indices forms one keep-set whose terminal block is
+   *  the first unmarked paragraph after it — the shape that exercises the
+   *  paginator's unbounded successor scan across a progressive truncation
+   *  cut. Applied to paragraph-bodied shapes (`plain`, `header-footer`,
+   *  `fields`); ignored for `tables`. */
+  readonly keepNextIndices?: readonly number[];
   /** Body paragraph count (or table count for `tables`). */
   readonly paragraphs?: number;
   /** Words per generated paragraph. `long-paragraphs` overrides this upward. */
@@ -277,9 +284,13 @@ export function syntheticDocxModel(
       (_unused, index) => trackedParagraph(next, words, index) as BodyElement,
     );
   } else {
+    const keepNext = new Set(options.keepNextIndices ?? []);
     body = Array.from(
       { length: count },
-      () => textParagraph(sentence(next, words)) as BodyElement,
+      (_unused, index) => textParagraph(
+        sentence(next, words),
+        keepNext.has(index) ? { keepNext: true } : {},
+      ) as BodyElement,
     );
   }
 

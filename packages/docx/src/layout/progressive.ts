@@ -17,20 +17,22 @@
  * produced by exactly the code path that produces the real one. Nothing here
  * teaches the engine a second way to build a page.
  *
- * ## Why the preview's last page is dropped
+ * ## Why the preview's last page is dropped — and why publications are still
+ * ## provisional
  *
  * Truncating the body removes the lookahead the paginator uses at the cut:
  * `keepNext` keep-sets, widow/orphan control and table continuation all consult
- * blocks that follow. So the FINAL page of a preview may paginate differently
- * from the real document. Earlier pages cannot: nothing downstream of a page
- * boundary can move content back above it, given identical header/footer
- * reserves — and the reserves are identical, because the preview carries the
- * same section and the same header/footer stories.
- *
- * Dropping the last preview page therefore yields pages that match the real
- * layout exactly, for documents without whole-document feedback. Documents WITH
- * such feedback are reported as inexact rather than presented as settled, so a
- * viewer can decide whether to show them at all.
+ * blocks that follow. Dropping the preview's final page absorbs the common
+ * case, but it is NOT a proof: the paginator's lookahead is unbounded. A
+ * `keepNext` chain is scanned to its terminal block however far away that is,
+ * so a chain crossing the cut can change the page-or-column decision for a
+ * block on an EARLIER page (the truncated preview keeps the chain's head where
+ * the authoritative layout pushes it forward), and the trailing-empty-mark
+ * admission consults whether ANY ink follows. Until the paginator exposes a
+ * genuinely stable checkpoint — a cut it can prove no lookahead crosses —
+ * every publication is therefore reported as provisional (`exact: false`), and
+ * consumers must repaint published pages when the authoritative layout
+ * replaces them.
  *
  * ## Why a chain, and not one preview
  *
@@ -101,8 +103,10 @@ export interface ProgressiveLayoutOptions {
   readonly scheduler?: PaginationSchedulerOptions;
   /**
    * Whether the document has PAGE/NUMPAGES feedback — `LayoutSourceStore.
-   * hasPaginationFields`. Supplied by the caller because it is a parsed-source
-   * fact, and the layout input alone cannot answer it cheaply.
+   * hasPaginationFields`. A parsed-source fact the layout input alone cannot
+   * answer cheaply. Currently informational: every publication is provisional
+   * regardless (see the module doc), but a future stable-checkpoint mechanism
+   * would need it again, and callers already thread it.
    */
   readonly hasPaginationFields?: boolean;
 }
@@ -111,27 +115,16 @@ export interface ProgressiveLayoutPreview {
   /** A complete, paintable layout of the document's opening pages. */
   readonly layout: DocumentLayout;
   /**
-   * Whether these pages are known to match the final layout. False when the
-   * document has whole-document feedback (PAGE/NUMPAGES fields), in which case
-   * page numbering in headers and footers can still change.
+   * Whether these pages are known to match the final layout. Currently ALWAYS
+   * false: the paginator's lookahead is unbounded (`keepNext` chains,
+   * trailing-empty-mark admission), so no truncation cut can be proven stable
+   * — published pages must be treated as provisional and repainted when the
+   * authoritative layout replaces them. The field stays so a future paginator
+   * checkpoint can restore exactness without an API change.
    */
   readonly exact: boolean;
   /** Body entries the preview covers, for diagnostics. */
   readonly coveredEntries: number;
-}
-
-/**
- * Whether a preview's pages can be trusted to survive into the final layout.
- *
- * PAGE/NUMPAGES fields are the disqualifier: their value depends on the total
- * page count, which a prefix does not know, so a footer reading "Page 1 of 3"
- * would later become "Page 1 of 480". Page-owned anchors and continuous-section
- * column balancing also re-paginate, but they resolve from evidence contained in
- * the pages themselves, so a prefix converges to the same result for the pages
- * it keeps.
- */
-function previewIsExact(hasPaginationFields: boolean | undefined): boolean {
-  return hasPaginationFields !== true;
 }
 
 /** Build the same input restricted to its first `entries` body entries. */
@@ -151,7 +144,9 @@ function capPages(layout: DocumentLayout, limit: number): DocumentLayout {
   }) as DocumentLayout;
 }
 
-/** Drop the preview's final page — the only one truncation can have changed. */
+/** Drop the preview's final page — the one truncation changes most often. Not
+ *  a correctness guarantee (see the module doc): unbounded lookahead can still
+ *  reach earlier pages, which is why publications stay provisional. */
 function withoutTrailingPage(layout: DocumentLayout): DocumentLayout {
   return Object.freeze({
     ...layout,
@@ -177,11 +172,10 @@ export async function layoutDocumentProgressively(
 ): Promise<DocumentLayout> {
   const previewPages = Math.max(1, progressive.previewPages ?? 2);
   const { onPreview, scheduler } = progressive;
-  const exact = previewIsExact(progressive.hasPaginationFields);
   const total = input.sequence.length;
 
   let covered = onPreview
-    ? emitPreview(input, services, options, previewPages, onPreview, exact)
+    ? emitPreview(input, services, options, previewPages, onPreview)
     : 0;
 
   if (onPreview && covered > 0) {
@@ -216,7 +210,7 @@ export async function layoutDocumentProgressively(
       // spacer would jump the viewport under the reader.
       if (publication.pages.length <= published) continue;
       published = publication.pages.length;
-      onPreview(Object.freeze({ layout: publication, exact, coveredEntries: next }));
+      onPreview(Object.freeze({ layout: publication, exact: false, coveredEntries: next }));
     }
   }
 
@@ -231,7 +225,6 @@ function emitPreview(
   options: LayoutOptions,
   previewPages: number,
   onPreview: (preview: ProgressiveLayoutPreview) => void,
-  exact: boolean,
 ): number {
   const total = input.sequence.length;
   let entries = INITIAL_PREVIEW_ENTRIES;
@@ -262,7 +255,7 @@ function emitPreview(
       // pages that the imminent full layout is about to replace anyway.
       const published = capPages(withoutTrailingPage(layout), previewPages);
       if (published.pages.length === 0) return 0;
-      onPreview(Object.freeze({ layout: published, exact, coveredEntries: covered }));
+      onPreview(Object.freeze({ layout: published, exact: false, coveredEntries: covered }));
       return covered;
     }
     entries = covered * PREVIEW_GROWTH;
