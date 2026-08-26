@@ -46,11 +46,6 @@ npm install @silurus/ooxml
 pnpm add @silurus/ooxml
 ```
 
-> Upgrading from v0.76? Review the
-> [v0.77 migration guide](https://ooxml.silurus.dev/announcements/v077-migration-guide/)
-> for the XLSX selection, selection-context, MCP-tool, option/type, and Viewer
-> error-handling changes.
-
 > **Bundler note**: the Rust parsers ship as real `.wasm` asset files next to the
 > JavaScript, referenced with the standard `new URL('…', import.meta.url)` form
 > and fetched (streaming-compiled) at load time. Verified to work with zero
@@ -787,6 +782,7 @@ file without uploading it.
 | | lumMod / lumOff / alpha transforms | ✅ |
 | **Interaction** | Text selection (transparent overlay, native copy) | ✅ |
 | | Bounded text/element selection context (`getSelectionContext()`, element selection, master/layout/slide provenance, main + worker) | ✅ |
+| | Comments — opt-in slide-side cards (`comments: true`), authored target markers and highlights, replies and resolved state; also available per slide through the presentation model | ✅ |
 | | In-document find (`findText` / `findNext` / `findPrev` / `clearFind` — matches tagged with slide) | ✅ |
 | | Runtime zoom (`getScale` / `setScale` / `fitWidth` / `fitPage`) | ✅ |
 | | Clickable hyperlinks (`onHyperlinkClick`; internal slide-jump navigation) | ✅ |

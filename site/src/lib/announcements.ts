@@ -38,7 +38,7 @@ export const announcements: readonly Announcement[] = [
   {
     slug: 'v082-review-comments',
     date: '2026-08-26',
-    label: 'Upcoming release',
+    label: 'Release note',
     version: 'v0.82.0',
     title: 'Comments and tracked changes in v0.82.0',
     summary: 'v0.82.0 adds read-only comment presentation across Word, Excel and PowerPoint, together with detached Word tracked-change data.',
