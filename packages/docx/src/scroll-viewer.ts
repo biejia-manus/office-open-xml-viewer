@@ -126,7 +126,10 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
    *
    * `pageCount` therefore starts small and grows; {@link findText} waits for the
    * full layout internally. Ignored by `fromDocument`, whose document is already
-   * loaded. Requires `mode: 'main'`.
+   * loaded. Works in both render modes; in `mode: 'worker'` it additionally
+   * keeps the remaining pagination off the main thread, though it does not
+   * apply to a viewer that also starts in the tracked-changes markup view (the
+   * worker paginates the default view).
    */
   progressiveLayout?: boolean;
   /**

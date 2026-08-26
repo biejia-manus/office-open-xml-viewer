@@ -51,6 +51,7 @@ import {
 import type { DeepReadonly, DocumentLayout } from './layout/types.js';
 import { snapshotPlainData } from './layout/plain-data.js';
 import type {
+  DocumentLayoutPartial,
   DocumentMeta,
   RenderWorkerRequest,
   RenderWorkerResponse,
@@ -152,8 +153,16 @@ export interface LoadOptions extends CoreLoadOptions {
    * whole document: page-count-sensitive UI, text search, bookmark navigation,
    * printing or export.
    *
+   * Works in BOTH `mode: 'main'` and `mode: 'worker'`. In worker mode the
+   * pagination stays in the render worker, so the opening pages arrive without
+   * a blank wait AND the remaining layout never competes for main-thread
+   * frames. One limitation there: the worker paginates the document's default
+   * view, so a load that also selects a variant — `showTrackedChanges: true`,
+   * or an explicit {@link currentDate} — falls back to a blocking parse rather
+   * than publish pages for a view it is not going to paint.
+   *
    * Off by default: `load()` resolving before the document is fully laid out is
-   * a behaviour change existing callers should opt into. Requires `mode: 'main'`.
+   * a behaviour change existing callers should opt into.
    */
   progressiveLayout?: boolean;
   /**
@@ -218,6 +227,42 @@ interface ReviewSnapshot {
   readonly revisions: readonly Readonly<DocRevision>[];
 }
 
+/** Live state of a worker-mode progressive load: the caller's callbacks, the
+ *  abort controller `destroy()` trips, and the deferred that lets `load()`
+ *  resolve on the first published prefix instead of the finished document. */
+interface WorkerProgressiveLoad {
+  readonly onPartial?: LoadOptions['onLayoutPartial'];
+  readonly onComplete?: LoadOptions['onLayoutComplete'];
+  readonly onProgress?: LoadOptions['onLayoutProgress'];
+  readonly abort: AbortController;
+  /** Settles when the worker publishes its first prefix, or — when it publishes
+   *  none — when the authoritative `parsedMeta` lands. Either way it is what
+   *  `load()` waits on. */
+  readonly firstPublication: Deferred<void>;
+  published: boolean;
+}
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (error: unknown) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+/** Identity-stable empties for the two anchor projections.
+ *  `commentAnchorRanges()` is polled per draw and consumers cache on identity
+ *  (`DocxScrollViewer._hasDisplayableComments`), so returning a fresh `[]` each
+ *  call would rebuild that cache on every frame — most visibly during the
+ *  progressive window, where worker metadata carries no anchor ranges yet. */
+const NO_COMMENT_ANCHOR_RANGES: readonly CommentAnchorRange[] = Object.freeze([]);
+const NO_REVISION_ANCHOR_RANGES: readonly RevisionAnchorRange[] = Object.freeze([]);
+
 const EMPTY_REVIEW_SNAPSHOT: ReviewSnapshot = Object.freeze({
   comments: Object.freeze([]),
   revisions: Object.freeze([]),
@@ -263,6 +308,17 @@ export class DocxDocument {
   private _revisionAnchorRanges: readonly RevisionAnchorRange[] | null = null;
   /** Shared lightweight index for comment and revision anchor projections. */
   private _reviewTextRunSourceIndex: ReadonlyMap<string, ReadonlySet<number>> | null = null;
+  /** Correlation id of the in-flight worker `parse`. Progressive pushes name it
+   *  in `forId`; ids are monotonic and never reused, so a push carrying any
+   *  other id belongs to a parse this document has already moved past. */
+  private _parseRequestId: number | null = null;
+  /** Set for the duration of a worker-mode progressive parse. */
+  private _progressive: WorkerProgressiveLoad | null = null;
+  /** Silence watchdog for a progressive parse. The parse request itself gives up
+   *  its deadline (a background layout legitimately outlives any fixed timeout),
+   *  so liveness is tracked here instead and re-armed by every worker push. */
+  private _parseWatchdog: ReturnType<typeof setTimeout> | undefined;
+  private _parseWatchdogMs: number | undefined;
   private _mode: 'main' | 'worker' = 'main';
   private _threeD: ChartThreeDRenderer | undefined;
   private _regionMap: ChartRegionMapRenderer | undefined;
@@ -310,6 +366,10 @@ export class DocxDocument {
           : 'id' in res
             ? res.id
             : undefined,
+      // Progressive layout pushes carry `forId` rather than `id`, so `correlate`
+      // above returns undefined for them and they arrive here instead of
+      // resolving the still-pending `parse`. That is the whole mechanism.
+      onUnsolicited: (res) => this._onWorkerLayoutPush(res),
       toError: (res) => {
         if ('protocol' in res || res.type !== 'error') return undefined;
         // Reconstruct every shared typed error first (resource quota, decoded
@@ -373,6 +433,17 @@ export class DocxDocument {
         ? (await import('./render-worker-host')).createRenderWorker()
         : new InlineWorker();
     const rendererDescriptors = mode === 'worker' ? workerRendererDescriptors(opts) : undefined;
+    // The render worker paginates the DEFAULT layout variant — its metadata
+    // route reads `doc.layoutVariants.defaultLayout`. A load that selects
+    // another variant (the tracked-changes markup view, or an explicit
+    // `currentDate`) would therefore have its prefix primed under a key nothing
+    // reads: the progressive pass would be discarded AND a second full layout
+    // built. Such a load keeps today's blocking parse until the worker learns
+    // to paginate the variant actually being viewed.
+    const workerProgressive = mode === 'worker'
+      && !!opts.progressiveLayout
+      && opts.currentDate === undefined
+      && opts.showTrackedChanges !== true;
     let doc: DocxDocument | undefined;
     try {
       doc = new DocxDocument(worker, mode, defaultCurrentDateMs, opts.wasmUrl);
@@ -387,6 +458,16 @@ export class DocxDocument {
         opts.workerTimeoutMs,
         (usage) => metrics.observeUsage(usage),
         rendererDescriptors,
+        workerProgressive
+          ? {
+              onPartial: opts.onLayoutPartial,
+              onComplete: opts.onLayoutComplete,
+              onProgress: opts.onLayoutProgress,
+              abort: new AbortController(),
+              firstPublication: deferred<void>(),
+              published: false,
+            }
+          : undefined,
       );
       if (mode === 'worker' && doc._mode === 'main') {
         metrics.setMode('main');
@@ -601,7 +682,20 @@ export class DocxDocument {
     timeoutMs?: number,
     onUsage?: (usage: import('@silurus/ooxml-core').OoxmlResourceUsageSnapshot) => void,
     renderers?: WorkerRendererDescriptors,
+    progressive?: WorkerProgressiveLoad,
   ): Promise<void> {
+    if (progressive) {
+      await this._parseProgressively(
+        buffer,
+        resourcePolicy,
+        useGoogleFonts,
+        timeoutMs,
+        onUsage,
+        renderers,
+        progressive,
+      );
+      return;
+    }
     const res = await this._bridge.request(
       (id) =>
         this._mode === 'worker'
@@ -644,12 +738,242 @@ export class DocxDocument {
     );
   }
 
+  /**
+   * Route an uncorrelated worker push.
+   *
+   * Only pushes naming the in-flight `parse` are acted on: request ids are
+   * monotonic and never reused, so a `forId` from any other parse belongs to a
+   * load this document has already moved past.
+   */
+  private _onWorkerLayoutPush(res: WorkerResponse | RenderWorkerResponse): void {
+    if (!('forId' in res) || res.forId !== this._parseRequestId) return;
+    // Any push proves the worker is alive and working, which is the only thing
+    // the watchdog is asking about.
+    this._rearmParseWatchdog();
+    const progressive = this._progressive;
+    if (res.type === 'layoutProgress') {
+      progressive?.onProgress?.({ committedPages: res.committedPages });
+      return;
+    }
+    if (res.type !== 'layoutPartial' || !progressive) return;
+    this._applyLayoutPartial(res.partial);
+    if (progressive.published) {
+      progressive.onPartial?.({
+        pageCount: res.partial.pageCount,
+        exact: res.partial.exact,
+      });
+      return;
+    }
+    // The first publication is what `load()` has been waiting for. It fires no
+    // `onLayoutPartial`: the caller is about to see these pages as the loaded
+    // document, not as an extension of one — same rule main mode follows.
+    progressive.published = true;
+    this._layoutComplete = false;
+    progressive.firstPublication.resolve();
+  }
+
+  /**
+   * Fold a provisional prefix into the worker metadata the geometry accessors
+   * read.
+   *
+   * Replaces rather than mutates: `pageCount` and `pageSizes` have to move
+   * together, and a reader that caught one without the other would size a
+   * scroll extent against the wrong page list.
+   */
+  private _applyLayoutPartial(partial: DocumentLayoutPartial): void {
+    // `review` rides on the first publication only; later ones keep what the
+    // first established.
+    const review = partial.review ?? this._meta;
+    this._meta = {
+      pageCount: partial.pageCount,
+      pageSizes: partial.pageSizes,
+      bookmarkPages: partial.bookmarkPages,
+      revisions: review?.revisions ?? [],
+      comments: review?.comments ?? [],
+      footnotes: review?.footnotes ?? [],
+      endnotes: review?.endnotes ?? [],
+      // The two anchor projections are whole-document joins; only the
+      // authoritative `parsedMeta` carries them. Absent is a shape
+      // `DocumentMeta` already documents as supported.
+    };
+    if (partial.review) {
+      this._review = snapshotReviewData(partial.review.comments, partial.review.revisions);
+    }
+    this._invalidateLayoutDerivedCaches();
+  }
+
+  /** Install the authoritative metadata and close the progressive window. */
+  private _onAuthoritativeMeta(meta: DocumentMeta): void {
+    this._clearParseWatchdog();
+    this._meta = meta;
+    this._invalidateLayoutDerivedCaches();
+    this._review = snapshotReviewData(meta.comments, meta.revisions);
+    const progressive = this._progressive;
+    if (!progressive) return;
+    this._layoutComplete = true;
+    // A load whose worker published nothing resolves here instead — there was
+    // never anything to show early, so `load()` waited for the real document.
+    progressive.firstPublication.resolve();
+    if (progressive.published) progressive.onComplete?.();
+  }
+
+  /** Bookmark pages and the review anchor projections are derived from the
+   *  layout, so they belong to the publication that produced them. */
+  private _invalidateLayoutDerivedCaches(): void {
+    this._bookmarkPages = null;
+    this._commentAnchorRanges = null;
+    this._revisionAnchorRanges = null;
+    this._reviewTextRunSourceIndex = null;
+  }
+
+  private _rearmParseWatchdog(): void {
+    if (this._parseWatchdogMs === undefined) return;
+    clearTimeout(this._parseWatchdog);
+    this._parseWatchdog = setTimeout(() => this._onParseWentSilent(), this._parseWatchdogMs);
+  }
+
+  private _clearParseWatchdog(): void {
+    clearTimeout(this._parseWatchdog);
+    this._parseWatchdog = undefined;
+    this._parseWatchdogMs = undefined;
+  }
+
+  /** The worker produced neither a publication nor a heartbeat within the
+   *  caller's timeout. A background layout may legitimately run for a long
+   *  time, but it may not go quiet: treat silence as a wedged worker. */
+  private _onParseWentSilent(): void {
+    const progressive = this._progressive;
+    this._clearParseWatchdog();
+    const error = new Error(
+      `worker layout produced no progress for ${this._parseWatchdogMs}ms`,
+    );
+    if (progressive && !progressive.published) {
+      // load() has not resolved yet, so this can still be its rejection.
+      progressive.firstPublication.reject(error);
+    } else if (progressive) {
+      this._layoutError = error;
+      this._layoutComplete = true;
+      progressive.onComplete?.(error);
+    }
+    this._bridge.terminate();
+  }
+
+  /**
+   * Worker-mode progressive parse: resolve as soon as the worker publishes a
+   * paintable prefix, and let the authoritative layout land in the background.
+   *
+   * The `parse` request deliberately gives up its own deadline. Deferring
+   * `parsedMeta` until the whole document is paginated would otherwise turn
+   * `workerTimeoutMs` into "the entire layout must finish within it" — failing
+   * on exactly the large documents progressive layout exists for. Liveness is
+   * enforced by the silence watchdog instead, which is what that timeout was
+   * really protecting against.
+   */
+  private async _parseProgressively(
+    buffer: ArrayBuffer,
+    resourcePolicy: NormalizedOoxmlResourcePolicy,
+    useGoogleFonts: boolean,
+    timeoutMs: number | undefined,
+    onUsage: ((usage: import('@silurus/ooxml-core').OoxmlResourceUsageSnapshot) => void) | undefined,
+    renderers: WorkerRendererDescriptors | undefined,
+    progressive: WorkerProgressiveLoad,
+  ): Promise<void> {
+    this._progressive = progressive;
+    this._layoutAbort = progressive.abort;
+    this._parseWatchdogMs = timeoutMs;
+    const parsed = this._bridge.request(
+      (id) => {
+        this._parseRequestId = id;
+        return {
+          type: 'parse',
+          id,
+          data: buffer,
+          resourcePolicy,
+          useGoogleFonts,
+          defaultCurrentDateMs: documentLayoutRuntimeOf(this).defaultCurrentDateMs,
+          renderers,
+          progressiveLayout: true,
+        } satisfies RenderWorkerRequest;
+      },
+      [buffer],
+      { timeoutMs: false },
+    );
+    // Retained rather than awaited: once a publication resolves load(), a later
+    // failure can no longer reject it, and must surface through
+    // whenLayoutComplete() instead of as an unhandled rejection.
+    this._layoutCompletion = parsed.then(
+      async (res) => {
+        this._parseRequestId = null;
+        if ('protocol' in res) {
+          throw new Error('DOCX parse open returned a pull-protocol response');
+        }
+        if ('usage' in res && res.usage) onUsage?.(res.usage);
+        if (res.type === 'mainThreadVerticalFallback') {
+          // This document needs DOM OpenType vertical glyph selection, so the
+          // worker never paginated it and never published anything. Demote to
+          // main mode exactly as the ordinary parse does; load()'s main-mode
+          // block then lays it out — progressively — on this thread.
+          this._clearParseWatchdog();
+          this._progressive = null;
+          this._layoutAbort = null;
+          const adapted = await materializeDocumentPullAdapterSession(
+            this._bridge.transport(isDocumentPullResponse),
+            res,
+            { timeoutMs, onUsage },
+          );
+          this._source = adapted.source;
+          this._document = adapted.document;
+          this._meta = null;
+          this._mode = 'main';
+          this._review = snapshotReviewData(
+            adapted.document.comments ?? [],
+            adapted.document.revisions ?? [],
+          );
+          progressive.firstPublication.resolve();
+          return;
+        }
+        this._onAuthoritativeMeta(
+          (res as Extract<RenderWorkerResponse, { type: 'parsedMeta' }>).meta,
+        );
+      },
+      (error: unknown) => {
+        this._parseRequestId = null;
+        this._clearParseWatchdog();
+        // Destroyed or replaced mid-layout: the worker was terminated on
+        // purpose, there is nobody left to tell, and whenLayoutComplete() must
+        // not reject for it. Exactly how main mode treats PaginationAbortError.
+        if (progressive.abort.signal.aborted) {
+          this._layoutComplete = true;
+          progressive.firstPublication.resolve();
+          return;
+        }
+        if (!progressive.published) {
+          // load() has not resolved yet, so this is still its rejection.
+          progressive.firstPublication.reject(error);
+          return;
+        }
+        this._layoutError = error;
+        this._layoutComplete = true;
+        progressive.onComplete?.(error);
+      },
+    );
+    this._rearmParseWatchdog();
+    await progressive.firstPublication.promise;
+  }
+
   destroy(): void {
     // Stop background layout first: without this, a destroyed document's
     // remaining pagination kept consuming main-thread slices to completion for
     // a viewer that no longer exists.
     this._layoutAbort?.abort();
     this._layoutAbort = null;
+    // In worker mode the abort above only marks intent; terminate() is what
+    // actually stops the worker's background pagination. The pending `parse`
+    // then rejects with 'Worker terminated', which the progressive rejection
+    // handler recognises as a deliberate teardown and settles quietly.
+    this._clearParseWatchdog();
+    this._parseRequestId = null;
+    this._progressive = null;
     this._bridge.terminate();
     this._document = null;
     this._source = null;
@@ -847,7 +1171,7 @@ export class DocxDocument {
    * same projection in metadata. Returns `[]` when no anchors exist.
    */
   commentAnchorRanges(): readonly CommentAnchorRange[] {
-    if (this._meta) return this._meta.commentAnchorRanges ?? [];
+    if (this._meta) return this._meta.commentAnchorRanges ?? NO_COMMENT_ANCHOR_RANGES;
     if (!this._document || !this._source) return [];
     const runtime = documentLayoutRuntimeOf(this);
     const services = runtime.services;
@@ -875,7 +1199,7 @@ export class DocxDocument {
    * deterministic final-state text position because accepted rendering gives
    * their own content no geometry. Mode-agnostic. */
   revisionAnchorRanges(): readonly RevisionAnchorRange[] {
-    if (this._meta) return this._meta.revisionAnchorRanges ?? [];
+    if (this._meta) return this._meta.revisionAnchorRanges ?? NO_REVISION_ANCHOR_RANGES;
     if (!this._document || !this._source) return [];
     const runtime = documentLayoutRuntimeOf(this);
     const services = runtime.services;
