@@ -63,6 +63,39 @@ describe('DocxScrollViewer.load() — no orphaned engine on re-load (SC20)', () 
     expect(first.destroyed).toBe(true);
   });
 
+  it('a failed re-load does not disconnect the retained document\u2019s background layout', async () => {
+    // The atomic swap keeps the previous document installed when acquisition
+    // rejects — but load() had already bumped the generation its progressive
+    // callbacks captured. Without restoring it, the retained document's later
+    // publications and completion were ignored forever: the engine reported the
+    // full page count while the viewer stayed frozen at the preview prefix.
+    const onVisiblePageChange = vi.fn();
+    const { v } = build({ progressiveLayout: true, onVisiblePageChange });
+    const first = new FakeDocxEngine(2, SIZE);
+    let captured: Parameters<typeof DocxDocument.load>[1] | undefined;
+    vi.spyOn(DocxDocument, 'load')
+      .mockImplementationOnce((_source, opts) => {
+        captured = opts;
+        return Promise.resolve(first.asDoc());
+      })
+      .mockRejectedValueOnce(new Error('boom'));
+
+    await v.load('one.docx');
+    expect(v.pageCount).toBe(2);
+    await expect(v.load('bad.docx')).rejects.toThrow('boom');
+
+    // The retained document's background layout finishes AFTER the failed
+    // swap; its completion must still reach this viewer.
+    first.setPageCount(80);
+    onVisiblePageChange.mockClear();
+    captured?.onLayoutComplete?.();
+    expect(v.pageCount).toBe(80);
+    expect(onVisiblePageChange).toHaveBeenCalledWith(0, 80, expect.anything());
+
+    v.destroy();
+    expect(first.destroyed).toBe(true);
+  });
+
   it('rejects an initial window render failure without also calling onError', async () => {
     const onError = vi.fn();
     const { v } = build({ onError });

@@ -596,8 +596,12 @@ export class DocxScrollViewer implements ZoomableViewer {
     // (The borrowed path returned above can never reach here, so this only ever
     // frees an engine we created.)
     let elementInvalidated = false;
+    const generation = ++this._loadGeneration;
+    // Set once the owner has resolved the swap (installed a new document or
+    // returned a superseded loser). Until then, a failure means the PREVIOUS
+    // document is still installed — see the catch below.
+    let swapResolved = false;
     try {
-      const generation = ++this._loadGeneration;
       const doc = await this._documentOwner.replace(() => DocxDocument.load(source, {
         password: this._opts.password,
         useGoogleFonts: this._opts.useGoogleFonts,
@@ -662,6 +666,7 @@ export class DocxScrollViewer implements ZoomableViewer {
           this._lastReportedTotal = -1;
         }
       });
+      swapResolved = true;
       if (!doc) return;
       if (this._destroyed) throw new Error('DocxScrollViewer is destroyed');
       this._find.invalidate();
@@ -677,6 +682,18 @@ export class DocxScrollViewer implements ZoomableViewer {
       this._relayout(initialRenders);
       await Promise.all(initialRenders);
     } catch (err) {
+      // A rejected acquisition leaves the PREVIOUS document installed (the
+      // atomic swap in `replace`), but its background-layout callbacks
+      // captured the pre-bump generation — without restoring it they would
+      // ignore every later progressive publication and completion, freezing
+      // the retained document at its preview prefix forever. Restore only
+      // when no newer load() has claimed the counter; that load's own
+      // bookkeeping owns it now. A post-swap failure (relayout, initial
+      // renders) keeps the new generation: the installed document's callbacks
+      // captured it.
+      if (!swapResolved && this._loadGeneration === generation) {
+        this._loadGeneration = generation - 1;
+      }
       // Superseded loads own no error reporting — the winning load (or destroy())
       // is the outcome the caller awaits; swallow this stale rejection.
       if (this._destroyed) throw new Error('DocxScrollViewer is destroyed');
