@@ -13,12 +13,12 @@ export interface DocumentLayoutRuntimeState {
   /**
    * The layout variant this document is currently being VIEWED as.
    *
-   * An explicit `currentDate` selects a different retained layout, with a
-   * different page count and different page geometry. Document-level accessors
-   * used to read the default variant unconditionally, which meant such a viewer
-   * measured its scrollbar against the default-dated geometry while painting
-   * pages from another layout — and, worse, forced a whole extra synchronous
-   * pagination of the variant nobody was looking at.
+   * `showTrackedChanges` (and an explicit `currentDate`) select a different
+   * retained layout, with a different page count and different page geometry.
+   * Document-level accessors used to read the default variant unconditionally,
+   * which meant a tracked-changes viewer measured its scrollbar against
+   * final-view geometry while painting markup-view pages — and, worse, forced a
+   * whole extra synchronous pagination of the variant nobody was looking at.
    *
    * `null` means "the default view", which is what an ordinary load selects.
    */

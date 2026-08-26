@@ -122,35 +122,34 @@ describe('progressive layout handover', () => {
   }, 300_000);
 
   it('geometry follows the active variant, not the default one', async () => {
-    // A viewer loaded with an explicit currentDate paints that variant; its
-    // scrollbar, page heights and mount window must be measured against the
-    // same layout. Reading the default here would size the viewport from a
-    // layout nobody is looking at — and pay for building it.
+    // A tracked-changes viewer paints the markup layout; its scrollbar, page
+    // heights and mount window must be measured against that same layout. The
+    // two variants genuinely differ, so reading the default here would size the
+    // viewport for a document the user is not looking at.
     const source = layoutSourceStore(syntheticDocxModel('tracked', { paragraphs: 160 }));
     const services = createLayoutServices(source);
     const retained = retainRenderWorkerDocumentLayout(source, services, DEFAULT_CURRENT_DATE_MS);
     const store = retained.layoutVariants;
 
-    const datedOptions = normalizeLayoutOptions(
-      new Date(DEFAULT_CURRENT_DATE_MS + 86_400_000),
-      DEFAULT_CURRENT_DATE_MS,
-    );
-    const dated = await layoutDocumentProgressively(
+    const markupOptions = normalizeLayoutOptions(undefined, DEFAULT_CURRENT_DATE_MS, true);
+    const markup = await layoutDocumentProgressively(
       source.bodyLayoutInput,
       services,
-      datedOptions,
+      markupOptions,
       { hasPaginationFields: source.hasPaginationFields },
     );
-    store.prime(datedOptions, dated, true);
+    store.prime(markupOptions, markup, true);
+
+    const finalOptions = normalizeLayoutOptions(undefined, DEFAULT_CURRENT_DATE_MS, false);
+    expect(store.layoutFor(finalOptions).pages.length).not.toBe(markup.pages.length);
 
     // A host object standing in for DocxDocument's runtime-state wiring.
     const owner = {};
     attachDocumentLayoutRuntime(owner, DEFAULT_CURRENT_DATE_MS);
     const runtime = documentLayoutRuntimeOf(owner);
     expect(runtime.activeLayoutOptions).toBeNull();
-    runtime.activeLayoutOptions = datedOptions;
-    // The primed layout is served as-is: same object, no rebuild behind it.
-    expect(store.layoutFor(runtime.activeLayoutOptions)).toBe(dated);
+    runtime.activeLayoutOptions = markupOptions;
+    expect(store.layoutFor(runtime.activeLayoutOptions).pages.length).toBe(markup.pages.length);
   }, 300_000);
 
   it('replace is required to supersede a primed layout', () => {

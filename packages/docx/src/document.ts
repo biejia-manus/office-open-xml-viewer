@@ -173,19 +173,32 @@ export interface LoadOptions extends CoreLoadOptions {
    */
   onLayoutPartial?: (progress: Readonly<{ pageCount: number; exact: boolean }>) => void;
   /**
-   * Date used to resolve DATE/TIME fields, and part of the layout variant key:
-   * a different date is a different retained layout, because a field's resolved
-   * text can change line breaking and pagination. Passing it here makes load
-   * build the variant that will actually be rendered — otherwise the first
-   * render misses the cached layout and repaginates the whole document
-   * synchronously. Omitted means "now at load time", which is what the renderer
-   * defaults to.
+   * Lay the document out for the tracked-change markup view (ECMA-376
+   * §17.13.5) rather than its final state.
+   *
+   * This is a LAYOUT input, not a paint flag: showing deletions changes line
+   * breaking and pagination, so it selects a different retained layout with its
+   * own page count. Passing it here makes load build the variant that will
+   * actually be rendered — otherwise the first render misses the cached layout
+   * and repaginates the whole document synchronously, which on a large reviewed
+   * document is seconds of frozen UI. Viewers that expose a markup toggle
+   * should pass their initial state here and call
+   * {@link DocxDocument.setLayoutView} when it changes.
+   */
+  showTrackedChanges?: boolean;
+  /**
+   * Date used to resolve DATE/TIME fields, and part of the layout variant key
+   * for the same reason as {@link showTrackedChanges}. Omitted means "now at
+   * load time", which is what the renderer defaults to.
    */
   currentDate?: Date | number;
 }
 
 /** Options for {@link DocxDocument.collectPageRuns}. */
-export type CollectPageRunsOptions = Pick<RenderPageOptions, 'width' | 'currentDate'>;
+export type CollectPageRunsOptions = Pick<
+  RenderPageOptions,
+  'width' | 'currentDate' | 'showTrackedChanges'
+>;
 
 /** Options for {@link DocxDocument.getCommentThreads}. */
 export interface DocxPageCommentThreadsOptions
@@ -468,6 +481,7 @@ export class DocxDocument {
         const layoutOptions = normalizeLayoutOptions(
           opts.currentDate,
           runtime.defaultCurrentDateMs,
+          opts.showTrackedChanges === true,
         );
         runtime.activeLayoutOptions = layoutOptions;
         const scheduler = {
@@ -900,13 +914,40 @@ export class DocxDocument {
     if (!services) throw new Error('Document layout services are not initialized');
     const store = layoutVariantStoreOf(services);
     if (!store) throw new Error('Document layout variant store is not initialized');
-    // The ACTIVE variant, not the default one: a document loaded with an
-    // explicit `currentDate` paints that variant, so its page count and page
-    // geometry must come from the same layout. Reading the default here also
-    // silently paginated the whole document a second time for a variant nobody
-    // was viewing.
+    // The ACTIVE variant, not the default one: a tracked-changes viewer paints
+    // the markup layout, so its page count and page geometry must come from
+    // that same layout. Reading the default here also silently paginated the
+    // whole document a second time for a variant nobody was viewing.
     const active = runtime.activeLayoutOptions;
     return active ? store.layoutFor(active) : store.defaultLayout;
+  }
+
+  /**
+   * Select the layout variant this document is viewed as.
+   *
+   * `showTrackedChanges` and an explicit `currentDate` each select a different
+   * retained layout with its own pagination, so the geometry accessors
+   * ({@link pageCount}, {@link pageSize}, bookmark lookup) have to follow
+   * whichever one the renderer is actually painting. Viewers call this when the
+   * user toggles the markup view.
+   *
+   * Switching to a variant that has never been built pays for building it on
+   * the next geometry read — unavoidable, since the variant genuinely
+   * repaginates the document. The guarantee progressive layout makes is about
+   * the INITIAL variant: that one is never built behind your back.
+   */
+  setLayoutView(
+    view: Readonly<{ showTrackedChanges?: boolean; currentDate?: Date | number }> = {},
+  ): void {
+    const runtime = documentLayoutRuntimeOf(this);
+    runtime.activeLayoutOptions = normalizeLayoutOptions(
+      view.currentDate,
+      runtime.defaultCurrentDateMs,
+      view.showTrackedChanges === true,
+    );
+    // Bookmark pages are derived from the layout, so they belong to the variant
+    // that produced them.
+    this._bookmarkPages = null;
   }
 
   /** Lazily build (and cache) the `bookmarkName → page index` map from either
@@ -1054,6 +1095,7 @@ export class DocxDocument {
       currentDate: wireOpts.currentDate,
       defaultCurrentDateMs: runtime.defaultCurrentDateMs,
       width: wireOpts.width,
+      showTrackedChanges: wireOpts.showTrackedChanges,
     });
   }
 

@@ -22,14 +22,14 @@
  *                      an extra line-breaking pass per cell paragraph.
  * - `long-paragraphs`— few, very long single-script paragraphs, where cluster
  *                      geometry's per-grapheme prefix measurement dominates.
- * - `tracked`        — a mix of ordinary and deleted (`w:del`) runs, so the
- *                      final-content projection (§17.13.5) has to drop roughly
- *                      half the authored text before layout sees it. The
- *                      fixture for anything that must exercise a reviewed
- *                      document rather than plain body text.
- * - `tracked-fields` — the same, plus the PAGE/NUMPAGES footer, i.e. a reviewed
- *                      document that is also inexact under a prefix preview
- *                      (the shape of a real reviewed contract).
+ * - `tracked`        — a mix of ordinary and deleted (`w:del`) runs. The two
+ *                      `showTrackedChanges` views paginate DIFFERENTLY: the
+ *                      final view hides deletions, the markup view keeps them
+ *                      visible, so this is the fixture for anything that must
+ *                      distinguish layout variants.
+ * - `tracked-fields` — the same, plus the PAGE/NUMPAGES footer, i.e. a document
+ *                      that is both variant-sensitive and inexact under a
+ *                      prefix preview (the shape of a real reviewed contract).
  *
  * Everything here is derived from a fixed seed: the same `shape` and
  * `paragraphs` always produce byte-identical models, so a benchmark or an
@@ -172,12 +172,13 @@ function deletedRun(text: string): DocParagraph['runs'][number] {
 }
 
 /**
- * A paragraph whose laid-out length differs from its authored length.
+ * A paragraph whose length depends on which tracked-change view is selected.
  *
- * Roughly half the text sits in a deleted run, so the final-content projection
- * lays out materially less than the model carries — which is the whole point of
- * the fixture. Every other paragraph is left untouched so the difference
- * accumulates gradually rather than halving the document.
+ * Roughly half the text sits in a deleted run, so the final view lays out
+ * materially less content than the markup view and the two variants reach
+ * different page counts — which is the whole point of the fixture. Every other
+ * paragraph is left untouched so the difference accumulates gradually rather
+ * than doubling the document.
  */
 function trackedParagraph(next: () => number, words: number, index: number): DocParagraph {
   if (index % 2 === 1) return textParagraph(sentence(next, words));

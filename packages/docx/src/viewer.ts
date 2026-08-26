@@ -251,6 +251,7 @@ export class DocxViewer implements ZoomableViewer {
         mode: this._mode,
         // The variant this viewer renders, so load builds that one rather than
         // paying for a second full pagination on the first render.
+        ...(this._opts.showTrackedChanges === true ? { showTrackedChanges: true } : {}),
         ...(this._opts.currentDate === undefined
           ? {}
           : { currentDate: this._opts.currentDate }),
@@ -585,6 +586,7 @@ export class DocxViewer implements ZoomableViewer {
         yPt: localY / rect.height * pageSize.heightPt,
       }, {
         currentDate: this._opts.currentDate,
+        showTrackedChanges: this._opts.showTrackedChanges,
         maxTextCharacters: MAX_DOCX_ELEMENT_TEXT_CHARACTERS,
       });
     } catch (error) {
@@ -678,6 +680,7 @@ export class DocxViewer implements ZoomableViewer {
       dpr: this._opts.dpr,
       defaultTextColor: this._opts.defaultTextColor,
       currentDate: this._opts.currentDate,
+      showTrackedChanges: this._opts.showTrackedChanges,
       onTextRun,
     };
     if (isWorker) {
@@ -719,6 +722,28 @@ export class DocxViewer implements ZoomableViewer {
     this._find.setPageRuns(this._currentPage, runs);
     this._buildHighlightLayer(runs);
     this._opts.onPageChange?.(this._currentPage, this.pageCount);
+  }
+
+  /**
+   * ECMA-376 §17.13.5 — switch between the final view (`false`, the default:
+   * deletions hidden) and the markup view (`true`: author-coloured revision
+   * decoration + margin change bars) at runtime, re-rendering the current
+   * page against the selected layout variant. Find results are invalidated:
+   * the visible text differs between the views.
+   */
+  async setShowTrackedChanges(value: boolean): Promise<void> {
+    if ((this._opts.showTrackedChanges === true) === value) return;
+    this._opts = { ...this._opts, showTrackedChanges: value };
+    this._find.invalidate();
+    // The markup view paginates differently, so the document's geometry
+    // accessors must follow it — and the current page may no longer exist:
+    // hiding deletions can shorten the document past where the reader is.
+    this._doc?.setLayoutView?.({
+      showTrackedChanges: value,
+      currentDate: this._opts.currentDate,
+    });
+    this._currentPage = Math.max(0, Math.min(this._currentPage, this.pageCount - 1));
+    await this._render();
   }
 
   /** Draw the find-highlight boxes for the current page from its runs. Clears
@@ -778,6 +803,7 @@ export class DocxViewer implements ZoomableViewer {
     return this._doc.collectPageRuns(page, {
       width: this._renderWidth(),
       currentDate: this._opts.currentDate,
+      showTrackedChanges: this._opts.showTrackedChanges,
     });
   }
 

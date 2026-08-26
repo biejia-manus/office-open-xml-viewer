@@ -162,10 +162,26 @@ describe('DocxScrollViewer — growing page count', () => {
     viewer.destroy();
   });
 
-  it('recycles out-of-range slots when the document gets shorter', () => {
-    // A relayout can shorten the document under the reader. Doing that while
-    // scrolled deep used to leave slots asking for pages that no longer exist,
-    // which surfaced as a RangeError and a blank page.
+  it('moves the document to the markup variant when tracked changes are toggled', () => {
+    installDom();
+    const engine = new FakeDocxEngine(20, PAGE);
+    const viewer = DocxScrollViewer.fromDocument(
+      makeContainer(700, 500) as unknown as HTMLElement,
+      engine.asDoc(),
+    );
+    expect(engine.layoutViews).toEqual([]);
+
+    viewer.setShowTrackedChanges(true);
+    expect(engine.layoutViews).toEqual([
+      { showTrackedChanges: true, currentDate: undefined },
+    ]);
+    viewer.destroy();
+  });
+
+  it('recycles out-of-range slots when the markup variant is shorter', () => {
+    // Hiding vs showing deletions changes the page count. Toggling to a SHORTER
+    // variant while scrolled deep used to leave slots asking for pages that no
+    // longer exist, which surfaced as a RangeError and a blank page.
     installDom();
     const engine = new FakeDocxEngine(60, PAGE);
     const container = makeContainer(700, 500);
@@ -176,13 +192,13 @@ describe('DocxScrollViewer — growing page count', () => {
     viewer.scrollToPage(50);
     expect(viewer.topVisiblePage).toBeGreaterThan(0);
 
-    // The relayout shortens the document under the reader.
+    // The toggle shortens the document under the reader.
     engine.setPageCount(3);
     engine.renderCalls.length = 0;
-    viewer.relayout();
+    viewer.setShowTrackedChanges(true);
 
     expect(viewer.pageCount).toBe(3);
-    // Every page requested AFTER the relayout must exist in the shorter document.
+    // Every page requested AFTER the toggle must exist in the shorter variant.
     expect(engine.renderCalls.length).toBeGreaterThan(0);
     for (const call of engine.renderCalls) {
       expect(call.page).toBeLessThan(3);

@@ -191,24 +191,21 @@ describe('preview pages match the final layout', () => {
     expect(previews.length).toBeLessThanOrEqual(1);
   }, 300_000);
 
-  it('matches a blocking layout for a non-default date variant', async () => {
-    // A variant keyed off an explicit currentDate must converge to exactly the
-    // blocking result for that same key, not to the default one.
-    const datedOptions = normalizeLayoutOptions(
-      new Date(CURRENT_DATE_MS + 86_400_000),
-      CURRENT_DATE_MS,
-    );
+  it('matches a blocking markup-view layout for a tracked-changes document', async () => {
+    // The variant most affected by the tracked-changes fix must still converge
+    // to exactly the blocking result.
+    const markupOptions = normalizeLayoutOptions(undefined, CURRENT_DATE_MS, true);
     const blockingCase = open('tracked', 120);
     const blocking = paginateBody(
       blockingCase.source.bodyLayoutInput,
       blockingCase.services,
-      datedOptions,
+      markupOptions,
     );
     const progressiveCase = open('tracked', 120);
     const progressive = await layoutDocumentProgressively(
       progressiveCase.source.bodyLayoutInput,
       progressiveCase.services,
-      datedOptions,
+      markupOptions,
       { hasPaginationFields: progressiveCase.source.hasPaginationFields },
     );
     expect(layoutFingerprint(progressive)).toBe(layoutFingerprint(blocking));

@@ -336,6 +336,9 @@ export interface RenderCall {
    *  each page gets its OWN px width (uniform px-per-pt scale, §7). */
   width?: number;
   currentDate?: Date | number;
+  /** §17.13.5 — the tracked-change view flag the viewer passed (absent =
+   *  final view), so the option tests can pin the render-path threading. */
+  showTrackedChanges?: boolean;
   hasTextRunCallback?: boolean;
   /** The canvas element the viewer handed to `renderPage` (main mode). The
    *  flicker-free double-buffer settle renders into a SPARE canvas, so this lets
@@ -382,6 +385,14 @@ export class FakeDocxEngine {
    *  authoritative layout replaces the provisional prefix. */
   setPageCount(pageCount: number): void {
     this._pageCount = pageCount;
+  }
+  /** Recorded {@link setLayoutView} calls — the viewer must move the document's
+   *  active layout variant when its tracked-changes view toggles, BEFORE it
+   *  reads any geometry from the new variant. */
+  layoutViews: Array<{ showTrackedChanges?: boolean; currentDate?: Date | number }> = [];
+
+  setLayoutView(view: { showTrackedChanges?: boolean; currentDate?: Date | number }): void {
+    this.layoutViews.push(view);
   }
 
   get pageCount(): number {
@@ -435,6 +446,7 @@ export class FakeDocxEngine {
         page,
         width: opts?.width,
         currentDate: opts?.currentDate,
+        showTrackedChanges: opts?.showTrackedChanges,
         hasTextRunCallback: typeof opts?.onTextRun === 'function',
         canvas,
         resolve: () => resolve(),
@@ -460,6 +472,7 @@ export class FakeDocxEngine {
         page,
         width: opts?.width,
         currentDate: opts?.currentDate,
+        showTrackedChanges: opts?.showTrackedChanges,
         hasTextRunCallback: typeof opts?.onTextRun === 'function',
         resolve: () => resolve(bmp as unknown as ImageBitmap),
         reject,

@@ -424,6 +424,11 @@ export class DocxScrollViewer implements ZoomableViewer {
     (page) => this._collectPageRuns(page),
   );
   private _findActive = false;
+  /** ECMA-376 §17.13.5 — current tracked-change view. A LAYOUT axis (deletions
+   *  change line breaking and pagination), so it selects which retained layout
+   *  variant the viewer reads geometry from; toggle it with
+   *  {@link setShowTrackedChanges}. */
+  private _showTrackedChanges: boolean;
 
   /**
    * Create a Scroll Viewer that borrows an already-loaded document.
@@ -457,6 +462,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     }
     this._container = container;
     this._opts = opts;
+    this._showTrackedChanges = opts.showTrackedChanges === true;
     // `??` (not `||`): a caller's explicit `false` must disable the shadow, not
     // fall through to the default.
     this._pageShadow = opts.pageShadow ?? DEFAULT_PAGE_SHADOW;
@@ -606,8 +612,10 @@ export class DocxScrollViewer implements ZoomableViewer {
         regionMap: this._opts.regionMap,
         chartEx: this._opts.chartEx,
         mode: this._mode,
-        // The variant the viewer will render, so load builds that one rather
-        // than paying a full synchronous repagination on the first paint.
+        // The variant the viewer will render. Without these, load builds the
+        // final view while every render asks for the markup view, and the first
+        // paint pays a full synchronous repagination.
+        ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
         ...(this._opts.currentDate === undefined
           ? {}
           : { currentDate: this._opts.currentDate }),
@@ -1292,6 +1300,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         dpr,
         defaultTextColor: this._opts.defaultTextColor,
         currentDate: this._opts.currentDate,
+        ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
         onTextRun,
       });
     } catch (error) {
@@ -1464,6 +1473,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         dpr,
         defaultTextColor: this._opts.defaultTextColor,
         currentDate: this._opts.currentDate,
+        ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
         onTextRun: wantRuns ? (r) => runs.push(r) : undefined,
       });
       // Stale if EITHER (a) the epoch moved (a setScale rescaled mid-flight, so
@@ -1918,6 +1928,7 @@ export class DocxScrollViewer implements ZoomableViewer {
       dpr,
       defaultTextColor: this._opts.defaultTextColor,
       currentDate: this._opts.currentDate,
+      ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
       onTextRun,
     })
       .then(() => {
@@ -1974,6 +1985,34 @@ export class DocxScrollViewer implements ZoomableViewer {
         ) this._reportRenderError(err);
         spareDispatcher.destroy();
       });
+  }
+
+  // ─── §17.13.5 tracked-changes view toggle ─────────────────────────────────
+
+  /**
+   * ECMA-376 §17.13.5 — switch between the final view (`false`, the default:
+   * deletions hidden) and the markup view (`true`: author-coloured revision
+   * decoration + margin change bars) at runtime. Every mounted page
+   * re-renders against the selected layout variant; find results are
+   * invalidated because the visible text differs between the views.
+   */
+  setShowTrackedChanges(value: boolean): void {
+    if (this._showTrackedChanges === value) return;
+    this._showTrackedChanges = value;
+    this._find.invalidate();
+    // The markup view is a different retained layout with its own pagination,
+    // so move the document's active variant before reading any geometry from
+    // it — page count and page heights are about to change.
+    this._doc?.setLayoutView?.({
+      showTrackedChanges: value,
+      currentDate: this._opts.currentDate,
+    });
+    // Re-render every mounted slot at the new variant, and relayout: heights,
+    // spacer and mount window all follow the new page count, and a shrinking
+    // document must recycle slots that are now out of range rather than ask for
+    // pages that no longer exist.
+    this._invalidateRenderedSlots();
+    this.relayout();
   }
 
   /**
@@ -2112,6 +2151,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         const runs = doc.collectPageRuns(page, {
           width: this._pageWidthPx(page),
           currentDate: this._opts.currentDate,
+          ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
         });
         entry = { scale, runs };
         this._commentRunsByPage.set(page, entry);
@@ -2242,6 +2282,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     return this._doc.collectPageRuns(page, {
       width: this._pageWidthPx(page),
       currentDate: this._opts.currentDate,
+      ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
     });
   }
 
@@ -2684,6 +2725,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         yPt: localY / rect.height * pageSize.heightPt,
       }, {
         currentDate: this._opts.currentDate,
+        ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
         maxTextCharacters: MAX_DOCX_ELEMENT_TEXT_CHARACTERS,
       });
     } catch (error) {
