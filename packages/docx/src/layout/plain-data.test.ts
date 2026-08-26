@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sealPlainData, snapshotPlainData } from './plain-data.js';
+import { deepFreezePlainData, sealPlainData, snapshotPlainData } from './plain-data.js';
 
 describe('plain layout data snapshots', () => {
   it('preserves signed unbounded finite DrawingML source-rectangle percentages exactly', () => {
@@ -46,6 +46,58 @@ describe('plain layout data snapshots', () => {
     const shared = { value: 7 };
     const snapshot = snapshotPlainData({ first: shared, second: shared }, 'layout payload');
     expect(snapshot.first).toBe(snapshot.second);
+  });
+
+  it('returns the identical reference for an already-processed graph', () => {
+    const snapshot = snapshotPlainData({ nested: { values: [1, 2, 3] } }, 'layout payload');
+
+    expect(snapshotPlainData(snapshot, 'layout payload')).toBe(snapshot);
+  });
+
+  it('reuses an already-processed subtree by reference inside a fresh wrapper', () => {
+    const inner = snapshotPlainData({ big: [1, 2, 3] }, 'layout payload');
+    const wrapped = snapshotPlainData({ inner, extra: 'new' }, 'layout payload');
+
+    expect(wrapped.inner).toBe(inner);
+    expect(wrapped.extra).toBe('new');
+    expect(Object.isFrozen(wrapped)).toBe(true);
+  });
+
+  it('still validates new data next to an already-processed subtree', () => {
+    const inner = snapshotPlainData({ ok: 1 }, 'layout payload');
+
+    expect(() => snapshotPlainData({ inner, bad: () => undefined }, 'layout payload'))
+      .toThrow(/structured-clone-safe plain data/i);
+  });
+
+  it('still validates frozen graphs that were never processed', () => {
+    // Frozen alone does not imply validated: deepFreezePlainData never
+    // registers, so this graph must still be walked and rejected.
+    const frozenInvalid = deepFreezePlainData({ bad: () => undefined });
+
+    expect(() => snapshotPlainData({ frozenInvalid }, 'layout payload'))
+      .toThrow(/structured-clone-safe plain data/i);
+  });
+
+  it('treats sealed builder-owned data as already processed', () => {
+    const sealed = sealPlainData({ nested: { value: 1 } }, 'layout payload');
+
+    expect(snapshotPlainData(sealed, 'layout payload')).toBe(sealed);
+  });
+
+  it('preserves an own enumerable __proto__ data property like structuredClone', () => {
+    const source = Object.defineProperty({ marker: 1 }, '__proto__', {
+      value: { polluted: false },
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    const snapshot = snapshotPlainData(source, 'layout payload') as Record<string, unknown>;
+
+    expect(Object.prototype.hasOwnProperty.call(snapshot, '__proto__')).toBe(true);
+    expect((snapshot as { __proto__: unknown }).__proto__).toEqual({ polluted: false });
+    expect(Object.getPrototypeOf(snapshot)).toBe(Object.prototype);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
   it.each([
