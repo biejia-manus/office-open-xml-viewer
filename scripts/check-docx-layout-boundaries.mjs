@@ -36,6 +36,15 @@ const CONFORMANCE_FIXTURE = 'packages/docx/tests/visual/conformance-fixture.html
 const LAYOUT_PARSER_MODEL_GATEWAY_IMPORT = '../parser-model.js';
 const LAYOUT_PARSER_MODEL_GATEWAY_SYMBOL = 'normalizeInternalDocumentModel';
 
+const CANONICAL_PAGINATION_PRODUCER = 'paginateBodySteps';
+const CANONICAL_PAGINATION_DRAIN = 'drainPagination';
+const CANONICAL_PAGINATION_EAGER_ROUTE = 'paginateBody';
+const CANONICAL_PAGINATOR_EXPORTS = [
+  CANONICAL_PAGINATION_DRAIN,
+  CANONICAL_PAGINATION_PRODUCER,
+  CANONICAL_PAGINATION_EAGER_ROUTE,
+];
+
 const FINAL_RENDERER_EXPORTS = new Set([
   'DocxTextRunInfo',
   'RenderDocumentOptions',
@@ -332,7 +341,10 @@ function posixPath(path) {
 function isProductionTypeScript(path) {
   return /\.tsx?$/.test(path)
     && !path.endsWith('.d.ts')
-    && !/\.(test|spec|stories|test-support)\.tsx?$/.test(path)
+    // `.bench.ts` files are `vitest bench` tooling, not shipped code: they are
+    // free to reach across layout boundaries the way tests are, and production
+    // may not import them (see `assertNoProductionTestSupportImports`).
+    && !/\.(test|spec|stories|test-support|bench)\.tsx?$/.test(path)
     && !path.includes('/wasm/');
 }
 
@@ -342,7 +354,7 @@ function assertNoProductionTestSupportImports(root) {
     for (const edge of moduleEdges(path)) {
       if (!edge.literal || !edge.specifier.startsWith('.')) continue;
       const dependency = resolveLocalImport(path, edge.specifier);
-      if (dependency && /\.(?:test|test-support)\.tsx?$/.test(dependency)) {
+      if (dependency && /\.(?:test|test-support|bench)\.tsx?$/.test(dependency)) {
         fail(
           'PRODUCTION_TEST_SUPPORT_IMPORT',
           `${posixPath(relative(root, path))} -> ${posixPath(relative(root, dependency))}`,
@@ -1077,7 +1089,13 @@ function assertOccurrenceProjectionRuntimeDependencies(root) {
   const occurrence = resolve(root, LAYOUT_SOURCE, 'occurrence-projection.ts');
   const translation = resolve(root, LAYOUT_SOURCE, 'retained-geometry-translation.ts');
   const plainData = resolve(root, LAYOUT_SOURCE, 'plain-data.ts');
-  const guarded = [occurrence, translation, plainData];
+  // The retained-layout contract checks are development-only, so `plain-data.ts`
+  // reads the policy flag at runtime. `validation-policy.ts` is admitted into
+  // the sealed projection subgraph rather than exempted from it: it is guarded
+  // here with an empty target set, so the seam stays a closed leaf and the
+  // policy module cannot become a back door into layout or the parser model.
+  const validationPolicy = resolve(root, LAYOUT_SOURCE, 'validation-policy.ts');
+  const guarded = [occurrence, translation, plainData, validationPolicy];
   for (const path of guarded) {
     if (!existsSync(path)) {
       fail('OCCURRENCE_PROJECTION_RUNTIME_DEPENDENCY', `missing ${posixPath(relative(root, path))}`);
@@ -1086,7 +1104,8 @@ function assertOccurrenceProjectionRuntimeDependencies(root) {
   const allowedTargets = new Map([
     [occurrence, new Set([translation, plainData])],
     [translation, new Set()],
-    [plainData, new Set()],
+    [plainData, new Set([validationPolicy])],
+    [validationPolicy, new Set()],
   ]);
   for (const current of guarded) {
     for (const edge of moduleEdges(current)) {
@@ -2351,10 +2370,25 @@ function workerMetadataRouteIsCanonical(source) {
     && bookmarkCall.arguments[0].getText(source) === 'layout';
 }
 
+/**
+ * The eager route must be nothing but a drain of the canonical generator, so
+ * time-sliced and straight-through pagination cannot diverge and the eager
+ * route cannot reach a layout that skipped the validate-and-freeze boundary.
+ */
+function eagerPaginationRouteDrainsCanonicalSteps(producer) {
+  if (producer.body?.statements.length !== 1) return false;
+  const returned = producer.body.statements[0];
+  if (!ts.isReturnStatement(returned)) return false;
+  const drain = callOf(returned.expression, CANONICAL_PAGINATION_DRAIN);
+  return drain?.arguments.length === 1
+    && callOf(drain.arguments[0], CANONICAL_PAGINATION_PRODUCER) !== null;
+}
+
 function assertCanonicalCutoverBoundaries(root) {
   const paginatorPath = resolve(root, LAYOUT_SOURCE, 'body-paginator.ts');
+  const producerLabel = `${LAYOUT_SOURCE}/body-paginator.ts#${CANONICAL_PAGINATION_PRODUCER}`;
   if (!existsSync(paginatorPath)) {
-    fail('CANONICAL_LAYOUT_PRODUCER', `${LAYOUT_SOURCE}/body-paginator.ts#paginateBody`);
+    fail('CANONICAL_LAYOUT_PRODUCER', producerLabel);
   } else {
     const source = sourceFile(paginatorPath);
     const exportedValues = source.statements.filter((statement) => (
@@ -2368,20 +2402,30 @@ function assertCanonicalCutoverBoundaries(root) {
       ts.isExportAssignment(statement)
       || (ts.isExportDeclaration(statement) && !exportIsTypeOnly(statement))
     ));
-    const producer = exportedValues.find((statement) => (
-      ts.isFunctionDeclaration(statement) && statement.name?.text === 'paginateBody'
-    ));
-    if (!producer?.body || exportedValues.length !== 1 || runtimeExportForms.length !== 0) {
-      fail('CANONICAL_LAYOUT_PRODUCER', `${LAYOUT_SOURCE}/body-paginator.ts#paginateBody`);
+    const exportedFunctions = new Map(exportedValues
+      .filter((statement) => ts.isFunctionDeclaration(statement) && statement.name)
+      .map((statement) => [statement.name.text, statement]));
+    // Pagination is time-sliced: `paginateBodySteps` is the single producer that
+    // validates and freezes, `drainPagination` runs it straight through, and
+    // `paginateBody` is the eager route spelled as exactly that drain. Pinning
+    // the exported set to those three keeps one validated exit from the module.
+    const producer = exportedFunctions.get(CANONICAL_PAGINATION_PRODUCER);
+    const eager = exportedFunctions.get(CANONICAL_PAGINATION_EAGER_ROUTE);
+    if (exportedValues.length !== CANONICAL_PAGINATOR_EXPORTS.length
+      || CANONICAL_PAGINATOR_EXPORTS.some((name) => !exportedFunctions.get(name)?.body)
+      || !producer.asteriskToken
+      || runtimeExportForms.length !== 0
+      || !eagerPaginationRouteDrainsCanonicalSteps(eager)) {
+      fail('CANONICAL_LAYOUT_PRODUCER', producerLabel);
     }
     const returned = producer.body.statements.at(-1);
     const frozenCall = returned && ts.isReturnStatement(returned)
       ? callOf(returned.expression, 'assertAndDeepFreezeDocumentLayout')
       : null;
     if (!hasExactInvariantImports(source)
-      || callsNamed(producer.body, 'assertAndDeepFreezeDocumentLayout').length !== 1
+      || callsNamed(source, 'assertAndDeepFreezeDocumentLayout').length !== 1
       || frozenCall?.arguments.length !== 1) {
-      fail('RETAINED_LAYOUT_IMMUTABILITY', `${LAYOUT_SOURCE}/body-paginator.ts#paginateBody`);
+      fail('RETAINED_LAYOUT_IMMUTABILITY', producerLabel);
     }
   }
 
