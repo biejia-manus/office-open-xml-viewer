@@ -1,6 +1,14 @@
 import type { DeepReadonly } from './types.js';
 import { documentLayoutValidationEnabled } from './validation-policy.js';
 
+/** A plain-data contract violation detected inside the unconditional clone /
+ *  freeze walks. Carries the reason without a property path — the path-precise
+ *  report is `assertPlainData`'s job, and that pre-pass is development-only.
+ *  Fatal state (a non-finite number in retained data) must be detected whether
+ *  or not the development pre-pass ran, per the layout engine's error
+ *  contract, so these checks are fused into the walks that always run. */
+class PlainDataContractError extends TypeError {}
+
 function assertPlainData(
   value: unknown,
   path: string,
@@ -59,17 +67,28 @@ export function deepFreezePlainData<T>(
   seen = new WeakSet<object>(),
 ): DeepReadonly<T> {
   if (value === null || typeof value !== 'object' || seen.has(value)) {
+    // Non-finite geometry is fatal state; the check rides the walk that always
+    // runs so it cannot be disabled with the development-only pre-pass.
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      throw new PlainDataContractError('must contain finite numbers');
+    }
     return value as DeepReadonly<T>;
   }
   seen.add(value);
   // Walked without `Object.values`, which allocates a fresh array for every
   // node: retained geometry is a deep graph of small objects, so that
-  // array-per-node is pure garbage on a hot path. The visited set is unchanged —
-  // plain data has only own enumerable string-keyed properties, and arrays carry
-  // index properties only (enforced by `assertPlainData` above).
+  // array-per-node is pure garbage on a hot path.
   if (Array.isArray(value)) {
     for (let index = 0; index < value.length; index += 1) {
       deepFreezePlainData(value[index], seen);
+    }
+    // Plain-data arrays carry index properties only; walking any stray extra
+    // property too (rather than assuming the contract) means its subgraph can
+    // never be left unfrozen when the development pre-pass did not run.
+    for (const key in value) {
+      if (String(Number(key)) !== key && Object.prototype.hasOwnProperty.call(value, key)) {
+        deepFreezePlainData((value as unknown as Record<string, unknown>)[key], seen);
+      }
     }
   } else {
     for (const key in value) {
@@ -104,6 +123,11 @@ function cloneAndFreezePlainData<T>(value: T, seen: Map<object, unknown>): DeepR
     if (typeof value === 'function' || typeof value === 'symbol') {
       throw new TypeError('value must be structured-clone-safe plain data');
     }
+    // Fatal state stays fatal without the development pre-pass: a non-finite
+    // number in retained data must throw here, not surface as a paint defect.
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      throw new PlainDataContractError('must contain finite numbers');
+    }
     return value as DeepReadonly<T>;
   }
   const prior = seen.get(value);
@@ -131,15 +155,19 @@ function cloneAndFreezePlainData<T>(value: T, seen: Map<object, unknown>): DeepR
 }
 
 export function snapshotPlainData<T>(value: T, label: string): DeepReadonly<T> {
-  // Contract check on engine-produced data — see validation-policy.ts. The
-  // structured clone below still rejects genuinely non-cloneable graphs, so a
-  // real violation is reported either way; only the precise property path is
-  // development-only.
+  // Path-precise contract check on engine-produced data — see
+  // validation-policy.ts. The clone below unconditionally rejects the fatal
+  // violations (non-cloneable values, foreign prototypes, non-finite numbers),
+  // so a real violation is reported either way; only the precise property path
+  // is development-only.
   if (documentLayoutValidationEnabled()) assertPlainData(value, label);
   try {
     return cloneAndFreezePlainData(value, new Map<object, unknown>());
-  } catch {
-    throw new TypeError(`${label} must be structured-clone-safe plain data`);
+  } catch (error) {
+    const reason = error instanceof PlainDataContractError
+      ? error.message
+      : 'must be structured-clone-safe plain data';
+    throw new TypeError(`${label} ${reason}`);
   }
 }
 

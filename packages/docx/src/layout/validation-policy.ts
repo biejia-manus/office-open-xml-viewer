@@ -2,28 +2,31 @@
  * Retained-layout validation policy.
  *
  * The layout engine defends its "retained layout is structured-clone-safe plain
- * data" contract with two recursive traversals: `assertPlainData` (every node,
- * every property, checking prototypes, symbols, property descriptors and finite
- * numbers) and the full `assertDocumentLayoutUnchecked` invariant suite. They
- * are contract checks on ENGINE-PRODUCED data, not on untrusted input: the
- * graph they inspect is built entirely by this package, so a violation is a bug
- * in the engine rather than a property of the document being viewed.
+ * data" contract in two layers:
  *
- * Running them on every finished layout — and, via `snapshotPlainData`, on every
- * block accepted during pagination — costs a large fraction of total layout time
- * on big documents, and it re-pays that cost on every convergence pass. This
- * module makes the checks a development-time contract instead of a production
- * one:
+ * - FATAL checks, which always run and are NOT governed by this policy: the
+ *   full `assertDocumentLayout` invariant suite on every finished layout
+ *   (non-finite or negative geometry, invalid ownership, broken layout
+ *   invariants — fatal per the layout engine's error contract in
+ *   docs/docx-layout-engine-redesign.md, with no test/production split), plus
+ *   the backstops fused into the unconditional clone/freeze walks in
+ *   `plain-data.ts` and `invariants.ts` (non-cloneable values, foreign
+ *   prototypes, non-finite numbers).
+ * - PATH-PRECISE diagnostics, which this policy gates: the separate
+ *   `assertPlainData` pre-pass that walks the graph a second time purely to
+ *   report the exact property path of a violation. It is redundant with the
+ *   fused backstops — the same violation is still detected and thrown without
+ *   it, just with a terser message — so it is a development-time nicety, not a
+ *   safety layer.
+ *
+ * `snapshotPlainData` runs on every block accepted during pagination, re-paid
+ * on every convergence pass, so the duplicate pre-pass walk is a real cost on
+ * big documents. The policy is:
  *
  * - ON by default under a test runner, so every suite (and therefore CI) keeps
- *   validating exactly as before.
- * - ON when a document is loaded with `debug: true`.
- * - OFF otherwise, where the freezing still happens but the traversals do not.
- *
- * The trade is explicit: with validation off, an engine bug that used to surface
- * as a typed `LayoutInvariantError` at load time would instead surface as a
- * paint defect. That is acceptable precisely because the checks are exhaustive
- * in test and CI, where such a bug is introduced.
+ *   the path-precise reports.
+ * - OFF otherwise; an embedder diagnosing a layout defect against a production
+ *   build can re-enable it via the exported `setDocumentLayoutValidation`.
  *
  * Freezing is NOT part of this policy and always runs: retained-layout
  * immutability is load-bearing (the identity WeakSets here and in

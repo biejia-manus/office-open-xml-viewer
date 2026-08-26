@@ -16,10 +16,11 @@ export type {
   ViewerCommentThreadContext,
 } from '@silurus/ooxml-core';
 export { buildDocxTextLayer } from './text-layer';
-// Retained-layout contract checks are a development-time guard: on under a test
-// runner, off in production, where they otherwise cost a large share of layout
-// time on big documents. Exposed so an embedder can re-enable them while
-// diagnosing a layout defect against a production build.
+// The path-precise plain-data pre-pass is a development-time diagnostic: on
+// under a test runner, off in production, where its duplicate graph walk costs
+// real layout time. Fatal checks (non-finite geometry, layout invariants) run
+// unconditionally either way. Exposed so an embedder can re-enable the precise
+// error paths while diagnosing a layout defect against a production build.
 export { setDocumentLayoutValidation } from './layout/validation-policy';
 export {
   readDocxTextSelectionContext,
