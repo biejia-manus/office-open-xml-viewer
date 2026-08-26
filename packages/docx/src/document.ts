@@ -66,7 +66,10 @@ import {
 import type { DocxElementContext, DocxPagePoint } from './selection-context.js';
 import {
   collectLayoutSourceCommentRangesIfPresent,
+  resolveDocxCommentThreads,
   type CommentAnchorRange,
+  type ResolvedDocxCommentThread,
+  type ResolveDocxCommentThreadsOptions,
 } from './comments.js';
 import {
   collectLayoutSourceRevisionRangesIfPresent,
@@ -183,6 +186,10 @@ export interface LoadOptions extends CoreLoadOptions {
 
 /** Options for {@link DocxDocument.collectPageRuns}. */
 export type CollectPageRunsOptions = Pick<RenderPageOptions, 'width' | 'currentDate'>;
+
+/** Options for {@link DocxDocument.getCommentThreads}. */
+export interface DocxPageCommentThreadsOptions
+  extends CollectPageRunsOptions, ResolveDocxCommentThreadsOptions {}
 
 /** IX6 — options for {@link DocxDocument.renderPageToBitmap}: the serializable
  *  render knobs plus an OPTIONAL `onTextRun`. The callback stays main-thread (it
@@ -1048,6 +1055,27 @@ export class DocxDocument {
       defaultCurrentDateMs: runtime.defaultCurrentDateMs,
       width: wireOpts.width,
     });
+  }
+
+  /**
+   * Resolve the comment threads that have rendered anchor geometry on one page.
+   * A range that crosses pages, or a repeating header/footer anchor, appears on
+   * every page where it is rendered; each result contains only that page's
+   * rectangles. Unanchored comments remain available through {@link comments}
+   * but are not returned here.
+   */
+  async getCommentThreads(
+    pageIndex: number,
+    options: DocxPageCommentThreadsOptions = {},
+  ): Promise<readonly Readonly<ResolvedDocxCommentThread>[]> {
+    const { includeResolved, width, currentDate } = options;
+    const runs = await this.collectPageRuns(pageIndex, { width, currentDate });
+    return resolveDocxCommentThreads(
+      this.comments,
+      this.commentAnchorRanges(),
+      runs,
+      { includeResolved },
+    );
   }
 
   /**

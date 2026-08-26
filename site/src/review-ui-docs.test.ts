@@ -9,7 +9,7 @@ describe('Office comment UI integration guide', () => {
   it('starts with the built-in path and keeps low-level composition available', () => {
     expect(page).toContain('<h1>Comments in DOCX, XLSX, and PPTX</h1>');
     expect(page).toContain('reads comments already stored in Office files');
-    for (const concept of ['Comments and threads', 'Anchors', 'Built-in presentation', 'Viewport geometry']) {
+    for (const concept of ['Comments and threads', 'Anchors', 'Built-in presentation', 'Surface geometry']) {
       expect(page).toContain(concept);
     }
     for (const viewer of ['DocxScrollViewer', 'PptxScrollViewer', 'XlsxViewer']) {
@@ -18,12 +18,18 @@ describe('Office comment UI integration guide', () => {
     expect(page).toContain('Built-in or custom');
     expect(page).toContain('Application-owned list, Viewer-owned target');
     expect(page).toContain('keeps the list outside the document surface');
-    expect(page).toContain("docxViewer.goToComment(comment.id, { behavior: 'smooth' })");
-    expect(page).toContain("pptxViewer.goToComment(slideIndex, commentIndex, { behavior: 'smooth' })");
-    expect(page).toContain("xlsxViewer.goToComment(comment.cellRef, { align: 'center' })");
-    expect(page).toContain('DocxScrollViewer.fromDocument(docxHost, docxDocument');
-    expect(page).toContain('PptxScrollViewer.fromPresentation(pptxHost, presentation');
-    expect(page).toContain('await xlsxViewer.load(xlsxSource)');
+    expect(page).toContain("viewer.goToComment(comment.id, { behavior: 'smooth' })");
+    expect(page).toContain("viewer.goToComment(slideIndex, commentIndex, { behavior: 'smooth' })");
+    expect(page).toContain("viewer.goToComment(sheetIndex, comment.cellRef, { align: 'center' })");
+    expect(page).toContain('DocxScrollViewer.fromDocument(container, document');
+    expect(page).toContain('PptxScrollViewer.fromPresentation(container, presentation');
+    expect(page).toContain('XlsxViewer.fromWorkbook(container, workbook');
+    expect(page).toContain('<CodeTabs id="comment-list-navigation-code" tabs={commentListTabs} />');
+    expect(page).not.toContain('const independentListExample');
+    expect(page.indexOf('id="css-variables-title"')).toBeLessThan(
+      page.indexOf('id="stable-classes-title"'),
+    );
+    expect(page).toContain('await workbook.getComments(sheetIndex)');
     expect(page).toContain('comments: true');
     expect(page).toContain('comments: false');
     expect(page).toContain('<code>markers</code>');
@@ -90,7 +96,7 @@ describe('Office comment UI integration guide', () => {
 
   it('maps concepts to public APIs and distinguishes transcript from anchored UI', () => {
     const example = read('./examples/review-margin/index.ts');
-    for (const api of ['doc.comments', 'commentAnchorRanges()', 'onTextRun', 'resolveDocxCommentThreads()']) {
+    for (const api of ['doc.comments', 'getCommentThreads(pageIndex', 'workbook.getComments(sheetIndex)', 'getElementBoundsByIds']) {
       expect(page).toContain(api);
     }
     expect(page).toContain('The Viewer owns its built-in presentation.');
@@ -99,7 +105,7 @@ describe('Office comment UI integration guide', () => {
     expect(page).not.toContain('No page geometry');
     expect(page).not.toContain('Page geometry required');
     expect(page).toContain('<CodeTabs id="comment-primitives" tabs={primitiveTabs} />');
-    for (const tab of ["label: 'Records'", "label: 'DOCX'", "label: 'XLSX'", "label: 'PPTX'"]) {
+    for (const tab of ["label: 'Source records'", "label: 'DOCX page'", "label: 'XLSX sheet'", "label: 'PPTX slide'"]) {
       expect(page).toContain(tab);
     }
     expect(page).toContain('<CommentListNavigationDemo />');
@@ -110,7 +116,8 @@ describe('Office comment UI integration guide', () => {
     expect(listDemo).toContain('PptxScrollViewer.fromPresentation(host, presentation');
     expect(listDemo).toContain("viewer.goToComment(slideIndex, commentIndex, { behavior: 'smooth' })");
     expect(listDemo).toContain("new XlsxViewer(host, { comments: false })");
-    expect(listDemo).toContain("viewer.goToComment(comment.cellRef, { align: 'center' })");
+    expect(listDemo).toContain("viewer.goToComment(sheetIndex, comment.cellRef, { align: 'center' })");
+    expect(listDemo).toContain('xlsxThreads(next.getComments(), next, next.sheetIndex)');
     expect(listDemo).toContain(".filter((comment) => comment.parentId === undefined && !comment.resolved)");
     for (const format of ['docx', 'xlsx', 'pptx']) {
       expect(listDemo).toContain(`sample-1.${format}`);
@@ -127,8 +134,9 @@ describe('Office comment UI integration guide', () => {
     expect(apiReference).toContain('get comments(): readonly Readonly<DocComment>[]');
     expect(apiReference).toContain('get revisions(): readonly Readonly<DocRevision>[]');
     expect(apiReference).toContain('commentAnchorRanges(): readonly CommentAnchorRange[]');
+    expect(apiReference).toContain('getCommentThreads(pageIndex: number');
     expect(apiReference).toContain('revisionAnchorRanges(): readonly RevisionAnchorRange[]');
-    expect(page).toContain('standalone export from <code>@silurus/ooxml/docx</code>');
+    expect(page).toContain('DOCX comments are stored for the document, not authored as page-owned records');
     expect(apiReference).not.toContain("{ sig: 'resolveDocxCommentThreads");
     expect(apiReference).toContain('collectPageRuns(index');
     expect(apiReference).toContain("detailsHref: '/review-ui', detailsLabel: 'Comment UI guide'");
@@ -140,13 +148,14 @@ describe('Office comment UI integration guide', () => {
     expect(page).toContain('How comments are represented');
     expect(page).toContain('Use the same <code>comments</code> option across formats');
     expect(page).toContain('presentation.getComments(slideIndex)');
-    expect(page).toContain('viewer.getComments()');
+    expect(page).toContain('workbook.getComments(sheetIndex)');
     expect(page).toContain('getCellViewportRect()');
     expect(page).toContain('getSelectionContext()');
     expect(apiReference).toContain('getComments(slideIndex: number)');
     expect(apiReference).toContain('goToComment(slideIndex: number, commentIndex: number');
     expect(apiReference).toContain('goToComment(commentId: string');
-    expect(apiReference.match(/goToComment\(cellRef: string/g)).toHaveLength(2);
+    expect(apiReference.match(/goToComment\(sheetIndex: number, cellRef: string/g)).toHaveLength(2);
+    expect(apiReference).toContain('getComments(sheetIndex: number): Promise<readonly Readonly<XlsxComment>[]>');
     expect(apiReference.match(/getComments\(\): readonly Readonly<XlsxComment>\[\]/g)).toHaveLength(2);
     expect(apiReference).toContain('selected comment thread');
     expect(apiReference).toContain('including attached comments');
@@ -174,6 +183,12 @@ describe('Office comment UI integration guide', () => {
     expect(core).toContain('resolveDocxCommentThreads(');
     expect(page).toContain('href="/review-ui/source"');
     expect(page).toContain('Complete DOCX custom UI');
+    const customUiSection = page.slice(
+      page.indexOf('<section class="review-section" aria-labelledby="minimum-flow">'),
+      page.indexOf('<section class="review-section next-steps"'),
+    );
+    expect(customUiSection).toContain('href="/review-ui/source"');
+    expect(page.match(/href="\/review-ui\/source"/g)).toHaveLength(1);
     const sourcePage = read('./pages/review-ui/source.astro');
     expect(sourcePage).toContain('<ReviewDemo showCode={false} />');
     expect(sourcePage).toContain('blob/main/site/src/components/ReviewDemo.astro');
@@ -196,12 +211,12 @@ describe('Office comment UI integration guide', () => {
     expect(styles).not.toContain('@media (max-width: 720px)');
   });
 
-  it('keeps only the essential accepted-final rule and delegates advanced details', () => {
+  it('keeps the public guide focused on comments and delegates change-history design', () => {
     for (const term of ['Insertions', 'move destinations', 'Deletions', 'move sources']) {
-      expect(page).toContain(term);
+      expect(page).not.toContain(term);
     }
-    expect(page).toContain('accepted-final document');
-    expect(page).toContain('nearby final-state position');
+    expect(page).not.toContain('accepted-final document');
+    expect(page).not.toContain('DOCX tracked changes');
     expect(page).toContain('Canvas content needs an accessible transcript');
     expect(page).toContain('href="/production#rendering-mode"');
     expect(page).not.toContain('href="/production#ownership"');
@@ -212,6 +227,34 @@ describe('Office comment UI integration guide', () => {
     for (const detail of ['geometryFallback', 'storyInstance', 'sourceRunIndex', 'Device pixel ratio', 'renderPageToBitmap', 'useGoogleFonts', 'same-origin or return suitable CORS headers']) {
       expect(page).not.toContain(detail);
     }
+  });
+
+  it('keeps cross-format change history distinct from comments without inventing placeholder APIs', () => {
+    const design = read('../../docs/review-ui-extension-design.md');
+    const apiLayout = read('./layouts/ApiPage.astro');
+    const changeHistory = read('./components/ChangeHistoryApiGuide.astro');
+    expect(design).toContain('Change-history boundary and future API symmetry');
+    expect(design).toContain('SpreadsheetML revision headers and revision logs');
+    expect(design).toContain('PresentationML has no general revision-log model equivalent');
+    expect(design).toContain('same three-layer architecture as comments');
+    expect(design).toContain('record and geometry types remain format-specific');
+    expect(design).toContain('Unsupported formats expose no placeholder method');
+    expect(design).toContain('not masquerade as revision records read from one presentation');
+    expect(apiLayout).toContain('<a href="#review-data">Review data</a>');
+    expect(apiLayout).toContain('<ChangeHistoryApiGuide format={format} />');
+    expect(apiLayout.indexOf('<ApiReference format={format} />')).toBeLessThan(
+      apiLayout.indexOf('<ChangeHistoryApiGuide format={format} />'),
+    );
+    expect(changeHistory).toContain('<h2>Review data</h2>');
+    expect(changeHistory).toContain('<h3 id="revision-records">Office revision records</h3>');
+    expect(changeHistory).toContain('<a href="/review-ui">Comments guide →</a>');
+    expect(changeHistory).toContain('<strong>Available for DOCX.</strong>');
+    expect(changeHistory).toContain('<strong>Not available for XLSX.</strong>');
+    expect(changeHistory).toContain('<strong>Not available for PPTX.</strong>');
+    expect(changeHistory).toContain('document.revisions');
+    expect(changeHistory).toContain('resolveRevisionAnchorRuns(range, runs)');
+    expect(changeHistory).toContain('You can');
+    expect(changeHistory).toContain('You cannot');
   });
 
   it('renders resolved threads, fallback carets, linked controls, and live states', () => {

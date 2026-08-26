@@ -34,6 +34,7 @@ export interface PptxCommentSelectionContext {
   readonly format: 'pptx';
   readonly kind: 'comment';
   readonly slideIndex: number;
+  readonly commentIndex: number;
   readonly occurrenceId: string;
   readonly commentId?: string;
   readonly point?: Readonly<{ x: number; y: number }>;
@@ -47,6 +48,7 @@ export interface PptxCommentSelectionContext {
 export function createPptxCommentSelectionContext(
   comment: Readonly<PptxComment>,
   slideIndex: number,
+  commentIndex: number,
   occurrenceId: string,
   options: TextSelectionContextOptions = {},
 ): PptxCommentSelectionContext {
@@ -71,6 +73,7 @@ export function createPptxCommentSelectionContext(
     format: 'pptx',
     kind: 'comment',
     slideIndex,
+    commentIndex,
     occurrenceId,
     ...(comment.id ? { commentId: comment.id } : {}),
     ...(Number.isFinite(comment.x) && Number.isFinite(comment.y)

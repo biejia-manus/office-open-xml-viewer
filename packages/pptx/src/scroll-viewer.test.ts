@@ -3,6 +3,7 @@ import { PptxScrollViewer } from './scroll-viewer.js';
 import { PptxPresentation } from './presentation.js';
 import { installDom, makeContainer, makeEl, makeBorrowedPptxScrollViewer, FakePptxEngine, type FakeEl } from './scroll-viewer-test-dom.js';
 import * as pptxIndex from './index.js';
+import type { PptxElementBounds } from './element-selection.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -181,13 +182,13 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     expect(markerLayer.children.some((child) =>
       child.dataset.ooxmlCommentTarget !== undefined)).toBe(false);
 
-    expect(viewer.goToComment(0, 0)).toBe(true);
+    await expect(viewer.goToComment(0, 0)).resolves.toBe(true);
     expect(markerLayer.children.some((child) =>
       child.dataset.ooxmlCommentTarget === 'slide:0:external-list')).toBe(true);
     viewer.destroy();
   });
 
-  it('navigates from an application-owned comment list by slide and occurrence', () => {
+  it('navigates from an application-owned comment list by slide and occurrence', async () => {
     installDom();
     const engine = new FakePptxEngine(4, SLIDE_W_EMU, SLIDE_H_EMU);
     engine.commentsBySlide = [[], [], [{
@@ -204,12 +205,116 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
     viewer.scrollToSlide(2);
     const slideTop = scrollHost.scrollTop;
     viewer.scrollToSlide(0);
-    expect(viewer.goToComment(2, 0)).toBe(true);
+    await expect(viewer.goToComment(2, 0)).resolves.toBe(true);
     expect(scrollHost.scrollTop).toBeGreaterThan(slideTop);
     expect(viewer.getSelectionContext()).toMatchObject({
-      kind: 'comment', commentId: 'modern-1', slideIndex: 2,
+      kind: 'comment', commentId: 'modern-1', slideIndex: 2, commentIndex: 0,
     });
-    expect(viewer.goToComment(2, 9)).toBe(false);
+    await expect(viewer.goToComment(2, 9)).resolves.toBe(false);
+    viewer.destroy();
+  });
+
+  it('resolves goToComment only after a drawing-element target is available', async () => {
+    installDom();
+    const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
+    engine.commentsBySlide = [[{
+      id: 'anchored', author: 'Grace', text: 'Review this',
+      x: 100, y: 200,
+      anchors: [{ type: 'drawingElement', elementId: '7' }],
+    }]];
+    let resolveBounds!: (bounds: readonly PptxElementBounds[]) => void;
+    const boundsPromise = new Promise<readonly PptxElementBounds[]>((resolve) => {
+      resolveBounds = resolve;
+    });
+    engine.getElementBoundsByIds = vi.fn(() => boundsPromise);
+    const viewer = PptxScrollViewer.fromPresentation(
+      makeContainer() as unknown as HTMLElement,
+      engine.asPres(),
+    );
+
+    let settled = false;
+    const navigation = viewer.goToComment(0, 0).then((value) => {
+      settled = true;
+      return value;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    resolveBounds([{
+      elementId: '7',
+      elementIndex: 0,
+      origin: 'slide',
+      elementType: 'shape',
+      bounds: {
+        x: 1_000, y: 2_000, width: 3_000, height: 4_000,
+        rotation: 0, flipH: false, flipV: false,
+      },
+    }]);
+    await expect(navigation).resolves.toBe(true);
+    expect(viewer.getSelectionContext()).toMatchObject({
+      kind: 'comment', slideIndex: 0, commentIndex: 0,
+    });
+    viewer.destroy();
+  });
+
+  it('does not reinterpret an unresolved modern element offset as a slide point', async () => {
+    installDom();
+    const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
+    engine.commentsBySlide = [[{
+      id: 'unresolved', author: 'Grace', text: 'Review this',
+      x: 100, y: 200,
+      anchors: [{ type: 'drawingElement', creationId: 'creation-only' }],
+    }]];
+    const viewer = PptxScrollViewer.fromPresentation(
+      makeContainer() as unknown as HTMLElement,
+      engine.asPres(),
+    );
+    const scrollTop = (viewer as unknown as { _scrollHost: { scrollTop: number } })._scrollHost.scrollTop;
+
+    await expect(viewer.goToComment(0, 0)).resolves.toBe(false);
+    expect(viewer.getSelectionContext()).toBeNull();
+    expect((viewer as unknown as { _scrollHost: { scrollTop: number } })._scrollHost.scrollTop)
+      .toBe(scrollTop);
+    viewer.destroy();
+  });
+
+  it('does not reinterpret an unknown modern anchor offset as a slide point', async () => {
+    installDom();
+    const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
+    engine.commentsBySlide = [[{
+      id: 'unknown', author: 'Grace', text: 'Review this',
+      x: 100, y: 200,
+      anchors: [{ type: 'unknown' }],
+    }]];
+    const viewer = PptxScrollViewer.fromPresentation(
+      makeContainer() as unknown as HTMLElement,
+      engine.asPres(),
+    );
+
+    await expect(viewer.goToComment(0, 0)).resolves.toBe(false);
+    expect(viewer.getSelectionContext()).toBeNull();
+    viewer.destroy();
+  });
+
+  it('uses an explicit slide anchor when an element anchor cannot be resolved', async () => {
+    installDom();
+    const engine = new FakePptxEngine(1, SLIDE_W_EMU, SLIDE_H_EMU);
+    engine.commentsBySlide = [[{
+      id: 'slide-fallback', author: 'Grace', text: 'Review this',
+      x: 100, y: 200,
+      anchors: [
+        { type: 'drawingElement', creationId: 'creation-only' },
+        { type: 'slide' },
+      ],
+    }]];
+    const viewer = PptxScrollViewer.fromPresentation(
+      makeContainer() as unknown as HTMLElement,
+      engine.asPres(),
+    );
+
+    await expect(viewer.goToComment(0, 0)).resolves.toBe(true);
+    expect(viewer.getSelectionContext()).toMatchObject({
+      kind: 'comment', slideIndex: 0, commentIndex: 0,
+    });
     viewer.destroy();
   });
 

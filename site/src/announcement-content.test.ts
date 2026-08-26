@@ -15,7 +15,7 @@ describe('v0.82 review announcement', () => {
 
   it('states the read-only cross-format boundary and compatibility', () => {
     expect(announcement).toMatchObject({
-      label: 'Upcoming release',
+      label: 'Release note',
       version: 'v0.82.0',
       title: 'Comments and tracked changes in v0.82.0',
     });
@@ -83,12 +83,14 @@ describe('v0.81 ChartEx migration guide', () => {
 
 describe('stable documentation boundaries', () => {
   it('keeps the current bundle measurements on one stable page', () => {
-    expect(bundleSizePage).toContain('Updated for v0.81.0');
-    expect(bundleSizePage).toContain('+118 KiB');
-    expect(bundleSizePage).toContain('+32 KiB');
-    expect(bundleSizePage).toContain('+42 KB');
-    expect(bundleSizePage).toContain('+12 KB');
-    expect(bundleSizePage).toContain('static JavaScript import closure');
+    expect(bundleSizePage).toContain('Current production assets in v0.82.0');
+    expect(bundleSizePage).toContain('DOCX static JavaScript');
+    expect(bundleSizePage).toContain('XLSX static JavaScript');
+    expect(bundleSizePage).toContain('PPTX static JavaScript');
+    expect(bundleSizePage).toContain('ChartEx');
+    expect(bundleSizePage).toContain('Parser WASM');
+    expect(bundleSizePage).toContain('complete synchronous import graph');
+    expect(bundleSizePage).not.toContain('change from v0.81.0');
     expect(siteFooter).toContain('href="/bundle-size"');
     expect(readme).toContain('https://ooxml.silurus.dev/bundle-size/');
     expect(readme).not.toContain('For v0.79.0, the complete npm package');

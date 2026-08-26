@@ -2114,7 +2114,7 @@ export class XlsxSheetViewer implements ZoomableViewer {
     getCellAt(clientX: number, clientY: number): CellAddress | null;
     getCellViewportRect(cell: CellAddress | string): XlsxCellViewportRect | null;
     getComments(): readonly Readonly<XlsxComment>[];
-    goToComment(cellRef: string, options?: XlsxScrollToCellOptions): Promise<boolean>;
+    goToComment(sheetIndex: number, cellRef: string, options?: XlsxScrollToCellOptions): Promise<boolean>;
     get selectionState(): XlsxSelectionState | null;
     setSelection(selection: XlsxSelectionInput): void;
     getSelectionContext(options?: XlsxSelectionContextOptions): XlsxSelectionContext | null;
@@ -2183,7 +2183,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     getCellAt(clientX: number, clientY: number): CellAddress | null;
     getCellViewportRect(cell: CellAddress | string): XlsxCellViewportRect | null;
     getComments(): readonly Readonly<XlsxComment>[];
-    goToComment(cellRef: string, options?: XlsxScrollToCellOptions): Promise<boolean>;
+    goToComment(sheetIndex: number, cellRef: string, options?: XlsxScrollToCellOptions): Promise<boolean>;
     get selectionState(): XlsxSelectionState | null;
     setSelection(input: XlsxSelectionInput): void;
     getSelectionContext(options?: XlsxSelectionContextOptions): XlsxSelectionContext | null;
@@ -2231,6 +2231,7 @@ export class XlsxWorkbook {
     sheetVisibility(sheetIndex: number): SheetVisibility;
     isHidden(sheetIndex: number): boolean;
     getWorksheet(sheetIndex: number): Promise<Worksheet>;
+    getComments(sheetIndex: number): Promise<readonly Readonly<XlsxComment>[]>;
     getResourceMetrics(): Promise<OoxmlResourceMetrics>;
     getImage(imagePath: string, mimeType: string): Promise<Blob>;
     toMarkdown(): Promise<string>;

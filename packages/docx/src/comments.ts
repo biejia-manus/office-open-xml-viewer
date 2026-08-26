@@ -498,10 +498,19 @@ export function resolveDocxCommentThreads(
     group.push(comment);
   }
 
+  const pageSources = new Set<string>();
+  for (const run of runs) {
+    if (run.source) pageSources.add(sourceKey(run.source));
+  }
   const resolvedByRoot = new Map<string, ResolvedDocxCommentAnchor[]>();
   for (const anchor of anchors) {
     const rootId = rootIdByCommentId.get(anchor.commentId);
     if (rootId === undefined) continue;
+    const mayResolve = pageSources.has(sourceKey(anchor.source)) ||
+      pageSources.has(sourceKey(anchor.reference.source)) ||
+      (anchor.geometryFallback !== undefined &&
+        pageSources.has(sourceKey(anchor.geometryFallback.source)));
+    if (!mayResolve) continue;
     const resolvedRuns = resolveCommentAnchorRuns(anchor, runs);
     if (resolvedRuns.length === 0) continue;
     const resolved = resolvedByRoot.get(rootId) ?? [];
