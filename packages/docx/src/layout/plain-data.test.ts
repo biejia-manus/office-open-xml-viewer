@@ -48,6 +48,29 @@ describe('plain layout data snapshots', () => {
     expect(snapshot.first).toBe(snapshot.second);
   });
 
+  it('preserves sparse-array length and holes exactly', () => {
+    const sparse = new Array<string>(4);
+    sparse[2] = 'present';
+
+    const snapshot = snapshotPlainData(sparse, 'layout payload');
+
+    expect(snapshot).toHaveLength(4);
+    expect(0 in snapshot).toBe(false);
+    expect(1 in snapshot).toBe(false);
+    expect(2 in snapshot).toBe(true);
+    expect(3 in snapshot).toBe(false);
+  });
+
+  it('rejects proxies like structuredClone', () => {
+    const proxied = new Proxy({ value: 1 }, {});
+
+    expect(() => structuredClone(proxied)).toThrow();
+    expect(() => snapshotPlainData(proxied, 'layout payload'))
+      .toThrow(/structured-clone-safe plain data/i);
+    expect(() => sealPlainData(proxied, 'layout payload'))
+      .toThrow(/structured-clone-safe plain data/i);
+  });
+
   it('returns the identical reference for an already-processed graph', () => {
     const snapshot = snapshotPlainData({ nested: { values: [1, 2, 3] } }, 'layout payload');
 
@@ -71,8 +94,8 @@ describe('plain layout data snapshots', () => {
   });
 
   it('still validates frozen graphs that were never processed', () => {
-    // Frozen alone does not imply validated: deepFreezePlainData never
-    // registers, so this graph must still be walked and rejected.
+    // Frozen alone does not imply validated: deepFreezePlainData never marks a
+    // graph as processed, so this graph must still be walked and rejected.
     const frozenInvalid = deepFreezePlainData({ bad: () => undefined });
 
     expect(() => snapshotPlainData({ frozenInvalid }, 'layout payload'))

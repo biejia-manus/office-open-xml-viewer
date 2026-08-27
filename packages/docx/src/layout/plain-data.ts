@@ -9,11 +9,10 @@ import { documentLayoutValidationEnabled } from './validation-policy.js';
  *  contract, so these checks are fused into the walks that always run. */
 class PlainDataContractError extends TypeError {}
 
-/** Object graphs already validated and deeply frozen by snapshotPlainData or
- * sealPlainData. Registered graphs are engine-owned and immutable, so layout
- * boundaries that receive them again (whole or as subtrees of a fresh
- * wrapper) can reuse them by reference instead of re-validating, re-cloning,
- * and re-freezing the same multi-megabyte structures on every call. */
+/** Graph roots snapshotted by snapshotPlainData, plus every node sealed in
+ * place by sealPlainData. Registered graphs are engine-owned and immutable, so
+ * later layout boundaries can reuse them by reference instead of reprocessing
+ * the same multi-megabyte structures on every call. */
 const processedPlainData = new WeakSet<object>();
 
 /** Object graphs already deeply frozen by deepFreezePlainData. Freeze walks
@@ -147,17 +146,25 @@ function cloneAndFreezePlainData<T>(value: T, seen: Map<object, unknown>): DeepR
     }
     return value as DeepReadonly<T>;
   }
-  if (processedPlainData.has(value)) return value as DeepReadonly<T>;
+  // Every processed graph is frozen. The cheap brand check avoids a WeakSet
+  // lookup for the overwhelmingly common fresh mutable nodes.
+  if (Object.isFrozen(value) && processedPlainData.has(value)) {
+    return value as DeepReadonly<T>;
+  }
   const prior = seen.get(value);
   if (prior !== undefined) return prior as DeepReadonly<T>;
   if (Array.isArray(value)) {
     const copy = new Array(value.length);
     seen.set(value, copy);
+    // `new Array(length)` preserves a completely sparse array. Copy only own
+    // indices so individual holes remain holes instead of becoming explicit
+    // `undefined` entries.
     for (let index = 0; index < value.length; index += 1) {
-      copy[index] = cloneAndFreezePlainData(value[index], seen);
+      if (Object.prototype.hasOwnProperty.call(value, index)) {
+        copy[index] = cloneAndFreezePlainData(value[index], seen);
+      }
     }
     Object.freeze(copy);
-    processedPlainData.add(copy);
     return copy as DeepReadonly<T>;
   }
   const prototype = Object.getPrototypeOf(value);
@@ -168,11 +175,22 @@ function cloneAndFreezePlainData<T>(value: T, seen: Map<object, unknown>): DeepR
   seen.set(value, copy);
   for (const key in value) {
     if (Object.prototype.hasOwnProperty.call(value, key)) {
-      copy[key] = cloneAndFreezePlainData((value as Record<string, unknown>)[key], seen);
+      const child = cloneAndFreezePlainData((value as Record<string, unknown>)[key], seen);
+      if (key === '__proto__') {
+        // Assignment would mutate the prototype instead of creating the own
+        // data property that structuredClone produces.
+        Object.defineProperty(copy, key, {
+          value: child,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      } else {
+        copy[key] = child;
+      }
     }
   }
   Object.freeze(copy);
-  processedPlainData.add(copy);
   return copy as DeepReadonly<T>;
 }
 
@@ -181,13 +199,16 @@ export function snapshotPlainData<T>(value: T, label: string): DeepReadonly<T> {
     return value as DeepReadonly<T>;
   }
   // Path-precise contract check on engine-produced data — see
-  // validation-policy.ts. The clone below unconditionally rejects the fatal
-  // violations (non-cloneable values, foreign prototypes, non-finite numbers),
-  // so a real violation is reported either way; only the precise property path
-  // is development-only.
-  if (documentLayoutValidationEnabled()) assertPlainData(value, label);
+  // validation-policy.ts. The clone below still rejects the fatal structural
+  // violations without this development pass; the native preflight additionally
+  // pins the platform's Proxy brand check while validation is enabled.
+  if (documentLayoutValidationEnabled()) {
+    validatePlainData(value, label);
+  }
   try {
-    return cloneAndFreezePlainData(value, new Map<object, unknown>());
+    const snapshot = cloneAndFreezePlainData(value, new Map<object, unknown>());
+    if (typeof snapshot === 'object' && snapshot !== null) processedPlainData.add(snapshot);
+    return snapshot;
   } catch (error) {
     const reason = error instanceof PlainDataContractError
       ? error.message
@@ -200,8 +221,22 @@ export function snapshotPlainData<T>(value: T, label: string): DeepReadonly<T> {
  * snapshotPlainData this has no second structured-clone peak; callers must own
  * the supplied graph and must not expose it for later mutation. */
 export function sealPlainData<T>(value: T, label: string): DeepReadonly<T> {
-  if (documentLayoutValidationEnabled()) assertPlainData(value, label);
+  if (documentLayoutValidationEnabled()) validatePlainData(value, label);
   return deepFreezeAndRegister(value, new WeakSet()) as DeepReadonly<T>;
+}
+
+function validatePlainData(value: unknown, label: string): void {
+  // A transparent Proxy is intentionally indistinguishable from its target
+  // through reflection. Native structuredClone provides the platform brand
+  // check and rejects it before our descriptor walk can invoke user traps.
+  // This extra pass is development-only; production receives engine-owned
+  // retained data and keeps the single clone/freeze walk.
+  try {
+    structuredClone(value);
+  } catch {
+    throw new TypeError(`${label} must be structured-clone-safe plain data`);
+  }
+  assertPlainData(value, label);
 }
 
 function deepFreezeAndRegister(value: unknown, seen: WeakSet<object>): unknown {
