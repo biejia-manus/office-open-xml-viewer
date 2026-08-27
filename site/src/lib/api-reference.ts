@@ -125,16 +125,16 @@ const DOCX_SLICE_LAYOUT: ApiOption = {
 };
 const DOCX_LAYOUT_PROGRESS: ApiOption = {
   name: 'onLayoutProgress',
-  type: '(progress: Readonly<{ committedPages: number }>) => void',
-  desc: 'Receive pagination telemetry from resumable layout passes. committedPages can move backward while convergence revises provisional work, so use pageCount and the Viewer page callbacks for application navigation UI.',
-  emphasis: 'committedPages can move backward while convergence revises provisional work',
+  type: '(progress: Readonly<{ committedUnits: number }>) => void',
+  desc: 'Receive pagination telemetry from resumable layout passes. committedUnits can move backward while convergence revises provisional work; it counts pages, so use pageCount and the Viewer page callbacks for application navigation UI.',
+  emphasis: 'committedUnits can move backward while convergence revises provisional work',
   detailsHref: '/docx#progressive-layout',
   detailsLabel: 'Progressive layout guide',
 };
 const DOCX_LAYOUT_PARTIAL: ApiOption = {
   name: 'onLayoutPartial',
-  type: '(progress: Readonly<{ pageCount: number; exact: boolean }>) => void',
-  desc: 'Receive each later provisional page publication after the initial load publication. pageCount is the pages available so far and exact is currently always false.',
+  type: '(progress: Readonly<{ availableUnits: number; totalUnits?: number; exact: boolean }>) => void',
+  desc: 'Receive each later provisional page publication after the initial load publication. availableUnits is the pages available so far; totalUnits is omitted until DOCX pagination knows the final count, and exact is currently always false.',
   detailsHref: '/docx#progressive-layout',
   detailsLabel: 'Progressive layout guide',
 };
@@ -156,15 +156,15 @@ const PPTX_PROGRESSIVE_LAYOUT: ApiOption = {
 };
 const PPTX_LAYOUT_PROGRESS: ApiOption = {
   name: 'onLayoutProgress',
-  type: '(progress: Readonly<{ committedSlides: number }>) => void',
-  desc: 'Called as the sequential preflight commits each paintable slide.',
+  type: '(progress: Readonly<{ committedUnits: number }>) => void',
+  desc: 'Called as the sequential preflight commits each paintable slide. committedUnits counts slides.',
   detailsHref: '/pptx#progressive-layout',
   detailsLabel: 'Progressive layout guide',
 };
 const PPTX_LAYOUT_PARTIAL: ApiOption = {
   name: 'onLayoutPartial',
-  type: '(progress: Readonly<{ availableSlides: number; slideCount: number; exact: boolean }>) => void',
-  desc: 'Called for each additional paintable prefix after load() resolves. slideCount stays final and exact is false until completion.',
+  type: '(progress: Readonly<{ availableUnits: number; totalUnits?: number; exact: boolean }>) => void',
+  desc: 'Called for each additional paintable prefix after load() resolves. availableUnits counts paintable slides, totalUnits is the final slide count, and exact is false until completion.',
   detailsHref: '/pptx#progressive-layout',
   detailsLabel: 'Progressive layout guide',
 };

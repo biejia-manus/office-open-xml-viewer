@@ -233,7 +233,7 @@ describe('PptxPresentation progressive layout lifecycle', () => {
         onUsage: undefined,
         renderers: undefined,
         progressive: {
-          onPartial: (progress: { availableSlides: number }) => void;
+          onPartial: (progress: { availableUnits: number }) => void;
           onComplete: (error?: unknown) => void;
           firstPublication: ReturnType<typeof deferred<void>>;
           published: boolean;
@@ -248,7 +248,7 @@ describe('PptxPresentation progressive layout lifecycle', () => {
       undefined,
       undefined,
       {
-        onPartial: ({ availableSlides }) => partials.push(availableSlides),
+        onPartial: ({ availableUnits }) => partials.push(availableUnits),
         onComplete: (error) => completions.push(error),
         firstPublication: deferred<void>(),
         published: false,

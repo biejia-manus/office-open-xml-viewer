@@ -989,16 +989,18 @@ export interface LineBreak {
 export type LoadOptions = LoadOptions__emitterCollision1 & {
     mode?: 'main' | 'worker';
     progressiveLayout?: boolean;
-    onLayoutProgress?: (progress: Readonly<{
-        committedSlides: number;
-    }>) => void;
-    onLayoutPartial?: (progress: Readonly<{
-        availableSlides: number;
-        slideCount: number;
-        exact: boolean;
-    }>) => void;
+    onLayoutProgress?: (progress: Readonly<ProgressiveLayoutProgress>) => void;
+    onLayoutPartial?: (progress: Readonly<ProgressiveLayoutPartial>) => void;
     onLayoutComplete?: (error?: unknown) => void;
 };
+interface ProgressiveLayoutPartial {
+    availableUnits: number;
+    totalUnits?: number;
+    exact: boolean;
+}
+interface ProgressiveLayoutProgress {
+    committedUnits: number;
+}
 interface LoadOptions__emitterCollision1 {
     useGoogleFonts?: boolean;
     password?: string;

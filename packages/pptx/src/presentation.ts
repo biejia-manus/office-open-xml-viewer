@@ -23,6 +23,8 @@ import {
   toArrayBuffer,
   OoxmlResourceLimitError,
   type LoadOptions as CoreLoadOptions,
+  type ProgressiveLayoutPartial,
+  type ProgressiveLayoutProgress,
   type MathRenderer,
   type ChartThreeDRenderer,
   type ChartRegionMapRenderer,
@@ -105,13 +107,9 @@ export type LoadOptions = CoreLoadOptions & {
    */
   progressiveLayout?: boolean;
   /** Called as the sequential preflight commits slides. */
-  onLayoutProgress?: (progress: Readonly<{ committedSlides: number }>) => void;
+  onLayoutProgress?: (progress: Readonly<ProgressiveLayoutProgress>) => void;
   /** Called for each additional paintable prefix after `load()` resolves. */
-  onLayoutPartial?: (progress: Readonly<{
-    availableSlides: number;
-    slideCount: number;
-    exact: boolean;
-  }>) => void;
+  onLayoutPartial?: (progress: Readonly<ProgressiveLayoutPartial>) => void;
   /** Called once background preflight completes, or with its failure. */
   onLayoutComplete?: (error?: unknown) => void;
 };
@@ -703,7 +701,7 @@ export class PptxPresentation {
     this._availableSlideCount = prefix.slides.length;
     this._layoutComplete = false;
     this._wakeLayoutWaiters();
-    progressive.onProgress?.({ committedSlides: this._availableSlideCount });
+    progressive.onProgress?.({ committedUnits: this._availableSlideCount });
     publishPptxLayout(this, {
       availableSlides: this._availableSlideCount,
       slideCount: this.slideCount,
@@ -716,8 +714,8 @@ export class PptxPresentation {
       return;
     }
     progressive.onPartial?.({
-      availableSlides: this._availableSlideCount,
-      slideCount: this.slideCount,
+      availableUnits: this._availableSlideCount,
+      totalUnits: this.slideCount,
       exact: false,
     });
   }

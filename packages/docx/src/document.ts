@@ -12,6 +12,8 @@ import {
   resolveOoxmlContainer,
   toArrayBuffer,
   type LoadOptions as CoreLoadOptions,
+  type ProgressiveLayoutPartial,
+  type ProgressiveLayoutProgress,
   type MathRenderer,
   type ChartThreeDRenderer,
   type ChartRegionMapRenderer,
@@ -133,7 +135,7 @@ export interface LoadOptions extends CoreLoadOptions {
    * Implies {@link sliceLayout} in main mode, since a blocking layout cannot
    * deliver progress the UI could act on.
    */
-  onLayoutProgress?: (progress: Readonly<{ committedPages: number }>) => void;
+  onLayoutProgress?: (progress: Readonly<ProgressiveLayoutProgress>) => void;
   /**
    * Resolve `load()` as soon as the document's opening pages are ready, and
    * finish laying the rest out in the background.
@@ -174,10 +176,12 @@ export interface LoadOptions extends CoreLoadOptions {
    * Called each time progressive layout publishes more pages, before the
    * authoritative layout replaces them.
    *
-   * `pageCount` is the pages available so far. `exact` is currently always
-   * false because a later convergence pass can still replace those pages.
+   * `availableUnits` is the pages available so far. `totalUnits` is omitted
+   * because pagination does not know the final page count yet. `exact` is
+   * currently always false because a later convergence pass can still replace
+   * those pages.
    */
-  onLayoutPartial?: (progress: Readonly<{ pageCount: number; exact: boolean }>) => void;
+  onLayoutPartial?: (progress: Readonly<ProgressiveLayoutPartial>) => void;
   /**
    * Lay the document out for the tracked-change markup view (ECMA-376
    * §17.13.5) rather than its final state.
@@ -582,7 +586,7 @@ export class DocxDocument {
         if (!layoutOptions) throw new Error('Active layout view was not recorded at load');
         const scheduler = {
           onProgress: opts.onLayoutProgress
-            ? (committedPages: number) => opts.onLayoutProgress?.({ committedPages })
+            ? (committedPages: number) => opts.onLayoutProgress?.({ committedUnits: committedPages })
             : undefined,
         };
         if (deferrable && opts.progressiveLayout) {
@@ -633,7 +637,7 @@ export class DocxDocument {
                     complete: false,
                   });
                   opts.onLayoutPartial?.({
-                    pageCount: preview.layout.pages.length,
+                    availableUnits: preview.layout.pages.length,
                     exact: preview.exact,
                   });
                 } else {
@@ -818,7 +822,7 @@ export class DocxDocument {
     this._rearmParseWatchdog();
     const progressive = this._progressive;
     if (res.type === 'layoutProgress') {
-      progressive?.onProgress?.({ committedPages: res.committedPages });
+      progressive?.onProgress?.({ committedUnits: res.committedPages });
       return;
     }
     if (res.type !== 'layoutPartial' || !progressive) return;
@@ -836,7 +840,7 @@ export class DocxDocument {
         complete: false,
       });
       progressive.onPartial?.({
-        pageCount: res.partial.pageCount,
+        availableUnits: res.partial.pageCount,
         exact: res.partial.exact,
       });
       return;

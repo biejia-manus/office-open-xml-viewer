@@ -1573,17 +1573,20 @@ export interface LoadOptions extends LoadOptions__emitterCollision1 {
     math?: MathRenderer;
     mode?: 'main' | 'worker';
     sliceLayout?: boolean;
-    onLayoutProgress?: (progress: Readonly<{
-        committedPages: number;
-    }>) => void;
+    onLayoutProgress?: (progress: Readonly<ProgressiveLayoutProgress>) => void;
     progressiveLayout?: boolean;
     onLayoutComplete?: (error?: unknown) => void;
-    onLayoutPartial?: (progress: Readonly<{
-        pageCount: number;
-        exact: boolean;
-    }>) => void;
+    onLayoutPartial?: (progress: Readonly<ProgressiveLayoutPartial>) => void;
     showTrackedChanges?: boolean;
     currentDate?: Date | number;
+}
+interface ProgressiveLayoutPartial {
+    availableUnits: number;
+    totalUnits?: number;
+    exact: boolean;
+}
+interface ProgressiveLayoutProgress {
+    committedUnits: number;
 }
 interface LoadOptions__emitterCollision1 {
     useGoogleFonts?: boolean;

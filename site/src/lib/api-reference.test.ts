@@ -116,7 +116,7 @@ describe('official-site API reference', () => {
         'onLayoutComplete',
       ]));
       expect(options.find(({ name }) => name === 'onLayoutPartial')?.type, apiClass.name)
-        .toContain('pageCount: number; exact: boolean');
+        .toContain('availableUnits: number; totalUnits?: number; exact: boolean');
       expect(options.find(({ name }) => name === 'onLayoutComplete')?.type, apiClass.name)
         .toBe('(error?: unknown) => void');
 
@@ -146,6 +146,8 @@ describe('official-site API reference', () => {
         'onLayoutPartial',
         'onLayoutComplete',
       ]));
+      expect(options.find(({ name }) => name === 'onLayoutPartial')?.type, apiClass.name)
+        .toContain('availableUnits: number; totalUnits?: number; exact: boolean');
       expect(apiClass.methods.find(({ sig }) => sig === 'get availableSlideCount(): number'), apiClass.name)
         .toBeDefined();
       expect(apiClass.methods.find(({ sig }) => sig === 'get layoutComplete(): boolean'), apiClass.name)
