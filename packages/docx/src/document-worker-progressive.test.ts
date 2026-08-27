@@ -65,9 +65,9 @@ function fullMeta(pageCount: number): DocumentMeta {
 function progressiveDocument(opts: {
   timeoutMs?: number;
   view?: { currentDateMs?: number; showTrackedChanges?: boolean };
-  onPartial?: (p: { pageCount: number; exact: boolean }) => void;
+  onPartial?: (p: { availableUnits: number; exact: boolean }) => void;
   onComplete?: (error?: unknown) => void;
-  onProgress?: (p: { committedPages: number }) => void;
+  onProgress?: (p: { committedUnits: number }) => void;
 } = {}) {
   let settle!: (res: RenderWorkerResponse) => void;
   let fail!: (error: unknown) => void;
@@ -156,7 +156,7 @@ function progressiveDocument(opts: {
 
 describe('worker-mode progressive load', () => {
   it('asks the worker for progressive layout and resolves on the first publication', async () => {
-    const partials: { pageCount: number; exact: boolean }[] = [];
+    const partials: { availableUnits: number; exact: boolean }[] = [];
     const harness = progressiveDocument({ onPartial: (p) => partials.push(p) });
 
     const parseRequest = harness.requests[0];
@@ -180,7 +180,7 @@ describe('worker-mode progressive load', () => {
   });
 
   it('grows page geometry on later publications and settles on the authoritative meta', async () => {
-    const partials: { pageCount: number; exact: boolean }[] = [];
+    const partials: { availableUnits: number; exact: boolean }[] = [];
     let completed = 0;
     const harness = progressiveDocument({
       onPartial: (p) => partials.push(p),
@@ -192,7 +192,7 @@ describe('worker-mode progressive load', () => {
     harness.push({ type: 'layoutPartial', forId: 11, partial: partial(9) });
 
     expect(harness.document.pageCount).toBe(9);
-    expect(partials).toEqual([{ pageCount: 9, exact: false }]);
+    expect(partials).toEqual([{ availableUnits: 9, exact: false }]);
     // Review data established by the first publication survives later ones,
     // which deliberately do not re-send it.
     expect(harness.document.comments).toHaveLength(1);
@@ -205,7 +205,7 @@ describe('worker-mode progressive load', () => {
       .toBe(harness.document.commentAnchorRanges());
 
     harness.settle({ type: 'parsedMeta', id: 11, meta: fullMeta(40) });
-    await harness.document.whenLayoutComplete();
+    await harness.document.waitUntilLayoutComplete();
 
     expect(harness.document.pageCount).toBe(40);
     expect(harness.document.layoutComplete).toBe(true);
@@ -250,13 +250,13 @@ describe('worker-mode progressive load', () => {
   });
 
   it('forwards throttled worker progress', async () => {
-    const progress: { committedPages: number }[] = [];
+    const progress: { committedUnits: number }[] = [];
     const harness = progressiveDocument({ onProgress: (p) => progress.push(p) });
     harness.push({ type: 'layoutProgress', forId: 11, committedPages: 17 });
     harness.push({ type: 'layoutPartial', forId: 11, partial: partial(2, { review: REVIEW }) });
     await harness.parsed;
 
-    expect(progress).toEqual([{ committedPages: 17 }]);
+    expect(progress).toEqual([{ committedUnits: 17 }]);
   });
 
   it('rejects load() when the worker fails before publishing anything', async () => {
@@ -271,7 +271,7 @@ describe('worker-mode progressive load', () => {
     expect(completed).toBe(0);
   });
 
-  it('reports a failure arriving after load() resolved through whenLayoutComplete', async () => {
+  it('reports a failure arriving after load() resolved through waitUntilLayoutComplete', async () => {
     const errors: unknown[] = [];
     const harness = progressiveDocument({ onComplete: (error) => errors.push(error) });
 
@@ -279,7 +279,7 @@ describe('worker-mode progressive load', () => {
     await harness.parsed;
     harness.fail(new Error('background layout failed'));
 
-    await expect(harness.document.whenLayoutComplete()).rejects.toThrow('background layout failed');
+    await expect(harness.document.waitUntilLayoutComplete()).rejects.toThrow('background layout failed');
     expect(errors).toHaveLength(1);
     // The provisional pages stay usable; only the completion is lost.
     expect(harness.document.pageCount).toBe(2);
@@ -296,8 +296,8 @@ describe('worker-mode progressive load', () => {
     harness.fail(new Error('Worker terminated'));
 
     // A deliberate teardown is not a layout failure: there is nobody left to
-    // tell, and whenLayoutComplete() must not reject for it.
-    await expect(harness.document.whenLayoutComplete()).resolves.toBeUndefined();
+    // tell, and waitUntilLayoutComplete() must not reject for it.
+    await expect(harness.document.waitUntilLayoutComplete()).resolves.toBeUndefined();
     expect(completed).toBe(0);
   });
 
@@ -573,7 +573,7 @@ describe('worker layout-view metadata switch', () => {
     expect(progressive.onPartial).not.toHaveBeenCalled();
 
     settleParse({ type: 'parsedMeta', id: 31, meta: fullMeta(40) });
-    await document.whenLayoutComplete();
+    await document.waitUntilLayoutComplete();
     expect(document.layoutComplete).toBe(true);
     expect(document.pageCount).toBe(13);
     expect(document.pageSize(12)).toEqual(selectedPage);

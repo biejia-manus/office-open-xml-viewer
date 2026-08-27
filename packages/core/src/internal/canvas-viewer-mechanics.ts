@@ -484,6 +484,38 @@ export class StaticCanvasRenderDispatcher {
     return true;
   }
 
+  /**
+   * Commit a worker bitmap through a 2D context. This keeps ImageBitmap
+   * ownership and stale-generation disposal inside the dispatcher while
+   * allowing canvases that must remain compatible with interactive 2D media
+   * rendering to avoid acquiring a `bitmaprenderer` context.
+   */
+  commitBitmapTo2d(
+    generation: number,
+    bitmap: ImageBitmap,
+    size: BitmapCommitSize = {},
+  ): boolean {
+    if (!this.isCurrent(generation)) {
+      bitmap.close();
+      return false;
+    }
+    if (this.canvas.width !== bitmap.width) this.canvas.width = bitmap.width;
+    if (this.canvas.height !== bitmap.height) this.canvas.height = bitmap.height;
+    if (size.cssWidth !== undefined) this.canvas.style.width = `${size.cssWidth}px`;
+    if (size.cssHeight !== undefined) this.canvas.style.height = `${size.cssHeight}px`;
+    const context = this.canvas.getContext('2d');
+    if (!context) {
+      bitmap.close();
+      throw new Error('2D context not available');
+    }
+    try {
+      context.drawImage(bitmap, 0, 0);
+    } finally {
+      bitmap.close();
+    }
+    return true;
+  }
+
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;

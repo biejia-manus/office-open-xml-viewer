@@ -251,7 +251,7 @@ describe('DocxScrollViewer — growing page count', () => {
       engine.asDoc(),
     );
     expect(viewer.layoutComplete).toBe(true);
-    await expect(viewer.whenLayoutComplete()).resolves.toBeUndefined();
+    await expect(viewer.waitUntilLayoutComplete()).resolves.toBeUndefined();
     viewer.destroy();
   });
 

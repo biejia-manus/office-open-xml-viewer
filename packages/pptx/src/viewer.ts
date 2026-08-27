@@ -8,7 +8,7 @@ import { buildPptxHighlightLayer, type PptxHighlightMatch } from './find-highlig
 import { PptxFindController, type PptxMatchLocation } from './find';
 import { PptxPresentation, type LoadOptions } from './presentation';
 import type { PresentationHandle } from './presentation-handle';
-import { nextVisibleIndex, resolveVisibleIndex, countVisible } from './hidden';
+import { countVisible } from './hidden';
 import type { DimOptions } from './types';
 import {
   type HyperlinkTarget,
@@ -47,6 +47,10 @@ import {
   MAX_ELEMENT_TEXT_CHARACTERS,
 } from './element-selection';
 import { renderPptxFocusedSlide } from './focused-view-runtime';
+import {
+  subscribePptxLayout,
+  type PptxLayoutPublication,
+} from './presentation-layout-events';
 
 const borrowedPresentationOption = Symbol('PptxViewer.borrowedPresentation');
 type InternalPptxViewerOptions = PptxViewerOptions & {
@@ -60,8 +64,8 @@ export type HiddenSlideMode = 'show' | 'skip' | 'dim';
 const DEFAULT_HIDDEN_DIM: DimOptions = { color: '#ffffff', opacity: 0.6 };
 
 export interface PptxViewerOptions extends Pick<RenderOptions, 'width' | 'dpr'>, LoadOptions {
-  /** Called when a slide finishes rendering */
-  onSlideChange?: (index: number, total: number) => void;
+  /** Called when a slide finishes rendering or progressive availability changes. */
+  onSlideChange?: (index: number, total: number, layoutComplete: boolean) => void;
   /**
    * Receives asynchronous Viewer-managed failures that cannot be observed by
    * awaiting the method that started them. Failures from `load()`, including
@@ -191,6 +195,7 @@ export class PptxViewer implements ZoomableViewer {
   private readonly hostWindow: Window & typeof globalThis;
   private readonly opts: PptxViewerOptions;
   private currentSlide = 0;
+  private _renderedSlide = -1;
   private _hiddenMode: HiddenSlideMode;
   private handle: PresentationHandle | null = null;
   private readonly _mode: 'main' | 'worker';
@@ -204,6 +209,15 @@ export class PptxViewer implements ZoomableViewer {
   private elementContext: PptxElementContext | null = null;
   private elementHitGeneration = 0;
   private readonly elementHitTolerance: number;
+  private readonly _loadingLayer: HTMLSpanElement;
+  private _layoutUnsubscribe: (() => void) | null = null;
+  private readonly _layoutWaiters = new Set<() => void>();
+  private _navigationGeneration = 0;
+  private _renderProgressGeneration = 0;
+  private _lastReportedSlide = -1;
+  private _lastReportedTotal = -1;
+  private _lastReportedAvailable = -1;
+  private _lastReportedLayoutComplete: boolean | null = null;
   /**
    * Create a Viewer that borrows an already-loaded presentation.
    *
@@ -262,6 +276,24 @@ export class PptxViewer implements ZoomableViewer {
     this.textLayer = overlays.textLayer;
     this.highlightLayer = overlays.highlightLayer;
     this.elementLayer = overlays.elementLayer;
+    this._loadingLayer = this.wrapper.ownerDocument.createElement('span');
+    this._loadingLayer.style.cssText = [
+      'position:absolute',
+      'inset:0',
+      'display:none',
+      'align-items:center',
+      'justify-content:center',
+      'background:rgba(255,255,255,0.72)',
+      'pointer-events:none',
+      'z-index:4',
+    ].join(';');
+    this._loadingLayer.setAttribute('role', 'status');
+    this._loadingLayer.setAttribute('aria-live', 'polite');
+    this._loadingLayer.setAttribute('aria-label', 'Loading slide');
+    const progress = this.wrapper.ownerDocument.createElement('progress');
+    progress.setAttribute('aria-hidden', 'true');
+    this._loadingLayer.appendChild(progress);
+    this.wrapper.insertBefore(this._loadingLayer, this.elementLayer);
     if (this.textLayer && (opts.onSelectionContextChange || opts.enableElementSelection)) {
       this.selectionChangeListener = () => this._emitSelectionContextChange();
       this.wrapper.ownerDocument.addEventListener('selectionchange', this.selectionChangeListener);
@@ -281,6 +313,7 @@ export class PptxViewer implements ZoomableViewer {
       () => this.slideCount,
       (slide) => this._collectSlideRuns(slide),
     );
+    if (borrowedPresentation) this._bindLayoutPresentation(borrowedPresentation);
   }
 
   /**
@@ -320,6 +353,10 @@ export class PptxViewer implements ZoomableViewer {
         regionMap: this.opts.regionMap,
         chartEx: this.opts.chartEx,
         mode: this._mode,
+        progressiveLayout: this.opts.progressiveLayout,
+        onLayoutProgress: this.opts.onLayoutProgress,
+        onLayoutPartial: this.opts.onLayoutPartial,
+        onLayoutComplete: this.opts.onLayoutComplete,
       }), () => {
         // Retire old-engine hit promises before install() destroys that engine:
         // a worker bridge may reject them synchronously during destroy, and its
@@ -330,6 +367,7 @@ export class PptxViewer implements ZoomableViewer {
         this._find.invalidate();
         this.handle?.destroy();
         this.handle = null;
+        this._unbindLayoutPresentation();
       });
       if (!engine) return;
       if (this.destroyed) throw new Error('PptxViewer is destroyed');
@@ -338,7 +376,11 @@ export class PptxViewer implements ZoomableViewer {
       // previous engine before rendering the replacement deck.
       // Discard the stale slide's media handle before swapping engines so its RAF
       // loop / object URLs don't outlive the replaced presentation.
-      this.currentSlide = this._initialSlide();
+      this._bindLayoutPresentation(engine);
+      const navigationGeneration = ++this._navigationGeneration;
+      this.currentSlide = await this._initialSlide(navigationGeneration);
+      if (navigationGeneration !== this._navigationGeneration || engine !== this.engine) return;
+      this._renderedSlide = -1;
       // A new presentation invalidates any prior find state.
       this._find.invalidate();
       await this.renderCurrentSlide();
@@ -353,6 +395,12 @@ export class PptxViewer implements ZoomableViewer {
 
   /** Navigate to a specific slide (0-indexed). */
   async goToSlide(index: number): Promise<void> {
+    const generation = ++this._navigationGeneration;
+    await this._goToSlide(index, generation);
+  }
+
+  private async _goToSlide(index: number, generation: number): Promise<void> {
+    if (generation !== this._navigationGeneration) return;
     if (!this.engine || this.slideCount === 0) return;
     const next = Math.max(0, Math.min(index, this.slideCount - 1));
     const changed = next !== this.currentSlide;
@@ -365,27 +413,45 @@ export class PptxViewer implements ZoomableViewer {
   }
 
   async nextSlide(): Promise<void> {
-    await this.goToSlide(this._step(1));
+    const generation = ++this._navigationGeneration;
+    const next = await this._step(1, generation);
+    await this._goToSlide(next, generation);
   }
 
   async prevSlide(): Promise<void> {
-    await this.goToSlide(this._step(-1));
+    const generation = ++this._navigationGeneration;
+    const next = await this._step(-1, generation);
+    await this._goToSlide(next, generation);
   }
 
   /** Next index for sequential nav: skip mode jumps over hidden slides. */
-  private _step(dir: 1 | -1): number {
-    if (this._hiddenMode === 'skip' && this.engine) {
-      return nextVisibleIndex(this.currentSlide, dir, (i) => this.engine!.isHidden(i), this.slideCount);
+  private async _step(dir: 1 | -1, generation: number): Promise<number> {
+    const engine = this.engine;
+    const from = this.currentSlide;
+    if (this._hiddenMode !== 'skip' || !engine) return from + dir;
+    for (let i = from + dir; i >= 0 && i < this.slideCount; i += dir) {
+      if (i >= engine.availableSlideCount) {
+        if (!engine.layoutComplete) this._setLoading(true);
+        if (!await this._waitForSlide(engine, i, () => generation === this._navigationGeneration)) {
+          return from;
+        }
+      }
+      if (!engine.isHidden(i)) return i;
     }
-    return this.currentSlide + dir;
+    return from;
   }
 
   /** Initial slide for load() / mode switch: skip mode lands on a visible one. */
-  private _initialSlide(): number {
-    if (this._hiddenMode === 'skip' && this.engine) {
-      return resolveVisibleIndex(0, (i) => this.engine!.isHidden(i), this.slideCount);
-    }
-    return 0;
+  private async _initialSlide(generation: number): Promise<number> {
+    const engine = this.engine;
+    if (this._hiddenMode !== 'skip' || !engine || this.slideCount === 0) return 0;
+    if (
+      engine.availableSlideCount === 0 &&
+      !await this._waitForSlide(engine, 0, () => generation === this._navigationGeneration)
+    ) return 0;
+    if (!engine.isHidden(0)) return 0;
+    const forward = await this._step(1, generation);
+    return forward !== 0 ? forward : 0;
   }
 
   /** Resolved `'dim'` overlay (defaults merged with the `hiddenSlideDim` option). */
@@ -401,15 +467,21 @@ export class PptxViewer implements ZoomableViewer {
    * while on a hidden slide advances to the nearest visible slide.
    */
   async setHiddenSlideMode(mode: HiddenSlideMode): Promise<void> {
+    const generation = ++this._navigationGeneration;
     this._hiddenMode = mode;
     let next = this.currentSlide;
     if (mode === 'skip' && this.engine) {
-      next = resolveVisibleIndex(
-        this.currentSlide,
-        (i) => this.engine!.isHidden(i),
-        this.slideCount,
-      );
+      const engine = this.engine;
+      if (
+        this.currentSlide >= engine.availableSlideCount &&
+        !await this._waitForSlide(engine, this.currentSlide, () => generation === this._navigationGeneration)
+      ) return;
+      if (engine.isHidden(this.currentSlide)) {
+        next = await this._step(1, generation);
+        if (next === this.currentSlide) next = await this._step(-1, generation);
+      }
     }
+    if (generation !== this._navigationGeneration) return;
     const changed = next !== this.currentSlide;
     if (changed) this._invalidateElementSelection(false);
     this.currentSlide = next;
@@ -429,6 +501,14 @@ export class PptxViewer implements ZoomableViewer {
 
   get slideIndex(): number { return this.currentSlide; }
   get slideCount(): number { return this.engine?.slideCount ?? 0; }
+  /** Number of opening slides currently paintable under progressive layout. */
+  get availableSlideCount(): number { return this.engine?.availableSlideCount ?? this.slideCount; }
+  /** Whether all slides are paintable. */
+  get layoutComplete(): boolean { return this.engine?.layoutComplete ?? true; }
+  /** Wait until all slides are paintable. */
+  async waitUntilLayoutComplete(): Promise<void> {
+    await this.engine?.waitUntilLayoutComplete?.();
+  }
 
   /**
    * Speaker-notes text for a slide (`ppt/notesSlides/notesSlideN.xml`,
@@ -536,37 +616,50 @@ export class PptxViewer implements ZoomableViewer {
   }
 
   private async renderCurrentSlide(): Promise<void> {
-    if (!this.engine) return;
+    const engine = this.engine;
+    if (!engine) return;
+    const slide = this.currentSlide;
+    const progressGeneration = ++this._renderProgressGeneration;
+    this._setLoading(slide >= this.availableSlideCount && !this.layoutComplete);
     const generation = this.renderDispatcher.begin();
-    const dim =
-      this._hiddenMode === 'dim' && this.engine.isHidden(this.currentSlide)
+    try {
+      if (slide >= engine.availableSlideCount) {
+        const ready = await this._waitForSlide(
+          engine,
+          slide,
+          () => progressGeneration === this._renderProgressGeneration &&
+            this.renderDispatcher.isCurrent(generation) &&
+            engine === this.engine &&
+            slide === this.currentSlide,
+        );
+        if (!ready) return;
+      }
+      const dim = this._hiddenMode === 'dim' && engine.isHidden(slide)
         ? this._dim()
         : undefined;
-    const targetWidth = this._targetWidth();
-    const dpr = this.opts.dpr ?? (window.devicePixelRatio || 1);
+      const targetWidth = this._targetWidth();
+      const dpr = this.opts.dpr ?? (window.devicePixelRatio || 1);
+      const scale = targetWidth / engine.slideWidth;
+      const cssHeight = Math.round(engine.slideHeight * scale);
+      this.canvas.style.width = `${targetWidth}px`;
+      this.canvas.style.height = `${cssHeight}px`;
 
-    const scale = targetWidth / this.engine.slideWidth;
-    const cssHeight = Math.round(this.engine.slideHeight * scale);
-    this.canvas.style.width = `${targetWidth}px`;
-    this.canvas.style.height = `${cssHeight}px`;
+      this.handle?.destroy();
+      this.handle = null;
 
-    this.handle?.destroy();
-    this.handle = null;
+      const isWorker = this._mode === 'worker';
+      // Collect runs unconditionally (not just when a text layer exists): the
+      // find-highlight overlay needs the current slide's run geometry too, and
+      // caching them lets find() reuse the visible render for this slide. IX6 —
+      // in worker mode the runs ride back beside the bitmap (via the proxy's
+      // `onTextRun`), so both modes populate the same `runs` array.
+      const runs: PptxTextRunInfo[] = [];
+      const onTextRun = (r: PptxTextRunInfo) => runs.push(r);
 
-    const isWorker = this._mode === 'worker';
-    // Collect runs unconditionally (not just when a text layer exists): the
-    // find-highlight overlay needs the current slide's run geometry too, and
-    // caching them lets find() reuse the visible render for this slide. IX6 —
-    // in worker mode the runs ride back beside the bitmap (via the proxy's
-    // `onTextRun`), so both modes populate the same `runs` array.
-    const runs: PptxTextRunInfo[] = [];
-    const onTextRun = (r: PptxTextRunInfo) => runs.push(r);
-
-    try {
       if (this.opts.enableMediaPlayback) {
         // presentSlide supports both modes (worker: base off-thread, video
         // overlay composited on the main thread).
-        const handle = await this.engine.presentSlide(this.canvas, this.currentSlide, {
+        const handle = await engine.presentSlide(this.canvas, slide, {
           width: targetWidth,
           dpr,
           dim,
@@ -584,7 +677,7 @@ export class PptxViewer implements ZoomableViewer {
         const bmp = await renderPptxFocusedSlide(
           this.engine,
           this.canvas,
-          this.currentSlide,
+          slide,
           'worker',
           { width: targetWidth, dpr, dim, onTextRun },
         );
@@ -593,27 +686,117 @@ export class PptxViewer implements ZoomableViewer {
         await renderPptxFocusedSlide(
           this.engine,
           this.canvas,
-          this.currentSlide,
+          slide,
           'main',
           { width: targetWidth, dpr, onTextRun, dim },
         );
         if (!this.renderDispatcher.isCurrent(generation)) return;
       }
-      this.opts.onSlideChange?.(this.currentSlide, this.slideCount);
+      this._renderedSlide = slide;
+      this._emitSlideChange(true);
+      // IX6 — identical overlay build for both modes: the run geometry the worker
+      // shipped is the same shape `onTextRun` emits in main mode.
+      if (this.textLayer) this._buildTextLayer(this.textLayer, runs, targetWidth, cssHeight);
+      // Feed the just-rendered slide's runs to the find controller (geometry
+      // matches what was drawn) and (re)draw its highlights.
+      this._find.setSlideRuns(slide, runs);
+      this._buildHighlightLayer(runs, targetWidth, cssHeight);
     } catch (err) {
       if (!this.renderDispatcher.isCurrent(generation)) return;
       throw err;
+    } finally {
+      if (progressGeneration === this._renderProgressGeneration) this._setLoading(false);
     }
+  }
 
-    // IX6 — identical overlay build for both modes: the run geometry the worker
-    // shipped is the same shape `onTextRun` emits in main mode.
-    if (this.textLayer) {
-      this._buildTextLayer(this.textLayer, runs, targetWidth, cssHeight);
+  private _bindLayoutPresentation(presentation: PptxPresentation): void {
+    this._unbindLayoutPresentation();
+    let initial = true;
+    this._layoutUnsubscribe = subscribePptxLayout(
+      presentation,
+      () => ({
+        availableSlides: presentation.availableSlideCount,
+        slideCount: presentation.slideCount,
+        exact: presentation.layoutComplete,
+        complete: presentation.layoutComplete,
+      }),
+      (publication) => {
+        if (initial) {
+          initial = false;
+          return;
+        }
+        this._onLayoutPublication(presentation, publication);
+      },
+      (error) => this._reportRenderError(error),
+    );
+  }
+
+  private _unbindLayoutPresentation(): void {
+    this._layoutUnsubscribe?.();
+    this._layoutUnsubscribe = null;
+    this._navigationGeneration++;
+    this._renderProgressGeneration++;
+    this._wakeLayoutWaiters();
+    this._setLoading(false);
+  }
+
+  private _onLayoutPublication(
+    presentation: PptxPresentation,
+    publication: PptxLayoutPublication,
+  ): void {
+    if (this.destroyed || presentation !== this.engine) return;
+    this._wakeLayoutWaiters();
+    if (publication.error !== undefined) {
+      this._reportRenderError(publication.error);
+      return;
     }
-    // Feed the just-rendered slide's runs to the find controller (geometry
-    // matches what was drawn) and (re)draw its highlights.
-    this._find.setSlideRuns(this.currentSlide, runs);
-    this._buildHighlightLayer(runs, targetWidth, cssHeight);
+    if (this._renderedSlide !== this.currentSlide) return;
+    this._emitSlideChange();
+  }
+
+  private async _waitForSlide(
+    presentation: PptxPresentation,
+    slide: number,
+    isCurrent: () => boolean,
+  ): Promise<boolean> {
+    while (
+      !this.destroyed &&
+      isCurrent() &&
+      presentation === this.engine &&
+      slide >= presentation.availableSlideCount &&
+      !presentation.layoutComplete
+    ) {
+      await new Promise<void>((resolve) => this._layoutWaiters.add(resolve));
+    }
+    if (this.destroyed || !isCurrent() || presentation !== this.engine) return false;
+    if (presentation.layoutComplete) await presentation.waitUntilLayoutComplete?.();
+    return slide < presentation.availableSlideCount;
+  }
+
+  private _wakeLayoutWaiters(): void {
+    for (const resolve of this._layoutWaiters) resolve();
+    this._layoutWaiters.clear();
+  }
+
+  private _emitSlideChange(force = false): void {
+    const total = this.slideCount;
+    const available = this.availableSlideCount;
+    const complete = this.layoutComplete;
+    if (!force &&
+      this.currentSlide === this._lastReportedSlide &&
+      total === this._lastReportedTotal &&
+      available === this._lastReportedAvailable &&
+      complete === this._lastReportedLayoutComplete
+    ) return;
+    this._lastReportedSlide = this.currentSlide;
+    this._lastReportedTotal = total;
+    this._lastReportedAvailable = available;
+    this._lastReportedLayoutComplete = complete;
+    this.opts.onSlideChange?.(this.currentSlide, total, complete);
+  }
+
+  private _setLoading(loading: boolean): void {
+    this._loadingLayer.style.display = loading ? 'flex' : 'none';
   }
 
   /** Draw the find-highlight boxes for the current slide from its runs. */
@@ -942,6 +1125,7 @@ export class PptxViewer implements ZoomableViewer {
     invalidatePptxRenderTarget(this.canvas);
     this.handle?.destroy();
     this.handle = null;
+    this._unbindLayoutPresentation();
     this.presentationOwner.close();
     // IX2 — drop the find state (matches + cached runs) so a stale
     // findNext()/findPrev() after teardown returns null instead of a match

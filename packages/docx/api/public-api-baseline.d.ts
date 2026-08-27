@@ -1096,7 +1096,7 @@ export class DocxDocument {
     toMarkdown(): Promise<string>;
     get pageCount(): number;
     get layoutComplete(): boolean;
-    whenLayoutComplete(): Promise<void>;
+    waitUntilLayoutComplete(): Promise<void>;
     get mode(): 'main' | 'worker';
     get document(): DocxDocumentModel;
     get comments(): readonly Readonly<DocComment>[];
@@ -1190,7 +1190,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     load(source: string | ArrayBuffer): Promise<void>;
     get pageCount(): number;
     get layoutComplete(): boolean;
-    whenLayoutComplete(): Promise<void>;
+    waitUntilLayoutComplete(): Promise<void>;
     relayout(): void;
     setScale(scale: number): void;
     getScale(): number;
@@ -1351,7 +1351,7 @@ export class DocxViewer implements ZoomableViewer {
     get pageCount(): number;
     get currentPage(): number;
     get layoutComplete(): boolean;
-    whenLayoutComplete(): Promise<void>;
+    waitUntilLayoutComplete(): Promise<void>;
     get canvasElement(): HTMLCanvasElement;
     goToPage(index: number): Promise<void>;
     nextPage(): Promise<void>;
@@ -1573,17 +1573,20 @@ export interface LoadOptions extends LoadOptions__emitterCollision1 {
     math?: MathRenderer;
     mode?: 'main' | 'worker';
     sliceLayout?: boolean;
-    onLayoutProgress?: (progress: Readonly<{
-        committedPages: number;
-    }>) => void;
+    onLayoutProgress?: (progress: Readonly<ProgressiveLayoutProgress>) => void;
     progressiveLayout?: boolean;
     onLayoutComplete?: (error?: unknown) => void;
-    onLayoutPartial?: (progress: Readonly<{
-        pageCount: number;
-        exact: boolean;
-    }>) => void;
+    onLayoutPartial?: (progress: Readonly<ProgressiveLayoutPartial>) => void;
     showTrackedChanges?: boolean;
     currentDate?: Date | number;
+}
+interface ProgressiveLayoutPartial {
+    availableUnits: number;
+    totalUnits?: number;
+    exact: boolean;
+}
+interface ProgressiveLayoutProgress {
+    committedUnits: number;
 }
 interface LoadOptions__emitterCollision1 {
     useGoogleFonts?: boolean;

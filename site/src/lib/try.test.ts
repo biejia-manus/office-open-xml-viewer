@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   xlsx: [] as Array<Record<string, any>>,
   deferDocx: false,
   deferDocxLayout: false,
+  deferPptxLayout: false,
   rejectXlsx: false,
   math: { loadMathJax: vi.fn(), mathMLToSvg: vi.fn() },
   threeD: { render: vi.fn() },
@@ -39,7 +40,7 @@ vi.mock('@silurus/ooxml-docx', () => {
         this.rejectLoad = reject;
       });
     }
-    whenLayoutComplete(): Promise<void> {
+    waitUntilLayoutComplete(): Promise<void> {
       if (this.layoutComplete) return Promise.resolve();
       return new Promise<void>((resolve) => {
         this.resolveLayout = () => {
@@ -73,6 +74,8 @@ vi.mock('@silurus/ooxml-pptx', () => {
     readonly relayout = vi.fn();
     readonly events: string[] = [];
     readonly setScaleCalls: number[] = [];
+    layoutComplete = true;
+    resolveLayout: (() => void) | null = null;
     constructor(
       public readonly host: HTMLElement,
       public readonly opts: Record<string, any>,
@@ -81,7 +84,17 @@ vi.mock('@silurus/ooxml-pptx', () => {
     }
     load(): Promise<void> {
       this.events.push('load');
+      if (this.opts.progressiveLayout && mocks.deferPptxLayout) this.layoutComplete = false;
       return Promise.resolve();
+    }
+    waitUntilLayoutComplete(): Promise<void> {
+      if (this.layoutComplete) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        this.resolveLayout = () => {
+          this.layoutComplete = true;
+          resolve();
+        };
+      });
     }
     setScale(scale: number): void {
       this.events.push('setScale');
@@ -175,6 +188,7 @@ beforeEach(() => {
   });
   mocks.deferDocx = false;
   mocks.deferDocxLayout = false;
+  mocks.deferPptxLayout = false;
   mocks.rejectXlsx = false;
 });
 
@@ -246,7 +260,8 @@ describe('Try Yours ScrollViewer integration', () => {
     expect(viewer.opts.mediaOverscan).toBe(1);
     expect(viewer.opts.zoomMin).toBe(0.5);
     expect(viewer.opts.pageShadow).toBe(false);
-    expect(viewer.opts.mode).toBe('main');
+    expect(viewer.opts.mode).toBe('worker');
+    expect(viewer.opts.progressiveLayout).toBe(true);
     expect(viewer.opts.comments).toBe(true);
     expect(viewer.opts.threeD).toBe(mocks.threeD);
     expect(viewer.opts.regionMap).toBe(mocks.regionMap);
@@ -255,6 +270,17 @@ describe('Try Yours ScrollViewer integration', () => {
     expect(viewer.events[0]).toBe('load');
     expect(viewer.opts.overscan).toBe(6);
     expect(viewer.relayout).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports PPTX progressive completion without changing its final slide count', async () => {
+    mocks.deferPptxLayout = true;
+    const result = await renderFile(stage(), file('progressive.pptx'));
+    const viewer = mocks.pptx[0];
+
+    expect(result.units).toBe(6);
+    expect(result.finalUnits).toBeDefined();
+    viewer.resolveLayout();
+    await expect(result.finalUnits).resolves.toBe(6);
   });
 
   it.each([

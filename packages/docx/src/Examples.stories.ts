@@ -226,7 +226,7 @@ export const ProgressiveScrollViewer: LayoutStory = {
         status.textContent = `First paint after ${painted}ms with ${viewer.pageCount} page(s); laying out the rest\u2026`;
         // pageCount is the pages available so far, not the document total, until
         // layout completes.
-        await viewer.whenLayoutComplete();
+        await viewer.waitUntilLayoutComplete();
         const settled = Math.round(performance.now() - started);
         status.textContent = `First paint ${painted}ms \u2192 full layout ${settled}ms, ${viewer.pageCount} pages`;
       })

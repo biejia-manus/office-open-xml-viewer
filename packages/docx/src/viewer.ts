@@ -328,8 +328,8 @@ export class DocxViewer implements ZoomableViewer {
   }
 
   /** Resolve once the authoritative layout has replaced any provisional pages. */
-  async whenLayoutComplete(): Promise<void> {
-    await this._doc?.whenLayoutComplete?.();
+  async waitUntilLayoutComplete(): Promise<void> {
+    await this._doc?.waitUntilLayoutComplete?.();
   }
 
   /** The underlying <canvas> element. */
@@ -844,7 +844,7 @@ export class DocxViewer implements ZoomableViewer {
     ) {
       await new Promise<void>((resolve) => { this._layoutWaiters.add(resolve); });
     }
-    if (doc === this._doc && doc.layoutComplete) await doc.whenLayoutComplete();
+    if (doc === this._doc && doc.layoutComplete) await doc.waitUntilLayoutComplete();
   }
 
   private _wakeLayoutWaiters(): void {

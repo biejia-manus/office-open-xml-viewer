@@ -318,8 +318,10 @@ function normalizeMediaElement(value: unknown, slideIndex: number): Readonly<Med
   return copyMediaElement(element as MediaElement);
 }
 
-/** Validate, detach, and freeze a compact preflight crossing a worker boundary. */
-export function normalizePresentationPreflight(value: unknown): PresentationPreflight {
+function normalizePresentationPreflightValue(
+  value: unknown,
+  allowPartial: boolean,
+): PresentationPreflight {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('invalid PPTX presentation preflight payload');
   }
@@ -330,7 +332,9 @@ export function normalizePresentationPreflight(value: unknown): PresentationPref
     !Number.isSafeInteger(candidate.slideHeight) || (candidate.slideHeight ?? 0) <= 0 ||
     !Array.isArray(candidate.embeddedFonts) ||
     !Array.isArray(candidate.slides) ||
-    candidate.slides.length !== candidate.slideCount ||
+    (allowPartial
+      ? candidate.slides.length > (candidate.slideCount ?? -1)
+      : candidate.slides.length !== candidate.slideCount) ||
     !Array.isArray(candidate.fontPreloadNames)
   ) {
     throw new Error('invalid PPTX presentation preflight dimensions or slide count');
@@ -389,6 +393,16 @@ export function normalizePresentationPreflight(value: unknown): PresentationPref
     slides: Object.freeze(slides),
     fontPreloadNames: Object.freeze(fontPreloadNames),
   });
+}
+
+/** Validate, detach, and freeze an authoritative compact preflight. */
+export function normalizePresentationPreflight(value: unknown): PresentationPreflight {
+  return normalizePresentationPreflightValue(value, false);
+}
+
+/** Validate a sequential compact prefix pushed by a progressive render worker. */
+export function normalizePresentationPreflightPrefix(value: unknown): PresentationPreflight {
+  return normalizePresentationPreflightValue(value, true);
 }
 
 export function findPreflightMimeType(
@@ -564,6 +578,40 @@ export class PresentationPreflightBuilder {
 
   get remainingDescriptorCount(): number {
     return this.descriptors.reduce((count, descriptor) => count + Number(descriptor !== undefined), 0);
+  }
+
+  /** Latest immutable per-slide fact committed by the sequential cursor. */
+  get latestSlide(): PresentationPreflightSlide | undefined {
+    return this.slides[this.slides.length - 1];
+  }
+
+  /** Current cumulative font request set for the committed slide prefix. */
+  get currentFontPreloadNames(): readonly (string | null)[] {
+    return this.fontPreloadNames;
+  }
+
+  /**
+   * Read-only snapshot of the committed prefix while preflight is still open.
+   * `slideCount` remains the final bootstrap count; `slides.length` is the
+   * number currently paintable. The snapshot is created only for a consumer
+   * that needs the current compact facts, not once per cursor step.
+   */
+  snapshot(): PresentationPreflight {
+    if (this.finished) return this.finished;
+    if (this.pending) throw new Error('PPTX presentation preflight has an uncommitted slide');
+    return Object.freeze({
+      slideCount: this.slideCountValue,
+      slideWidth: this.slideWidthValue,
+      slideHeight: this.slideHeightValue,
+      defaultTextColor: this.defaultTextColorValue,
+      majorFont: this.majorFontValue,
+      minorFont: this.minorFontValue,
+      hlinkColor: this.hlinkColorValue,
+      folHlinkColor: this.folHlinkColorValue,
+      embeddedFonts: this.embeddedFontsValue,
+      slides: Object.freeze([...this.slides]),
+      fontPreloadNames: this.fontPreloadNames,
+    });
   }
 
   addSlide(

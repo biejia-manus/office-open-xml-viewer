@@ -24,6 +24,26 @@ export interface OoxmlResourceLimits {
   maxArchiveEntries?: OoxmlResourceLimit;
 }
 
+/** Format-neutral progress reported while a progressive layout pass runs. */
+export interface ProgressiveLayoutProgress {
+  /**
+   * Units committed by the current pass (pages for DOCX, slides for PPTX).
+   * This is telemetry rather than a final count and may move backward when a
+   * converging layout pass restarts.
+   */
+  committedUnits: number;
+}
+
+/** Format-neutral publication of a newly paintable progressive prefix. */
+export interface ProgressiveLayoutPartial {
+  /** Units currently available to paint (pages for DOCX, slides for PPTX). */
+  availableUnits: number;
+  /** Final unit count when the format knows it before layout completes. */
+  totalUnits?: number;
+  /** Whether the publication is authoritative rather than provisional. */
+  exact: boolean;
+}
+
 /**
  * Common load-time options shared by the docx / pptx / xlsx
  * `Document.load` / `Presentation.load` / `Workbook.load` factories and their

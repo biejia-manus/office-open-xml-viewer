@@ -20,7 +20,7 @@ const viewer = new DocxScrollViewer(container, {
 await viewer.load('/document.docx');
 
 // Print, export, and final-page-count UI need the converged layout.
-await viewer.whenLayoutComplete();
+await viewer.waitUntilLayoutComplete();
 console.log('Final page count:', viewer.pageCount);`;
 ---
 
@@ -51,7 +51,7 @@ console.log('Final page count:', viewer.pageCount);`;
           <h3>Subscribe or await</h3>
           <p>
             Use <code>onPageChange</code> or <code>onVisiblePageChange</code> for live navigation
-            UI. Await <code>whenLayoutComplete()</code> before printing, exporting, or relying on
+            UI. Await <code>waitUntilLayoutComplete()</code> before printing, exporting, or relying on
             the authoritative total.
           </p>
         </article>

@@ -23,6 +23,8 @@ import {
   toArrayBuffer,
   OoxmlResourceLimitError,
   type LoadOptions as CoreLoadOptions,
+  type ProgressiveLayoutPartial,
+  type ProgressiveLayoutProgress,
   type MathRenderer,
   type ChartThreeDRenderer,
   type ChartRegionMapRenderer,
@@ -52,6 +54,8 @@ import {
   findPreflightMimeType,
   normalizePresentationBootstrap,
   normalizePresentationPreflight,
+  normalizePresentationPreflightPrefix,
+  PresentationPreflightBuilder,
   type PresentationPreflight,
 } from './presentation-preflight';
 import { PptxSlideRepository } from './slide-repository';
@@ -63,6 +67,7 @@ import {
 import type {
   PptxWorkerRequest,
   PptxWorkerResponse,
+  PresentationBootstrap,
   RenderWorkerRequest,
   RenderWorkerResponse,
 } from './worker-protocol';
@@ -76,6 +81,7 @@ import {
   type PptxElementBounds,
   type PptxSlidePoint,
 } from './element-selection';
+import { publishPptxLayout } from './presentation-layout-events';
 
 /** Options for {@link PptxPresentation.load}. */
 export type LoadOptions = CoreLoadOptions & {
@@ -86,7 +92,52 @@ export type LoadOptions = CoreLoadOptions & {
    * ImageBitmap via an `ImageBitmapRenderingContext`. Requires OffscreenCanvas.
    */
   mode?: 'main' | 'worker';
+  /**
+   * Resolve `load()` when the opening slide is paintable, then prepare the
+   * remaining slides in the background. Mirrors DOCX progressive layout:
+   * {@link PptxPresentation.layoutComplete} becomes false until the same
+   * sequential preflight reaches the end, and
+   * {@link PptxPresentation.waitUntilLayoutComplete} observes the final result.
+   *
+   * Unlike DOCX pagination, the PPTX bootstrap already knows the final slide
+   * count and uniform dimensions. {@link PptxPresentation.slideCount} is
+   * therefore final from first paint; only
+   * {@link PptxPresentation.availableSlideCount} grows. This keeps a
+   * ScrollViewer's extent and scrollbar stable while later slides prepare.
+   */
+  progressiveLayout?: boolean;
+  /** Called as the sequential preflight commits slides. */
+  onLayoutProgress?: (progress: Readonly<ProgressiveLayoutProgress>) => void;
+  /** Called for each additional paintable prefix after `load()` resolves. */
+  onLayoutPartial?: (progress: Readonly<ProgressiveLayoutPartial>) => void;
+  /** Called once background preflight completes, or with its failure. */
+  onLayoutComplete?: (error?: unknown) => void;
 };
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+  reject(reason?: unknown): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: Deferred<T>['resolve'];
+  let reject!: Deferred<T>['reject'];
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+interface ProgressiveLoad {
+  readonly onProgress?: LoadOptions['onLayoutProgress'];
+  readonly onPartial?: LoadOptions['onLayoutPartial'];
+  readonly onComplete?: LoadOptions['onLayoutComplete'];
+  readonly firstPublication: Deferred<void>;
+  published: boolean;
+  settled: boolean;
+}
 
 /** Options for {@link PptxPresentation.renderSlideToBitmap}. */
 export interface RenderSlideToBitmapOptions {
@@ -162,7 +213,16 @@ export class PptxPresentation {
     PptxWorkerResponse | RenderWorkerResponse | PullSessionResponse<ArrayBuffer, number>
   >;
   private _mode: 'main' | 'worker' = 'main';
+  private _bootstrap: PresentationBootstrap | null = null;
   private _preflight: PresentationPreflight | null = null;
+  /** Paintable prefix under progressiveLayout; final slideCount is bootstrap-owned. */
+  private _availableSlideCount = 0;
+  private _layoutComplete = true;
+  private _layoutCompletion: Promise<void> | null = null;
+  private _layoutError: unknown = undefined;
+  private _parseRequestId: number | null = null;
+  private _progressive: ProgressiveLoad | null = null;
+  private readonly _layoutWaiters = new Set<() => void>();
   private _slides: PptxSlideRepository | null = null;
   private _slidePullClient: PptxSlidePullClient | null = null;
   /** First fatal package/model violation for this presentation generation. */
@@ -223,6 +283,7 @@ export class PptxPresentation {
         !('protocol' in msg) && msg.kind === 'error'
           ? deserializeWorkerError(msg)
           : undefined,
+      onUnsolicited: (msg) => this._onWorkerLayoutPush(msg),
     });
     // Default: the parser WASM emitted next to this bundle, resolved relative to
     // the document URL. `wasmUrl` overrides it (CDN / self-hosted copy); a
@@ -316,16 +377,27 @@ export class PptxPresentation {
         );
       }
       pres._chartEx = mode === 'worker' ? undefined : opts.chartEx;
+      const progressive = opts.progressiveLayout
+        ? {
+            onProgress: opts.onLayoutProgress,
+            onPartial: opts.onLayoutPartial,
+            onComplete: opts.onLayoutComplete,
+            firstPublication: deferred<void>(),
+            published: false,
+            settled: false,
+          } satisfies ProgressiveLoad
+        : undefined;
       await pres._parse(
         buffer,
         resourceOptions.policy,
-        mode === 'worker' ? !!opts.useGoogleFonts : false,
+        !!opts.useGoogleFonts,
         opts.workerTimeoutMs,
         (usage) => metrics.observeUsage(usage),
         rendererDescriptors,
+        progressive,
       );
       metrics.checkpoint('presentation preflight ready');
-      if (mode === 'main' && opts.useGoogleFonts && pres._preflight) {
+      if (mode === 'main' && opts.useGoogleFonts && pres._preflight && !progressive) {
         pres._googleFontFaces = await preloadGoogleFonts(
           excludeEmbeddedFontFamilies(
             pres._preflight.fontPreloadNames,
@@ -354,7 +426,21 @@ export class PptxPresentation {
     timeoutMs?: number,
     onUsage?: (usage: import('@silurus/ooxml-core').OoxmlResourceUsageSnapshot) => void,
     renderers?: WorkerRendererDescriptors,
+    progressive?: ProgressiveLoad,
   ): Promise<void> {
+    if (progressive) {
+      this._progressive = progressive;
+      if (this._mode === 'worker') {
+        await this._parseWorkerProgressively(
+          buffer, resourcePolicy, useGoogleFonts, timeoutMs, onUsage, renderers, progressive,
+        );
+      } else {
+        await this._parseMainProgressively(
+          buffer, resourcePolicy, useGoogleFonts, timeoutMs, onUsage, progressive,
+        );
+      }
+      return;
+    }
     const response = await this._bridge.request(
       (id) =>
         this._mode === 'worker'
@@ -369,12 +455,15 @@ export class PptxPresentation {
       this._preflight = normalizePresentationPreflight(
         (response as Extract<RenderWorkerResponse, { kind: 'presentationReady' }>).preflight,
       );
+      this._bootstrap = this._preflight;
+      this._availableSlideCount = this._preflight.slideCount;
       return;
     }
 
     const bootstrap = normalizePresentationBootstrap(
       (response as Extract<PptxWorkerResponse, { kind: 'presentationOpened' }>).bootstrap,
     );
+    this._bootstrap = bootstrap;
     // Font extraction is independent of the retained slide cursor, so start it
     // from bootstrap metadata while the worker preflights the slide sequence.
     // Rendering still awaits `_parse`, which does not return until both finish.
@@ -428,26 +517,293 @@ export class PptxPresentation {
     this._preflight = normalizePresentationPreflight(
       (finished as Extract<PptxWorkerResponse, { kind: 'presentationPreflightReady' }>).preflight,
     );
+    this._availableSlideCount = this._preflight.slideCount;
     this._slides = new PptxSlideRepository({
       slideCount: this._preflight.slideCount,
       maxCachedSlides: HARD_MAX_PPTX_CACHED_SLIDES,
       maxCachedStructuralBytes: HARD_MAX_PPTX_CACHED_SLIDE_PROJECTION_BYTES,
       loadSlide: async (slideIndex) => {
-        const slide = await this._slidePullClient?.load(slideIndex, true);
+        const slide = await this._slidePullClient?.load(slideIndex, true, timeoutMs);
         if (!slide) throw new Error('PPTX slide pull client is unavailable');
         return slide;
       },
     });
   }
 
+  private async _parseMainProgressively(
+    buffer: ArrayBuffer,
+    resourcePolicy: NormalizedOoxmlResourcePolicy,
+    useGoogleFonts: boolean,
+    timeoutMs: number | undefined,
+    onUsage: ((usage: import('@silurus/ooxml-core').OoxmlResourceUsageSnapshot) => void) | undefined,
+    progressive: ProgressiveLoad,
+  ): Promise<void> {
+    const response = await this._bridge.request(
+      (id) => ({
+        kind: 'parse', id, buffer, resourcePolicy, progressiveLayout: true,
+      }) satisfies PptxWorkerRequest,
+      [buffer],
+      { timeoutMs },
+    );
+    const bootstrap = normalizePresentationBootstrap(
+      (response as Extract<PptxWorkerResponse, { kind: 'presentationOpened' }>).bootstrap,
+    );
+    this._bootstrap = bootstrap;
+    const embeddedFontLoad = loadEmbeddedFonts(
+      bootstrap.embeddedFonts,
+      (path) => this.getFontBytes(path),
+    ).then((loaded) => {
+      if (this._destroyed) unregisterEmbeddedFonts(loaded.faces);
+      else {
+        this._embeddedFontFaces = loaded.faces;
+        this._embeddedFontAliases = loaded.aliases;
+        this._embeddedFontAuthoredFamilies = loaded.authoredFamilies;
+      }
+    });
+    this._slidePullClient = this._createSlidePullClient(bootstrap.slideCount, timeoutMs, onUsage);
+    this._slides = new PptxSlideRepository({
+      slideCount: bootstrap.slideCount,
+      maxCachedSlides: HARD_MAX_PPTX_CACHED_SLIDES,
+      maxCachedStructuralBytes: HARD_MAX_PPTX_CACHED_SLIDE_PROJECTION_BYTES,
+      loadSlide: async (slideIndex) => {
+        const slide = await this._slidePullClient?.load(slideIndex, true, timeoutMs);
+        if (!slide) throw new Error('PPTX slide pull client is unavailable');
+        return slide;
+      },
+    });
+    const builder = new PresentationPreflightBuilder(bootstrap);
+    const loadedGoogleFonts = new Set<string>();
+    const ensureFonts = async (): Promise<void> => {
+      await embeddedFontLoad;
+      if (!useGoogleFonts) return;
+      const requested = excludeEmbeddedFontFamilies(
+        builder.currentFontPreloadNames,
+        this._embeddedFontAliases,
+      ).filter((name): name is string => !!name && !loadedGoogleFonts.has(name));
+      if (requested.length === 0) return;
+      for (const name of requested) loadedGoogleFonts.add(name);
+      this._googleFontFaces.push(...await preloadGoogleFonts(requested, PPTX_GOOGLE_FONTS));
+    };
+    const full = (async () => {
+      for (let slideIndex = 0; slideIndex < bootstrap.slideCount; slideIndex += 1) {
+        await this._slides!.withSlide(slideIndex, (slide) => {
+          builder.addSlide(slide);
+        });
+        await ensureFonts();
+        this._applyProgressivePrefix(builder.snapshot(), progressive);
+      }
+      await embeddedFontLoad;
+      this._finishProgressiveLayout(builder.finish(), progressive);
+    })();
+    this._layoutCompletion = full.then(
+      () => undefined,
+      (error) => this._failProgressiveLayout(error, progressive),
+    );
+    await progressive.firstPublication.promise;
+  }
+
+  private async _parseWorkerProgressively(
+    buffer: ArrayBuffer,
+    resourcePolicy: NormalizedOoxmlResourcePolicy,
+    useGoogleFonts: boolean,
+    timeoutMs: number | undefined,
+    onUsage: ((usage: import('@silurus/ooxml-core').OoxmlResourceUsageSnapshot) => void) | undefined,
+    renderers: WorkerRendererDescriptors | undefined,
+    progressive: ProgressiveLoad,
+  ): Promise<void> {
+    const parsed = this._bridge.request(
+      (id) => {
+        this._parseRequestId = id;
+        return {
+          kind: 'parse', id, buffer, resourcePolicy, useGoogleFonts, renderers,
+          progressiveLayout: true,
+        } satisfies RenderWorkerRequest;
+      },
+      [buffer],
+      { timeoutMs },
+    );
+    this._layoutCompletion = parsed.then(
+      (response) => {
+        this._parseRequestId = null;
+        const ready = response as Extract<RenderWorkerResponse, { kind: 'presentationReady' }>;
+        if (ready.usage) onUsage?.(ready.usage);
+        this._finishProgressiveLayout(
+          normalizePresentationPreflight(ready.preflight),
+          progressive,
+        );
+      },
+      (error) => {
+        this._parseRequestId = null;
+        this._failProgressiveLayout(error, progressive);
+      },
+    );
+    await progressive.firstPublication.promise;
+  }
+
+  private _createSlidePullClient(
+    slideCount: number,
+    timeoutMs: number | undefined,
+    onUsage: ((usage: import('@silurus/ooxml-core').OoxmlResourceUsageSnapshot) => void) | undefined,
+  ): PptxSlidePullClient {
+    return new PptxSlidePullClient({
+      slideCount,
+      transport: this._bridge.transport(isPptxSlidePullResponse),
+      open: async (slideIndex, identity, operationTimeoutMs) => {
+        await this._bridge.request(
+          (id) => ({
+            kind: 'openSlideSession', id, slideIndex, ...identity,
+          }) satisfies PptxWorkerRequest,
+          undefined,
+          { timeoutMs: operationTimeoutMs ?? timeoutMs },
+        );
+      },
+      onUsage,
+    });
+  }
+
+  private _onWorkerLayoutPush(
+    response: PptxWorkerResponse | RenderWorkerResponse | PullSessionResponse<ArrayBuffer, number>,
+  ): void {
+    if (
+      !('kind' in response) ||
+      response.kind !== 'presentationLayoutPartial' ||
+      response.forId !== this._parseRequestId ||
+      !this._progressive
+    ) return;
+    try {
+      if (response.usage) this._metrics?.observeUsage(response.usage);
+      if (response.bootstrap) this._bootstrap = normalizePresentationBootstrap(response.bootstrap);
+      const bootstrap = this._bootstrap;
+      if (!bootstrap) throw new Error('PPTX progressive worker published before bootstrap');
+      const prior = this._preflight?.slides ?? [];
+      if (response.availableSlides !== prior.length + 1 || response.slide.index !== prior.length) {
+        throw new Error('PPTX progressive worker published a non-sequential slide');
+      }
+      this._applyProgressivePrefix(
+        normalizePresentationPreflightPrefix({
+          ...bootstrap,
+          slides: [...prior, response.slide],
+          fontPreloadNames: response.fontPreloadNames,
+        }),
+        this._progressive,
+      );
+    } catch (error) {
+      this._failProgressiveLayout(error, this._progressive);
+    }
+  }
+
+  private _applyProgressivePrefix(
+    prefix: PresentationPreflight,
+    progressive: ProgressiveLoad,
+  ): void {
+    if (progressive.settled || this._destroyed) return;
+    this._preflight = prefix;
+    this._availableSlideCount = prefix.slides.length;
+    this._layoutComplete = false;
+    this._wakeLayoutWaiters();
+    progressive.onProgress?.({ committedUnits: this._availableSlideCount });
+    publishPptxLayout(this, {
+      availableSlides: this._availableSlideCount,
+      slideCount: this.slideCount,
+      exact: false,
+      complete: false,
+    });
+    if (!progressive.published) {
+      progressive.published = true;
+      progressive.firstPublication.resolve();
+      return;
+    }
+    progressive.onPartial?.({
+      availableUnits: this._availableSlideCount,
+      totalUnits: this.slideCount,
+      exact: false,
+    });
+  }
+
+  private _finishProgressiveLayout(
+    preflight: PresentationPreflight,
+    progressive: ProgressiveLoad,
+  ): void {
+    if (progressive.settled || this._destroyed) return;
+    progressive.settled = true;
+    this._preflight = preflight;
+    this._bootstrap ??= preflight;
+    this._availableSlideCount = preflight.slideCount;
+    this._layoutComplete = true;
+    this._wakeLayoutWaiters();
+    progressive.firstPublication.resolve();
+    publishPptxLayout(this, {
+      availableSlides: this._availableSlideCount,
+      slideCount: this.slideCount,
+      exact: true,
+      complete: true,
+    });
+    if (progressive.published) progressive.onComplete?.();
+  }
+
+  private _failProgressiveLayout(error: unknown, progressive: ProgressiveLoad): void {
+    if (progressive.settled) return;
+    progressive.settled = true;
+    if (this._destroyed) return;
+    if (!progressive.published) {
+      progressive.firstPublication.reject(error);
+      return;
+    }
+    this._layoutError = error;
+    this._layoutComplete = true;
+    this._wakeLayoutWaiters();
+    publishPptxLayout(this, {
+      availableSlides: this._availableSlideCount,
+      slideCount: this.slideCount,
+      exact: false,
+      complete: true,
+      error,
+    });
+    progressive.onComplete?.(error);
+  }
+
+  private _wakeLayoutWaiters(): void {
+    for (const resolve of this._layoutWaiters) resolve();
+    this._layoutWaiters.clear();
+  }
+
+  private async _waitForSlide(slideIndex: number): Promise<void> {
+    while (
+      !this._destroyed &&
+      slideIndex >= this._availableSlideCount &&
+      !this._layoutComplete
+    ) {
+      await new Promise<void>((resolve) => this._layoutWaiters.add(resolve));
+    }
+    if (this._layoutComplete) await this.waitUntilLayoutComplete();
+  }
+
+  private _assertSlideIndex(slideIndex: number): void {
+    if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex >= this.slideCount) {
+      throw new Error(`Slide index ${slideIndex} out of range (count: ${this.slideCount})`);
+    }
+  }
+
   /** Total number of slides in the loaded presentation. */
-  get slideCount(): number { return this._preflight?.slideCount ?? 0; }
+  get slideCount(): number { return this._bootstrap?.slideCount ?? this._preflight?.slideCount ?? 0; }
+
+  /** Slides whose compact facts and full model can currently be painted. */
+  get availableSlideCount(): number { return this._availableSlideCount; }
+
+  /** False only while an opt-in progressive preflight continues. */
+  get layoutComplete(): boolean { return this._layoutComplete; }
+
+  /** Wait until all slides are paintable; rethrows a post-load background failure. */
+  async waitUntilLayoutComplete(): Promise<void> {
+    if (this._layoutCompletion) await this._layoutCompletion;
+    if (this._layoutError !== undefined) throw this._layoutError;
+  }
 
   /** Slide width in EMU. */
-  get slideWidth(): number { return this._preflight?.slideWidth ?? 0; }
+  get slideWidth(): number { return this._bootstrap?.slideWidth ?? this._preflight?.slideWidth ?? 0; }
 
   /** Slide height in EMU. */
-  get slideHeight(): number { return this._preflight?.slideHeight ?? 0; }
+  get slideHeight(): number { return this._bootstrap?.slideHeight ?? this._preflight?.slideHeight ?? 0; }
 
   /** The render mode this engine was loaded with ('main' | 'worker'). A fact for
    *  integrators and the scroll viewer: an injected engine's mode decides whether
@@ -508,7 +864,8 @@ export class PptxPresentation {
 
   /** The compact preflight's per-slide `partName` array (`sldIdLst` order). */
   private _partNames(): SlidePartNames {
-    return (this._preflight?.slides ?? []).map((slide) => slide.partName);
+    return (this._bootstrap?.slides ?? this._preflight?.slides ?? [])
+      .map((slide) => slide.partName);
   }
 
   /** Lazily build (and cache) the `partName → index` map. Nulled by
@@ -569,6 +926,8 @@ export class PptxPresentation {
           "renderSlide(canvas) is unavailable in mode: 'worker'; use renderSlideToBitmap() and paint it via an ImageBitmapRenderingContext",
         );
       }
+      this._assertSlideIndex(slideIndex);
+      await this._waitForSlide(slideIndex);
       const compact = this._preflight;
       const repository = this._slides;
       if (!compact || !repository) throw new Error('Presentation not loaded');
@@ -625,12 +984,11 @@ export class PptxPresentation {
   ): Promise<ImageBitmap> {
     this._assertResourceHealthy();
     try {
+      this._assertSlideIndex(slideIndex);
+      await this._waitForSlide(slideIndex);
       const width = opts.width ?? 960;
       const dpr = opts.dpr ?? defaultDpr();
       if (this._mode === 'worker') {
-        if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex >= this.slideCount) {
-          throw new Error(`Slide index ${slideIndex} out of range (count: ${this.slideCount})`);
-        }
         const res = await this._bridge.request(
           (id) => ({ kind: 'renderSlide', id, slideIndex, width, dpr, skipMediaControls: opts.skipMediaControls, dim: opts.dim }) satisfies RenderWorkerRequest,
         );
@@ -666,10 +1024,9 @@ export class PptxPresentation {
   async collectSlideRuns(slideIndex: number, width = 960): Promise<PptxTextRunInfo[]> {
     this._assertResourceHealthy();
     try {
+      this._assertSlideIndex(slideIndex);
+      await this._waitForSlide(slideIndex);
       if (this._mode === 'worker') {
-        if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex >= this.slideCount) {
-          throw new Error(`Slide index ${slideIndex} out of range (count: ${this.slideCount})`);
-        }
         const res = await this._bridge.request(
           (id) => ({ kind: 'collectRuns', id, slideIndex, width }) satisfies RenderWorkerRequest,
         );
@@ -696,10 +1053,9 @@ export class PptxPresentation {
     options: PptxElementContextOptions = {},
   ): Promise<PptxElementContext | null> {
     this._assertResourceHealthy();
-    if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex >= this.slideCount) {
-      throw new Error(`Slide index ${slideIndex} out of range (count: ${this.slideCount})`);
-    }
+    this._assertSlideIndex(slideIndex);
     try {
+      await this._waitForSlide(slideIndex);
       if (this._mode === 'worker') {
         const response = await this._bridge.request(
           (id) => ({ kind: 'hitTestElement', id, slideIndex, point, options }) satisfies RenderWorkerRequest,
@@ -722,12 +1078,11 @@ export class PptxPresentation {
     elementIds: readonly string[],
   ): Promise<readonly PptxElementBounds[]> {
     this._assertResourceHealthy();
-    if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex >= this.slideCount) {
-      throw new Error(`Slide index ${slideIndex} out of range (count: ${this.slideCount})`);
-    }
+    this._assertSlideIndex(slideIndex);
     const ids = Object.freeze(elementIds.filter((id) => typeof id === 'string' && id.length > 0));
     if (ids.length === 0) return Object.freeze([]);
     try {
+      await this._waitForSlide(slideIndex);
       if (this._mode === 'worker') {
         const response = await this._bridge.request(
           (id) => ({
@@ -862,12 +1217,11 @@ export class PptxPresentation {
   ): Promise<PresentationHandle> {
     this._assertResourceHealthy();
     try {
+      this._assertSlideIndex(slideIndex);
+      await this._waitForSlide(slideIndex);
       if (!this._preflight) {
         throw new Error('Presentation not loaded');
       }
-    if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex >= this.slideCount) {
-      throw new Error(`Slide index ${slideIndex} out of range (count: ${this.slideCount})`);
-    }
     const dpr = opts.dpr ?? defaultDpr();
     const width = opts.width ?? (canvas.offsetWidth || 960);
 
@@ -924,7 +1278,15 @@ export class PptxPresentation {
     this._slides?.clear();
     this._slides = null;
     this._slidePullClient = null;
+    this._bootstrap = null;
     this._preflight = null;
+    this._availableSlideCount = 0;
+    this._layoutComplete = true;
+    this._layoutCompletion = null;
+    this._layoutError = undefined;
+    this._progressive = null;
+    this._parseRequestId = null;
+    this._wakeLayoutWaiters();
     this._resourceFailure = null;
     this._slidePartIndex = null;
     this._rawParts.clear();

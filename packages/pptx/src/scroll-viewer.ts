@@ -36,6 +36,10 @@ import type { PptxCommentsOptions } from './comment-margin';
 import { pptxCommentOccurrenceKey } from './comment-occurrence';
 import type { PptxComment } from './types';
 import { renderPptxFocusedSlide } from './focused-view-runtime';
+import {
+  subscribePptxLayout,
+  type PptxLayoutPublication,
+} from './presentation-layout-events';
 
 /**
  * Debounce window (ms) after the last `setScale` in a zoom burst before the
@@ -185,7 +189,7 @@ export interface PptxScrollViewerOptions extends Pick<RenderSlideOptions, 'width
   /** Fires when the top-most visible slide changes. `topIndex` from
    *  `computeVisibleRange` (the first slide intersecting the viewport top,
    *  EXCLUDING overscan). */
-  onVisibleSlideChange?: (topIndex: number, total: number) => void;
+  onVisibleSlideChange?: (topIndex: number, total: number, layoutComplete: boolean) => void;
   /** IX9 — fires whenever the zoom factor actually changes (`1` = 100% = a slide
    *  at its natural EMU→px size): from {@link PptxScrollViewer.setScale},
    *  `zoomIn`/`zoomOut`, `fitWidth`/`fitPage`, a Ctrl/⌘+wheel gesture, or a
@@ -236,6 +240,7 @@ interface SlideSlot {
   textLayer: HTMLDivElement | null;
   highlightLayer: HTMLDivElement;
   elementLayer: HTMLDivElement | null;
+  loadingLayer: HTMLSpanElement;
   commentMarkerLayer: HTMLDivElement | null;
   commentMargin: HTMLDivElement | null;
   commentDecorationLayer: HTMLDivElement | null;
@@ -314,6 +319,9 @@ export class PptxScrollViewer implements ZoomableViewer {
   private _uniformSlideHeight = 0;
   private _lastRange: VisibleWindow | null = null;
   private _lastTopIndex = -1;
+  private _lastReportedTotal = -1;
+  private _lastReportedLayoutComplete: boolean | null = null;
+  private _layoutUnsubscribe: (() => void) | null = null;
   private _scrollListener: (() => void) | null = null;
   private _selectionChangeListener: (() => void) | null = null;
   private _selectionContextKey = 'null';
@@ -548,6 +556,7 @@ export class PptxScrollViewer implements ZoomableViewer {
     }
 
     if (this._borrowed) {
+      this._bindLayoutPresentation(borrowedPresentation!);
       // A borrowed engine is already loaded, so lay out + mount the first
       // window immediately. relayout() is idempotent and defers under a
       // zero-width container (the resize path re-runs it once width appears).
@@ -590,6 +599,10 @@ export class PptxScrollViewer implements ZoomableViewer {
         regionMap: this._opts.regionMap,
         chartEx: this._opts.chartEx,
         mode: this._mode,
+        progressiveLayout: this._opts.progressiveLayout,
+        onLayoutProgress: this._opts.onLayoutProgress,
+        onLayoutPartial: this._opts.onLayoutPartial,
+        onLayoutComplete: this._opts.onLayoutComplete,
       }), (ownedPresentation) => {
         // Invalidate before TerminalResourceOwner installs the candidate and
         // destroys the prior worker, whose pending hit requests reject on close.
@@ -600,6 +613,7 @@ export class PptxScrollViewer implements ZoomableViewer {
         this._activeCommentId = null;
         this._activeCommentSlide = null;
         this._hasComments = false;
+        this._unbindLayoutPresentation();
         if (ownedPresentation) {
           for (const [idx, slot] of [...this._slots]) this._recycleSlot(idx, slot);
           this._lastTopIndex = -1;
@@ -615,6 +629,7 @@ export class PptxScrollViewer implements ZoomableViewer {
       this._activeCommentSlide = null;
       this._hasComments = this._commentsEnabled()
         && this._presentationHasComments(pres);
+      this._bindLayoutPresentation(pres);
       // Lay out + mount the first window now that the engine exists (mirrors the
       // borrowed-engine path in the constructor). relayout() is idempotent and
       // defers under a zero-width container — `_onResize` re-runs it once width
@@ -633,6 +648,21 @@ export class PptxScrollViewer implements ZoomableViewer {
 
   get slideCount(): number {
     return this._pres?.slideCount ?? 0;
+  }
+
+  /** Number of opening slides currently paintable under progressive layout. */
+  get availableSlideCount(): number {
+    return this._pres?.availableSlideCount ?? this.slideCount;
+  }
+
+  /** Whether all slides are paintable. */
+  get layoutComplete(): boolean {
+    return this._pres?.layoutComplete ?? true;
+  }
+
+  /** Wait until all slides are paintable. */
+  async waitUntilLayoutComplete(): Promise<void> {
+    await this._pres?.waitUntilLayoutComplete?.();
   }
 
   /** Uniform slide width in CSS px at the current scale. `_scale` is a
@@ -930,7 +960,10 @@ export class PptxScrollViewer implements ZoomableViewer {
           !!mediaRange && this._rangeContains(mediaRange, i),
           initialRenders === undefined,
         );
-        if (initialRenders && render) initialRenders.push(render);
+        // Progressive load resolves once the opening paintable prefix is on
+        // screen. Later mounted slots keep their loading UI and finish from the
+        // presentation's availability wait; they must not hold `load()` open.
+        if (initialRenders && render && i < this.availableSlideCount) initialRenders.push(render);
       } else if (repositionExisting) {
         // Re-position (offsets shift after a spacer/height change).
         this._positionSlot(this._slots.get(i)!, i, r);
@@ -941,10 +974,7 @@ export class PptxScrollViewer implements ZoomableViewer {
     // (change-only latch; `_lastTopIndex` starts at -1 so the first layout fires
     // once for slide 0). Every mount path — scroll, zoom, resize re-fit, and
     // scrollToSlide — funnels through here, so navigation never double-fires.
-    if (r.topIndex !== this._lastTopIndex) {
-      this._lastTopIndex = r.topIndex;
-      this._opts.onVisibleSlideChange?.(r.topIndex, this._pres.slideCount);
-    }
+    this._emitVisibleSlideChange(r);
   }
 
   /** Apply the resolved slide-canvas shadow (design: recipe drop shadow by
@@ -986,6 +1016,27 @@ export class PptxScrollViewer implements ZoomableViewer {
       'position:absolute;top:0;left:0;width:100%;height:100%;' +
       'overflow:hidden;pointer-events:none;';
     wrapper.appendChild(highlightLayer);
+    const loadingLayer = document.createElement('span');
+    loadingLayer.style.cssText = [
+      'position:absolute',
+      'top:0',
+      'right:0',
+      'bottom:0',
+      'left:0',
+      'display:none',
+      'align-items:center',
+      'justify-content:center',
+      'background:rgba(255,255,255,0.72)',
+      'pointer-events:none',
+      'z-index:4',
+    ].join(';');
+    loadingLayer.setAttribute('role', 'status');
+    loadingLayer.setAttribute('aria-live', 'polite');
+    loadingLayer.setAttribute('aria-label', 'Loading slide');
+    const progress = document.createElement('progress');
+    progress.setAttribute('aria-hidden', 'true');
+    loadingLayer.appendChild(progress);
+    wrapper.appendChild(loadingLayer);
     let commentMarkerLayer: HTMLDivElement | null = null;
     let commentMargin: HTMLDivElement | null = null;
     let commentDecorationLayer: HTMLDivElement | null = null;
@@ -1020,6 +1071,7 @@ export class PptxScrollViewer implements ZoomableViewer {
       textLayer,
       highlightLayer,
       elementLayer,
+      loadingLayer,
       commentMarkerLayer,
       commentMargin,
       commentDecorationLayer,
@@ -1029,7 +1081,10 @@ export class PptxScrollViewer implements ZoomableViewer {
       commentAnchorGeneration: 0,
       renderedSlide: -1,
       renderedScale: -1,
-      dispatcher: new StaticCanvasRenderDispatcher(canvas, this._mode === 'worker'),
+      dispatcher: new StaticCanvasRenderDispatcher(
+        canvas,
+        this._mode === 'worker' && !this._opts.enableMediaPlayback,
+      ),
       presentationHandle: null,
       mediaInteractive: false,
       renderGeneration: 0,
@@ -1050,7 +1105,10 @@ export class PptxScrollViewer implements ZoomableViewer {
     slot.mediaInteractive = false;
     slot.dispatcher.destroy();
     if (!this._destroyed) {
-      slot.dispatcher = new StaticCanvasRenderDispatcher(slot.canvas, this._mode === 'worker');
+      slot.dispatcher = new StaticCanvasRenderDispatcher(
+        slot.canvas,
+        this._mode === 'worker' && !this._opts.enableMediaPlayback,
+      );
     }
     // Clear the per-slot text overlay so a slot sitting in the free pool holds no
     // stale spans. buildPptxTextLayer also clears on its next build, but an
@@ -1066,6 +1124,7 @@ export class PptxScrollViewer implements ZoomableViewer {
     slot.highlightLayer.innerHTML = '';
     slot.highlightLayer.style.transform = '';
     slot.highlightLayer.style.transformOrigin = '';
+    slot.loadingLayer.style.display = 'none';
     if (slot.commentMarkerLayer) {
       slot.commentMarkerLayer.replaceChildren();
       slot.commentMarkerLayer.style.visibility = '';
@@ -1167,6 +1226,8 @@ export class PptxScrollViewer implements ZoomableViewer {
     if (slot.renderedSlide === i) return null;
     slot.renderedSlide = i;
     const renderGeneration = ++slot.renderGeneration;
+    slot.loadingLayer.style.display =
+      i >= this.availableSlideCount && !this.layoutComplete ? 'flex' : 'none';
 
     const dpr = this._dpr();
     const widthPx = this._slideWidthPx();
@@ -1177,21 +1238,31 @@ export class PptxScrollViewer implements ZoomableViewer {
 
     if (this._opts.enableMediaPlayback && mediaInteractive) {
       slot.mediaInteractive = true;
-      return this._renderInteractiveSlot(i, slot, widthPx, dpr, scale, epoch, reportErrors);
+      return this._trackSlotLoading(
+        i,
+        slot,
+        renderGeneration,
+        this._renderInteractiveSlot(i, slot, widthPx, dpr, scale, epoch, reportErrors),
+      );
     }
     slot.mediaInteractive = false;
 
     if (this._mode === 'worker') {
-      return this._renderSlotBitmap(
+      return this._trackSlotLoading(
         i,
         slot,
-        widthPx,
-        dpr,
-        scale,
         renderGeneration,
-        dispatcher,
-        generation,
-        reportErrors,
+        this._renderSlotBitmap(
+          i,
+          slot,
+          widthPx,
+          dpr,
+          scale,
+          renderGeneration,
+          dispatcher,
+          generation,
+          reportErrors,
+        ),
       );
     }
 
@@ -1201,7 +1272,7 @@ export class PptxScrollViewer implements ZoomableViewer {
     const wantRuns = wantOverlay || this._findActive;
     const onTextRun = wantRuns ? (r: PptxTextRunInfo) => runs.push(r) : undefined;
     const canvas = slot.canvas;
-    return renderPptxFocusedSlide(this._pres, canvas, i, 'main', {
+    return this._trackSlotLoading(i, slot, renderGeneration, renderPptxFocusedSlide(this._pres, canvas, i, 'main', {
       width: widthPx, // this slide's own px width → uniform px-per-EMU scale (§7)
       dpr,
       onTextRun,
@@ -1247,7 +1318,80 @@ export class PptxScrollViewer implements ZoomableViewer {
         if (!isCurrent) return;
         if (reportErrors) this._reportRenderError(err);
         else throw err;
-      });
+      }));
+  }
+
+  private async _trackSlotLoading(
+    slideIndex: number,
+    slot: SlideSlot,
+    renderGeneration: number,
+    render: Promise<void>,
+  ): Promise<void> {
+    try {
+      await render;
+    } finally {
+      if (
+        renderGeneration === slot.renderGeneration &&
+        this._slots.get(slideIndex) === slot &&
+        slot.renderedSlide === slideIndex
+      ) {
+        slot.loadingLayer.style.display = 'none';
+      }
+    }
+  }
+
+  private _bindLayoutPresentation(presentation: PptxPresentation): void {
+    this._unbindLayoutPresentation();
+    let initial = true;
+    this._layoutUnsubscribe = subscribePptxLayout(
+      presentation,
+      () => ({
+        availableSlides: presentation.availableSlideCount,
+        slideCount: presentation.slideCount,
+        exact: presentation.layoutComplete,
+        complete: presentation.layoutComplete,
+      }),
+      (publication) => {
+        if (initial) {
+          initial = false;
+          return;
+        }
+        this._onLayoutPublication(presentation, publication);
+      },
+      (error) => this._reportRenderError(error),
+    );
+  }
+
+  private _unbindLayoutPresentation(): void {
+    this._layoutUnsubscribe?.();
+    this._layoutUnsubscribe = null;
+  }
+
+  private _onLayoutPublication(
+    presentation: PptxPresentation,
+    publication: PptxLayoutPublication,
+  ): void {
+    if (this._destroyed || presentation !== this._pres) return;
+    if (publication.error !== undefined) {
+      this._reportRenderError(publication.error);
+      return;
+    }
+    if (this._lastRange) this._emitVisibleSlideChange(this._lastRange);
+  }
+
+  private _emitVisibleSlideChange(range: VisibleWindow): void {
+    if (!this._pres) return;
+    const total = this._pres.slideCount;
+    const complete = this.layoutComplete;
+    if (
+      range.topIndex === this._lastTopIndex &&
+      total === this._lastReportedTotal &&
+      complete === this._lastReportedLayoutComplete
+    ) return;
+    this._lastTopIndex = range.topIndex;
+    this._lastReportedTotal = total;
+    this._lastReportedLayoutComplete = complete;
+    this._opts.onVisibleSlideChange?.(range.topIndex, total, complete);
   }
 
   /**
@@ -1441,10 +1585,17 @@ export class PptxScrollViewer implements ZoomableViewer {
         bmp.close();
         return;
       }
-      if (!dispatcher.commitBitmap(generation, bmp, {
+      const size = {
         cssWidth: Math.round(bmp.width / dpr),
         cssHeight: Math.round(bmp.height / dpr),
-      })) return;
+      };
+      // Interactive media later paints through `presentSlide()` on the same
+      // pooled canvas, so that canvas must remain a 2D canvas. A browser canvas
+      // cannot switch back from `bitmaprenderer` after the first acquisition.
+      const committed = this._opts.enableMediaPlayback
+        ? dispatcher.commitBitmapTo2d(generation, bmp, size)
+        : dispatcher.commitBitmap(generation, bmp, size);
+      if (!committed) return;
       // This bitmap now defines the scale the on-screen canvas lives at, so a
       // later zoom preview stretches from HERE (design §7 renderedScale).
       slot.renderedScale = scale;
@@ -1767,10 +1918,7 @@ export class PptxScrollViewer implements ZoomableViewer {
     }
     if (mediaRange) this._syncMediaPlayback(mediaRange);
     // Fire onVisibleSlideChange only when the top slide actually changed.
-    if (r.topIndex !== this._lastTopIndex) {
-      this._lastTopIndex = r.topIndex;
-      this._opts.onVisibleSlideChange?.(r.topIndex, this._pres.slideCount);
-    }
+    this._emitVisibleSlideChange(r);
   }
 
   /**
@@ -2788,6 +2936,7 @@ export class PptxScrollViewer implements ZoomableViewer {
     this._destroyed = true;
     this._find.invalidate();
     this._findActive = false;
+    this._unbindLayoutPresentation();
     if (this._selectionChangeListener) {
       this._wrapper.ownerDocument.removeEventListener('selectionchange', this._selectionChangeListener);
       this._selectionChangeListener = null;

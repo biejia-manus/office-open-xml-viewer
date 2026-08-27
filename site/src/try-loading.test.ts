@@ -34,9 +34,16 @@ describe('Try Yours parsing progress', () => {
   it('opens DOCX files progressively and reports when the authoritative page count arrives', () => {
     expect(renderer).toContain("mode: 'worker'");
     expect(renderer).toContain('progressiveLayout: true');
-    expect(renderer).toContain('viewer.whenLayoutComplete().then(mountAllPages)');
+    expect(renderer).toContain('viewer.waitUntilLayoutComplete().then(mountAllPages)');
     expect(source).toContain('available · opened in');
     expect(source).toContain('res.finalUnits.then');
+  });
+
+  it('opens PPTX files progressively in worker mode with a stable final count', () => {
+    const branch = renderer.match(/if \(ext === 'pptx'\) \{([\s\S]*?)\n  \}\n\n  const host/)?.[1] ?? '';
+    expect(branch).toContain("mode: 'worker'");
+    expect(branch).toContain('progressiveLayout: true');
+    expect(branch).toContain('viewer.waitUntilLayoutComplete()');
   });
 
   it('keeps the preview frame for XLSX as well as DOCX and PPTX', () => {

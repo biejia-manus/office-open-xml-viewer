@@ -708,10 +708,10 @@ export class DocxScrollViewer implements ZoomableViewer {
    * printing, export. {@link findText} does so internally. Resolves immediately
    * unless progressive layout actually deferred work.
    */
-  async whenLayoutComplete(): Promise<void> {
+  async waitUntilLayoutComplete(): Promise<void> {
     // Optional-called because an INJECTED engine (fromDocument) may predate this
     // method; a document that cannot defer layout is already complete.
-    await this._doc?.whenLayoutComplete?.();
+    await this._doc?.waitUntilLayoutComplete?.();
   }
 
   private _bindLayoutDocument(doc: DocxDocument): void {
@@ -2378,7 +2378,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     // synchronously: `findText()` followed immediately by `clearFind()` must
     // cancel the find, which it cannot do if the find has not begun.
     if (this._doc.layoutComplete === false) {
-      await this._doc.whenLayoutComplete();
+      await this._doc.waitUntilLayoutComplete();
       if (this._destroyed || !this._doc) return [];
     }
     this._findActive = query.length > 0;

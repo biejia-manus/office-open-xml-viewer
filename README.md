@@ -475,17 +475,45 @@ const viewer = new DocxScrollViewer(container, {
 await viewer.load('/document.docx');
 
 // Print, export, and final-page-count UI need the converged layout.
-await viewer.whenLayoutComplete();
+await viewer.waitUntilLayoutComplete();
 console.log('Final page count:', viewer.pageCount);
 ```
 
 While `layoutComplete` is false, `pageCount` and the callback's `total` argument
 mean pages available so far, not the final total. The page callbacks fire again
 when that count grows, even if the visible page does not change. Await
-`whenLayoutComplete()` before printing, exporting, or snapshotting a final count.
+`waitUntilLayoutComplete()` before printing, exporting, or snapshotting a final count.
 In-document `NUMPAGES` fields are repainted with their authoritative value after
 pagination converges. See the [progressive layout guide](https://ooxml-viewer.com/docx#progressive-layout)
 and [DOCX API reference](https://ooxml-viewer.com/api/docx).
+
+### Progressive PPTX layout
+
+PPTX exposes the same progressive lifecycle on `PptxViewer`,
+`PptxScrollViewer`, and `PptxPresentation.load()`:
+
+```typescript
+import { PptxScrollViewer } from '@silurus/ooxml/pptx';
+
+const viewer = new PptxScrollViewer(container, {
+  progressiveLayout: true,
+  mode: 'worker',
+  onVisibleSlideChange(slideIndex, slideCount, layoutComplete) {
+    pager.textContent = `Slide ${slideIndex + 1} of ${slideCount}`;
+    pager.setAttribute('aria-busy', String(!layoutComplete));
+  },
+});
+
+await viewer.load('/presentation.pptx');
+await viewer.waitUntilLayoutComplete();
+```
+
+Unlike DOCX pagination, a PPTX bootstrap already provides the final slide list
+and uniform dimensions. `slideCount` and the ScrollViewer's scroll extent are
+therefore stable from first paint; `availableSlideCount` grows as the paintable
+opening prefix is prepared. Scrolling ahead shows a loading state without
+changing the scrollbar length. See the [PPTX progressive layout guide](https://ooxml-viewer.com/pptx#progressive-layout)
+and [PPTX API reference](https://ooxml-viewer.com/api/pptx).
 
 For presentations, `enableMediaPlayback: true` makes embedded audio and video
 interactive inside the real viewport plus `mediaOverscan` slides. Other mounted
