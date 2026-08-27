@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   deferDocx: false,
   deferDocxLayout: false,
   rejectXlsx: false,
+  math: { loadMathJax: vi.fn(), mathMLToSvg: vi.fn() },
   threeD: { render: vi.fn() },
   regionMap: { render: vi.fn() },
   chartEx: { render: vi.fn() },
@@ -117,11 +118,7 @@ vi.mock('@silurus/ooxml-xlsx', () => ({
   },
 }));
 
-vi.mock('../../../packages/core/src/math/engine', () => ({
-  loadMathJax: vi.fn(),
-  mathMLToSvg: vi.fn(),
-}));
-
+vi.mock('../../../src/math', () => ({ math: mocks.math }));
 vi.mock('../../../src/three-d', () => ({ threeD: mocks.threeD }));
 vi.mock('../../../src/region-map', () => ({ regionMap: mocks.regionMap }));
 vi.mock('../../../src/chart-ex', () => ({ chartEx: mocks.chartEx }));
@@ -206,6 +203,7 @@ describe('Try Yours ScrollViewer integration', () => {
     expect(viewer.opts.mode).toBe('worker');
     expect(viewer.opts.progressiveLayout).toBe(true);
     expect(viewer.opts.comments).toBe(true);
+    expect(viewer.opts.math).toBe(mocks.math);
     expect(viewer.opts.threeD).toBe(mocks.threeD);
     expect(viewer.opts.regionMap).toBe(mocks.regionMap);
     expect(viewer.opts.chartEx).toBe(mocks.chartEx);
