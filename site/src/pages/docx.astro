@@ -2,6 +2,7 @@
 import FormatPage from '../layouts/FormatPage.astro';
 import DemoBlock from '../components/DemoBlock.astro';
 import FormatCommentsDemo from '../components/FormatCommentsDemo.astro';
+import DocxProgressiveLayoutGuide from '../components/DocxProgressiveLayoutGuide.astro';
 import { docxSnippets } from '../lib/demo-snippets';
 ---
 <FormatPage format="docx" name="DOCX" ext=".docx">
@@ -17,6 +18,7 @@ import { docxSnippets } from '../lib/demo-snippets';
     description="Drive the headless DocxDocument engine to render each page into its own canvas, stacked in a scroll container — the natural way to read a long document."
     code={docxSnippets.scroll}
   />
+  <DocxProgressiveLayoutGuide />
   <DemoBlock
     format="docx" kind="thumbnails" badge="Story · ThumbnailGrid"
     title="Page thumbnails"

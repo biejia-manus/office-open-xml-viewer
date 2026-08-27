@@ -102,6 +102,38 @@ describe('official-site API reference', () => {
     }
   });
 
+  it('documents the complete progressive DOCX contract on every loading surface', () => {
+    for (const apiClass of apiReference.docx) {
+      const options = apiClass.options ?? [];
+      const progressive = options.find(({ name }) => name === 'progressiveLayout');
+      expect(progressive?.def, apiClass.name).toBe('false');
+      expect(progressive?.desc, apiClass.name).toContain('pages available so far');
+      expect(progressive?.detailsHref, apiClass.name).toBe('/docx#progressive-layout');
+      expect(options.map(({ name }) => name), apiClass.name).toEqual(expect.arrayContaining([
+        'sliceLayout',
+        'onLayoutProgress',
+        'onLayoutPartial',
+        'onLayoutComplete',
+      ]));
+      expect(options.find(({ name }) => name === 'onLayoutPartial')?.type, apiClass.name)
+        .toContain('pageCount: number; exact: boolean');
+      expect(options.find(({ name }) => name === 'onLayoutComplete')?.type, apiClass.name)
+        .toBe('(error?: unknown) => void');
+
+      const pageCount = apiClass.methods.find(({ sig }) => sig === 'get pageCount(): number');
+      expect(pageCount?.desc, apiClass.name).toContain('available so far');
+      expect(apiClass.methods.find(({ sig }) => sig === 'get layoutComplete(): boolean'), apiClass.name)
+        .toBeDefined();
+      expect(apiClass.methods.find(({ sig }) => sig === 'whenLayoutComplete(): Promise<void>')?.desc, apiClass.name)
+        .toContain('authoritative full layout');
+    }
+
+    const viewerCallback = apiReference.docx[0].options?.find(({ name }) => name === 'onPageChange');
+    expect(viewerCallback?.desc).toContain('page-count publication changes total');
+    const scrollCallback = apiReference.docx[2].options?.find(({ name }) => name === 'onVisiblePageChange');
+    expect(scrollCallback?.desc).toContain('even if the same page remains visible');
+  });
+
   it('documents the Viewer error-delivery contract and typed resource failures', () => {
     for (const classes of Object.values(apiReference)) {
       for (const apiClass of classes.filter(({ name }) => name.endsWith('Viewer'))) {

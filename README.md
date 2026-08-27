@@ -448,6 +448,45 @@ document.destroy(); // release it yourself when every pane is gone
 `PptxViewer` and `PptxScrollViewer` use `fromPresentation(...)`; `XlsxViewer`
 and `XlsxSheetViewer` use `fromWorkbook(...)`.
 
+### Progressive DOCX layout
+
+For a large DOCX file, set `progressiveLayout: true` to resolve `load()` when the
+opening pages are paintable while the same paginator continues in the background.
+It is available on `DocxViewer`, `DocxScrollViewer`, and `DocxDocument.load()` in
+both render modes. Pair it with `mode: 'worker'` when the remaining layout and
+paint work should also stay off the UI thread.
+
+```typescript
+import { DocxScrollViewer } from '@silurus/ooxml/docx';
+
+const container = document.querySelector('#document') as HTMLElement;
+const pager = document.querySelector('#pager') as HTMLElement;
+
+const viewer = new DocxScrollViewer(container, {
+  progressiveLayout: true,
+  mode: 'worker',
+  onVisiblePageChange(pageIndex, availablePages, layoutComplete) {
+    pager.textContent =
+      `Page ${pageIndex + 1} of ${availablePages}${layoutComplete ? '' : '…'}`;
+    pager.setAttribute('aria-busy', String(!layoutComplete));
+  },
+});
+
+await viewer.load('/document.docx');
+
+// Print, export, and final-page-count UI need the converged layout.
+await viewer.whenLayoutComplete();
+console.log('Final page count:', viewer.pageCount);
+```
+
+While `layoutComplete` is false, `pageCount` and the callback's `total` argument
+mean pages available so far, not the final total. The page callbacks fire again
+when that count grows, even if the visible page does not change. Await
+`whenLayoutComplete()` before printing, exporting, or snapshotting a final count.
+In-document `NUMPAGES` fields are repainted with their authoritative value after
+pagination converges. See the [progressive layout guide](https://ooxml-viewer.com/docx#progressive-layout)
+and [DOCX API reference](https://ooxml-viewer.com/api/docx).
+
 For presentations, `enableMediaPlayback: true` makes embedded audio and video
 interactive inside the real viewport plus `mediaOverscan` slides. Other mounted
 slides remain static and selectable, avoiding offscreen media blobs and

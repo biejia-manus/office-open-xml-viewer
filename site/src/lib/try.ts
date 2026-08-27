@@ -34,6 +34,8 @@ export interface RenderResult {
   format: 'docx' | 'xlsx' | 'pptx';
   units: number; // pages / slides; 0 for xlsx (sheet-based)
   unitLabel: string;
+  /** Resolves with the authoritative count when progressive layout finishes. */
+  finalUnits?: Promise<number>;
 }
 
 function scrollViewerHost(stage: HTMLElement): HTMLDivElement {
@@ -156,6 +158,7 @@ export async function renderFile(stage: HTMLElement, file: File): Promise<Render
     comments: true,
     math,
     mode: 'main',
+    progressiveLayout: true,
     ...advancedChartRenderers,
   };
   const viewer = new DocxScrollViewer(host, viewerOptions);
@@ -172,12 +175,28 @@ export async function renderFile(stage: HTMLElement, file: File): Promise<Render
     viewer.destroy();
     throw new SupersededRenderError();
   }
-  // As above, native Find needs every page's text layer in the DOM. pageCount is
-  // a finite, parser-validated bound and avoids an unbounded overscan sentinel.
-  viewerOptions.overscan = viewer.pageCount;
-  viewer.relayout();
   activeCleanup = () => viewer.destroy();
-  return { format: 'docx', units: viewer.pageCount, unitLabel: 'page' };
+
+  const mountAllPages = (): number => {
+    assertCurrentRender(generation);
+    // Native Find needs every page's text layer in the DOM. Wait for the
+    // authoritative count before expanding overscan so progressive load can
+    // paint its opening window without immediately mounting unfinished pages.
+    viewerOptions.overscan = viewer.pageCount;
+    viewer.relayout();
+    return viewer.pageCount;
+  };
+
+  if (viewer.layoutComplete) {
+    return { format: 'docx', units: mountAllPages(), unitLabel: 'page' };
+  }
+
+  return {
+    format: 'docx',
+    units: viewer.pageCount,
+    unitLabel: 'page',
+    finalUnits: viewer.whenLayoutComplete().then(mountAllPages),
+  };
 }
 
 // Hot standby: warm each WASM engine on an idle tick

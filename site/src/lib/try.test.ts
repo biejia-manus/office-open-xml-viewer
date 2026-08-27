@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   pptx: [] as Array<Record<string, any>>,
   xlsx: [] as Array<Record<string, any>>,
   deferDocx: false,
+  deferDocxLayout: false,
   rejectXlsx: false,
   threeD: { render: vi.fn() },
   regionMap: { render: vi.fn() },
@@ -16,8 +17,10 @@ vi.mock('@silurus/ooxml-docx', () => {
     pageCount = 4;
     destroyed = false;
     readonly relayout = vi.fn();
+    layoutComplete = true;
     resolveLoad: (() => void) | null = null;
     rejectLoad: ((error: Error) => void) | null = null;
+    resolveLayout: (() => void) | null = null;
     readonly events: string[] = [];
     readonly setScaleCalls: number[] = [];
     constructor(
@@ -28,10 +31,21 @@ vi.mock('@silurus/ooxml-docx', () => {
     }
     load(): Promise<void> {
       this.events.push('load');
+      if (this.opts.progressiveLayout && mocks.deferDocxLayout) this.layoutComplete = false;
       if (!mocks.deferDocx) return Promise.resolve();
       return new Promise<void>((resolve, reject) => {
         this.resolveLoad = resolve;
         this.rejectLoad = reject;
+      });
+    }
+    whenLayoutComplete(): Promise<void> {
+      if (this.layoutComplete) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        this.resolveLayout = () => {
+          this.pageCount = 7;
+          this.layoutComplete = true;
+          resolve();
+        };
       });
     }
     setScale(scale: number): void {
@@ -163,6 +177,7 @@ beforeEach(() => {
     createElement: () => new FakeElement(),
   });
   mocks.deferDocx = false;
+  mocks.deferDocxLayout = false;
   mocks.rejectXlsx = false;
 });
 
@@ -189,6 +204,7 @@ describe('Try Yours ScrollViewer integration', () => {
     expect(viewer.opts.zoomMin).toBe(0.5);
     expect(viewer.opts.pageShadow).toBe(false);
     expect(viewer.opts.mode).toBe('main');
+    expect(viewer.opts.progressiveLayout).toBe(true);
     expect(viewer.opts.comments).toBe(true);
     expect(viewer.opts.threeD).toBe(mocks.threeD);
     expect(viewer.opts.regionMap).toBe(mocks.regionMap);
@@ -201,6 +217,23 @@ describe('Try Yours ScrollViewer integration', () => {
     expect(renderedStage.children).toHaveLength(1);
     expect(renderedStage.children[0].className).toBe('lv-scroll-viewer');
     expect(renderedStage.children[0].children).toHaveLength(0);
+  });
+
+  it('returns opening DOCX pages early and mounts the full native-Find surface after layout converges', async () => {
+    mocks.deferDocxLayout = true;
+    const result = await renderFile(stage(), file('large.docx'));
+    const viewer = mocks.docx[0];
+
+    expect(result.units).toBe(4);
+    expect(result.finalUnits).toBeDefined();
+    expect(viewer.opts.progressiveLayout).toBe(true);
+    expect(viewer.opts.overscan).toBe(0);
+    expect(viewer.relayout).not.toHaveBeenCalled();
+
+    viewer.resolveLayout();
+    await expect(result.finalUnits).resolves.toBe(7);
+    expect(viewer.opts.overscan).toBe(7);
+    expect(viewer.relayout).toHaveBeenCalledTimes(1);
   });
 
   it('lets PPTX fit the preview width while keeping selection, media, and native Find', async () => {
