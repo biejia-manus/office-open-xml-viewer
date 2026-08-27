@@ -2854,6 +2854,24 @@ describe('DocxScrollViewer — flicker-free zoom (T8)', () => {
     v.destroy();
   });
 
+  it('worker bitmap clamping never changes the logical CSS page size', async () => {
+    const { v, scrollHost } = setup(20, {}, 'worker');
+    // The fake worker deliberately returns a 100×200 backing bitmap for a
+    // logical 200×400 page. This models the production renderer reducing the
+    // backing resolution to MAX_CANVAS_AREA at a large zoom. The bitmap is a
+    // rasterization detail; it must still be stretched over the requested page
+    // box or the canvas occupies only the top-left of its wrapper.
+    await Promise.resolve();
+    await Promise.resolve();
+    const slot = slotAtTop(scrollHost, '0px')!;
+    const canvas = slot.children.find((k) => k.tag === 'canvas') as FakeEl;
+    expect(canvas.width).toBe(100);
+    expect(canvas.height).toBe(200);
+    expect(canvas.style.width).toBe('200px');
+    expect(canvas.style.height).toBe('400px');
+    v.destroy();
+  });
+
   // (e) A settle whose epoch is superseded (another setScale during the settle
   //     render) is discarded per the existing epoch gate.
   it('stale settle: an epoch bump during the settle render discards the settle (no swap, spare not attached)', () => {

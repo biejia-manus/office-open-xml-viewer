@@ -727,6 +727,11 @@ export class DocxViewer implements ZoomableViewer {
     // identical default); once a zoom latched a factor it is `naturalWidth ×
     // scale`.
     const renderWidth = this._renderWidth();
+    const pageSize = this._doc.pageSize(this._currentPage);
+    const logicalWidth = renderWidth ?? pageSize.widthPt * PT_TO_PX;
+    const logicalHeight = pageSize.widthPt > 0
+      ? logicalWidth * pageSize.heightPt / pageSize.widthPt
+      : 0;
     // Collect runs unconditionally (not just when a text layer exists): the
     // find-highlight overlay needs the current page's run geometry too, and
     // caching them here means find() reuses the visible render for this page
@@ -757,11 +762,12 @@ export class DocxViewer implements ZoomableViewer {
         'worker',
         renderOptions,
       );
-      // The bitmap is sized in device px; mirror the main renderer by setting
-      // the CSS size to the logical (÷dpr) dimensions so it isn't 2× on HiDPI.
+      // A worker bitmap's backing resolution may be reduced by the canvas-area
+      // clamp. Preserve the requested logical page box; deriving CSS size from
+      // bitmap/dpr would collapse a clamped page into the wrapper's top-left.
       if (!this._renderDispatcher.commitBitmap(generation, bmp, {
-        cssWidth: Math.round(bmp.width / dpr),
-        cssHeight: Math.round(bmp.height / dpr),
+        cssWidth: logicalWidth > 0 ? logicalWidth : Math.round(bmp.width / dpr),
+        cssHeight: logicalHeight > 0 ? logicalHeight : Math.round(bmp.height / dpr),
       })) return;
     } else {
       await renderDocxFocusedPage(

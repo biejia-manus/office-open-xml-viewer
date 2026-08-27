@@ -1555,6 +1555,10 @@ export class DocxScrollViewer implements ZoomableViewer {
     // mounted window, don't dispatch at all.
     if (this._slots.get(i) !== slot) return;
     const epoch = this._renderEpoch;
+    // Logical CSS geometry is independent from the worker bitmap's backing
+    // dimensions. The renderer may reduce the bitmap to stay inside the browser
+    // canvas area limit; the page must still occupy its requested layout box.
+    const heightPx = this._pageHeightPx(i);
     this._bitmapInFlight.add(i);
     // Whether this invocation actually painted its slot. When it did NOT (stale
     // epoch or moved identity), the `finally` may need to re-dispatch a live slot.
@@ -1590,8 +1594,8 @@ export class DocxScrollViewer implements ZoomableViewer {
         return;
       }
       if (!dispatcher.commitBitmap(generation, bmp, {
-        cssWidth: Math.round(bmp.width / dpr),
-        cssHeight: Math.round(bmp.height / dpr),
+        cssWidth: widthPx,
+        cssHeight: heightPx,
       })) return;
       // This bitmap now defines the scale the on-screen canvas lives at, so a
       // later zoom preview stretches from HERE (design §7 renderedScale).
