@@ -6207,6 +6207,12 @@ export type SlideRenderOptions = RenderOptions & {
   regionMap?: ChartRegionMapRenderer;
   chartEx?: ChartExRenderer;
   dim?: DimOptions;
+};
+
+/** Presentation-owned font aliases are intentionally kept out of the public
+ * render options. They are an implementation detail of embedded-font lifetime
+ * isolation, not a caller-configurable rendering policy. */
+type InternalSlideRenderOptions = SlideRenderOptions & {
   embeddedFontAliases?: ReadonlyMap<string, string>;
   embeddedFontAuthoredFamilies?: ReadonlyMap<string, string>;
 };
@@ -6309,6 +6315,26 @@ export async function renderSlide(
   opts: SlideRenderOptions = {},
   onTextRun?: TextRunCallback,
 ): Promise<HTMLCanvasElement | OffscreenCanvas> {
+  return renderSlideWithEmbeddedFonts(
+    canvas,
+    slide,
+    slideWidth,
+    slideHeight,
+    opts,
+    onTextRun,
+  );
+}
+
+/** @internal Presentation/worker entry that carries presentation-scoped font
+ * aliases without widening {@link renderSlide}'s public options. */
+export async function renderSlideWithEmbeddedFonts(
+  canvas: HTMLCanvasElement | OffscreenCanvas,
+  slide: Slide,
+  slideWidth: number,
+  slideHeight: number,
+  opts: InternalSlideRenderOptions = {},
+  onTextRun?: TextRunCallback,
+): Promise<HTMLCanvasElement | OffscreenCanvas> {
   // Render-pass lease (core acquireBitmapCacheLease): the warm pass below fires
   // a decode for every picture on the slide and the draw loop then awaits each
   // element's bitmap and draws it. The shared bitmap cache is LRU-bounded, so a
@@ -6342,7 +6368,7 @@ async function renderSlideLeased(
   slide: Slide,
   slideWidth: number,
   slideHeight: number,
-  opts: SlideRenderOptions = {},
+  opts: InternalSlideRenderOptions = {},
   onTextRun?: TextRunCallback,
   bitmapOwner?: PosterFetchImage,
 ): Promise<HTMLCanvasElement | OffscreenCanvas> {

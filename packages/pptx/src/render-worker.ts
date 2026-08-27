@@ -1,5 +1,5 @@
 import init, { PptxArchive, reinit } from './wasm/pptx_parser.js';
-import { renderSlide, type PptxTextRunInfo } from './renderer';
+import { renderSlideWithEmbeddedFonts, type PptxTextRunInfo } from './renderer';
 import { PPTX_GOOGLE_FONTS } from './google-fonts';
 import {
   findPreflightMimeType,
@@ -241,7 +241,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
         await fontsLoaded;
         const canvas = new OffscreenCanvas(1, 1);
         const runs: PptxTextRunInfo[] = [];
-        await renderSlide(canvas, slide, compact.slideWidth, compact.slideHeight, {
+        await renderSlideWithEmbeddedFonts(canvas, slide, compact.slideWidth, compact.slideHeight, {
           width: request.width,
           dpr: request.dpr,
           defaultTextColor: compact.defaultTextColor,
@@ -271,7 +271,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
         await fontsLoaded;
         const canvas = new OffscreenCanvas(1, 1);
         const runs: PptxTextRunInfo[] = [];
-        await renderSlide(canvas, slide, compact.slideWidth, compact.slideHeight, {
+        await renderSlideWithEmbeddedFonts(canvas, slide, compact.slideWidth, compact.slideHeight, {
           width: request.width,
           defaultTextColor: compact.defaultTextColor,
           majorFont: compact.majorFont,

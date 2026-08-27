@@ -1,5 +1,10 @@
 import type { DimOptions, PptxComment } from './types';
-import { renderSlide, dropImageBitmapCache, type TextRunCallback, type PptxTextRunInfo } from './renderer';
+import {
+  renderSlideWithEmbeddedFonts,
+  dropImageBitmapCache,
+  type TextRunCallback,
+  type PptxTextRunInfo,
+} from './renderer';
 import { createPresentationHandle, type PresentationHandle } from './presentation-handle';
 import {
   buildSlidePartIndex,
@@ -574,7 +579,7 @@ export class PptxPresentation {
         // entrance check. Re-check the presentation poison at the ownership
         // boundary before a cached Slide becomes observable.
         this._assertResourceHealthy();
-        return renderSlide(
+        return renderSlideWithEmbeddedFonts(
           canvas,
           slide,
           compact.slideWidth,
