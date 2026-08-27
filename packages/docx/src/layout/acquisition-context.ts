@@ -28,6 +28,9 @@ export interface RetainedTableRecord {
   readonly sourceIndex: number;
   readonly acquisition: RetainedTableAcquisition;
   readonly contentWidthPt: number;
+  /** Precomputed retainedTableAcquisitionIsReusableAcrossPages(acquisition);
+   *  stored so the per-flow-region reuse check stays O(1). */
+  readonly reusableAcrossPages: boolean;
   readonly anchorYPt: number;
 }
 

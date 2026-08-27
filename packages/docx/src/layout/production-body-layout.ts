@@ -35,7 +35,7 @@ import { measureParagraphIntrinsicWidths, measureTableCellIntrinsicWidths } from
 import { buildFont, fontClassesWithPitches, getDefaultFontSize, paragraphMarkLineHeight } from '../line-layout.js';
 import type { DocGridCtx } from '../line-layout.js';
 import { measureParagraph } from '../paragraph-measure.js';
-import { acquireRetainedTable, type RetainedTableAcquisition } from './table-acquisition.js';
+import { acquireRetainedTable, retainedTableAcquisitionIsReusableAcrossPages, type RetainedTableAcquisition } from './table-acquisition.js';
 import { combineAdjacentTableLayoutInputs } from './adjacent-table-layout-input.js';
 import { layoutTable as layoutRetainedTableInput } from './table.js';
 import { startTableFragmentCursor, takeTableFragment, type PageDependentTableBlockRequest } from './table-pagination.js';
@@ -2153,7 +2153,13 @@ function paraGrid(para: ParagraphLayoutSource, state: BodyMeasurementContext): D
 }
 
 /** Resolve column widths once, acquire the retained table, and return its
- * authoritative row advances for one top-level body occurrence. */
+ * authoritative row advances for one top-level body occurrence. A table that
+ * continues onto another flow region is measured once per region; while the
+ * inline extent is unchanged the retained acquisition is identical for every
+ * destination page (page-varying geometry is excluded by
+ * retainedTableAcquisitionIsReusableAcrossPages), so reuse the record instead
+ * of re-walking and re-laying out every row — that made pagination cost
+ * O(flow-regions × rows). */
 function computeTablePtLayout(
   state: BodyAcquisitionState,
   table: TableLayoutSource,
@@ -2161,6 +2167,14 @@ function computeTablePtLayout(
   sourceIndex: number,
 ): { colWidthsPt: number[]; rowContentHeightsPt: number[]; rowHeightsPt: number[] } {
   const prior = state.retainedTablesBySourceIndex.get(sourceIndex);
+  if (prior?.contentWidthPt === contentWPt && prior.reusableAcrossPages) {
+    const priorRowHeightsPt = prior.acquisition.layout.rows.map((row) => row.advancePt);
+    return {
+      colWidthsPt: [...prior.acquisition.layout.columnWidthsPt],
+      rowContentHeightsPt: priorRowHeightsPt,
+      rowHeightsPt: priorRowHeightsPt,
+    };
+  }
   const colWidthsPt = resolveColumnWidths(table, contentWPt, state);
   const dependencies = state.retainedTableAcquisition;
   const acquired = acquireRetainedTable(
@@ -2186,6 +2200,7 @@ function computeTablePtLayout(
     sourceIndex,
     acquisition: retained,
     contentWidthPt: contentWPt,
+    reusableAcrossPages: retainedTableAcquisitionIsReusableAcrossPages(retained),
     anchorYPt: state.y,
   }));
   const rowHeightsPt = retained.layout.rows.map((row) => row.advancePt);
