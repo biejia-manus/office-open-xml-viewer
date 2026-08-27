@@ -124,9 +124,9 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
    * paginated. With this on, the viewer mounts the first pages within a few
    * hundred milliseconds regardless of document length, the scrollbar grows as
    * the rest of the layout arrives, and the viewer relays out once it lands.
-   * The pages shown early are the ones the finished layout will show, except in
-   * documents whose headers or footers carry PAGE/NUMPAGES fields, where the
-   * displayed totals settle when layout completes.
+   * Published pages are provisional: later header/footer, field, anchored-object,
+   * or section convergence can still replace them. Mounted pages repaint when
+   * the authoritative layout lands.
    *
    * `pageCount` therefore starts small and grows; {@link findText} waits for the
    * full layout internally. Ignored by `fromDocument`, whose document is already

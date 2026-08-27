@@ -97,6 +97,10 @@ function progressiveDocument(opts: {
     },
   });
   attachDocumentLayoutRuntime(document, 0);
+  documentLayoutRuntimeOf(document).activeLayoutOptions = {
+    currentDateMs: 0,
+    showTrackedChanges: false,
+  };
   if (opts.view) {
     // load() records the active variant before parsing; the parse request is
     // derived from that same record.
@@ -110,6 +114,7 @@ function progressiveDocument(opts: {
     onPartial: opts.onPartial,
     onComplete: opts.onComplete,
     onProgress: opts.onProgress,
+    layoutOptions: documentLayoutRuntimeOf(document).activeLayoutOptions,
     abort: new AbortController(),
     firstPublication: (() => {
       let resolve!: () => void;
@@ -467,5 +472,112 @@ describe('worker layout-view metadata switch', () => {
 
     expect(requests).toHaveLength(1);
     expect(document.pageCount).toBe(11);
+  });
+
+  it('does not let the original progressive parse overwrite a selected variant', async () => {
+    const selectedPage = { widthPt: 700, heightPt: 900 };
+    let settleParse!: (value: RenderWorkerResponse) => void;
+    const parseResponse = new Promise<RenderWorkerResponse>((resolve) => {
+      settleParse = resolve;
+    });
+    const requests: RenderWorkerRequest[] = [];
+    const document = Object.create(DocxDocument.prototype) as DocxDocument;
+    Object.assign(document, {
+      _mode: 'worker',
+      _document: null,
+      _source: null,
+      _meta: null,
+      _layoutComplete: true,
+      _layoutViewGeneration: 0,
+      _parseRequestId: null,
+      _bridge: {
+        request: (factory: (id: number) => RenderWorkerRequest) => {
+          const request = factory(requests.length + 31);
+          requests.push(request);
+          if (request.type === 'selectLayoutView') {
+            return Promise.resolve({
+              type: 'layoutViewSelected',
+              id: request.id,
+              meta: {
+                pageCount: 13,
+                pageSizes: Array.from({ length: 13 }, () => ({ ...selectedPage })),
+                bookmarkPages: [['markup-end', 12]],
+                commentAnchorRanges: [],
+                revisionAnchorRanges: [],
+              },
+            } satisfies RenderWorkerResponse);
+          }
+          return parseResponse;
+        },
+        terminate: () => undefined,
+      },
+    });
+    attachDocumentLayoutRuntime(document, 0);
+    const runtime = documentLayoutRuntimeOf(document);
+    runtime.activeLayoutOptions = { currentDateMs: 0, showTrackedChanges: false };
+    const progressive = {
+      onPartial: vi.fn(),
+      layoutOptions: runtime.activeLayoutOptions,
+      abort: new AbortController(),
+      firstPublication: (() => {
+        let resolve!: () => void;
+        let reject!: (error: unknown) => void;
+        const promise = new Promise<void>((res, rej) => { resolve = res; reject = rej; });
+        return { promise, resolve, reject };
+      })(),
+      published: false,
+    };
+    const loading = (document as unknown as {
+      _parse(
+        buffer: ArrayBuffer,
+        policy: unknown,
+        google: boolean,
+        timeoutMs: number | undefined,
+        onUsage: unknown,
+        renderers: unknown,
+        progressive: unknown,
+      ): Promise<void>;
+    })._parse(
+      new ArrayBuffer(1),
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      progressive,
+    );
+
+    (document as unknown as {
+      _onWorkerLayoutPush(response: RenderWorkerResponse): void;
+    })._onWorkerLayoutPush({
+      type: 'layoutPartial',
+      forId: 31,
+      partial: partial(2, { review: REVIEW }),
+    });
+    await loading;
+    await document.setLayoutView({ showTrackedChanges: true });
+    expect(document.pageCount).toBe(13);
+    expect(document.pageSize(12)).toEqual(selectedPage);
+    expect(document.getBookmarkPage('markup-end')).toBe(12);
+
+    // These messages still belong to the live parse request, but describe its
+    // original final-view variant rather than the now-selected markup variant.
+    (document as unknown as {
+      _onWorkerLayoutPush(response: RenderWorkerResponse): void;
+    })._onWorkerLayoutPush({
+      type: 'layoutPartial',
+      forId: 31,
+      partial: partial(7),
+    });
+    expect(document.pageCount).toBe(13);
+    expect(progressive.onPartial).not.toHaveBeenCalled();
+
+    settleParse({ type: 'parsedMeta', id: 31, meta: fullMeta(40) });
+    await document.whenLayoutComplete();
+    expect(document.layoutComplete).toBe(true);
+    expect(document.pageCount).toBe(13);
+    expect(document.pageSize(12)).toEqual(selectedPage);
+    expect(document.getBookmarkPage('markup-end')).toBe(12);
+    expect(document.getBookmarkPage('outro')).toBeUndefined();
   });
 });

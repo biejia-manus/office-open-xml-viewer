@@ -83,7 +83,7 @@ import {
 import { layoutDocumentInputAsync } from './layout/document.js';
 import { layoutDocumentProgressively } from './layout/progressive.js';
 import { PaginationAbortError } from './layout/pagination-scheduler.js';
-import { normalizeLayoutOptions } from './layout/options.js';
+import { normalizeLayoutOptions, type LayoutOptions } from './layout/options.js';
 import { publishDocxLayout } from './document-layout-events.js';
 
 /** Options for {@link DocxDocument.load}. Extends the shared load-options type
@@ -231,6 +231,9 @@ interface WorkerProgressiveLoad {
   readonly onPartial?: LoadOptions['onLayoutPartial'];
   readonly onComplete?: LoadOptions['onLayoutComplete'];
   readonly onProgress?: LoadOptions['onLayoutProgress'];
+  /** The immutable view selected by the parse request. Later publications from
+   *  this load may update host geometry only while this view remains active. */
+  readonly layoutOptions: LayoutOptions;
   readonly abort: AbortController;
   /** Settles when the worker publishes its first prefix, or — when it publishes
    *  none — when the authoritative `parsedMeta` lands. Either way it is what
@@ -243,6 +246,17 @@ interface Deferred<T> {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
   readonly reject: (error: unknown) => void;
+}
+
+/** LayoutOptions are already normalized; absent and explicit false select the
+ * same retained variant. */
+function sameLayoutView(
+  left: LayoutOptions | null,
+  right: LayoutOptions,
+): boolean {
+  return left !== null
+    && left.currentDateMs === right.currentDateMs
+    && (left.showTrackedChanges === true) === (right.showTrackedChanges === true);
 }
 
 function deferred<T>(): Deferred<T> {
@@ -438,21 +452,20 @@ export class DocxDocument {
     try {
       doc = new DocxDocument(worker, mode, defaultCurrentDateMs, opts.wasmUrl);
       doc._metrics = metrics;
-      {
-        // The variant the caller will actually render, recorded for BOTH render
-        // modes and recorded BEFORE the parse: geometry accessors and the
-        // per-call option fill-in (`_withActiveView`) read it, the wire options
-        // for every render/collect/hit-test request are filled from it, and in
-        // worker mode the parse itself now carries it so the worker paginates
-        // — and reports metadata for — this same variant rather than the
-        // default one.
-        const runtime = documentLayoutRuntimeOf(doc);
-        runtime.activeLayoutOptions = normalizeLayoutOptions(
-          opts.currentDate,
-          runtime.defaultCurrentDateMs,
-          opts.showTrackedChanges === true,
-        );
-      }
+      // The variant the caller will actually render, recorded for BOTH render
+      // modes and recorded BEFORE the parse: geometry accessors and the
+      // per-call option fill-in (`_withActiveView`) read it, the wire options
+      // for every render/collect/hit-test request are filled from it, and in
+      // worker mode the parse itself now carries it so the worker paginates
+      // — and reports metadata for — this same variant rather than the
+      // default one.
+      const loadRuntime = documentLayoutRuntimeOf(doc);
+      const initialLayoutOptions = normalizeLayoutOptions(
+        opts.currentDate,
+        loadRuntime.defaultCurrentDateMs,
+        opts.showTrackedChanges === true,
+      );
+      loadRuntime.activeLayoutOptions = initialLayoutOptions;
       // In worker mode the worker preloads fonts before paginating (pagination
       // measures text), so the flag is forwarded; in main mode fonts are loaded
       // here after parse, before the lazy first pagination.
@@ -468,6 +481,7 @@ export class DocxDocument {
               onPartial: opts.onLayoutPartial,
               onComplete: opts.onLayoutComplete,
               onProgress: opts.onLayoutProgress,
+              layoutOptions: initialLayoutOptions,
               abort: new AbortController(),
               firstPublication: deferred<void>(),
               published: false,
@@ -592,6 +606,11 @@ export class DocxDocument {
                 store.prime(layoutOptions, preview.layout, published);
                 progressiveDocument._bookmarkPages = null;
                 if (published) {
+                  // This background session still owns its store entry, but a
+                  // runtime view switch may have selected a different entry.
+                  // Never describe the inactive session as current document
+                  // geometry; switching back reads its latest primed prefix.
+                  if (!progressiveDocument._isLayoutViewActive(layoutOptions)) return;
                   // A later checkpoint: more pages are now available.
                   publishDocxLayout(progressiveDocument, {
                     pageCount: preview.layout.pages.length,
@@ -622,7 +641,10 @@ export class DocxDocument {
             progressiveDocument._bookmarkPages = null;
             progressiveDocument._layoutComplete = true;
             publishDocxLayout(progressiveDocument, {
-              pageCount: layout.pages.length,
+              // A runtime view switch can complete before this original
+              // session. Publish the geometry the document actually exposes,
+              // not the just-finished inactive session's page count.
+              pageCount: progressiveDocument.pageCount,
               exact: true,
               complete: true,
             });
@@ -779,8 +801,14 @@ export class DocxDocument {
       return;
     }
     if (res.type !== 'layoutPartial' || !progressive) return;
-    this._applyLayoutPartial(res.partial);
+    // The worker continues its load-time variant after setLayoutView() builds a
+    // different one. The original session may keep priming its own store entry,
+    // but its pushes no longer own the host's synchronous geometry.
+    const ownsActiveView = !progressive.published
+      || this._isLayoutViewActive(progressive.layoutOptions);
+    if (ownsActiveView) this._applyLayoutPartial(res.partial);
     if (progressive.published) {
+      if (!ownsActiveView) return;
       publishDocxLayout(this, {
         pageCount: res.partial.pageCount,
         exact: res.partial.exact,
@@ -838,14 +866,29 @@ export class DocxDocument {
   /** Install the authoritative metadata and close the progressive window. */
   private _onAuthoritativeMeta(meta: DocumentMeta): void {
     this._clearParseWatchdog();
-    this._meta = meta;
+    const progressive = this._progressive;
+    if (!progressive || this._isLayoutViewActive(progressive.layoutOptions) || !this._meta) {
+      this._meta = meta;
+    } else {
+      // Model-derived data belongs to the document and can be refreshed from
+      // the final parse response. Layout-derived fields must stay on the
+      // runtime-selected variant installed by setLayoutView().
+      const selected = this._meta;
+      this._meta = {
+        ...meta,
+        pageCount: selected.pageCount,
+        pageSizes: selected.pageSizes,
+        bookmarkPages: selected.bookmarkPages,
+        commentAnchorRanges: selected.commentAnchorRanges,
+        revisionAnchorRanges: selected.revisionAnchorRanges,
+      };
+    }
     this._invalidateLayoutDerivedCaches();
     this._review = snapshotReviewData(meta.comments, meta.revisions);
-    const progressive = this._progressive;
     if (!progressive) return;
     this._layoutComplete = true;
     publishDocxLayout(this, {
-      pageCount: meta.pageCount,
+      pageCount: this.pageCount,
       exact: true,
       complete: true,
     });
@@ -862,6 +905,12 @@ export class DocxDocument {
     this._commentAnchorRanges = null;
     this._revisionAnchorRanges = null;
     this._reviewTextRunSourceIndex = null;
+  }
+
+  /** Whether synchronous geometry and paint currently select this normalized
+   *  layout view. Optional false and absent are the same layout key. */
+  private _isLayoutViewActive(options: LayoutOptions): boolean {
+    return sameLayoutView(documentLayoutRuntimeOf(this).activeLayoutOptions, options);
   }
 
   private _rearmParseWatchdog(): void {
@@ -1362,10 +1411,7 @@ export class DocxDocument {
     );
     const generation = ++this._layoutViewGeneration;
     const active = runtime.activeLayoutOptions;
-    if (
-      active?.currentDateMs === next.currentDateMs &&
-      (active.showTrackedChanges === true) === (next.showTrackedChanges === true)
-    ) return;
+    if (sameLayoutView(active, next)) return;
     if (this._mode === 'worker' && this._meta) {
       const res = await this._bridge.request(
         (id) => ({

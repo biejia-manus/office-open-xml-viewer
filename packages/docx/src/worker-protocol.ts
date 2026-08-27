@@ -77,7 +77,7 @@ export interface DocumentLayoutPartial {
    *  the prefix are simply absent until layout completes. */
   bookmarkPages: [string, number][];
   /** Whether these pages are known to match the final layout. Always false
-   *  today — see `layout/progressive.ts` on unbounded paginator lookahead. */
+   *  today because later convergence can still replace a checkpoint. */
   exact: boolean;
   /** Model-derived review data, sent with the FIRST publication only.
    *
