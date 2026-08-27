@@ -170,7 +170,7 @@ describe('retainedTableAcquisitionIsReusableAcrossPages', () => {
   }) as unknown as RetainedTableAcquisition;
 
   const paragraphBlock = (extra: object = {}) => ({
-    layout: { kind: 'paragraph', drawings: [], ...extra },
+    layout: { kind: 'paragraph', lines: [], drawings: [], textBoxes: [], ...extra },
   });
 
   it('accepts an acquisition of plain paragraph rows', () => {
@@ -187,10 +187,67 @@ describe('retainedTableAcquisitionIsReusableAcrossPages', () => {
 
   it('rejects an acquisition carrying anchored drawings', () => {
     const anchored = paragraphBlock({
-      drawings: [{ anchorLayer: { occurrenceId: 'a' } }],
+      drawings: [{ kind: 'drawing', anchorLayer: { occurrenceId: 'a' } }],
     });
     expect(retainedTableAcquisitionIsReusableAcrossPages(
       fakeAcquisition(anchored),
+    )).toBe(false);
+  });
+
+  it('rejects page-dependent content nested in a text box', () => {
+    const pageDependentTextBox = paragraphBlock({
+      textBoxes: [{
+        kind: 'textbox',
+        story: {
+          blocks: [{
+            kind: 'paragraph',
+            lines: [{ placements: [{ kind: 'text', dependency: 'page' }] }],
+            drawings: [],
+            textBoxes: [],
+          }],
+        },
+      }],
+    });
+    expect(retainedTableAcquisitionIsReusableAcrossPages(
+      fakeAcquisition(pageDependentTextBox),
+    )).toBe(false);
+  });
+
+  it('accepts page-invariant content nested in a text box', () => {
+    const plainTextBox = paragraphBlock({
+      textBoxes: [{
+        kind: 'textbox',
+        story: {
+          blocks: [{
+            kind: 'paragraph',
+            lines: [{ placements: [{ kind: 'text' }] }],
+            drawings: [],
+            textBoxes: [],
+          }],
+        },
+      }],
+    });
+    expect(retainedTableAcquisitionIsReusableAcrossPages(
+      fakeAcquisition(plainTextBox),
+    )).toBe(true);
+  });
+
+  it('rejects anchored drawings nested in a text box', () => {
+    const anchoredTextBox = paragraphBlock({
+      textBoxes: [{
+        kind: 'textbox',
+        story: {
+          blocks: [{
+            kind: 'paragraph',
+            lines: [],
+            drawings: [{ kind: 'drawing', anchorLayer: { occurrenceId: 'nested' } }],
+            textBoxes: [],
+          }],
+        },
+      }],
+    });
+    expect(retainedTableAcquisitionIsReusableAcrossPages(
+      fakeAcquisition(anchoredTextBox),
     )).toBe(false);
   });
 
