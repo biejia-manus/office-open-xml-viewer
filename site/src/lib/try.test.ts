@@ -203,7 +203,7 @@ describe('Try Yours ScrollViewer integration', () => {
     expect(viewer.opts.enableZoom).toBe(true);
     expect(viewer.opts.zoomMin).toBe(0.5);
     expect(viewer.opts.pageShadow).toBe(false);
-    expect(viewer.opts.mode).toBe('main');
+    expect(viewer.opts.mode).toBe('worker');
     expect(viewer.opts.progressiveLayout).toBe(true);
     expect(viewer.opts.comments).toBe(true);
     expect(viewer.opts.threeD).toBe(mocks.threeD);

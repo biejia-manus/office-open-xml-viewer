@@ -157,7 +157,9 @@ export async function renderFile(stage: HTMLElement, file: File): Promise<Render
     useGoogleFonts: true,
     comments: true,
     math,
-    mode: 'main',
+    // Keep progressive pagination and painting off the UI thread so scrolling
+    // remains responsive while later pages are still being prepared.
+    mode: 'worker',
     progressiveLayout: true,
     ...advancedChartRenderers,
   };

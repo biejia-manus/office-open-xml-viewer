@@ -32,6 +32,7 @@ describe('Try Yours parsing progress', () => {
   });
 
   it('opens DOCX files progressively and reports when the authoritative page count arrives', () => {
+    expect(renderer).toContain("mode: 'worker'");
     expect(renderer).toContain('progressiveLayout: true');
     expect(renderer).toContain('viewer.whenLayoutComplete().then(mountAllPages)');
     expect(source).toContain('available · opened in');
