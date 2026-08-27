@@ -31,6 +31,14 @@ describe('Try Yours parsing progress', () => {
     expect(source.match(/stageProgress\.hidden = true;/g)).toHaveLength(2);
   });
 
+  it('opens DOCX files progressively and reports when the authoritative page count arrives', () => {
+    expect(renderer).toContain("mode: 'worker'");
+    expect(renderer).toContain('progressiveLayout: true');
+    expect(renderer).toContain('viewer.whenLayoutComplete().then(mountAllPages)');
+    expect(source).toContain('available · opened in');
+    expect(source).toContain('res.finalUnits.then');
+  });
+
   it('keeps the preview frame for XLSX as well as DOCX and PPTX', () => {
     expect(source).not.toContain(".try-preview[data-format='xlsx'] { border: 0; }");
   });
