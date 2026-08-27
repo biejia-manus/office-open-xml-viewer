@@ -9,6 +9,7 @@ import {
 import {
   preloadGoogleFonts,
   unloadGoogleFonts,
+  unregisterEmbeddedFonts,
   WorkerBridge,
   defaultDpr,
   isHTMLCanvas,
@@ -49,6 +50,7 @@ import {
   type PresentationPreflight,
 } from './presentation-preflight';
 import { PptxSlideRepository } from './slide-repository';
+import { excludeEmbeddedFontFamilies, loadEmbeddedFonts } from './embedded-fonts';
 import {
   isPptxSlidePullResponse,
   PptxSlidePullClient,
@@ -176,6 +178,8 @@ export class PptxPresentation {
    *  the shared FontFaceSet for the lifetime of the SPA (deduped + refcounted in
    *  core, so a web font shared with another open deck survives until both go). */
   private _googleFontFaces: FontFace[] = [];
+  /** Embedded Font parts registered into the main-thread FontFaceSet. */
+  private _embeddedFontFaces: FontFace[] = [];
   /** One stable closure per instance: the decoded-bitmap and SVG caches key on
    *  this identity to scope decodes per deck (so two open decks never swap
    *  images for a shared zip path like ppt/media/image1.png). Reusing the same
@@ -313,9 +317,19 @@ export class PptxPresentation {
         rendererDescriptors,
       );
       metrics.checkpoint('presentation preflight ready');
+      if (mode === 'main' && pres._preflight) {
+        const loadedPresentation = pres;
+        pres._embeddedFontFaces = await loadEmbeddedFonts(
+          pres._preflight.embeddedFonts,
+          (path) => loadedPresentation.getFontBytes(path),
+        );
+      }
       if (mode === 'main' && opts.useGoogleFonts && pres._preflight) {
         pres._googleFontFaces = await preloadGoogleFonts(
-          pres._preflight.fontPreloadNames,
+          excludeEmbeddedFontFamilies(
+            pres._preflight.fontPreloadNames,
+            pres._preflight.embeddedFonts,
+          ),
           PPTX_GOOGLE_FONTS,
         );
       }
@@ -754,6 +768,20 @@ export class PptxPresentation {
     }
   }
 
+  private async getFontBytes(fontPath: string): Promise<Uint8Array> {
+    this._assertResourceHealthy();
+    try {
+      const response = await this._bridge.request(
+        (id) => ({ kind: 'extractFont', id, path: fontPath }) satisfies PptxWorkerRequest,
+      );
+      return new Uint8Array(
+        (response as Extract<PptxWorkerResponse, { kind: 'fontExtracted' }>).bytes,
+      );
+    } catch (error) {
+      this._rethrowWithResourceFailure(error);
+    }
+  }
+
   /** Return a fresh content-free metrics snapshot, including lazy slide and
    * media work completed since load. */
   async getResourceMetrics(): Promise<OoxmlResourceMetrics> {
@@ -882,6 +910,10 @@ export class PptxPresentation {
     if (this._googleFontFaces.length > 0) {
       unloadGoogleFonts(this._googleFontFaces);
       this._googleFontFaces = [];
+    }
+    if (this._embeddedFontFaces.length > 0) {
+      unregisterEmbeddedFonts(this._embeddedFontFaces);
+      this._embeddedFontFaces = [];
     }
     // Release this deck's decoded raster bitmaps (GPU-backed), duotone-recoloured
     // rasters, and SVG object URLs promptly; all three caches are keyed by

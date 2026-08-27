@@ -72,6 +72,7 @@ describe('PptxPresentation bounded main-mode pipeline', () => {
       minorFont: 'Aptos',
       hlinkColor: '0563C1',
       folHlinkColor: null,
+      embeddedFonts: [],
       slides: [
         { index: 0, partName: 'ppt/slides/slide1.xml' },
         { index: 1, partName: 'ppt/slides/slide2.xml' },

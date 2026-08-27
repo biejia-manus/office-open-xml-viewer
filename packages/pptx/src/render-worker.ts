@@ -35,6 +35,7 @@ import type {
   RenderWorkerResponse,
 } from './worker-protocol';
 import { findPptxElementBoundsByIds, hitTestPptxSlideContext } from './element-selection';
+import { excludeEmbeddedFontFamilies, loadEmbeddedFonts } from './embedded-fonts';
 
 const host = new WasmParserHost<PptxArchive>(init, {
   freeArchive: (archive) => archive.free(),
@@ -121,6 +122,13 @@ function getImage(path: string, mimeType: string): Promise<Blob> {
   }));
 }
 
+function getFontBytes(path: string): Promise<Uint8Array> {
+  return slidePull.run(() => {
+    const bytes = executeArchive((archive) => archive.extract_font(path));
+    return new Uint8Array(bytes as Uint8Array);
+  });
+}
+
 async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'parse' }>) {
   await slidePull.reset();
   slides?.clear();
@@ -155,8 +163,17 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
   }
   preflight = preflightBuilder.finish();
   preflightBuilder = null;
+  const embeddedFontsLoaded = loadEmbeddedFonts(preflight.embeddedFonts, getFontBytes);
   if (request.useGoogleFonts) {
-    fontsLoaded = preloadGoogleFonts(preflight.fontPreloadNames, PPTX_GOOGLE_FONTS);
+    fontsLoaded = Promise.all([
+      embeddedFontsLoaded,
+      preloadGoogleFonts(
+        excludeEmbeddedFontFamilies(preflight.fontPreloadNames, preflight.embeddedFonts),
+        PPTX_GOOGLE_FONTS,
+      ),
+    ]);
+  } else {
+    fontsLoaded = embeddedFontsLoaded;
   }
   return preflight;
 }
@@ -288,6 +305,11 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
       const mimeType = findPreflightMimeType(compact, request.path);
       const bytes = await (await getImage(request.path, mimeType)).arrayBuffer();
       post({ kind: 'imageExtracted', id: request.id, bytes }, [bytes]);
+      return;
+    }
+    if (request.kind === 'extractFont') {
+      const bytes = (await getFontBytes(request.path)).buffer as ArrayBuffer;
+      post({ kind: 'fontExtracted', id: request.id, bytes }, [bytes]);
       return;
     }
     if (request.kind === 'resourceUsage') {
