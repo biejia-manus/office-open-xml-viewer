@@ -456,7 +456,7 @@ animation loops.
 Both viewers also expose `relayout()` (force a re-fit when the container resizes
 in a way a `ResizeObserver` cannot see — e.g. a late web-font load),
 `onVisiblePageChange` / `onVisibleSlideChange` (fires when the top-most visible
-page/slide changes), and `onError` (async per-page render failures are routed
+page/slide, or the page count, changes), and `onError` (async per-page render failures are routed
 here instead of crashing the scroll loop). The parse/render knobs from the
 headless engines (`mode`, `useGoogleFonts`, `resourceLimits`, the deprecated
 `maxZipEntryBytes` alias, `math`, `dpr`) are accepted too.
@@ -613,7 +613,7 @@ file without uploading it.
 | | Page-number formats (`w:pgNumType` restart / format §17.6.12; PAGE `\*` switches — decimal / roman / letter / hex / ordinal-dash / hebrew2 / koreanLegal, §17.18.59) | ✅ |
 | | Field date/time pictures (`TIME` / `DATE` field `\@` format, §17.16.5.72 / .16) | ✅ |
 | | `w:snapToGrid` opt-out of the document grid (§17.3.1.32) | ✅ |
-| | Track changes (§17.13.5 `w:ins` / `w:del` / `w:moveFrom` / `w:moveTo`) — body-story revision records are available as data; rendering projects the accepted final state, with deletions and moved-away text hidden | ✅ |
+| | Track changes (§17.13.5 `w:ins` / `w:del` / `w:moveFrom` / `w:moveTo`) — the default render is the FINAL state (deletions and moved-away text hidden); the opt-in markup view (`showTrackedChanges`) draws author-coloured underline / strikethrough plus margin change bars, and body-story revision records are available as data | ✅ |
 | | Comments (§17.13.4) — opt-in margin balloons (`comments: true`): commented ranges tinted, threaded replies via `commentsExtended.xml`, resolved threads hidden, click-to-select stacking; also available as data (`doc.comments`, `doc.commentAnchorRanges()`) | ✅ |
 | | Markdown export (`DocxDocument.toMarkdown()` — headings, lists, tables, footnotes / comments) | ✅ |
 | | Mail merge fields | ❌ Not planned |
