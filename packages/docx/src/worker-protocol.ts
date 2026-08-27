@@ -43,6 +43,19 @@ export interface DocumentMeta {
   revisionAnchorRanges?: RevisionAnchorRange[];
 }
 
+/** Geometry and layout-derived indexes for one retained worker variant.
+ * Model-derived review/note data is invariant across variants and remains on
+ * the host, so a runtime view switch transfers only the fields that pagination
+ * can change. */
+export type DocumentLayoutMeta = Pick<
+  DocumentMeta,
+  | 'pageCount'
+  | 'pageSizes'
+  | 'bookmarkPages'
+  | 'commentAnchorRanges'
+  | 'revisionAnchorRanges'
+>;
+
 /**
  * Provisional layout geometry published by the render worker while it is still
  * paginating under `progressiveLayout`.
@@ -64,7 +77,7 @@ export interface DocumentLayoutPartial {
    *  the prefix are simply absent until layout completes. */
   bookmarkPages: [string, number][];
   /** Whether these pages are known to match the final layout. Always false
-   *  today — see `layout/progressive.ts` on unbounded paginator lookahead. */
+   *  today because later convergence can still replace a checkpoint. */
   exact: boolean;
   /** Model-derived review data, sent with the FIRST publication only.
    *
@@ -91,6 +104,7 @@ export type RenderWorkerRequest =
   // pagination with its own page count. Omitted means the document's default
   // view, which is what every load selected before these existed.
   | { type: 'parse'; id: number; data: ArrayBuffer; resourcePolicy: NormalizedOoxmlResourcePolicy; useGoogleFonts?: boolean; defaultCurrentDateMs: number; currentDateMs?: number; showTrackedChanges?: boolean; renderers?: WorkerRendererDescriptors; progressiveLayout?: boolean }
+  | { type: 'selectLayoutView'; id: number; currentDateMs: number; showTrackedChanges: boolean }
   | { type: 'renderPage'; id: number; pageIndex: number; opts: WireRenderPageOptions }
   // IX6 — collect a page's text-run geometry WITHOUT transferring a bitmap. The
   // find controller scans every page for its runs; a bitmap per page would be
@@ -120,6 +134,7 @@ export type RenderWorkerResponse =
       meta: DocumentMeta;
       usage?: OoxmlResourceUsageSnapshot;
     }
+  | { type: 'layoutViewSelected'; id: number; meta: DocumentLayoutMeta }
   // OffscreenCanvas cannot select/probe the OpenType `vert` feature. A render
   // worker that parses vertical East-Asian content opens a bounded model stream
   // so the proxy can continue through main-thread rendering instead of silently

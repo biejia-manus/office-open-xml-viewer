@@ -61,7 +61,6 @@ describe('progressive layout handover', () => {
       services,
       layoutOptions,
       {
-        hasPaginationFields: source.hasPaginationFields,
         onPreview: (preview) => {
           store.prime(layoutOptions, preview.layout);
           // The store now answers with the provisional pages — this is exactly
@@ -76,7 +75,7 @@ describe('progressive layout handover', () => {
     // Before replacement the store still holds the preview.
     expect(store.defaultLayout.pages.length).toBe(previewPageCount);
 
-    store.prime(layoutOptions, full, true);
+    store.replaceIfCurrent(layoutOptions, store.defaultLayout, full);
     expect(store.defaultLayout.pages.length).toBe(full.pages.length);
 
     const blocking = paginateBody(
@@ -95,21 +94,18 @@ describe('progressive layout handover', () => {
     const store = retained.layoutVariants;
     const layoutOptions = normalizeLayoutOptions(undefined, DEFAULT_CURRENT_DATE_MS);
 
-    const previewGeometry: { widthPt: number; heightPt: number }[] = [];
+    let previewGeometry: { widthPt: number; heightPt: number }[] = [];
     const full = await layoutDocumentProgressively(
       source.bodyLayoutInput,
       services,
       layoutOptions,
       {
-        hasPaginationFields: source.hasPaginationFields,
         onPreview: (preview) => {
           store.prime(layoutOptions, preview.layout);
-          for (const page of preview.layout.pages) {
-            previewGeometry.push({
-              widthPt: page.geometry.widthPt,
-              heightPt: page.geometry.heightPt,
-            });
-          }
+          previewGeometry = preview.layout.pages.map((page) => ({
+            widthPt: page.geometry.widthPt,
+            heightPt: page.geometry.heightPt,
+          }));
         },
       },
     );
@@ -136,9 +132,8 @@ describe('progressive layout handover', () => {
       source.bodyLayoutInput,
       services,
       markupOptions,
-      { hasPaginationFields: source.hasPaginationFields },
     );
-    store.prime(markupOptions, markup, true);
+    store.prime(markupOptions, markup);
 
     const finalOptions = normalizeLayoutOptions(undefined, DEFAULT_CURRENT_DATE_MS, false);
     expect(store.layoutFor(finalOptions).pages.length).not.toBe(markup.pages.length);
@@ -152,7 +147,7 @@ describe('progressive layout handover', () => {
     expect(store.layoutFor(runtime.activeLayoutOptions).pages.length).toBe(markup.pages.length);
   }, 300_000);
 
-  it('replace is required to supersede a primed layout', () => {
+  it('only the current layout owner can supersede a primed layout', () => {
     const { services, retained } = retain('plain', 60);
     const store = retained.layoutVariants;
     const layoutOptions = normalizeLayoutOptions(undefined, DEFAULT_CURRENT_DATE_MS);
@@ -163,12 +158,16 @@ describe('progressive layout handover', () => {
     } as unknown as DocumentLayout;
     setDocumentLayoutValidation(false);
     try {
-      store.prime(layoutOptions, first);
-      // Without `replace`, priming must not swap a layout a consumer may
-      // already be painting from.
+      const retainedFirst = store.prime(layoutOptions, first);
+      // Ordinary priming must not swap a layout a consumer may be painting.
       store.prime(layoutOptions, second);
       expect(store.defaultLayout.pages.length).toBe(0);
-      store.prime(layoutOptions, second, true);
+      const retainedSecond = store.replaceIfCurrent(layoutOptions, retainedFirst, second);
+      expect(retainedSecond).not.toBeNull();
+      expect(store.defaultLayout.pages.length).toBe(1);
+      // The first publication's stale token can no longer replace the newer
+      // authority, even though both layouts use the same options key.
+      expect(store.replaceIfCurrent(layoutOptions, retainedFirst, first)).toBeNull();
       expect(store.defaultLayout.pages.length).toBe(1);
     } finally {
       setDocumentLayoutValidation(true);

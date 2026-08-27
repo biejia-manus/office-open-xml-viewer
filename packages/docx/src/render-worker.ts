@@ -31,9 +31,6 @@ import {
 } from '@silurus/ooxml-core/worker';
 import { prepareMathRuns, renderLayoutSourceToCanvas } from './renderer';
 import { createLayoutServices } from './layout-runtime.js';
-import { buildBookmarkPageMap } from './bookmark-nav';
-import { collectLayoutSourceCommentRangesIfPresent } from './comments.js';
-import { collectLayoutSourceRevisionRangesIfPresent } from './revisions.js';
 import { DOCX_GOOGLE_FONTS, docxFontPreloadNames } from './google-fonts';
 import { loadEmbeddedFonts } from './embedded-fonts';
 import { loadDocxLocalFontMetrics } from './local-font-metrics';
@@ -53,9 +50,13 @@ import { paginateRenderWorkerDocumentProgressively } from './render-worker-progr
 import { PaginationAbortError } from './layout/pagination-scheduler.js';
 import { normalizeLayoutOptions } from './layout/options.js';
 import { textRunsForSelectedPage } from './text-run-projection.js';
-import { textRunSourceIndexForDocument } from './layout/text-index.js';
 import { hitTestSelectedDocxElementContext } from './element-context.js';
 import { documentRequiresDomVerticalGlyphLayout } from './vertical-render-capability.js';
+import {
+  renderWorkerLayoutMeta,
+  projectRenderWorkerLayoutMeta,
+  type RenderWorkerReviewIndexInput,
+} from './render-worker-metadata.js';
 import { materializeDocumentPullOwnedModelsSession } from './document-pull-client.js';
 import {
   createLocalDocumentPullTransport,
@@ -84,6 +85,9 @@ const documentPull = new DocumentPullWorker(
 let documentGeneration = 0;
 let fallbackPull: DocumentPullWorker | null = null;
 let doc: RetainedRenderWorkerDocumentLayout | null = null;
+/** Compact model-derived inputs needed to re-project variant-specific review
+ * anchor geometry. The complete parser/public model is not retained. */
+let reviewIndexInput: RenderWorkerReviewIndexInput | null = null;
 /** Cancels a still-running progressive drain when a new `parse` supersedes it.
  *  The host's `destroy()` terminates the worker outright, so this covers only
  *  the re-parse path — where the worker survives and would otherwise keep
@@ -156,6 +160,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest>) => {
       await fallbackPull?.reset();
       fallbackPull = null;
       doc = null;
+      reviewIndexInput = null;
       if (localMetricFontFaces.length > 0) {
         unloadLocalFontMetrics(localMetricFontFaces);
         localMetricFontFaces = [];
@@ -223,6 +228,10 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest>) => {
       );
       const source = adapted.source;
       const model = adapted.document;
+      reviewIndexInput = {
+        comments: model.comments ?? [],
+        revisions: model.revisions ?? [],
+      };
       let googleFaces: FontFace[] = [];
       if (req.useGoogleFonts) {
         // Pagination measures text, so fonts must land before canonical layout —
@@ -317,31 +326,12 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest>) => {
       // paginating a second time. Without progressive layout it is the
       // blocking build, as it always was.
       const layout = doc.layoutVariants.layoutFor(layoutOptions);
-      const pageSizes = layout.pages.map((page) => ({
-        widthPt: page.geometry.widthPt,
-        heightPt: page.geometry.heightPt,
-      }));
-      const renderedRunIndex = textRunSourceIndexForDocument(layout);
       const meta: DocumentMeta = {
-        pageCount: layout.pages.length,
         revisions: model.revisions ?? [],
         comments: model.comments ?? [],
         footnotes: model.footnotes ?? [],
         endnotes: model.endnotes ?? [],
-        pageSizes,
-        bookmarkPages: [...buildBookmarkPageMap(layout)],
-        // §17.13.4 — story-aware anchor ranges use the exact retained source
-        // identities shipped by projected text runs in both modes.
-        commentAnchorRanges: collectLayoutSourceCommentRangesIfPresent(
-          model.comments,
-          source,
-          renderedRunIndex,
-        ),
-        revisionAnchorRanges: collectLayoutSourceRevisionRangesIfPresent(
-          model.revisions,
-          source,
-          renderedRunIndex,
-        ),
+        ...projectRenderWorkerLayoutMeta(layout, source, reviewIndexInput),
       };
       const loadedArchive = host.archive;
       if (!loadedArchive) throw new Error('No docx loaded');
@@ -349,6 +339,20 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest>) => {
         host.run(() => loadedArchive.resource_usage()),
       );
       post({ type: 'parsedMeta', id, meta, usage: resourceUsage });
+      return;
+    }
+    if (req.type === 'selectLayoutView') {
+      if (!doc || !reviewIndexInput) throw new Error('Document not loaded');
+      post({
+        type: 'layoutViewSelected',
+        id,
+        meta: renderWorkerLayoutMeta(
+          doc,
+          reviewIndexInput,
+          req.currentDateMs,
+          req.showTrackedChanges,
+        ),
+      });
       return;
     }
     if (req.type === 'renderPage') {

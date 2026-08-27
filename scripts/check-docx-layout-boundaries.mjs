@@ -2347,15 +2347,91 @@ function variableDeclarationsNamed(node, name) {
  * selected by (normalized from the request's own fields) keeps the reported
  * geometry, the primed progressive prefix and the painted pages on one key.
  */
-function workerMetadataRouteIsCanonical(source) {
+function functionDeclarationNamed(source, name) {
+  return source.statements.filter((statement) => (
+    ts.isFunctionDeclaration(statement) && statement.name?.text === name
+  ));
+}
+
+function workerMetadataAuthorityIsCanonical(source) {
+  const projectors = functionDeclarationNamed(source, 'projectRenderWorkerLayoutMeta');
+  const selectors = functionDeclarationNamed(source, 'renderWorkerLayoutMeta');
+  if (projectors.length !== 1 || selectors.length !== 1) return false;
+
+  const projector = projectors[0];
+  const projectorReturns = projector.body?.statements.filter(ts.isReturnStatement) ?? [];
+  const value = projectorReturns.length === 1
+    ? projectorReturns[0].expression && unwrapStaticExpression(projectorReturns[0].expression)
+    : null;
+  if (!value || !ts.isObjectLiteralExpression(value)) return false;
+  const pageCount = objectProperty(value, 'pageCount');
+  const pageSizes = objectProperty(value, 'pageSizes');
+  const bookmarks = objectProperty(value, 'bookmarkPages');
+  const comments = objectProperty(value, 'commentAnchorRanges');
+  const revisions = objectProperty(value, 'revisionAnchorRanges');
+  const pageSizesCall = ts.isPropertyAssignment(pageSizes)
+    ? unwrapStaticExpression(pageSizes.initializer)
+    : null;
+  const bookmarkValue = ts.isPropertyAssignment(bookmarks)
+    ? unwrapStaticExpression(bookmarks.initializer)
+    : null;
+  const bookmarkSpread = bookmarkValue && ts.isArrayLiteralExpression(bookmarkValue)
+    && bookmarkValue.elements.length === 1
+    && ts.isSpreadElement(bookmarkValue.elements[0])
+    ? bookmarkValue.elements[0]
+    : null;
+  const commentCall = ts.isPropertyAssignment(comments)
+    ? callOf(unwrapStaticExpression(comments.initializer), 'collectLayoutSourceCommentRangesIfPresent')
+    : null;
+  const revisionCall = ts.isPropertyAssignment(revisions)
+    ? callOf(unwrapStaticExpression(revisions.initializer), 'collectLayoutSourceRevisionRangesIfPresent')
+    : null;
+  if (!ts.isPropertyAssignment(pageCount)
+    || pageCount.initializer.getText(source) !== 'layout.pages.length'
+    || !pageSizesCall
+    || !ts.isCallExpression(pageSizesCall)
+    || !ts.isPropertyAccessExpression(pageSizesCall.expression)
+    || pageSizesCall.expression.name.text !== 'map'
+    || pageSizesCall.expression.expression.getText(source) !== 'layout.pages'
+    || !bookmarkSpread
+    || callOf(bookmarkSpread.expression, 'buildBookmarkPageMap')?.arguments[0]?.getText(source) !== 'layout'
+    || commentCall?.arguments.map((argument) => argument.getText(source)).join(',')
+      !== 'review.comments,source,renderedRunIndex'
+    || revisionCall?.arguments.map((argument) => argument.getText(source)).join(',')
+      !== 'review.revisions,source,renderedRunIndex') return false;
+
+  const selector = selectors[0];
+  const sources = variableDeclarationsNamed(selector, 'source');
+  const layouts = variableDeclarationsNamed(selector, 'layout');
+  const selectorReturns = selector.body?.statements.filter(ts.isReturnStatement) ?? [];
+  const layoutFor = layouts[0]?.initializer
+    && unwrapStaticExpression(layouts[0].initializer);
+  const normalized = layoutFor
+    && ts.isCallExpression(layoutFor)
+    && layoutFor.arguments[0]
+    && callOf(unwrapStaticExpression(layoutFor.arguments[0]), 'normalizeLayoutOptions');
+  const delegated = selectorReturns.length === 1
+    && selectorReturns[0].expression
+    && callOf(unwrapStaticExpression(selectorReturns[0].expression), 'projectRenderWorkerLayoutMeta');
+  return sources.length === 1
+    && sources[0].initializer?.getText(source) === 'layoutSourceStoreOf(doc.layoutServices)'
+    && layouts.length === 1
+    && layoutFor
+    && ts.isCallExpression(layoutFor)
+    && layoutFor.expression.getText(source) === 'doc.layoutVariants.layoutFor'
+    && normalized?.arguments.map((argument) => argument.getText(source)).join(',')
+      === 'currentDateMs,doc.defaultCurrentDateMs,showTrackedChanges'
+    && delegated?.arguments.map((argument) => argument.getText(source)).join(',')
+      === 'layout,source,review';
+}
+
+function workerMetadataRouteIsCanonical(source, metadataSource) {
   const layouts = variableDeclarationsNamed(source, 'layout');
-  const pageSizeLists = variableDeclarationsNamed(source, 'pageSizes');
   const metadata = variableDeclarationsNamed(source, 'meta');
   const viewOptions = variableDeclarationsNamed(source, 'layoutOptions');
   if (layouts.length !== 1
     || layouts[0].initializer?.getText(source) !== 'doc.layoutVariants.layoutFor(layoutOptions)'
     || viewOptions.length !== 1
-    || pageSizeLists.length !== 1
     || metadata.length !== 1) return false;
   const viewInitializer = viewOptions[0].initializer
     && unwrapStaticExpression(viewOptions[0].initializer);
@@ -2364,30 +2440,19 @@ function workerMetadataRouteIsCanonical(source) {
     || viewCall.arguments.length !== 3
     || viewCall.arguments.map((argument) => argument.getText(source)).join(',')
       !== 'req.currentDateMs,req.defaultCurrentDateMs,req.showTrackedChanges') return false;
-  const pageSizesInitializer = pageSizeLists[0].initializer
-    && unwrapStaticExpression(pageSizeLists[0].initializer);
-  if (!pageSizesInitializer
-    || !ts.isCallExpression(pageSizesInitializer)
-    || !ts.isPropertyAccessExpression(pageSizesInitializer.expression)
-    || pageSizesInitializer.expression.name.text !== 'map'
-    || pageSizesInitializer.expression.expression.getText(source) !== 'layout.pages') return false;
   const value = metadata[0].initializer && unwrapStaticExpression(metadata[0].initializer);
   if (!value || !ts.isObjectLiteralExpression(value)) return false;
-  const pageCount = objectProperty(value, 'pageCount');
-  const pageSizes = objectProperty(value, 'pageSizes');
-  const bookmarks = objectProperty(value, 'bookmarkPages');
-  if (!ts.isPropertyAssignment(pageCount)
-    || pageCount.initializer.getText(source) !== 'layout.pages.length'
-    || (!ts.isShorthandPropertyAssignment(pageSizes)
-      && !(ts.isPropertyAssignment(pageSizes)
-        && pageSizes.initializer.getText(source) === 'pageSizes'))
-    || !ts.isPropertyAssignment(bookmarks)
-    || !ts.isArrayLiteralExpression(bookmarks.initializer)
-    || bookmarks.initializer.elements.length !== 1
-    || !ts.isSpreadElement(bookmarks.initializer.elements[0])) return false;
-  const bookmarkCall = callOf(bookmarks.initializer.elements[0].expression, 'buildBookmarkPageMap');
-  return bookmarkCall?.arguments.length === 1
-    && bookmarkCall.arguments[0].getText(source) === 'layout';
+  const projection = value.properties.find(ts.isSpreadAssignment);
+  const projectionCall = projection
+    ? callOf(unwrapStaticExpression(projection.expression), 'projectRenderWorkerLayoutMeta')
+    : null;
+  const runtimeCalls = callsNamed(source, 'renderWorkerLayoutMeta');
+  return projectionCall?.arguments.map((argument) => argument.getText(source)).join(',')
+      === 'layout,source,reviewIndexInput'
+    && runtimeCalls.length === 1
+    && runtimeCalls[0].arguments.map((argument) => argument.getText(source)).join(',')
+      === 'doc,reviewIndexInput,req.currentDateMs,req.showTrackedChanges'
+    && workerMetadataAuthorityIsCanonical(metadataSource);
 }
 
 /**
@@ -2472,6 +2537,7 @@ function assertCanonicalCutoverBoundaries(root) {
     fail('WORKER_LAYOUT_SELECTION', `${DOCX_SOURCE}/render-worker-layout.ts`);
   } else {
     const source = sourceFile(workerPath);
+    const workerMetadataPath = resolve(root, DOCX_SOURCE, 'render-worker-metadata.ts');
     const topLevelPages = source.statements.some((statement) => (
       ts.isVariableStatement(statement)
       && statement.declarationList.declarations.some((declaration) => (
@@ -2497,7 +2563,8 @@ function assertCanonicalCutoverBoundaries(root) {
       || !workerRetentionCallIsCanonical(retentionCalls[0], source)
       || rendererCalls.length !== 1
       || rendererCalls.some((call) => !workerRenderCallIsCanonical(call, source))
-      || !workerMetadataRouteIsCanonical(source)) {
+      || !existsSync(workerMetadataPath)
+      || !workerMetadataRouteIsCanonical(source, sourceFile(workerMetadataPath))) {
       fail('WORKER_LAYOUT_SELECTION', `${DOCX_SOURCE}/render-worker.ts`);
     }
 

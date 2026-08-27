@@ -28,6 +28,10 @@ import {
   MAX_DOCX_ELEMENT_TEXT_CHARACTERS,
 } from './element-context';
 import { renderDocxFocusedPage } from './focused-view-runtime';
+import {
+  subscribeDocxLayout,
+  type DocxLayoutPublication,
+} from './document-layout-events.js';
 
 const borrowedDocumentOption = Symbol('DocxViewer.borrowedDocument');
 type InternalDocxViewerOptions = DocxViewerOptions & {
@@ -57,8 +61,10 @@ export interface DocxViewerOptions extends Omit<RenderPageOptions, 'onTextRun'>,
   onContextMenu?: (event: ViewerContextMenuEvent<DocxSelectionContext>) => void;
   /** CSS backgrounds for ordinary and active in-document search matches. */
   findHighlightColors?: FindHighlightColors;
-  /** Called when a page finishes rendering. */
-  onPageChange?: (index: number, total: number) => void;
+  /** Called when a page finishes rendering. While `layoutComplete` is false,
+   *  `total` is the number of pages available so far rather than the final
+   *  document total. */
+  onPageChange?: (index: number, total: number, layoutComplete: boolean) => void;
   /** IX9 zoom contract ({@link ZoomableViewer}) — the clamp range for
    *  {@link DocxViewer.setScale} / `zoomIn` / `zoomOut` / `fitWidth` / `fitPage`,
    *  as user-facing zoom factors (`1` = 100% = the page at its natural pt→px
@@ -140,6 +146,11 @@ export class DocxViewer implements ZoomableViewer {
   private _selectionContextKey = 'null';
   private _elementContext: DocxElementContext | null = null;
   private _elementHitGeneration = 0;
+  private _layoutViewGeneration = 0;
+  private _navigationGeneration = 0;
+  private _layoutUnsubscribe: (() => void) | null = null;
+  private readonly _layoutWaiters = new Set<() => void>();
+  private readonly _loadingLayer: HTMLDivElement;
   private _elementClickListener: ((event: MouseEvent) => void) | null = null;
   private _contextMenuListener: ((event: MouseEvent) => void) | null = null;
   /**
@@ -191,6 +202,24 @@ export class DocxViewer implements ZoomableViewer {
     this._textLayer = overlays.textLayer;
     this._highlightLayer = overlays.highlightLayer;
     this._elementLayer = overlays.elementLayer;
+    this._loadingLayer = this._wrapper.ownerDocument.createElement('div');
+    this._loadingLayer.style.cssText = [
+      'position:absolute',
+      'inset:0',
+      'display:none',
+      'align-items:center',
+      'justify-content:center',
+      'background:rgba(255,255,255,0.72)',
+      'pointer-events:none',
+      'z-index:4',
+    ].join(';');
+    this._loadingLayer.setAttribute('role', 'status');
+    this._loadingLayer.setAttribute('aria-live', 'polite');
+    this._loadingLayer.setAttribute('aria-label', 'Loading page');
+    const progress = this._wrapper.ownerDocument.createElement('progress');
+    progress.setAttribute('aria-hidden', 'true');
+    this._loadingLayer.appendChild(progress);
+    this._wrapper.insertBefore(this._loadingLayer, this._elementLayer);
     if (this._textLayer && (opts.onSelectionContextChange || opts.enableElementSelection)) {
       this._selectionChangeListener = () => this._emitSelectionContextChange();
       this._wrapper.ownerDocument.addEventListener('selectionchange', this._selectionChangeListener);
@@ -210,6 +239,7 @@ export class DocxViewer implements ZoomableViewer {
       () => this.pageCount,
       (page) => this._collectPageRuns(page),
     );
+    if (borrowedDocument) this._bindLayoutDocument(borrowedDocument);
   }
 
   /**
@@ -249,6 +279,11 @@ export class DocxViewer implements ZoomableViewer {
         regionMap: this._opts.regionMap,
         chartEx: this._opts.chartEx,
         mode: this._mode,
+        ...(this._opts.progressiveLayout ? { progressiveLayout: true } : {}),
+        ...(this._opts.sliceLayout ? { sliceLayout: true } : {}),
+        onLayoutProgress: this._opts.onLayoutProgress,
+        onLayoutPartial: this._opts.onLayoutPartial,
+        onLayoutComplete: this._opts.onLayoutComplete,
         // The variant this viewer renders, so load builds that one rather than
         // paying for a second full pagination on the first render.
         ...(this._opts.showTrackedChanges === true ? { showTrackedChanges: true } : {}),
@@ -263,10 +298,12 @@ export class DocxViewer implements ZoomableViewer {
         elementInvalidated = true;
         this._renderDispatcher.begin();
         this._find.invalidate();
+        this._unbindLayoutDocument();
       });
       if (!doc) return;
       if (this._destroyed) throw new Error('DocxViewer is destroyed');
       this._currentPage = 0;
+      this._bindLayoutDocument(doc);
       // A new document invalidates any prior find state (cached runs / matches).
       this._find.invalidate();
       await this._render();
@@ -285,14 +322,36 @@ export class DocxViewer implements ZoomableViewer {
     return this._currentPage;
   }
 
+  /** Whether every page has been laid out. */
+  get layoutComplete(): boolean {
+    return this._doc?.layoutComplete ?? true;
+  }
+
+  /** Resolve once the authoritative layout has replaced any provisional pages. */
+  async whenLayoutComplete(): Promise<void> {
+    await this._doc?.whenLayoutComplete?.();
+  }
+
   /** The underlying <canvas> element. */
   get canvasElement(): HTMLCanvasElement {
     return this._canvas;
   }
 
   async goToPage(index: number): Promise<void> {
-    if (!this._doc) return;
-    const clamped = Math.max(0, Math.min(index, this.pageCount - 1));
+    const doc = this._doc;
+    if (!doc) return;
+    const generation = this._cancelPendingNavigation();
+    const requested = Math.max(0, Number.isNaN(index) ? 0 : Math.trunc(index));
+    if (requested >= this.pageCount && !this.layoutComplete) {
+      this._setLoading(true);
+      try {
+        await this._waitForPage(doc, requested, generation);
+      } finally {
+        if (generation === this._navigationGeneration) this._setLoading(false);
+      }
+    }
+    if (this._destroyed || generation !== this._navigationGeneration || doc !== this._doc) return;
+    const clamped = Math.max(0, Math.min(requested, this.pageCount - 1));
     const changed = clamped !== this._currentPage;
     if (changed) this._invalidateElementContext(false);
     this._currentPage = clamped;
@@ -612,6 +671,8 @@ export class DocxViewer implements ZoomableViewer {
   destroy(): void {
     if (this._destroyed) return;
     this._destroyed = true;
+    this._layoutViewGeneration++;
+    this._unbindLayoutDocument();
     // First line: block any render rejection racing in from surfacing on a dead
     // viewer (checked at the top of _reportRenderError). Bump the load generation
     // too so a load() still in flight is treated as superseded and its engine is
@@ -721,7 +782,79 @@ export class DocxViewer implements ZoomableViewer {
     // geometry matches exactly what was drawn, then (re)draw the highlights.
     this._find.setPageRuns(this._currentPage, runs);
     this._buildHighlightLayer(runs);
-    this._opts.onPageChange?.(this._currentPage, this.pageCount);
+    this._opts.onPageChange?.(this._currentPage, this.pageCount, this.layoutComplete);
+  }
+
+  private _bindLayoutDocument(doc: DocxDocument): void {
+    this._unbindLayoutDocument();
+    let initial = true;
+    this._layoutUnsubscribe = subscribeDocxLayout(
+      doc,
+      () => ({
+        pageCount: doc.pageCount,
+        exact: doc.layoutComplete,
+        complete: doc.layoutComplete,
+      }),
+      (publication) => {
+        if (initial) {
+          initial = false;
+          return;
+        }
+        this._onLayoutPublication(doc, publication);
+      },
+      (error) => this._reportRenderError(error),
+    );
+  }
+
+  private _unbindLayoutDocument(): void {
+    this._layoutUnsubscribe?.();
+    this._layoutUnsubscribe = null;
+    this._cancelPendingNavigation();
+  }
+
+  private _onLayoutPublication(doc: DocxDocument, publication: DocxLayoutPublication): void {
+    if (this._destroyed || doc !== this._doc) return;
+    this._wakeLayoutWaiters();
+    if (publication.error !== undefined) {
+      this._reportRenderError(publication.error);
+      return;
+    }
+    this._find.invalidate();
+    this._currentPage = Math.max(0, Math.min(this._currentPage, publication.pageCount - 1));
+    void this._render().catch((error) => this._reportRenderError(error));
+  }
+
+  private async _waitForPage(
+    doc: DocxDocument,
+    page: number,
+    generation: number,
+  ): Promise<void> {
+    while (
+      !this._destroyed
+      && generation === this._navigationGeneration
+      && doc === this._doc
+      && page >= doc.pageCount
+      && !doc.layoutComplete
+    ) {
+      await new Promise<void>((resolve) => { this._layoutWaiters.add(resolve); });
+    }
+    if (doc === this._doc && doc.layoutComplete) await doc.whenLayoutComplete();
+  }
+
+  private _wakeLayoutWaiters(): void {
+    for (const resolve of this._layoutWaiters) resolve();
+    this._layoutWaiters.clear();
+  }
+
+  private _cancelPendingNavigation(): number {
+    const generation = ++this._navigationGeneration;
+    this._wakeLayoutWaiters();
+    this._setLoading(false);
+    return generation;
+  }
+
+  private _setLoading(loading: boolean): void {
+    this._loadingLayer.style.display = loading ? 'flex' : 'none';
   }
 
   /**
@@ -732,16 +865,28 @@ export class DocxViewer implements ZoomableViewer {
    * the visible text differs between the views.
    */
   async setShowTrackedChanges(value: boolean): Promise<void> {
-    if ((this._opts.showTrackedChanges === true) === value) return;
-    this._opts = { ...this._opts, showTrackedChanges: value };
-    this._find.invalidate();
+    const generation = ++this._layoutViewGeneration;
+    const doc = this._doc;
+    if ((this._opts.showTrackedChanges === true) === value) {
+      // Still forward the installed value: it cancels an older in-flight
+      // worker switch that has not become this viewer's state yet.
+      await doc?.setLayoutView?.({
+        showTrackedChanges: value,
+        currentDate: this._opts.currentDate,
+      });
+      return;
+    }
+    const nextOptions = { ...this._opts, showTrackedChanges: value };
     // The markup view paginates differently, so the document's geometry
     // accessors must follow it — and the current page may no longer exist:
     // hiding deletions can shorten the document past where the reader is.
-    this._doc?.setLayoutView?.({
+    await doc?.setLayoutView?.({
       showTrackedChanges: value,
-      currentDate: this._opts.currentDate,
+      currentDate: nextOptions.currentDate,
     });
+    if (this._destroyed || generation !== this._layoutViewGeneration || doc !== this._doc) return;
+    this._opts = nextOptions;
+    this._find.invalidate();
     this._currentPage = Math.max(0, Math.min(this._currentPage, this.pageCount - 1));
     await this._render();
   }

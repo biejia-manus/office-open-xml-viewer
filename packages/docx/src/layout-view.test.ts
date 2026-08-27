@@ -67,11 +67,10 @@ describe('progressive layout builds only the variant being viewed', () => {
       services,
       markupOptions,
       {
-        hasPaginationFields: source.hasPaginationFields,
         onPreview: (preview) => { store.prime(markupOptions, preview.layout); },
       },
     );
-    store.prime(markupOptions, full, true);
+    store.replaceIfCurrent(markupOptions, store.layoutFor(markupOptions), full);
 
     // Rendering a page in the markup view must hit the primed layout.
     const selected = store.select(markupOptions);
@@ -88,9 +87,8 @@ describe('progressive layout builds only the variant being viewed', () => {
       source.bodyLayoutInput,
       services,
       markupOptions,
-      { hasPaginationFields: source.hasPaginationFields },
     );
-    store.prime(markupOptions, markup, true);
+    store.prime(markupOptions, markup);
     builds.length = 0;
 
     // Selecting the OTHER view is what genuinely costs a build — and that only
@@ -112,9 +110,8 @@ describe('progressive layout builds only the variant being viewed', () => {
       source.bodyLayoutInput,
       services,
       dated,
-      { hasPaginationFields: source.hasPaginationFields },
     );
-    store.prime(dated, layout, true);
+    store.prime(dated, layout);
     builds.length = 0;
     store.select(dated);
     expect(builds).toEqual([]);

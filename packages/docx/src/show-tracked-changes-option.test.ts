@@ -130,7 +130,7 @@ describe('DocxScrollViewer — showTrackedChanges option (main mode)', () => {
   it('setShowTrackedChanges re-renders every mounted slot at the new variant', async () => {
     const { v, engine } = await setupScroll();
     const before = engine.renderCalls.length;
-    v.setShowTrackedChanges(true);
+    await v.setShowTrackedChanges(true);
     await Promise.resolve();
     await new Promise((r) => setTimeout(r, 0));
     expect(engine.renderCalls.length).toBeGreaterThan(before);

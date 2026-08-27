@@ -20,17 +20,18 @@
  * reasons. It has no `self` or WASM dependency, so tests exercise it directly
  * (see `render-worker-progressive.test.ts`) instead of standing up a Worker.
  * And `render-worker.ts`'s metadata route is AST-pinned by
- * `scripts/check-docx-layout-boundaries.mjs` to exactly one `layout` /
- * `pageSizes` / `meta` declaration, so the partials' geometry has to be built
- * somewhere else.
+ * `scripts/check-docx-layout-boundaries.mjs` to the selected variant and the
+ * shared metadata projector, so the partial projection remains isolated here.
  *
  * ## Why the worker's metadata route stays a single line
  *
- * This primes the AUTHORITATIVE layout into the variant store before it
- * returns, under the very options key the caller passed. The worker's
- * `const layout = doc.layoutVariants.layoutFor(layoutOptions)` therefore
- * becomes a cache hit rather than a second pagination: identical bytes, no
- * repeated work, and one spelling of "the layout this parse is reporting on".
+ * This leaves the variant store holding the newest authoritative layout before
+ * it returns, under the very options key the caller passed. Normally that is
+ * the completed progressive layout. If another request rebuilt the same key
+ * between slices, publication ownership transfers to that newer layout and the
+ * old drain cannot replace it. The worker's
+ * `const layout = doc.layoutVariants.layoutFor(layoutOptions)` therefore reads
+ * one authority without a redundant pagination pass.
  *
  * `layoutOptions` is supplied rather than derived here precisely so it cannot
  * drift from the one the metadata route selects. Priming under a key nothing
@@ -106,25 +107,35 @@ export async function paginateRenderWorkerDocumentProgressively(
   signal?: AbortSignal,
 ): Promise<void> {
   const store = doc.layoutVariants;
-  let published = false;
+  let publishedLayout: DeepReadonly<DocumentLayout> | null = null;
+  let ownsPublication = true;
   const layout = await layoutDocumentProgressively(
     source.bodyLayoutInput,
     doc.layoutServices,
     layoutOptions,
     {
-      hasPaginationFields: source.hasPaginationFields,
       scheduler: { signal, onProgress: (committedPages) => publisher.progress(committedPages) },
       onPreview: (preview) => {
-        // `replace` is false for the first publication (nothing to replace) and
-        // true afterwards, matching the main-thread path: a provisional prefix
-        // is the one layout a later pass is allowed to supersede.
-        store.prime(layoutOptions, preview.layout, published);
-        published = true;
+        if (!ownsPublication) return;
+        const retainedPreview = store.replaceIfCurrent(
+          layoutOptions,
+          publishedLayout,
+          preview.layout,
+        );
+        if (retainedPreview === null) {
+          // Another request evicted or rebuilt this variant between slices.
+          // Its layout is newer authority; this drain may finish but not publish.
+          ownsPublication = false;
+          return;
+        }
+        publishedLayout = retainedPreview;
         publisher.publish(publicationOf(preview.layout, preview.exact));
       },
     },
   );
-  // Replaces the provisional prefix. Anything the host already painted from it
-  // is stale by design — it repaints when the authoritative metadata lands.
-  store.prime(layoutOptions, layout, true);
+  // Replace only the exact prefix this drain still owns. If a newer layout now
+  // occupies the key, the parse response reads that authority back instead.
+  if (ownsPublication) {
+    store.replaceIfCurrent(layoutOptions, publishedLayout, layout);
+  }
 }

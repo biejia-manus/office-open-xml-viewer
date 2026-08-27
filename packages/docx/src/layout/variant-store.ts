@@ -99,16 +99,35 @@ export class LayoutVariantStore {
   prime(
     options: LayoutOptions,
     layout: DocumentLayout,
-    replace = false,
   ): DeepReadonly<DocumentLayout> {
     const normalized = Object.isFrozen(options) ? options : Object.freeze({ ...options });
     const key = layoutOptionsKey(normalized, this.#services);
     const existing = this.#variants.get(key);
-    // `replace` exists for progressive layout, where a provisional prefix is
-    // deliberately superseded by the authoritative layout of the same options.
-    // Every other caller must not be able to silently swap a cached layout a
-    // consumer may already be painting from.
-    if (existing && !replace) return existing;
+    if (existing) return existing;
+    return this.#store(key, layout);
+  }
+
+  /**
+   * Atomically replace one exact cached layout. Progressive pagination uses
+   * the retained return value from its previous publication as an ownership
+   * token: if another consumer evicted or rebuilt the same variant meanwhile,
+   * the stale session can no longer overwrite that newer authority.
+   *
+   * Passing `null` claims an absent key for the first publication. Returning
+   * `null` means ownership was not acquired or has been lost.
+   */
+  replaceIfCurrent(
+    options: LayoutOptions,
+    expected: DeepReadonly<DocumentLayout> | null,
+    layout: DocumentLayout,
+  ): DeepReadonly<DocumentLayout> | null {
+    const normalized = Object.isFrozen(options) ? options : Object.freeze({ ...options });
+    const key = layoutOptionsKey(normalized, this.#services);
+    if ((this.#variants.get(key) ?? null) !== expected) return null;
+    return this.#store(key, layout);
+  }
+
+  #store(key: string, layout: DocumentLayout): DeepReadonly<DocumentLayout> {
     const frozen = deepFreezeDocumentLayout(layout);
     if (key !== this.#defaultKey) {
       if (this.#activeNonDefaultKey !== null && this.#activeNonDefaultKey !== key) {
