@@ -119,7 +119,10 @@ export async function renderFile(stage: HTMLElement, file: File): Promise<Render
       useGoogleFonts: true,
       comments: true,
       math,
-      mode: 'main',
+      // Keep progressive preflight and paint off the UI thread while the user
+      // scrolls through slides that are still becoming available.
+      mode: 'worker',
+      progressiveLayout: true,
       ...advancedChartRenderers,
     };
     const viewer = new PptxScrollViewer(host, viewerOptions);
@@ -142,7 +145,14 @@ export async function renderFile(stage: HTMLElement, file: File): Promise<Render
     viewerOptions.overscan = viewer.slideCount;
     viewer.relayout();
     activeCleanup = () => viewer.destroy();
-    return { format: 'pptx', units: viewer.slideCount, unitLabel: 'slide' };
+    return {
+      format: 'pptx',
+      units: viewer.slideCount,
+      unitLabel: 'slide',
+      ...(viewer.layoutComplete
+        ? {}
+        : { finalUnits: viewer.waitUntilLayoutComplete().then(() => viewer.slideCount) }),
+    };
   }
 
   const host = scrollViewerHost(stage);
@@ -196,7 +206,7 @@ export async function renderFile(stage: HTMLElement, file: File): Promise<Render
     format: 'docx',
     units: viewer.pageCount,
     unitLabel: 'page',
-    finalUnits: viewer.whenLayoutComplete().then(mountAllPages),
+    finalUnits: viewer.waitUntilLayoutComplete().then(mountAllPages),
   };
 }
 

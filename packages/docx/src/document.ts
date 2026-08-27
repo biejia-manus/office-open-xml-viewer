@@ -149,7 +149,7 @@ export interface LoadOptions extends CoreLoadOptions {
    * object convergence can still repaginate them. The finished layout is
    * byte-identical to a blocking load either way.
    *
-   * Await {@link DocxDocument.whenLayoutComplete} before anything that needs the
+   * Await {@link DocxDocument.waitUntilLayoutComplete} before anything that needs the
    * whole document: page-count-sensitive UI, text search, bookmark navigation,
    * printing or export.
    *
@@ -300,7 +300,7 @@ export class DocxDocument {
    *  being built in the background. Always true for an ordinary load. */
   private _layoutComplete = true;
   /** Settles when background layout finishes; never rejects (the failure is
-   *  retained in `_layoutError` and re-thrown by `whenLayoutComplete`). */
+   *  retained in `_layoutError` and re-thrown by `waitUntilLayoutComplete`). */
   private _layoutCompletion: Promise<void> | null = null;
   private _layoutError: unknown = undefined;
   /** Cancels background layout when the document is destroyed or replaced. */
@@ -677,7 +677,7 @@ export class DocxDocument {
           });
           // Never awaited raw: once a publication resolves load(), a later
           // failure can no longer reject it and must surface through
-          // whenLayoutComplete() instead of as an unhandled rejection.
+          // waitUntilLayoutComplete() instead of as an unhandled rejection.
           progressiveDocument._layoutCompletion = full.catch((error: unknown) => {
             if (publishedLayout === null) {
               // Nothing was shown early, so this is still load()'s own
@@ -688,7 +688,7 @@ export class DocxDocument {
             }
             // An aborted drain means the document was destroyed or replaced,
             // not that layout failed. Settle quietly: there is nobody left to
-            // tell, and `whenLayoutComplete` must not reject for it.
+            // tell, and `waitUntilLayoutComplete` must not reject for it.
             if (error instanceof PaginationAbortError) {
               progressiveDocument._layoutComplete = true;
               return;
@@ -1036,7 +1036,7 @@ export class DocxDocument {
     );
     // Retained rather than awaited: once a publication resolves load(), a later
     // failure can no longer reject it, and must surface through
-    // whenLayoutComplete() instead of as an unhandled rejection.
+    // waitUntilLayoutComplete() instead of as an unhandled rejection.
     this._layoutCompletion = parsed.then(
       async (res) => {
         this._parseRequestId = null;
@@ -1076,7 +1076,7 @@ export class DocxDocument {
         this._parseRequestId = null;
         this._clearParseWatchdog();
         // Destroyed or replaced mid-layout: the worker was terminated on
-        // purpose, there is nobody left to tell, and whenLayoutComplete() must
+        // purpose, there is nobody left to tell, and waitUntilLayoutComplete() must
         // not reject for it. Exactly how main mode treats PaginationAbortError.
         if (progressive.abort.signal.aborted) {
           this._layoutComplete = true;
@@ -1259,7 +1259,7 @@ export class DocxDocument {
    * ordinary load. Re-throws a background layout failure, which cannot reject
    * `load()` because that already resolved.
    */
-  async whenLayoutComplete(): Promise<void> {
+  async waitUntilLayoutComplete(): Promise<void> {
     if (this._layoutCompletion) await this._layoutCompletion;
     if (this._layoutError !== undefined) throw this._layoutError;
   }

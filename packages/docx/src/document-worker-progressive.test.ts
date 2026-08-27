@@ -205,7 +205,7 @@ describe('worker-mode progressive load', () => {
       .toBe(harness.document.commentAnchorRanges());
 
     harness.settle({ type: 'parsedMeta', id: 11, meta: fullMeta(40) });
-    await harness.document.whenLayoutComplete();
+    await harness.document.waitUntilLayoutComplete();
 
     expect(harness.document.pageCount).toBe(40);
     expect(harness.document.layoutComplete).toBe(true);
@@ -271,7 +271,7 @@ describe('worker-mode progressive load', () => {
     expect(completed).toBe(0);
   });
 
-  it('reports a failure arriving after load() resolved through whenLayoutComplete', async () => {
+  it('reports a failure arriving after load() resolved through waitUntilLayoutComplete', async () => {
     const errors: unknown[] = [];
     const harness = progressiveDocument({ onComplete: (error) => errors.push(error) });
 
@@ -279,7 +279,7 @@ describe('worker-mode progressive load', () => {
     await harness.parsed;
     harness.fail(new Error('background layout failed'));
 
-    await expect(harness.document.whenLayoutComplete()).rejects.toThrow('background layout failed');
+    await expect(harness.document.waitUntilLayoutComplete()).rejects.toThrow('background layout failed');
     expect(errors).toHaveLength(1);
     // The provisional pages stay usable; only the completion is lost.
     expect(harness.document.pageCount).toBe(2);
@@ -296,8 +296,8 @@ describe('worker-mode progressive load', () => {
     harness.fail(new Error('Worker terminated'));
 
     // A deliberate teardown is not a layout failure: there is nobody left to
-    // tell, and whenLayoutComplete() must not reject for it.
-    await expect(harness.document.whenLayoutComplete()).resolves.toBeUndefined();
+    // tell, and waitUntilLayoutComplete() must not reject for it.
+    await expect(harness.document.waitUntilLayoutComplete()).resolves.toBeUndefined();
     expect(completed).toBe(0);
   });
 
@@ -573,7 +573,7 @@ describe('worker layout-view metadata switch', () => {
     expect(progressive.onPartial).not.toHaveBeenCalled();
 
     settleParse({ type: 'parsedMeta', id: 31, meta: fullMeta(40) });
-    await document.whenLayoutComplete();
+    await document.waitUntilLayoutComplete();
     expect(document.layoutComplete).toBe(true);
     expect(document.pageCount).toBe(13);
     expect(document.pageSize(12)).toEqual(selectedPage);

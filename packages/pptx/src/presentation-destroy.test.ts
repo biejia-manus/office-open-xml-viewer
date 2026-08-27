@@ -98,6 +98,7 @@ describe('PptxPresentation.destroy() — rejects in-flight worker requests', () 
     instance._rawParts = new BoundedRawPartCache({ maxEntries: 2, maxBytes: 1024 });
     instance._googleFontFaces = [];
     instance._embeddedFontFaces = [];
+    instance._layoutWaiters = new Set();
     instance._fetchImage = () => Promise.resolve(new Blob());
     return { pres: instance as unknown as DestroyProbe, bridge, worker };
   }

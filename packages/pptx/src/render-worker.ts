@@ -57,6 +57,8 @@ const slidePull = new SlidePullWorker(
 let preflight: PresentationPreflight | null = null;
 let preflightBuilder: PresentationPreflightBuilder | null = null;
 let slides: PptxSlideRepository | null = null;
+let availableSlideCount = 0;
+const slideAvailabilityWaiters = new Set<() => void>();
 let generation = 0;
 let nextOperationId = 1;
 type PresentationLifecycleState = 'empty' | 'opening' | 'ready' | 'failed';
@@ -84,8 +86,9 @@ const post = (message: RenderWorkerResponse, transfer?: Transferable[]) =>
   (self.postMessage as (value: unknown, transfer?: Transferable[]) => void)(message, transfer);
 
 function requirePreflight(): PresentationPreflight {
-  if (!preflight) throw new Error('No pptx loaded');
-  return preflight;
+  if (preflight) return preflight;
+  if (preflightBuilder?.acceptedSlideCount) return preflightBuilder.snapshot();
+  throw new Error('No pptx loaded');
 }
 
 function requireSlides(): PptxSlideRepository {
@@ -137,6 +140,8 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
   slides = null;
   preflight = null;
   preflightBuilder = null;
+  availableSlideCount = 0;
+  wakeSlideAvailabilityWaiters();
   generation += 1;
   nextOperationId = 1;
   rawParts.clear();
@@ -166,23 +171,77 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
     maxCachedStructuralBytes: HARD_MAX_PPTX_CACHED_SLIDE_PROJECTION_BYTES,
     loadSlide,
   });
-  for (let index = 0; index < bootstrap.slideCount; index += 1) {
-    await slides.withSlide(index, () => undefined);
+  if (request.progressiveLayout) {
+    const loadedGoogleFonts = new Set<string>();
+    const ensureFonts = async (): Promise<void> => {
+      const embedded = await embeddedFontsLoaded;
+      embeddedFontAliases = embedded.aliases;
+      embeddedFontAuthoredFamilies = embedded.authoredFamilies;
+      if (!request.useGoogleFonts) return;
+      const requested = excludeEmbeddedFontFamilies(
+        preflightBuilder!.currentFontPreloadNames,
+        embedded.aliases,
+      ).filter((name): name is string => !!name && !loadedGoogleFonts.has(name));
+      for (const name of requested) loadedGoogleFonts.add(name);
+      if (requested.length) await preloadGoogleFonts(requested, PPTX_GOOGLE_FONTS);
+    };
+    for (let index = 0; index < bootstrap.slideCount; index += 1) {
+      await slides.withSlide(index, () => undefined);
+      await ensureFonts();
+      availableSlideCount = index + 1;
+      const slide = preflightBuilder.latestSlide;
+      if (!slide) throw new Error(`PPTX progressive preflight lost slide ${index}`);
+      wakeSlideAvailabilityWaiters();
+      post({
+        kind: 'presentationLayoutPartial',
+        forId: request.id,
+        ...(index === 0 ? { bootstrap } : {}),
+        availableSlides: availableSlideCount,
+        slide,
+        fontPreloadNames: preflightBuilder.currentFontPreloadNames,
+        usage: resourceUsage,
+      });
+    }
+    preflight = preflightBuilder.finish();
+    preflightBuilder = null;
+    fontsLoaded = Promise.resolve();
+  } else {
+    for (let index = 0; index < bootstrap.slideCount; index += 1) {
+      await slides.withSlide(index, () => undefined);
+    }
+    preflight = preflightBuilder.finish();
+    preflightBuilder = null;
+    availableSlideCount = bootstrap.slideCount;
+    wakeSlideAvailabilityWaiters();
+    fontsLoaded = (async () => {
+      const embedded = await embeddedFontsLoaded;
+      embeddedFontAliases = embedded.aliases;
+      embeddedFontAuthoredFamilies = embedded.authoredFamilies;
+      if (!request.useGoogleFonts) return embedded.faces;
+      const substitutes = await preloadGoogleFonts(
+        excludeEmbeddedFontFamilies(preflight.fontPreloadNames, embedded.aliases),
+        PPTX_GOOGLE_FONTS,
+      );
+      return [...embedded.faces, ...substitutes];
+    })();
   }
-  preflight = preflightBuilder.finish();
-  preflightBuilder = null;
-  fontsLoaded = (async () => {
-    const embedded = await embeddedFontsLoaded;
-    embeddedFontAliases = embedded.aliases;
-    embeddedFontAuthoredFamilies = embedded.authoredFamilies;
-    if (!request.useGoogleFonts) return embedded.faces;
-    const substitutes = await preloadGoogleFonts(
-      excludeEmbeddedFontFamilies(preflight.fontPreloadNames, embedded.aliases),
-      PPTX_GOOGLE_FONTS,
-    );
-    return [...embedded.faces, ...substitutes];
-  })();
   return preflight;
+}
+
+function wakeSlideAvailabilityWaiters(): void {
+  for (const resolve of slideAvailabilityWaiters) resolve();
+  slideAvailabilityWaiters.clear();
+}
+
+async function waitForSlideAvailability(slideIndex: number): Promise<void> {
+  if (presentationState === 'empty') throw new Error('No pptx loaded');
+  while (slideIndex >= availableSlideCount && presentationState === 'opening') {
+    await new Promise<void>((resolve) => slideAvailabilityWaiters.add(resolve));
+  }
+  if (presentationState === 'failed') throw new Error('PPTX progressive preflight failed');
+  if (slideIndex >= availableSlideCount) {
+    throw new Error(`Slide index ${slideIndex} out of range (count: ${availableSlideCount})`);
+  }
 }
 
 function executeArchiveFromNew(
@@ -231,6 +290,8 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
       presentationState = 'ready';
       return;
     }
+
+    if ('slideIndex' in request) await waitForSlideAvailability(request.slideIndex);
 
     const compact = requirePreflight();
     await slidePull.run(() => executeArchive((archive) => archive.assert_healthy()));
@@ -337,7 +398,10 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
       post({ kind: 'markdownRendered', id: request.id, markdown });
     }
   } catch (error) {
-    if (ownsParseReservation) presentationState = 'failed';
+    if (ownsParseReservation) {
+      presentationState = 'failed';
+      wakeSlideAvailabilityWaiters();
+    }
     if (request.kind === 'parse') {
       slides?.clear();
       slides = null;

@@ -124,7 +124,7 @@ describe('official-site API reference', () => {
       expect(pageCount?.desc, apiClass.name).toContain('available so far');
       expect(apiClass.methods.find(({ sig }) => sig === 'get layoutComplete(): boolean'), apiClass.name)
         .toBeDefined();
-      expect(apiClass.methods.find(({ sig }) => sig === 'whenLayoutComplete(): Promise<void>')?.desc, apiClass.name)
+      expect(apiClass.methods.find(({ sig }) => sig === 'waitUntilLayoutComplete(): Promise<void>')?.desc, apiClass.name)
         .toContain('authoritative full layout');
     }
 
@@ -132,6 +132,32 @@ describe('official-site API reference', () => {
     expect(viewerCallback?.desc).toContain('page-count publication changes total');
     const scrollCallback = apiReference.docx[2].options?.find(({ name }) => name === 'onVisiblePageChange');
     expect(scrollCallback?.desc).toContain('even if the same page remains visible');
+  });
+
+  it('documents a symmetric PPTX lifecycle with a stable final slide extent', () => {
+    for (const apiClass of apiReference.pptx) {
+      const options = apiClass.options ?? [];
+      const progressive = options.find(({ name }) => name === 'progressiveLayout');
+      expect(progressive?.def, apiClass.name).toBe('false');
+      expect(progressive?.desc, apiClass.name).toContain('slideCount');
+      expect(progressive?.detailsHref, apiClass.name).toBe('/pptx#progressive-layout');
+      expect(options.map(({ name }) => name), apiClass.name).toEqual(expect.arrayContaining([
+        'onLayoutProgress',
+        'onLayoutPartial',
+        'onLayoutComplete',
+      ]));
+      expect(apiClass.methods.find(({ sig }) => sig === 'get availableSlideCount(): number'), apiClass.name)
+        .toBeDefined();
+      expect(apiClass.methods.find(({ sig }) => sig === 'get layoutComplete(): boolean'), apiClass.name)
+        .toBeDefined();
+      expect(apiClass.methods.find(({ sig }) => sig === 'waitUntilLayoutComplete(): Promise<void>'), apiClass.name)
+        .toBeDefined();
+    }
+
+    const viewerCallback = apiReference.pptx[0].options?.find(({ name }) => name === 'onSlideChange');
+    expect(viewerCallback?.type).toContain('layoutComplete: boolean');
+    const scrollCallback = apiReference.pptx[2].options?.find(({ name }) => name === 'onVisibleSlideChange');
+    expect(scrollCallback?.desc).toContain('same slide remains visible');
   });
 
   it('documents the Viewer error-delivery contract and typed resource failures', () => {

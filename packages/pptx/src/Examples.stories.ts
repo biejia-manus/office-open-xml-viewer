@@ -3,8 +3,6 @@ import { buildViewerUI } from './PptxViewer.stories';
 import { PptxPresentation } from './presentation';
 import { PptxViewer } from './viewer';
 import { PptxScrollViewer } from './scroll-viewer';
-import type { PptxTextRunInfo } from './renderer';
-import { buildPptxTextLayer } from './text-layer';
 import { math } from '../../../src/math';
 import { threeD } from '../../../src/three-d';
 import { regionMap } from '../../../src/region-map';
@@ -61,6 +59,8 @@ function makeStatus(root: HTMLElement): HTMLDivElement {
 export const ScrollView: LayoutStory = {
   name: 'ScrollView — stack all slides',
   render() {
+    scrollViewInstance?.destroy();
+    scrollViewInstance = null;
     const root = document.createElement('div');
     root.style.cssText = 'font-family:sans-serif;padding:16px;';
     const heading = document.createElement('h3');
@@ -69,40 +69,27 @@ export const ScrollView: LayoutStory = {
     root.appendChild(heading);
     const status = makeStatus(root);
 
-    const scroller = document.createElement('div');
-    scroller.style.cssText =
-      'max-height:720px;overflow-y:auto;border:1px solid #ccc;background:#f5f5f5;padding:12px;';
-    root.appendChild(scroller);
+    const container = document.createElement('div');
+    container.style.cssText = 'height:720px;border:1px solid #ccc;background:#f5f5f5;';
+    root.appendChild(container);
 
-    PptxPresentation.load(SAMPLE_URL, { useGoogleFonts: true, ...fullRenderers })
-      .then(async (pres) => {
-        status.textContent = `Rendering ${pres.slideCount} slides…`;
-        const widthPx = 800;
-        const cssHeight = Math.round(pres.slideHeight * widthPx / pres.slideWidth);
-
-        for (let i = 0; i < pres.slideCount; i++) {
-          const slideWrapper = document.createElement('div');
-          slideWrapper.style.cssText =
-            'position:relative;display:block;max-width:800px;margin:0 auto 12px;';
-
-          const canvas = document.createElement('canvas');
-          canvas.style.cssText =
-            'display:block;width:100%;max-width:800px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.2);';
-
-          const textLayer = document.createElement('div');
-          textLayer.style.cssText =
-            'position:absolute;top:0;left:0;width:100%;height:100%;' +
-            'overflow:hidden;pointer-events:none;user-select:text;-webkit-user-select:text;';
-
-          slideWrapper.appendChild(canvas);
-          slideWrapper.appendChild(textLayer);
-          scroller.appendChild(slideWrapper);
-
-          const runs: PptxTextRunInfo[] = [];
-          await pres.renderSlide(canvas, i, { width: widthPx, onTextRun: (r) => runs.push(r) });
-          buildPptxTextLayer(textLayer, runs, widthPx, cssHeight);
-        }
-        status.textContent = `Loaded ${pres.slideCount} slides`;
+    const viewer = new PptxScrollViewer(container, {
+      gap: 16,
+      overscan: 1,
+      enableTextSelection: true,
+      useGoogleFonts: true,
+      background: '#f5f5f5',
+      progressiveLayout: true,
+      mode: 'worker',
+      ...fullRenderers,
+      onVisibleSlideChange: (top, total, complete) => {
+        status.textContent = `Slide ${top + 1} / ${total}${complete ? '' : ' · preparing…'}`;
+      },
+    });
+    scrollViewInstance = viewer;
+    viewer.load(SAMPLE_URL)
+      .then(() => {
+        status.textContent = `Loaded ${viewer.slideCount} slides${viewer.layoutComplete ? '' : ' · preparing…'}`;
       })
       .catch((e: Error) => {
         status.textContent = `Error: ${e.message}`;
@@ -118,6 +105,7 @@ export const ScrollView: LayoutStory = {
 // re-render (args change / HMR) would keep observing a detached container and
 // leak canvases. Hold the last instance module-side and destroy it before
 // building a fresh one.
+let scrollViewInstance: PptxScrollViewer | null = null;
 let scrollViewerInstance: PptxScrollViewer | null = null;
 
 export const ScrollViewer: LayoutStory = {

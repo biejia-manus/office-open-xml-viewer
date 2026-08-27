@@ -21,7 +21,7 @@ describe('DocxViewer progressive layout', () => {
     const doc = engine.asDoc() as DocxDocument;
     Object.defineProperties(doc, {
       layoutComplete: { configurable: true, get: () => complete },
-      whenLayoutComplete: { configurable: true, value: () => completion },
+      waitUntilLayoutComplete: { configurable: true, value: () => completion },
     });
     const load = vi.spyOn(DocxDocument, 'load').mockResolvedValue(doc);
     const pageChanges: Array<[number, number, boolean]> = [];
@@ -56,7 +56,7 @@ describe('DocxViewer progressive layout', () => {
     settle();
     publishDocxLayout(doc, { pageCount: 5, exact: true, complete: true });
     expect(viewer.layoutComplete).toBe(true);
-    await expect(viewer.whenLayoutComplete()).resolves.toBeUndefined();
+    await expect(viewer.waitUntilLayoutComplete()).resolves.toBeUndefined();
     viewer.destroy();
   });
 
@@ -111,7 +111,7 @@ describe('DocxViewer progressive layout', () => {
     const doc = engine.asDoc() as DocxDocument;
     Object.defineProperties(doc, {
       layoutComplete: { configurable: true, get: () => false },
-      whenLayoutComplete: { configurable: true, value: () => new Promise<void>(() => {}) },
+      waitUntilLayoutComplete: { configurable: true, value: () => new Promise<void>(() => {}) },
     });
     vi.spyOn(DocxDocument, 'load').mockResolvedValue(doc);
     const viewer = new DocxViewer(makeEl('canvas') as unknown as HTMLCanvasElement, {

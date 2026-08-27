@@ -51,6 +51,7 @@ export type PptxWorkerRequest =
       id: number;
       buffer: ArrayBuffer;
       resourcePolicy: NormalizedOoxmlResourcePolicy;
+      progressiveLayout?: boolean;
     }
   | ({
       kind: 'openSlideSession';
@@ -87,6 +88,7 @@ export type RenderWorkerRequest =
       resourcePolicy: NormalizedOoxmlResourcePolicy;
       useGoogleFonts?: boolean;
       renderers?: WorkerRendererDescriptors;
+      progressiveLayout?: boolean;
     }
   | { kind: 'extractMedia'; id: number; path: string }
   | { kind: 'extractImage'; id: number; path: string }
@@ -126,6 +128,15 @@ export type RenderWorkerResponse =
       kind: 'presentationReady';
       id: number;
       preflight: PresentationPreflight;
+      usage?: OoxmlResourceUsageSnapshot;
+    }
+  | {
+      kind: 'presentationLayoutPartial';
+      forId: number;
+      bootstrap?: PresentationBootstrap;
+      availableSlides: number;
+      slide: PresentationPreflight['slides'][number];
+      fontPreloadNames: PresentationPreflight['fontPreloadNames'];
       usage?: OoxmlResourceUsageSnapshot;
     }
   | { kind: 'slideRendered'; id: number; bitmap: ImageBitmap; runs: PptxTextRunInfo[] }

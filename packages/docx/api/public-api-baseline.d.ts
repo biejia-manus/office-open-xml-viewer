@@ -1096,7 +1096,7 @@ export class DocxDocument {
     toMarkdown(): Promise<string>;
     get pageCount(): number;
     get layoutComplete(): boolean;
-    whenLayoutComplete(): Promise<void>;
+    waitUntilLayoutComplete(): Promise<void>;
     get mode(): 'main' | 'worker';
     get document(): DocxDocumentModel;
     get comments(): readonly Readonly<DocComment>[];
@@ -1190,7 +1190,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     load(source: string | ArrayBuffer): Promise<void>;
     get pageCount(): number;
     get layoutComplete(): boolean;
-    whenLayoutComplete(): Promise<void>;
+    waitUntilLayoutComplete(): Promise<void>;
     relayout(): void;
     setScale(scale: number): void;
     getScale(): number;
@@ -1351,7 +1351,7 @@ export class DocxViewer implements ZoomableViewer {
     get pageCount(): number;
     get currentPage(): number;
     get layoutComplete(): boolean;
-    whenLayoutComplete(): Promise<void>;
+    waitUntilLayoutComplete(): Promise<void>;
     get canvasElement(): HTMLCanvasElement;
     goToPage(index: number): Promise<void>;
     nextPage(): Promise<void>;
