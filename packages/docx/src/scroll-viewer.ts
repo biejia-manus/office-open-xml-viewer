@@ -1273,8 +1273,7 @@ export class DocxScrollViewer implements ZoomableViewer {
       slot.textLayer.innerHTML = '';
       // Drop any preview transform so a pooled slot re-used for another page does
       // not inherit a stale scale() before its overlay is rebuilt.
-      slot.textLayer.style.transform = '';
-      slot.textLayer.style.transformOrigin = '';
+      this._clearTextLayerPreview(slot.textLayer);
     }
     slot.highlightLayer.innerHTML = '';
     slot.highlightLayer.style.transform = '';
@@ -1605,8 +1604,7 @@ export class DocxScrollViewer implements ZoomableViewer {
       // and the rebuilt spans already sit at the crisp geometry (mirrors the
       // main-mode `_refreshSlotAtomically` clear).
       if (slot.textLayer) {
-        slot.textLayer.style.transform = '';
-        slot.textLayer.style.transformOrigin = '';
+        this._clearTextLayerPreview(slot.textLayer);
         if (wantOverlay) {
           const { width, height } = this._canvasCssPx(slot.canvas);
           buildDocxTextLayer(
@@ -1934,6 +1932,17 @@ export class DocxScrollViewer implements ZoomableViewer {
       const ratio = this._scale / slot.renderedScale;
       if (slot.textLayer) {
         slot.textLayer.style.transformOrigin = '0 0';
+        // The wrapper has already moved to the new layout dimensions. Keep the
+        // overlay's box at its last committed dimensions while scaling it;
+        // otherwise width/height:100% resolve against the NEW wrapper and the
+        // transform applies the zoom ratio a second time. Besides mis-sizing the
+        // overlay, that transformed border box becomes scrollable overflow. In
+        // worker mode each page settles independently, so the document extent
+        // would then shrink page-by-page and could strand the viewport over blank
+        // space. The transformed box below is exactly the current page box:
+        // (new / ratio) × ratio = new.
+        slot.textLayer.style.width = `${this._pageWidthPx(i) / ratio}px`;
+        slot.textLayer.style.height = `${this._pageHeightPx(i) / ratio}px`;
         slot.textLayer.style.transform = `scale(${ratio})`;
       }
       if (slot.commentMargin) this._commentUi?.previewReadOnlyCommentMargin(slot.commentMargin, ratio);
@@ -1951,6 +1960,14 @@ export class DocxScrollViewer implements ZoomableViewer {
     if (slot.commentTintLayer) slot.commentTintLayer.style.visibility = 'hidden';
     if (slot.commentMargin) slot.commentMargin.style.visibility = 'hidden';
     if (slot.commentDecorationLayer) slot.commentDecorationLayer.style.visibility = 'hidden';
+  }
+
+  /** Restore a text overlay after its transient CSS zoom preview. */
+  private _clearTextLayerPreview(layer: HTMLDivElement): void {
+    layer.style.transform = '';
+    layer.style.transformOrigin = '';
+    layer.style.width = '100%';
+    layer.style.height = '100%';
   }
 
   /** (Re)schedule the debounced settle re-render (design §7 mechanism 2). Resets
@@ -2057,8 +2074,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         // Rebuild the overlay at the full resolution and CLEAR the preview
         // transform (the crisp render no longer needs the scale()).
         if (slot.textLayer) {
-          slot.textLayer.style.transform = '';
-          slot.textLayer.style.transformOrigin = '';
+          this._clearTextLayerPreview(slot.textLayer);
           if (wantOverlay) {
             const { width, height } = this._canvasCssPx(spare);
             buildDocxTextLayer(

@@ -2723,7 +2723,7 @@ describe('DocxScrollViewer — flicker-free zoom (T8)', () => {
     v.destroy();
   });
 
-  it('CSS preview: text layer gets a transform: scale(ratio) matching newScale / renderedScale', async () => {
+  it('CSS preview: text layer scales from its committed box so transformed overlays cannot inflate the scroll extent', async () => {
     const { v, scrollHost, engine } = setup(20, { enableTextSelection: true });
     engine.feedTextRuns = [{ text: 'Hi', x: 1, y: 2, w: 10, h: 12, fontSize: 12, font: '12px serif' }];
     // The overlay is built in the renderPage .then() microtask.
@@ -2736,6 +2736,14 @@ describe('DocxScrollViewer — flicker-free zoom (T8)', () => {
     v.setScale(v.scaleForTest() * 2);
     expect(textLayer.style.transform).toBe('scale(2)');
     expect(textLayer.style.transformOrigin).toBe('0 0');
+    // The slot wrapper has already grown to 400×800. Keeping the text layer at
+    // width/height:100% and then scaling it by 2 would create an 800×1600
+    // transformed overflow box. In a real scroll container that temporarily
+    // expands both scrollbars; as each worker settle completes the extent then
+    // shrinks page-by-page and can strand the viewport in blank bottom-right
+    // space. Keep the overlay's pre-zoom box (200×400) during the transform.
+    expect(textLayer.style.width).toBe('200px');
+    expect(textLayer.style.height).toBe('400px');
     v.destroy();
   });
 
@@ -2942,6 +2950,8 @@ describe('DocxScrollViewer — flicker-free zoom (T8)', () => {
     // After settle, the preview transform is cleared (the overlay is rebuilt at the
     // full resolution so it no longer needs the scale()).
     expect(textLayer.style.transform).toBe('');
+    expect(textLayer.style.width).toBe('100%');
+    expect(textLayer.style.height).toBe('100%');
     vi.useRealTimers();
     v.destroy();
   });
