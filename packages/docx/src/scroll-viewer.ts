@@ -37,6 +37,10 @@ import {
 import type { DocxCommentsOptions } from './comment-margin';
 import { resolveCommentAnchorRuns } from './comments';
 import { renderDocxFocusedPage } from './focused-view-runtime';
+import {
+  subscribeDocxLayout,
+  type DocxLayoutPublication,
+} from './document-layout-events.js';
 
 /**
  * Debounce window (ms) after the last `setScale` in a zoom burst before the
@@ -112,6 +116,31 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
   paddingRight?: number;
   /** Pages kept mounted beyond the viewport on each side. Default 1. */
   overscan?: number;
+  /**
+   * Paint the document's opening pages as soon as they are laid out, instead of
+   * waiting for the whole document.
+   *
+   * A large document otherwise shows nothing until every page has been
+   * paginated. With this on, the viewer mounts the first pages within a few
+   * hundred milliseconds regardless of document length, the scrollbar grows as
+   * the rest of the layout arrives, and the viewer relays out once it lands.
+   * Published pages are provisional: later header/footer, field, anchored-object,
+   * or section convergence can still replace them. Mounted pages repaint when
+   * the authoritative layout lands.
+   *
+   * `pageCount` therefore starts small and grows; {@link findText} waits for the
+   * full layout internally. Ignored by `fromDocument`, whose document is already
+   * loaded. Works in both render modes and in either tracked-changes view; in
+   * `mode: 'worker'` it additionally keeps the remaining pagination off the
+   * main thread.
+   */
+  progressiveLayout?: boolean;
+  /**
+   * Lay the document out in slices, keeping the thread responsive while a large
+   * document paginates. `load()` still resolves only once layout is complete —
+   * use {@link progressiveLayout} to paint before then.
+   */
+  sliceLayout?: boolean;
   /** Per-page transparent text-selection overlay. IX6 — works in BOTH render
    *  modes: in worker mode the per-run geometry is collected off-thread and
    *  shipped back beside the page bitmap, so the overlay is populated identically
@@ -171,10 +200,21 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
    *   here rather than two competing options.
    */
   pageShadow?: string | false;
-  /** Fires when the top-most visible page changes. `topIndex` from
-   *  `computeVisibleRange` (the first page intersecting the viewport top,
-   *  EXCLUDING overscan). */
-  onVisiblePageChange?: (topIndex: number, total: number) => void;
+  /** Fires when the top-most visible page OR the document's page count changes.
+   *  `topIndex` from `computeVisibleRange` (the first page intersecting the
+   *  viewport top, EXCLUDING overscan).
+   *
+   *  `layoutComplete` is false while progressive layout is still running, and
+   *  `total` is then the pages laid out SO FAR, not the document's total — a
+   *  "page X of Y" indicator should mark it provisional (Word shows an
+   *  unsettled count the same way during background repagination). The count
+   *  is watched as well as the index precisely so that indicator updates when
+   *  the rest of the document arrives without the user scrolling. */
+  onVisiblePageChange?: (
+    topIndex: number,
+    total: number,
+    layoutComplete: boolean,
+  ) => void;
   /** IX9 — fires whenever the zoom factor actually changes (`1` = 100% = a page
    *  at its natural pt→px size): from {@link DocxScrollViewer.setScale},
    *  `zoomIn`/`zoomOut`, `fitWidth`/`fitPage`, a Ctrl/⌘+wheel gesture, or a
@@ -281,6 +321,13 @@ export class DocxScrollViewer implements ZoomableViewer {
   private _scrollGeometry: VirtualScrollGeometry = { offsets: [], totalHeight: 0 };
   private _lastRange: VisibleRange | null = null;
   private _lastTopIndex = -1;
+  /** Second half of the visible-page latch: a document that grows under the
+   *  viewport changes `total` without changing `topIndex`. */
+  private _lastReportedTotal = -1;
+  /** Subscription to the document currently installed by `_documentOwner`.
+   *  Failed and stale acquisitions never replace it, so they cannot revoke the
+   *  retained document's authority to publish background layout progress. */
+  private _layoutUnsubscribe: (() => void) | null = null;
   private _scrollListener: (() => void) | null = null;
   private _selectionChangeListener: (() => void) | null = null;
   private _selectionContextKey = 'null';
@@ -384,6 +431,12 @@ export class DocxScrollViewer implements ZoomableViewer {
     (page) => this._collectPageRuns(page),
   );
   private _findActive = false;
+  /** ECMA-376 §17.13.5 — current tracked-change view. A LAYOUT axis (deletions
+   *  change line breaking and pagination), so it selects which retained layout
+   *  variant the viewer reads geometry from; toggle it with
+   *  {@link setShowTrackedChanges}. */
+  private _showTrackedChanges: boolean;
+  private _layoutViewGeneration = 0;
 
   /**
    * Create a Scroll Viewer that borrows an already-loaded document.
@@ -417,6 +470,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     }
     this._container = container;
     this._opts = opts;
+    this._showTrackedChanges = opts.showTrackedChanges === true;
     // `??` (not `||`): a caller's explicit `false` must disable the shadow, not
     // fall through to the default.
     this._pageShadow = opts.pageShadow ?? DEFAULT_PAGE_SHADOW;
@@ -523,6 +577,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     }
 
     if (this._borrowed) {
+      this._bindLayoutDocument(borrowedDocument!);
       // A borrowed engine is already loaded, so lay out + mount the first
       // window immediately. relayout() is idempotent and defers under a
       // zero-width container (the resize path re-runs it once width appears).
@@ -565,6 +620,18 @@ export class DocxScrollViewer implements ZoomableViewer {
         regionMap: this._opts.regionMap,
         chartEx: this._opts.chartEx,
         mode: this._mode,
+        // The variant the viewer will render. Without these, load builds the
+        // final view while every render asks for the markup view, and the first
+        // paint pays a full synchronous repagination.
+        ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
+        ...(this._opts.currentDate === undefined
+          ? {}
+          : { currentDate: this._opts.currentDate }),
+        ...(this._opts.progressiveLayout ? { progressiveLayout: true } : {}),
+        ...(this._opts.sliceLayout ? { sliceLayout: true } : {}),
+        onLayoutProgress: this._opts.onLayoutProgress,
+        onLayoutPartial: this._opts.onLayoutPartial,
+        onLayoutComplete: this._opts.onLayoutComplete,
       }), (ownedDocument) => {
         this._invalidateElementContext(false);
         elementInvalidated = true;
@@ -573,15 +640,18 @@ export class DocxScrollViewer implements ZoomableViewer {
         this._activeCommentId = null;
         this._activeCommentPage = null;
         this._resetCommentNavigation();
+        this._unbindLayoutDocument();
         if (ownedDocument) {
           // Recycle before the old worker is terminated. Every captured slot
           // dispatcher then becomes stale before its expected rejection lands.
           for (const [idx, slot] of [...this._slots]) this._recycleSlot(idx, slot);
           this._lastTopIndex = -1;
+          this._lastReportedTotal = -1;
         }
       });
       if (!doc) return;
       if (this._destroyed) throw new Error('DocxScrollViewer is destroyed');
+      this._bindLayoutDocument(doc);
       this._find.invalidate();
       this._findActive = false;
       this._activeCommentId = null;
@@ -605,6 +675,70 @@ export class DocxScrollViewer implements ZoomableViewer {
 
   get pageCount(): number {
     return this._doc?.pageCount ?? 0;
+  }
+
+  /**
+   * Whether every page has been laid out.
+   *
+   * Only ever false under {@link DocxScrollViewerOptions.progressiveLayout},
+   * between the opening pages appearing and the full layout replacing them.
+   * While false, {@link pageCount} is the pages available so far, not the
+   * document's total.
+   */
+  get layoutComplete(): boolean {
+    return this._doc?.layoutComplete ?? true;
+  }
+
+  /**
+   * Resolve once the whole document is laid out.
+   *
+   * Await this before anything that must see every page — a total page count,
+   * printing, export. {@link findText} does so internally. Resolves immediately
+   * unless progressive layout actually deferred work.
+   */
+  async whenLayoutComplete(): Promise<void> {
+    // Optional-called because an INJECTED engine (fromDocument) may predate this
+    // method; a document that cannot defer layout is already complete.
+    await this._doc?.whenLayoutComplete?.();
+  }
+
+  private _bindLayoutDocument(doc: DocxDocument): void {
+    this._unbindLayoutDocument();
+    let initial = true;
+    this._layoutUnsubscribe = subscribeDocxLayout(
+      doc,
+      () => ({
+        pageCount: doc.pageCount,
+        exact: doc.layoutComplete,
+        complete: doc.layoutComplete,
+      }),
+      (publication) => {
+        if (initial) {
+          initial = false;
+          return;
+        }
+        this._onLayoutPublication(doc, publication);
+      },
+      (error) => this._reportRenderError(error),
+    );
+  }
+
+  private _unbindLayoutDocument(): void {
+    this._layoutUnsubscribe?.();
+    this._layoutUnsubscribe = null;
+  }
+
+  private _onLayoutPublication(doc: DocxDocument, publication: DocxLayoutPublication): void {
+    if (this._destroyed || doc !== this._doc) return;
+    if (publication.error !== undefined) {
+      this._reportRenderError(publication.error);
+      return;
+    }
+    this._find.invalidate();
+    // Provisional pages can change in place. The authoritative publication also
+    // replaces every provisional page, even if its page count happens to match.
+    if (!publication.exact || publication.complete) this._invalidateRenderedSlots();
+    this.relayout();
   }
 
   /** CSS px width of page `i` at the current scale. */
@@ -889,6 +1023,26 @@ export class DocxScrollViewer implements ZoomableViewer {
     this._mountVisible(undefined, false);
   }
 
+  /**
+   * Force every mounted slot to repaint on the next mount pass.
+   *
+   * `_renderSlot` short-circuits when a slot already holds the page it is being
+   * asked for, which is what stops scrolling from repainting unchanged pages.
+   * When the underlying layout is REPLACED — progressive layout swapping its
+   * provisional prefix for the authoritative one — that guard is exactly wrong:
+   * the page index is unchanged but its content may not be (a footer's
+   * PAGE/NUMPAGES total is only knowable once the last page exists). Clearing
+   * the slot identities makes the next `_mountVisible` re-render in place,
+   * without unmounting and re-creating the slots, so nothing blanks.
+   */
+  private _invalidateRenderedSlots(): void {
+    this._renderEpoch++;
+    for (const slot of this._slots.values()) {
+      slot.renderedPage = -1;
+      slot.renderedScale = -1;
+    }
+  }
+
   /** Mount/recycle slots for the current visible window. */
   private _mountVisible(
     initialRenders?: Promise<void>[],
@@ -914,17 +1068,37 @@ export class DocxScrollViewer implements ZoomableViewer {
         if (initialRenders && render) initialRenders.push(render);
       } else if (repositionExisting) {
         // Re-position (offsets shift after a spacer/height change).
-        this._positionSlot(this._slots.get(i)!, i, r);
+        const slot = this._slots.get(i)!;
+        this._positionSlot(slot, i, r);
+        // Repaint only if this slot's identity was cleared — `_renderSlot`
+        // returns null when the slot already holds page `i`, so ordinary
+        // scrolling and resizing still never re-render a mounted page. The one
+        // caller that clears it is `_invalidateRenderedSlots`, for a layout
+        // replaced underneath the pages on screen.
+        const render = this._renderSlot(i, slot, initialRenders === undefined);
+        if (initialRenders && render) initialRenders.push(render);
       }
     }
-    // onVisiblePageChange fires ONLY when the top visible page actually changes
-    // (change-only latch; `_lastTopIndex` starts at -1 so the first layout fires
-    // once for page 0). Every mount path — scroll, zoom, resize re-fit, and
-    // scrollToPage — funnels through here, so navigation never double-fires.
-    if (r.topIndex !== this._lastTopIndex) {
-      this._lastTopIndex = r.topIndex;
-      this._opts.onVisiblePageChange?.(r.topIndex, this._doc.pageCount);
-    }
+    this._emitVisiblePageChange(r);
+  }
+
+  /**
+   * Fire `onVisiblePageChange`, but only on an actual change.
+   *
+   * The latch is the (topIndex, total) PAIR. Watching the index alone was
+   * enough while a document's page count was fixed at load; under progressive
+   * layout the count grows while the user sits at the top of page 1, and an
+   * index-only latch leaves a "page 1 of 2" indicator stranded at the preview
+   * count until they happen to scroll. Both emit paths — mount and zoom
+   * preview — funnel through here so navigation still never double-fires.
+   */
+  private _emitVisiblePageChange(r: VisibleRange): void {
+    if (!this._doc) return;
+    const total = this._doc.pageCount;
+    if (r.topIndex === this._lastTopIndex && total === this._lastReportedTotal) return;
+    this._lastTopIndex = r.topIndex;
+    this._lastReportedTotal = total;
+    this._opts.onVisiblePageChange?.(r.topIndex, total, this.layoutComplete);
   }
 
   /** Apply the resolved page-canvas shadow (design: recipe drop shadow by
@@ -1153,6 +1327,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         dpr,
         defaultTextColor: this._opts.defaultTextColor,
         currentDate: this._opts.currentDate,
+        ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
         onTextRun,
       });
     } catch (error) {
@@ -1325,6 +1500,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         dpr,
         defaultTextColor: this._opts.defaultTextColor,
         currentDate: this._opts.currentDate,
+        ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
         onTextRun: wantRuns ? (r) => runs.push(r) : undefined,
       });
       // Stale if EITHER (a) the epoch moved (a setScale rescaled mid-flight, so
@@ -1663,11 +1839,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         this._previewSlot(existing, i, r);
       }
     }
-    // Fire onVisiblePageChange only when the top page actually changed.
-    if (r.topIndex !== this._lastTopIndex) {
-      this._lastTopIndex = r.topIndex;
-      this._opts.onVisiblePageChange?.(r.topIndex, this._doc.pageCount);
-    }
+    this._emitVisiblePageChange(r);
   }
 
   /**
@@ -1783,6 +1955,7 @@ export class DocxScrollViewer implements ZoomableViewer {
       dpr,
       defaultTextColor: this._opts.defaultTextColor,
       currentDate: this._opts.currentDate,
+      ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
       onTextRun,
     })
       .then(() => {
@@ -1839,6 +2012,43 @@ export class DocxScrollViewer implements ZoomableViewer {
         ) this._reportRenderError(err);
         spareDispatcher.destroy();
       });
+  }
+
+  // ─── §17.13.5 tracked-changes view toggle ─────────────────────────────────
+
+  /**
+   * ECMA-376 §17.13.5 — switch between the final view (`false`, the default:
+   * deletions hidden) and the markup view (`true`: author-coloured revision
+   * decoration + margin change bars) at runtime. Every mounted page
+   * re-renders against the selected layout variant; find results are
+   * invalidated because the visible text differs between the views.
+   */
+  async setShowTrackedChanges(value: boolean): Promise<void> {
+    const generation = ++this._layoutViewGeneration;
+    const doc = this._doc;
+    if (this._showTrackedChanges === value) {
+      await doc?.setLayoutView?.({
+        showTrackedChanges: value,
+        currentDate: this._opts.currentDate,
+      });
+      return;
+    }
+    // The markup view is a different retained layout with its own pagination,
+    // so move the document's active variant before reading any geometry from
+    // it — page count and page heights are about to change.
+    await doc?.setLayoutView?.({
+      showTrackedChanges: value,
+      currentDate: this._opts.currentDate,
+    });
+    if (this._destroyed || generation !== this._layoutViewGeneration || doc !== this._doc) return;
+    this._showTrackedChanges = value;
+    this._find.invalidate();
+    // Re-render every mounted slot at the new variant, and relayout: heights,
+    // spacer and mount window all follow the new page count, and a shrinking
+    // document must recycle slots that are now out of range rather than ask for
+    // pages that no longer exist.
+    this._invalidateRenderedSlots();
+    this.relayout();
   }
 
   /**
@@ -1977,6 +2187,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         const runs = doc.collectPageRuns(page, {
           width: this._pageWidthPx(page),
           currentDate: this._opts.currentDate,
+          ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
         });
         entry = { scale, runs };
         this._commentRunsByPage.set(page, entry);
@@ -2061,6 +2272,16 @@ export class DocxScrollViewer implements ZoomableViewer {
     opts: FindMatchesOptions = {},
   ): Promise<FindMatch<DocxMatchLocation>[]> {
     if (!this._doc) return [];
+    // Search spans every page, so a progressively-loaded document has to finish
+    // laying out first — otherwise the search silently covers only the pages
+    // that happen to exist yet. Guarded on the document actually being
+    // incomplete so that an ordinary document still starts its find
+    // synchronously: `findText()` followed immediately by `clearFind()` must
+    // cancel the find, which it cannot do if the find has not begun.
+    if (this._doc.layoutComplete === false) {
+      await this._doc.whenLayoutComplete();
+      if (this._destroyed || !this._doc) return [];
+    }
     this._findActive = query.length > 0;
     const matches = await this._find.find(query, opts);
     this._redrawHighlights();
@@ -2097,6 +2318,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     return this._doc.collectPageRuns(page, {
       width: this._pageWidthPx(page),
       currentDate: this._opts.currentDate,
+      ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
     });
   }
 
@@ -2539,6 +2761,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         yPt: localY / rect.height * pageSize.heightPt,
       }, {
         currentDate: this._opts.currentDate,
+        ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
         maxTextCharacters: MAX_DOCX_ELEMENT_TEXT_CHARACTERS,
       });
     } catch (error) {
@@ -2560,6 +2783,8 @@ export class DocxScrollViewer implements ZoomableViewer {
   destroy(): void {
     if (this._destroyed) return;
     this._destroyed = true;
+    this._unbindLayoutDocument();
+    this._layoutViewGeneration++;
     this._resetCommentNavigation();
     this._find.invalidate();
     this._findActive = false;
