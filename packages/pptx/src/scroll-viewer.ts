@@ -1585,7 +1585,17 @@ export class PptxScrollViewer implements ZoomableViewer {
         bmp.close();
         return;
       }
-      if (!this._commitSlotBitmap(canvas, dispatcher, generation, bmp, dpr)) return;
+      const size = {
+        cssWidth: Math.round(bmp.width / dpr),
+        cssHeight: Math.round(bmp.height / dpr),
+      };
+      // Interactive media later paints through `presentSlide()` on the same
+      // pooled canvas, so that canvas must remain a 2D canvas. A browser canvas
+      // cannot switch back from `bitmaprenderer` after the first acquisition.
+      const committed = this._opts.enableMediaPlayback
+        ? dispatcher.commitBitmapTo2d(generation, bmp, size)
+        : dispatcher.commitBitmap(generation, bmp, size);
+      if (!committed) return;
       // This bitmap now defines the scale the on-screen canvas lives at, so a
       // later zoom preview stretches from HERE (design §7 renderedScale).
       slot.renderedScale = scale;
@@ -1665,47 +1675,6 @@ export class PptxScrollViewer implements ZoomableViewer {
         void this._renderSlotBitmap(i, live, this._slideWidthPx(), this._dpr(), this._scale);
       }
     }
-  }
-
-  /**
-   * Worker slides normally use `bitmaprenderer`. A Viewer with interactive
-   * media must keep every pooled canvas eligible for `presentSlide()`'s 2D
-   * context, because browser canvases cannot switch context types after the
-   * first acquisition. In that configuration copy the transferred bitmap into
-   * 2D and close it explicitly; the ordinary worker-only path retains the
-   * zero-copy bitmaprenderer commit.
-   */
-  private _commitSlotBitmap(
-    canvas: HTMLCanvasElement,
-    dispatcher: StaticCanvasRenderDispatcher,
-    generation: number,
-    bitmap: ImageBitmap,
-    dpr: number,
-  ): boolean {
-    const cssWidth = Math.round(bitmap.width / dpr);
-    const cssHeight = Math.round(bitmap.height / dpr);
-    if (!this._opts.enableMediaPlayback) {
-      return dispatcher.commitBitmap(generation, bitmap, { cssWidth, cssHeight });
-    }
-    if (!dispatcher.isCurrent(generation)) {
-      bitmap.close();
-      return false;
-    }
-    if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
-    if (canvas.height !== bitmap.height) canvas.height = bitmap.height;
-    canvas.style.width = `${cssWidth}px`;
-    canvas.style.height = `${cssHeight}px`;
-    const context = canvas.getContext('2d');
-    if (!context) {
-      bitmap.close();
-      throw new Error('2D context not available');
-    }
-    try {
-      context.drawImage(bitmap, 0, 0);
-    } finally {
-      bitmap.close();
-    }
-    return true;
   }
 
   /**

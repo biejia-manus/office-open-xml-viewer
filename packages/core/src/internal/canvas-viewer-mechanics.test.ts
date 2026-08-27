@@ -198,6 +198,47 @@ describe('StaticCanvasRenderDispatcher', () => {
     expect(() => dispatcher.commitBitmap(dispatcher.begin(), bitmap)).toThrow(failure);
     expect(bitmap.close).toHaveBeenCalledOnce();
   });
+
+  it('commits and closes a worker bitmap through a 2D context', () => {
+    const drawImage = vi.fn();
+    const canvas = {
+      width: 0,
+      height: 0,
+      style: {},
+      getContext: vi.fn(() => ({ drawImage })),
+    } as unknown as HTMLCanvasElement;
+    const dispatcher = new StaticCanvasRenderDispatcher(canvas, false);
+    const bitmap = { width: 30, height: 40, close: vi.fn() } as unknown as ImageBitmap;
+
+    expect(dispatcher.commitBitmapTo2d(dispatcher.begin(), bitmap, {
+      cssWidth: 15,
+      cssHeight: 20,
+    })).toBe(true);
+    expect(drawImage).toHaveBeenCalledWith(bitmap, 0, 0);
+    expect(bitmap.close).toHaveBeenCalledOnce();
+    expect(canvas.width).toBe(30);
+    expect(canvas.height).toBe(40);
+    expect(canvas.style.width).toBe('15px');
+    expect(canvas.style.height).toBe('20px');
+  });
+
+  it('closes a stale 2D worker bitmap without drawing it', () => {
+    const drawImage = vi.fn();
+    const canvas = {
+      width: 0,
+      height: 0,
+      style: {},
+      getContext: vi.fn(() => ({ drawImage })),
+    } as unknown as HTMLCanvasElement;
+    const dispatcher = new StaticCanvasRenderDispatcher(canvas, false);
+    const stale = dispatcher.begin();
+    dispatcher.begin();
+    const bitmap = { width: 30, height: 40, close: vi.fn() } as unknown as ImageBitmap;
+
+    expect(dispatcher.commitBitmapTo2d(stale, bitmap)).toBe(false);
+    expect(bitmap.close).toHaveBeenCalledOnce();
+    expect(drawImage).not.toHaveBeenCalled();
+  });
 });
 
 describe('CanvasViewerErrorRouter', () => {
