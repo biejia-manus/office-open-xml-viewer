@@ -1,8 +1,9 @@
+use ooxml_common::content_types::PackageContentTypes;
 use ooxml_common::depth::{
     parse_guarded_with_node_limit, xml_dom_complexity_exceeds, GuardedParseError,
 };
 use ooxml_common::json_measurement::measure_json;
-use ooxml_common::ns::{is_a_ns, is_p_ns, is_r_ns};
+use ooxml_common::ns::{is_p_ns, is_r_ns};
 #[cfg(test)]
 use ooxml_common::package_session::PackageLimitReporter;
 use ooxml_common::package_session::{
@@ -11,12 +12,13 @@ use ooxml_common::package_session::{
 use ooxml_common::pull::insufficient_credit_error;
 use ooxml_common::rels::{parse_rels as parse_opc_rels, relationship_part_path, TargetMode};
 use ooxml_common::resource::{
-    HardResourceLimitKind, ResourceUsage, HARD_MAX_PPTX_BOOTSTRAP_JSON_BYTES,
-    HARD_MAX_PPTX_BOOTSTRAP_PROJECTION_BYTES, HARD_MAX_PPTX_BOOTSTRAP_SLIDES,
-    HARD_MAX_PPTX_MARKDOWN_BYTES, HARD_MAX_PPTX_MATERIALIZED_SLIDE_JSON_BYTES,
-    HARD_MAX_PPTX_SHARED_CACHE_ENTRIES, HARD_MAX_PPTX_SHARED_CACHE_PROJECTION_BYTES,
-    HARD_MAX_PPTX_SHARED_DEPENDENCY_PROJECTION_BYTES, HARD_MAX_PPTX_SHARED_DEPENDENCY_XML_BYTES,
-    HARD_MAX_PPTX_SLIDE_JSON_BYTES, HARD_MAX_PPTX_SLIDE_XML_BYTES, HARD_MAX_XML_DOM_COMPLEXITY,
+    HardResourceLimitKind, ResourceUsage, HARD_MAX_EMBEDDED_FONT_BYTES,
+    HARD_MAX_PPTX_BOOTSTRAP_JSON_BYTES, HARD_MAX_PPTX_BOOTSTRAP_PROJECTION_BYTES,
+    HARD_MAX_PPTX_BOOTSTRAP_SLIDES, HARD_MAX_PPTX_MARKDOWN_BYTES,
+    HARD_MAX_PPTX_MATERIALIZED_SLIDE_JSON_BYTES, HARD_MAX_PPTX_SHARED_CACHE_ENTRIES,
+    HARD_MAX_PPTX_SHARED_CACHE_PROJECTION_BYTES, HARD_MAX_PPTX_SHARED_DEPENDENCY_PROJECTION_BYTES,
+    HARD_MAX_PPTX_SHARED_DEPENDENCY_XML_BYTES, HARD_MAX_PPTX_SLIDE_JSON_BYTES,
+    HARD_MAX_PPTX_SLIDE_XML_BYTES, HARD_MAX_XML_DOM_COMPLEXITY,
 };
 use std::collections::HashMap;
 #[cfg(test)]
@@ -272,20 +274,19 @@ pub fn extract_font(
     max_archive_entry_bytes: Option<u64>,
     max_total_inflated_bytes: Option<u64>,
 ) -> Result<Vec<u8>, JsValue> {
-    extract_entry_with_limits(
-        data,
-        path,
+    let zip = open_zip_with_limits(
+        data.to_vec(),
         max_archive_entry_bytes,
         max_total_inflated_bytes,
-        "extract-font",
     )
-    .map_err(|e| JsValue::from_str(&e))
+    .map_err(|e| JsValue::from_str(&e))?;
+    zip.read_font_part(path).map_err(|e| JsValue::from_str(&e))
 }
 
 /// A stateful handle over an opened pptx archive.
 ///
 /// The free functions above (`parse_pptx` / `pptx_to_markdown` / `extract_media`
-/// / `extract_image`) each re-copy the whole file into WASM and re-scan the ZIP
+/// / `extract_image` / `extract_font`) each re-copy the whole file into WASM and re-scan the ZIP
 /// central directory on every call. A `PptxArchive` copies the bytes into WASM
 /// **once** (in `new`) and keeps the opened [`PptxZip`] session alive, so a `parse`
 /// followed by any number of `extract_media` / `extract_image` calls (the
@@ -988,8 +989,7 @@ impl PptxArchive {
             .archive
             .as_ref()
             .map_err(|e| JsValue::from_str(&format!("pptx-parser error: {e}")))?;
-        zip.read_part_in_independent_operation("extract-font", path)
-            .map_err(|e| JsValue::from_str(&e))
+        zip.read_font_part(path).map_err(|e| JsValue::from_str(&e))
     }
 
     /// GitHub-flavoured markdown projection of the retained archive. Mirrors the
@@ -1101,6 +1101,18 @@ impl PptxZip {
     ) -> Result<Vec<u8>, String> {
         self.session
             .run_operation(operation_name, |operation| operation.read_bytes(path))
+    }
+
+    fn read_font_part(&self, path: &str) -> Result<Vec<u8>, String> {
+        self.read_font_part_with_limit(path, HARD_MAX_EMBEDDED_FONT_BYTES)
+    }
+
+    fn read_font_part_with_limit(&self, path: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
+        let max_bytes = usize::try_from(max_bytes)
+            .map_err(|_| "embedded-font byte limit does not fit this target".to_string())?;
+        self.session.run_operation("extract-font", |operation| {
+            operation.read_bytes_bounded(path, max_bytes)
+        })
     }
 
     fn index_for_name(&self, path: &str) -> Option<()> {
@@ -1556,27 +1568,10 @@ const FONT_RELATIONSHIP_TYPES: &[&str] = &[
 ];
 const PPTX_FONT_CONTENT_TYPES: &[&str] = &["application/x-font-ttf", "application/x-fontdata"];
 
-#[derive(Default)]
-struct PackageContentTypes {
-    defaults: HashMap<String, String>,
-    overrides: HashMap<String, String>,
-}
-
-impl PackageContentTypes {
-    fn for_part(&self, part_path: &str) -> Option<&str> {
-        self.overrides
-            .get(part_path)
-            .or_else(|| {
-                let extension = part_path.rsplit_once('.')?.1.to_ascii_lowercase();
-                self.defaults.get(&extension)
-            })
-            .map(String::as_str)
-    }
-}
-
 /// Project `p:embeddedFontLst` into compact, extraction-safe references.
 ///
-/// ECMA-376 Part 1 §19.2.1.9-.10 associates an `a:font@typeface` with up to
+/// ECMA-376 Part 1 §19.2.1.9-.10 associates a `p:font@typeface` (whose schema
+/// type is DrawingML `a:CT_TextFont`) with up to
 /// four style slots whose `r:id` resolves through presentation relationships.
 /// Part 1 §15.2.13 permits raw sfnt (`application/x-font-ttf`) and EOT
 /// (`application/x-fontdata`) Font parts. External, wrong-type, missing and
@@ -1595,9 +1590,11 @@ fn parse_embedded_font_refs(
         return Vec::new();
     };
     let relationships = parse_opc_rels(rels_xml);
+    let content_types_node_limit =
+        u32::try_from(pptx_internal_limits().xml_dom_complexity).unwrap_or(u32::MAX);
     let content_types = read_zip_str(zip, "[Content_Types].xml")
         .ok()
-        .and_then(|xml| parse_package_content_types(&xml))
+        .and_then(|xml| PackageContentTypes::parse_with_node_limit(&xml, content_types_node_limit))
         .unwrap_or_default();
 
     let mut refs = Vec::new();
@@ -1611,7 +1608,7 @@ fn parse_embedded_font_refs(
             .find(|node| {
                 node.is_element()
                     && node.tag_name().name() == "font"
-                    && is_a_ns(node.tag_name().namespace())
+                    && is_p_ns(node.tag_name().namespace())
             })
             .and_then(|font| attr(&font, "typeface"))
             .filter(|name| !name.trim().is_empty())
@@ -1665,41 +1662,6 @@ fn parse_embedded_font_refs(
         }
     }
     refs
-}
-
-fn parse_package_content_types(xml: &str) -> Option<PackageContentTypes> {
-    let doc = parse_preflighted_pptx_xml(xml).ok()?;
-    let mut result = PackageContentTypes::default();
-    for node in doc
-        .root_element()
-        .children()
-        .filter(|node| node.is_element())
-    {
-        match node.tag_name().name() {
-            "Default" => {
-                let (Some(extension), Some(content_type)) =
-                    (attr(&node, "Extension"), attr(&node, "ContentType"))
-                else {
-                    continue;
-                };
-                result
-                    .defaults
-                    .insert(extension.to_ascii_lowercase(), content_type);
-            }
-            "Override" => {
-                let (Some(part_name), Some(content_type)) =
-                    (attr(&node, "PartName"), attr(&node, "ContentType"))
-                else {
-                    continue;
-                };
-                result
-                    .overrides
-                    .insert(part_name.trim_start_matches('/').to_owned(), content_type);
-            }
-            _ => {}
-        }
-    }
-    Some(result)
 }
 
 /// Resolve a relative path against a base directory inside the ZIP.
@@ -3409,13 +3371,14 @@ mod tests {
             r#"
           <p:presentation xmlns:p="{p_ns}" xmlns:a="{a_ns}" xmlns:r="{r_ns}">
             <p:embeddedFontLst>
-              <p:embeddedFont><a:font typeface="Deck Sans"/>
+              <p:embeddedFont><p:font typeface="Deck Sans"/>
                 <p:regular r:id="rRegular"/><p:bold r:id="rBold"/>
                 <p:italic r:id="rItalic"/><p:boldItalic r:id="rBoldItalic"/>
               </p:embeddedFont>
-              <p:embeddedFont><a:font typeface="External"/><p:regular r:id="rExternal"/></p:embeddedFont>
-              <p:embeddedFont><a:font typeface="Wrong Type"/><p:regular r:id="rImage"/></p:embeddedFont>
-              <p:embeddedFont><a:font typeface="Unsupported"/><p:regular r:id="rUnsupported"/></p:embeddedFont>
+              <p:embeddedFont><p:font typeface="External"/><p:regular r:id="rExternal"/></p:embeddedFont>
+              <p:embeddedFont><p:font typeface="Wrong Type"/><p:regular r:id="rImage"/></p:embeddedFont>
+              <p:embeddedFont><p:font typeface="Unsupported"/><p:regular r:id="rUnsupported"/></p:embeddedFont>
+              <p:embeddedFont><a:font typeface="Wrong Namespace"/><p:regular r:id="rWrongNamespace"/></p:embeddedFont>
             </p:embeddedFontLst>
             <p:sldIdLst/><p:sldSz cx="9144000" cy="6858000"/>
           </p:presentation>"#
@@ -3430,6 +3393,7 @@ mod tests {
             <Relationship Id="rExternal" Type="{font_rel}" Target="https://example.test/font.ttf" TargetMode="External"/>
             <Relationship Id="rImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="fonts/image.ttf"/>
             <Relationship Id="rUnsupported" Type="{font_rel}" Target="fonts/font5.woff"/>
+            <Relationship Id="rWrongNamespace" Type="{font_rel}" Target="fonts/font6.fntdata"/>
           </Relationships>"#
         );
         let content_types = format!(
@@ -3451,6 +3415,7 @@ mod tests {
             ("ppt/fonts/font4.fntdata", b"bold-italic"),
             ("ppt/fonts/image.ttf", b"not-a-font-rel"),
             ("ppt/fonts/font5.woff", b"unsupported"),
+            ("ppt/fonts/font6.fntdata", b"wrong-namespace"),
         ]);
         let mut zip = PptxZip::new(Cursor::new(bytes)).unwrap();
         let shared = bootstrap_presentation(&mut zip).unwrap();
@@ -3493,6 +3458,54 @@ mod tests {
             json["embeddedFonts"][1]["contentType"],
             "application/x-fontdata"
         );
+    }
+
+    #[test]
+    fn embedded_font_extraction_applies_its_limit_before_materialization() {
+        let bytes = zip_with_parts(&[("ppt/fonts/font1.fntdata", b"12345")]);
+        let zip = PptxZip::new(Cursor::new(bytes)).unwrap();
+        assert_eq!(
+            zip.read_font_part_with_limit("ppt/fonts/font1.fntdata", 5)
+                .unwrap(),
+            b"12345"
+        );
+        assert!(zip
+            .read_font_part_with_limit("ppt/fonts/font1.fntdata", 4)
+            .unwrap_err()
+            .contains("optional-part byte limit"));
+        assert!(zip.assert_healthy().is_ok());
+    }
+
+    #[test]
+    fn strict_presentation_embedded_font_uses_p_font_element() {
+        let presentation = r#"
+          <p:presentation xmlns:p="http://purl.oclc.org/ooxml/presentationml/main"
+            xmlns:r="http://purl.oclc.org/ooxml/officeDocument/relationships">
+            <p:embeddedFontLst><p:embeddedFont><p:font typeface="Strict Deck"/>
+              <p:regular r:id="rFont"/>
+            </p:embeddedFont></p:embeddedFontLst>
+            <p:sldIdLst/><p:sldSz cx="9144000" cy="6858000"/>
+          </p:presentation>"#;
+        let relationships = r#"
+          <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+            <Relationship Id="rFont"
+              Type="http://purl.oclc.org/ooxml/officeDocument/relationships/font"
+              Target="fonts/font1.fntdata"/>
+          </Relationships>"#;
+        let content_types = r#"
+          <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+            <Default Extension="fntdata" ContentType="application/x-font-ttf"/>
+          </Types>"#;
+        let bytes = zip_with_parts(&[
+            ("[Content_Types].xml", content_types.as_bytes()),
+            ("ppt/presentation.xml", presentation.as_bytes()),
+            ("ppt/_rels/presentation.xml.rels", relationships.as_bytes()),
+            ("ppt/fonts/font1.fntdata", b"font"),
+        ]);
+        let mut zip = PptxZip::new(Cursor::new(bytes)).unwrap();
+        let shared = bootstrap_presentation(&mut zip).unwrap();
+        assert_eq!(shared.embedded_fonts.len(), 1);
+        assert_eq!(shared.embedded_fonts[0].font_name, "Strict Deck");
     }
 
     // ECMA-376 §19.3.1.42 sldIdLst — each parsed slide is stamped with its

@@ -8,6 +8,8 @@ import {
 } from '@silurus/ooxml-core';
 import { BoundedRawPartCache } from '@silurus/ooxml-core/internal/bounded-raw-part-cache';
 import { PptxPresentation } from './presentation';
+import { loadEmbeddedFonts } from './embedded-fonts';
+import type { PptxEmbeddedFontRef } from './worker-protocol';
 
 /**
  * `PptxPresentation.destroy()` tears the parser worker down via
@@ -169,6 +171,12 @@ describe('PptxPresentation.destroy() — rejects in-flight worker requests', () 
       },
       '_parse',
     ).mockImplementationOnce(async function (this: PptxPresentation) {
+      const embeddedFonts: PptxEmbeddedFontRef[] = [{
+        fontName: 'Main Deck Font',
+        style: 'regular' as const,
+        partPath: 'ppt/fonts/font1.fntdata',
+        contentType: 'application/x-font-ttf',
+      }];
       (this as unknown as { _preflight: object })._preflight = {
         slideCount: 0,
         slideWidth: 914400,
@@ -178,25 +186,23 @@ describe('PptxPresentation.destroy() — rejects in-flight worker requests', () 
         minorFont: null,
         hlinkColor: null,
         folHlinkColor: null,
-        embeddedFonts: [{
-          fontName: 'Main Deck Font',
-          style: 'regular',
-          partPath: 'ppt/fonts/font1.fntdata',
-          contentType: 'application/x-font-ttf',
-        }],
+        embeddedFonts,
         slides: [],
         fontPreloadNames: [],
       };
+      const loaded = await loadEmbeddedFonts(
+        embeddedFonts,
+        async () => new Uint8Array([0, 1, 0, 0]),
+      );
+      (this as unknown as { _embeddedFontFaces: FontFace[] })._embeddedFontFaces = loaded.faces;
+      (this as unknown as { _embeddedFontAliases: ReadonlyMap<string, string> })
+        ._embeddedFontAliases = loaded.aliases;
+      (this as unknown as { _embeddedFontAuthoredFamilies: ReadonlyMap<string, string> })
+        ._embeddedFontAuthoredFamilies = loaded.authoredFamilies;
     });
-    vi.spyOn(
-      PptxPresentation.prototype as unknown as {
-        getFontBytes(path: string): Promise<Uint8Array>;
-      },
-      'getFontBytes',
-    ).mockResolvedValueOnce(new Uint8Array([0, 1, 0, 0]));
 
     const presentation = await PptxPresentation.load(new ArrayBuffer(0));
-    expect(added).toEqual([expect.objectContaining({ family: 'Main Deck Font' })]);
+    expect(added).toEqual([expect.objectContaining({ family: expect.stringMatching(/^__ooxml_pptx_/) })]);
     presentation.destroy();
     expect(added).toHaveLength(0);
   });

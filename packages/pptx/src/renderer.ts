@@ -132,6 +132,10 @@ import { drawEaVertRun } from './vertical-text.js';
 export interface RenderContext {
   themeMajorFont: string | null;
   themeMinorFont: string | null;
+  /** Lower-cased authored family → this presentation's isolated FontFace alias. */
+  embeddedFontAliases?: ReadonlyMap<string, string>;
+  /** Isolated FontFace alias → lower-cased authored family for fallback policy. */
+  embeddedFontAuthoredFamilies?: ReadonlyMap<string, string>;
   /** Theme hyperlink colour as a 6-char hex (no leading #), or null. */
   themeHlinkColor?: string | null;
   /**
@@ -436,20 +440,22 @@ interface LayoutLine {
  * leading to wrong text size. Map theme references to generic families as a safe fallback.
  */
 function normalizeFontFamily(family: string | null, rc: RenderContext): string {
-  if (!family) return rc.themeMinorFont ?? 'sans-serif';
+  const isolated = (name: string): string =>
+    rc.embeddedFontAliases?.get(name.trim().toLowerCase()) ?? name;
+  if (!family) return isolated(rc.themeMinorFont ?? 'sans-serif');
   if (family.startsWith('+')) {
     // +mn-lt = minor Latin, +mj-lt = major Latin, +mn-ea = minor East Asian, +mj-ea = major East Asian
     if (family === '+mj-lt' || family === '+mj-ea' || family === '+mj-cs') {
-      return rc.themeMajorFont ?? 'sans-serif';
+      return isolated(rc.themeMajorFont ?? 'sans-serif');
     }
     // +mn-lt, +mn-ea, +mn-cs, or any other + prefix → minor font
-    return rc.themeMinorFont ?? 'sans-serif';
+    return isolated(rc.themeMinorFont ?? 'sans-serif');
   }
   // OOXML typeface sometimes appends ",<generic>" hint (e.g. "Wingdings,Sans-Serif").
   // Strip it so the CSS font name resolves to the actual named font.
   const primary = family.split(',')[0].trim();
   if (!primary) return rc.themeMinorFont ?? 'sans-serif';
-  return primary;
+  return isolated(primary);
 }
 
 /** CSS generic font families — must NOT be quoted in a canvas font string. */
@@ -535,17 +541,17 @@ function quoteAll(names: readonly string[]): string {
  *
  * Exported for unit testing the fallback ordering.
  */
-export function cssFontStack(normalized: string): string {
-  const generic = genericFallback(normalized);
-  const sub = OFFICE_FONT_SUBSTITUTE[normalized.toLowerCase()];
+export function cssFontStack(normalized: string, authoredFamily = normalized): string {
+  const generic = genericFallback(authoredFamily);
+  const sub = OFFICE_FONT_SUBSTITUTE[authoredFamily.toLowerCase()];
   const subPart = sub ? `"${sub}", ` : '';
   // Arabic faces keep the historical chain unchanged (Arabic leads; appending a
   // CJK or non-CJK tail would let Latin/digits leak away from the Arabic face).
-  if (isArabicScriptFace(normalized)) {
+  if (isArabicScriptFace(authoredFamily)) {
     return `"${normalized}", ${subPart}${ARABIC_FALLBACKS}, ${generic}`;
   }
   const variant: 'sans' | 'serif' = generic === 'serif' ? 'serif' : 'sans';
-  const cjk = classifyCjkFont(normalized);
+  const cjk = classifyCjkFont(authoredFamily);
   const cjkPart = cjk ? `${quoteAll(cjkFallbackChain(cjk, variant))}, ` : '';
   const nonCjk = variant === 'serif' ? NON_CJK_SERIF_FALLBACKS : NON_CJK_SANS_FALLBACKS;
   const nonCjkPart = `${quoteAll(nonCjk)}, `;
@@ -707,12 +713,13 @@ function applyTextRunReflection(
 export function buildFont(bold: boolean, italic: boolean, sizePx: number, family: string, rc: RenderContext): string {
   const style  = italic ? 'italic ' : '';
   const normalized = normalizeFontFamily(family, rc);
-  const inferredWeight = namedFaceWeight(normalized);
+  const authoredFamily = rc.embeddedFontAuthoredFamilies?.get(normalized) ?? normalized;
+  const inferredWeight = namedFaceWeight(authoredFamily);
   const weight = bold ? 'bold ' : inferredWeight ? `${inferredWeight} ` : '';
   if (CSS_GENERIC_FAMILIES.has(normalized)) {
     return `${style}${weight}${sizePx}px ${normalized}`;
   }
-  return `${style}${weight}${sizePx}px ${cssFontStack(normalized)}`;
+  return `${style}${weight}${sizePx}px ${cssFontStack(normalized, authoredFamily)}`;
 }
 
 /**
@@ -6200,6 +6207,8 @@ export type SlideRenderOptions = RenderOptions & {
   regionMap?: ChartRegionMapRenderer;
   chartEx?: ChartExRenderer;
   dim?: DimOptions;
+  embeddedFontAliases?: ReadonlyMap<string, string>;
+  embeddedFontAuthoredFamilies?: ReadonlyMap<string, string>;
 };
 
 /**
@@ -6397,6 +6406,8 @@ async function renderSlideLeased(
     themeMajorFont: opts.majorFont ?? null,
     themeMinorFont: opts.minorFont ?? null,
     themeHlinkColor: opts.hlinkColor ?? null,
+    embeddedFontAliases: opts.embeddedFontAliases,
+    embeddedFontAuthoredFamilies: opts.embeddedFontAuthoredFamilies,
     // The backing store may have been clamped below `canvasSize × dpr`; downstream
     // crisp-offset math must use the SAME effective dpr the ctx was scaled by.
     dpr: effectiveDpr,

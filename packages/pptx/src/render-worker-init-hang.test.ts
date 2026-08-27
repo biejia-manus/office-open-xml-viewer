@@ -190,7 +190,7 @@ describe('pptx render-worker.ts — init failure never hangs a request (AR4)', (
     await vi.waitFor(() => expect(added).toHaveLength(1));
     expect(extractedFontCount).toBe(1);
     expect(added[0]).toMatchObject({
-      family: 'Worker Deck Font',
+      family: expect.stringMatching(/^__ooxml_pptx_/),
       descriptors: { weight: 'bold', style: 'italic' },
       loadCalls: 1,
     });

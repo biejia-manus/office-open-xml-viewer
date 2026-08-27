@@ -62,6 +62,8 @@ let nextOperationId = 1;
 type PresentationLifecycleState = 'empty' | 'opening' | 'ready' | 'failed';
 let presentationState: PresentationLifecycleState = 'empty';
 let fontsLoaded: Promise<unknown> = Promise.resolve();
+let embeddedFontAliases: ReadonlyMap<string, string> = new Map();
+let embeddedFontAuthoredFamilies: ReadonlyMap<string, string> = new Map();
 let resourceUsage: OoxmlResourceUsageSnapshot | undefined;
 let renderers: LoadedWorkerRenderers = {};
 const rawParts = new BoundedRawPartCache({
@@ -141,6 +143,8 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
   dropDecodedBitmapCache(getImage);
   dropSvgImageCache(getImage);
   fontsLoaded = Promise.resolve();
+  embeddedFontAliases = new Map();
+  embeddedFontAuthoredFamilies = new Map();
   resourceUsage = undefined;
   renderers = await loadWorkerRenderers(request.renderers);
 
@@ -151,6 +155,10 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
     maxTotal,
     maxEntries,
   ));
+  // The retained archive exposes font reads as independent operations, so font
+  // decoding can overlap the sequential slide preflight without sharing cursor
+  // ownership. First paint still waits for `fontsLoaded` below.
+  const embeddedFontsLoaded = loadEmbeddedFonts(bootstrap.embeddedFonts, getFontBytes);
   preflightBuilder = new PresentationPreflightBuilder(bootstrap);
   slides = new PptxSlideRepository({
     slideCount: bootstrap.slideCount,
@@ -163,18 +171,17 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
   }
   preflight = preflightBuilder.finish();
   preflightBuilder = null;
-  const embeddedFontsLoaded = loadEmbeddedFonts(preflight.embeddedFonts, getFontBytes);
-  if (request.useGoogleFonts) {
-    fontsLoaded = Promise.all([
-      embeddedFontsLoaded,
-      preloadGoogleFonts(
-        excludeEmbeddedFontFamilies(preflight.fontPreloadNames, preflight.embeddedFonts),
-        PPTX_GOOGLE_FONTS,
-      ),
-    ]);
-  } else {
-    fontsLoaded = embeddedFontsLoaded;
-  }
+  fontsLoaded = (async () => {
+    const embedded = await embeddedFontsLoaded;
+    embeddedFontAliases = embedded.aliases;
+    embeddedFontAuthoredFamilies = embedded.authoredFamilies;
+    if (!request.useGoogleFonts) return embedded.faces;
+    const substitutes = await preloadGoogleFonts(
+      excludeEmbeddedFontFamilies(preflight.fontPreloadNames, embedded.aliases),
+      PPTX_GOOGLE_FONTS,
+    );
+    return [...embedded.faces, ...substitutes];
+  })();
   return preflight;
 }
 
@@ -241,6 +248,8 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
           majorFont: compact.majorFont,
           minorFont: compact.minorFont,
           hlinkColor: compact.hlinkColor,
+          embeddedFontAliases,
+          embeddedFontAuthoredFamilies,
           fetchMedia: getMedia,
           fetchImage: getImage,
           skipMediaControls: request.skipMediaControls,
@@ -268,6 +277,8 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
           majorFont: compact.majorFont,
           minorFont: compact.minorFont,
           hlinkColor: compact.hlinkColor,
+          embeddedFontAliases,
+          embeddedFontAuthoredFamilies,
           fetchMedia: getMedia,
           fetchImage: getImage,
           math: renderers.math,
