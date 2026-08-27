@@ -595,7 +595,8 @@ export class DocxDocument {
           // first publication arrives asynchronously — this deferred is what
           // load() resolves on, exactly as the worker path's firstPublication.
           const firstPublication = deferred<void>();
-          let published = false;
+          let publishedLayout: DeepReadonly<DocumentLayout> | null = null;
+          let ownsPublication = true;
           const full = layoutDocumentProgressively(
             doc._source.bodyLayoutInput,
             services,
@@ -603,9 +604,23 @@ export class DocxDocument {
             {
               scheduler: { ...scheduler, signal: abort.signal },
               onPreview: (preview) => {
-                store.prime(layoutOptions, preview.layout, published);
+                if (!ownsPublication) return;
+                const first = publishedLayout === null;
+                const retainedPreview = store.replaceIfCurrent(
+                  layoutOptions,
+                  publishedLayout,
+                  preview.layout,
+                );
+                if (retainedPreview === null) {
+                  // A view change may evict this variant and a later geometry
+                  // read may rebuild it authoritatively. The old drain has then
+                  // lost its publication token and must never overwrite it.
+                  ownsPublication = false;
+                  return;
+                }
+                publishedLayout = retainedPreview;
                 progressiveDocument._bookmarkPages = null;
-                if (published) {
+                if (!first) {
                   // This background session still owns its store entry, but a
                   // runtime view switch may have selected a different entry.
                   // Never describe the inactive session as current document
@@ -623,7 +638,6 @@ export class DocxDocument {
                   });
                 } else {
                   progressiveDocument._layoutComplete = false;
-                  published = true;
                   publishDocxLayout(progressiveDocument, {
                     pageCount: preview.layout.pages.length,
                     exact: preview.exact,
@@ -634,9 +648,16 @@ export class DocxDocument {
               },
             },
           ).then((layout) => {
-            // Replaces the provisional prefix. Anything already painted from it
-            // is now stale by design; the viewer relays out on completion.
-            store.prime(layoutOptions, layout, true);
+            // Replace only the exact prefix this drain last published. A newer
+            // synchronous rebuild of the same variant owns the key otherwise.
+            if (ownsPublication) {
+              const authoritative = store.replaceIfCurrent(
+                layoutOptions,
+                publishedLayout,
+                layout,
+              );
+              if (authoritative === null) ownsPublication = false;
+            }
             // The prefix's bookmark map described a 2-page document.
             progressiveDocument._bookmarkPages = null;
             progressiveDocument._layoutComplete = true;
@@ -658,7 +679,7 @@ export class DocxDocument {
           // failure can no longer reject it and must surface through
           // whenLayoutComplete() instead of as an unhandled rejection.
           progressiveDocument._layoutCompletion = full.catch((error: unknown) => {
-            if (!published) {
+            if (publishedLayout === null) {
               // Nothing was shown early, so this is still load()'s own
               // rejection — including an abort, which for an un-resolved
               // load() means the caller's await must not hang forever.

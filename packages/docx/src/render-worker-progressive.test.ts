@@ -120,6 +120,41 @@ describe('render worker progressive layout', () => {
       .toBeGreaterThan(recorder.publications.at(-1)!.pageCount);
   }, 300_000);
 
+  it('cannot overwrite a newer same-key authority after losing publication ownership', async () => {
+    const { source, retained } = retain('plain', 300);
+    const store = retained.layoutVariants;
+    // Stand in for a synchronous rebuild triggered by a view switch between
+    // progressive slices. Its distinct pagination makes any stale overwrite
+    // observable even though it occupies the same options key.
+    const replacementSource = layoutSourceStore(syntheticDocxModel('plain', { paragraphs: 60 }));
+    const replacement = paginateBody(
+      replacementSource.bodyLayoutInput,
+      createLayoutServices(replacementSource),
+      DEFAULT_VIEW,
+    );
+    let publications = 0;
+
+    await paginateRenderWorkerDocumentProgressively(
+      retained,
+      source,
+      {
+        publish: () => {
+          publications += 1;
+          if (publications !== 1) return;
+          const progressivePrefix = store.layoutFor(DEFAULT_VIEW);
+          expect(store.replaceIfCurrent(DEFAULT_VIEW, progressivePrefix, replacement))
+            .not.toBeNull();
+        },
+        progress: () => {},
+      },
+      DEFAULT_VIEW,
+    );
+
+    expect(publications).toBe(1);
+    expect(layoutFingerprint(store.layoutFor(DEFAULT_VIEW) as DocumentLayout))
+      .toBe(layoutFingerprint(replacement));
+  }, 300_000);
+
   it('reports progress so a silent worker is distinguishable from a busy one', async () => {
     // The host gives up its request timeout for the duration of a progressive
     // parse, so these are its only liveness evidence between publications.
