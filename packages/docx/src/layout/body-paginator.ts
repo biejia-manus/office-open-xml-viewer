@@ -676,11 +676,25 @@ function locationAfter(
 
 function finalize(state: BodyPaginationState, owners: ReadonlyMap<string, BodySectionLayoutInput>): DocumentLayout {
   // Compatibility-owned continuous-section restart arithmetic anchors the
-  // incoming owner to its first appearance on the shared physical page.
+  // incoming owner to the first physical page that retains its body content.
+  // A transition-only empty region is capacity, not a numbering appearance.
   // Issue #804 locks the retained-layout and painted-footer observations together
   // in the continuous-section cases in page-number-field-render.test.ts.
   const contentFirstAppearance = sectionContentFirstAppearancePageIndices(
-    state.pages.map((draft) => draft.accumulator),
+    state.pages.map((draft) => ({
+      pageIndex: draft.accumulator.pageIndex,
+      sectionRegions: draft.accumulator.sectionRegions.map((region) => ({
+        sectionOccurrenceId: region.sectionOccurrenceId,
+        flowDomainIds: (region.columnIndexes
+          ?? region.section.columns.map((_, index) => index))
+          .map((columnIndex) => bodyFlowDomainId(
+            draft.accumulator.pageIndex,
+            region.id,
+            columnIndex,
+          )),
+      })),
+      contentFlowDomainIds: draft.accumulator.readingOrder.map((node) => node.flowDomainId),
+    })),
   );
   let displayNumber = 0;
   let priorOwner: string | null = null;

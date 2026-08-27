@@ -2723,7 +2723,7 @@ describe('DocxScrollViewer — flicker-free zoom (T8)', () => {
     v.destroy();
   });
 
-  it('CSS preview: text layer gets a transform: scale(ratio) matching newScale / renderedScale', async () => {
+  it('CSS preview: text layer scales from its committed box so transformed overlays cannot inflate the scroll extent', async () => {
     const { v, scrollHost, engine } = setup(20, { enableTextSelection: true });
     engine.feedTextRuns = [{ text: 'Hi', x: 1, y: 2, w: 10, h: 12, fontSize: 12, font: '12px serif' }];
     // The overlay is built in the renderPage .then() microtask.
@@ -2736,6 +2736,14 @@ describe('DocxScrollViewer — flicker-free zoom (T8)', () => {
     v.setScale(v.scaleForTest() * 2);
     expect(textLayer.style.transform).toBe('scale(2)');
     expect(textLayer.style.transformOrigin).toBe('0 0');
+    // The slot wrapper has already grown to 400×800. Keeping the text layer at
+    // width/height:100% and then scaling it by 2 would create an 800×1600
+    // transformed overflow box. In a real scroll container that temporarily
+    // expands both scrollbars; as each worker settle completes the extent then
+    // shrinks page-by-page and can strand the viewport in blank bottom-right
+    // space. Keep the overlay's pre-zoom box (200×400) during the transform.
+    expect(textLayer.style.width).toBe('200px');
+    expect(textLayer.style.height).toBe('400px');
     v.destroy();
   });
 
@@ -2846,6 +2854,24 @@ describe('DocxScrollViewer — flicker-free zoom (T8)', () => {
     v.destroy();
   });
 
+  it('worker bitmap clamping never changes the logical CSS page size', async () => {
+    const { v, scrollHost } = setup(20, {}, 'worker');
+    // The fake worker deliberately returns a 100×200 backing bitmap for a
+    // logical 200×400 page. This models the production renderer reducing the
+    // backing resolution to MAX_CANVAS_AREA at a large zoom. The bitmap is a
+    // rasterization detail; it must still be stretched over the requested page
+    // box or the canvas occupies only the top-left of its wrapper.
+    await Promise.resolve();
+    await Promise.resolve();
+    const slot = slotAtTop(scrollHost, '0px')!;
+    const canvas = slot.children.find((k) => k.tag === 'canvas') as FakeEl;
+    expect(canvas.width).toBe(100);
+    expect(canvas.height).toBe(200);
+    expect(canvas.style.width).toBe('200px');
+    expect(canvas.style.height).toBe('400px');
+    v.destroy();
+  });
+
   // (e) A settle whose epoch is superseded (another setScale during the settle
   //     render) is discarded per the existing epoch gate.
   it('stale settle: an epoch bump during the settle render discards the settle (no swap, spare not attached)', () => {
@@ -2942,6 +2968,8 @@ describe('DocxScrollViewer — flicker-free zoom (T8)', () => {
     // After settle, the preview transform is cleared (the overlay is rebuilt at the
     // full resolution so it no longer needs the scale()).
     expect(textLayer.style.transform).toBe('');
+    expect(textLayer.style.width).toBe('100%');
+    expect(textLayer.style.height).toBe('100%');
     vi.useRealTimers();
     v.destroy();
   });
