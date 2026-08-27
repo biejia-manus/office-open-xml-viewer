@@ -151,6 +151,12 @@ self.onmessage = async (
         return;
       }
 
+      if (request.kind === 'extractFont') {
+        const bytes = host.run(() => archive.extract_font(request.path).buffer as ArrayBuffer);
+        post({ kind: 'fontExtracted', id, bytes }, [bytes]);
+        return;
+      }
+
       if (request.kind === 'resourceUsage') {
         const usage = decodeOoxmlResourceUsage(host.run(() => archive.resource_usage()));
         post({ kind: 'resourceUsage', id, usage });

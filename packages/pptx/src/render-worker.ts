@@ -1,5 +1,5 @@
 import init, { PptxArchive, reinit } from './wasm/pptx_parser.js';
-import { renderSlide, type PptxTextRunInfo } from './renderer';
+import { renderSlideWithEmbeddedFonts, type PptxTextRunInfo } from './renderer';
 import { PPTX_GOOGLE_FONTS } from './google-fonts';
 import {
   findPreflightMimeType,
@@ -35,6 +35,7 @@ import type {
   RenderWorkerResponse,
 } from './worker-protocol';
 import { findPptxElementBoundsByIds, hitTestPptxSlideContext } from './element-selection';
+import { excludeEmbeddedFontFamilies, loadEmbeddedFonts } from './embedded-fonts';
 
 const host = new WasmParserHost<PptxArchive>(init, {
   freeArchive: (archive) => archive.free(),
@@ -61,6 +62,8 @@ let nextOperationId = 1;
 type PresentationLifecycleState = 'empty' | 'opening' | 'ready' | 'failed';
 let presentationState: PresentationLifecycleState = 'empty';
 let fontsLoaded: Promise<unknown> = Promise.resolve();
+let embeddedFontAliases: ReadonlyMap<string, string> = new Map();
+let embeddedFontAuthoredFamilies: ReadonlyMap<string, string> = new Map();
 let resourceUsage: OoxmlResourceUsageSnapshot | undefined;
 let renderers: LoadedWorkerRenderers = {};
 const rawParts = new BoundedRawPartCache({
@@ -121,6 +124,13 @@ function getImage(path: string, mimeType: string): Promise<Blob> {
   }));
 }
 
+function getFontBytes(path: string): Promise<Uint8Array> {
+  return slidePull.run(() => {
+    const bytes = executeArchive((archive) => archive.extract_font(path));
+    return new Uint8Array(bytes as Uint8Array);
+  });
+}
+
 async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'parse' }>) {
   await slidePull.reset();
   slides?.clear();
@@ -133,6 +143,8 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
   dropDecodedBitmapCache(getImage);
   dropSvgImageCache(getImage);
   fontsLoaded = Promise.resolve();
+  embeddedFontAliases = new Map();
+  embeddedFontAuthoredFamilies = new Map();
   resourceUsage = undefined;
   renderers = await loadWorkerRenderers(request.renderers);
 
@@ -143,6 +155,10 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
     maxTotal,
     maxEntries,
   ));
+  // The retained archive exposes font reads as independent operations, so font
+  // decoding can overlap the sequential slide preflight without sharing cursor
+  // ownership. First paint still waits for `fontsLoaded` below.
+  const embeddedFontsLoaded = loadEmbeddedFonts(bootstrap.embeddedFonts, getFontBytes);
   preflightBuilder = new PresentationPreflightBuilder(bootstrap);
   slides = new PptxSlideRepository({
     slideCount: bootstrap.slideCount,
@@ -155,9 +171,17 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
   }
   preflight = preflightBuilder.finish();
   preflightBuilder = null;
-  if (request.useGoogleFonts) {
-    fontsLoaded = preloadGoogleFonts(preflight.fontPreloadNames, PPTX_GOOGLE_FONTS);
-  }
+  fontsLoaded = (async () => {
+    const embedded = await embeddedFontsLoaded;
+    embeddedFontAliases = embedded.aliases;
+    embeddedFontAuthoredFamilies = embedded.authoredFamilies;
+    if (!request.useGoogleFonts) return embedded.faces;
+    const substitutes = await preloadGoogleFonts(
+      excludeEmbeddedFontFamilies(preflight.fontPreloadNames, embedded.aliases),
+      PPTX_GOOGLE_FONTS,
+    );
+    return [...embedded.faces, ...substitutes];
+  })();
   return preflight;
 }
 
@@ -217,13 +241,15 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
         await fontsLoaded;
         const canvas = new OffscreenCanvas(1, 1);
         const runs: PptxTextRunInfo[] = [];
-        await renderSlide(canvas, slide, compact.slideWidth, compact.slideHeight, {
+        await renderSlideWithEmbeddedFonts(canvas, slide, compact.slideWidth, compact.slideHeight, {
           width: request.width,
           dpr: request.dpr,
           defaultTextColor: compact.defaultTextColor,
           majorFont: compact.majorFont,
           minorFont: compact.minorFont,
           hlinkColor: compact.hlinkColor,
+          embeddedFontAliases,
+          embeddedFontAuthoredFamilies,
           fetchMedia: getMedia,
           fetchImage: getImage,
           skipMediaControls: request.skipMediaControls,
@@ -245,12 +271,14 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
         await fontsLoaded;
         const canvas = new OffscreenCanvas(1, 1);
         const runs: PptxTextRunInfo[] = [];
-        await renderSlide(canvas, slide, compact.slideWidth, compact.slideHeight, {
+        await renderSlideWithEmbeddedFonts(canvas, slide, compact.slideWidth, compact.slideHeight, {
           width: request.width,
           defaultTextColor: compact.defaultTextColor,
           majorFont: compact.majorFont,
           minorFont: compact.minorFont,
           hlinkColor: compact.hlinkColor,
+          embeddedFontAliases,
+          embeddedFontAuthoredFamilies,
           fetchMedia: getMedia,
           fetchImage: getImage,
           math: renderers.math,
@@ -288,6 +316,11 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
       const mimeType = findPreflightMimeType(compact, request.path);
       const bytes = await (await getImage(request.path, mimeType)).arrayBuffer();
       post({ kind: 'imageExtracted', id: request.id, bytes }, [bytes]);
+      return;
+    }
+    if (request.kind === 'extractFont') {
+      const bytes = (await getFontBytes(request.path)).buffer as ArrayBuffer;
+      post({ kind: 'fontExtracted', id: request.id, bytes }, [bytes]);
       return;
     }
     if (request.kind === 'resourceUsage') {

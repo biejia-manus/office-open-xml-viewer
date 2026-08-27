@@ -1,5 +1,10 @@
 import type { DimOptions, PptxComment } from './types';
-import { renderSlide, dropImageBitmapCache, type TextRunCallback, type PptxTextRunInfo } from './renderer';
+import {
+  renderSlideWithEmbeddedFonts,
+  dropImageBitmapCache,
+  type TextRunCallback,
+  type PptxTextRunInfo,
+} from './renderer';
 import { createPresentationHandle, type PresentationHandle } from './presentation-handle';
 import {
   buildSlidePartIndex,
@@ -9,6 +14,7 @@ import {
 import {
   preloadGoogleFonts,
   unloadGoogleFonts,
+  unregisterEmbeddedFonts,
   WorkerBridge,
   defaultDpr,
   isHTMLCanvas,
@@ -49,6 +55,7 @@ import {
   type PresentationPreflight,
 } from './presentation-preflight';
 import { PptxSlideRepository } from './slide-repository';
+import { excludeEmbeddedFontFamilies, loadEmbeddedFonts } from './embedded-fonts';
 import {
   isPptxSlidePullResponse,
   PptxSlidePullClient,
@@ -176,6 +183,11 @@ export class PptxPresentation {
    *  the shared FontFaceSet for the lifetime of the SPA (deduped + refcounted in
    *  core, so a web font shared with another open deck survives until both go). */
   private _googleFontFaces: FontFace[] = [];
+  /** Embedded Font parts registered into the main-thread FontFaceSet. */
+  private _embeddedFontFaces: FontFace[] = [];
+  private _embeddedFontAliases: ReadonlyMap<string, string> = new Map();
+  private _embeddedFontAuthoredFamilies: ReadonlyMap<string, string> = new Map();
+  private _destroyed = false;
   /** One stable closure per instance: the decoded-bitmap and SVG caches key on
    *  this identity to scope decodes per deck (so two open decks never swap
    *  images for a shared zip path like ppt/media/image1.png). Reusing the same
@@ -315,7 +327,10 @@ export class PptxPresentation {
       metrics.checkpoint('presentation preflight ready');
       if (mode === 'main' && opts.useGoogleFonts && pres._preflight) {
         pres._googleFontFaces = await preloadGoogleFonts(
-          pres._preflight.fontPreloadNames,
+          excludeEmbeddedFontFamilies(
+            pres._preflight.fontPreloadNames,
+            pres._embeddedFontAliases,
+          ),
           PPTX_GOOGLE_FONTS,
         );
       }
@@ -360,6 +375,20 @@ export class PptxPresentation {
     const bootstrap = normalizePresentationBootstrap(
       (response as Extract<PptxWorkerResponse, { kind: 'presentationOpened' }>).bootstrap,
     );
+    // Font extraction is independent of the retained slide cursor, so start it
+    // from bootstrap metadata while the worker preflights the slide sequence.
+    // Rendering still awaits `_parse`, which does not return until both finish.
+    const embeddedFontLoad = loadEmbeddedFonts(
+      bootstrap.embeddedFonts,
+      (path) => this.getFontBytes(path),
+    ).then((loaded) => {
+      if (this._destroyed) unregisterEmbeddedFonts(loaded.faces);
+      else {
+        this._embeddedFontFaces = loaded.faces;
+        this._embeddedFontAliases = loaded.aliases;
+        this._embeddedFontAuthoredFamilies = loaded.authoredFamilies;
+      }
+    });
     this._slidePullClient = new PptxSlidePullClient({
       slideCount: bootstrap.slideCount,
       transport: this._bridge.transport(isPptxSlidePullResponse),
@@ -381,14 +410,21 @@ export class PptxPresentation {
     // Preflight deliberately drains one transferred unit at a time without
     // decoding it in Window. The worker prepares compact facts from the same
     // unit and publishes them only when this consumer ACKs it.
-    for (let slideIndex = 0; slideIndex < bootstrap.slideCount; slideIndex += 1) {
-      await this._slidePullClient.load(slideIndex, false, timeoutMs);
+    let finished: Extract<PptxWorkerResponse, { kind: 'presentationPreflightReady' }>;
+    try {
+      for (let slideIndex = 0; slideIndex < bootstrap.slideCount; slideIndex += 1) {
+        await this._slidePullClient.load(slideIndex, false, timeoutMs);
+      }
+      finished = await this._bridge.request(
+        (id) => ({ kind: 'finishPresentationPreflight', id }) satisfies PptxWorkerRequest,
+        undefined,
+        { timeoutMs },
+      ) as Extract<PptxWorkerResponse, { kind: 'presentationPreflightReady' }>;
+      await embeddedFontLoad;
+    } catch (error) {
+      void embeddedFontLoad.catch(() => undefined);
+      throw error;
     }
-    const finished = await this._bridge.request(
-      (id) => ({ kind: 'finishPresentationPreflight', id }) satisfies PptxWorkerRequest,
-      undefined,
-      { timeoutMs },
-    );
     this._preflight = normalizePresentationPreflight(
       (finished as Extract<PptxWorkerResponse, { kind: 'presentationPreflightReady' }>).preflight,
     );
@@ -543,7 +579,7 @@ export class PptxPresentation {
         // entrance check. Re-check the presentation poison at the ownership
         // boundary before a cached Slide becomes observable.
         this._assertResourceHealthy();
-        return renderSlide(
+        return renderSlideWithEmbeddedFonts(
           canvas,
           slide,
           compact.slideWidth,
@@ -555,6 +591,8 @@ export class PptxPresentation {
             majorFont: compact.majorFont,
             minorFont: compact.minorFont,
             hlinkColor: compact.hlinkColor,
+            embeddedFontAliases: this._embeddedFontAliases,
+            embeddedFontAuthoredFamilies: this._embeddedFontAuthoredFamilies,
             fetchMedia: this._fetchMedia,
             fetchImage: this._fetchImage,
             skipMediaControls: opts.skipMediaControls,
@@ -754,6 +792,20 @@ export class PptxPresentation {
     }
   }
 
+  private async getFontBytes(fontPath: string): Promise<Uint8Array> {
+    this._assertResourceHealthy();
+    try {
+      const response = await this._bridge.request(
+        (id) => ({ kind: 'extractFont', id, path: fontPath }) satisfies PptxWorkerRequest,
+      );
+      return new Uint8Array(
+        (response as Extract<PptxWorkerResponse, { kind: 'fontExtracted' }>).bytes,
+      );
+    } catch (error) {
+      this._rethrowWithResourceFailure(error);
+    }
+  }
+
   /** Return a fresh content-free metrics snapshot, including lazy slide and
    * media work completed since load. */
   async getResourceMetrics(): Promise<OoxmlResourceMetrics> {
@@ -866,6 +918,7 @@ export class PptxPresentation {
 
   /** Terminate the worker and release all resources. */
   destroy(): void {
+    this._destroyed = true;
     this._slidePullClient?.cancelAll();
     this._bridge.terminate();
     this._slides?.clear();
@@ -883,6 +936,12 @@ export class PptxPresentation {
       unloadGoogleFonts(this._googleFontFaces);
       this._googleFontFaces = [];
     }
+    if (this._embeddedFontFaces.length > 0) {
+      unregisterEmbeddedFonts(this._embeddedFontFaces);
+      this._embeddedFontFaces = [];
+    }
+    this._embeddedFontAliases = new Map();
+    this._embeddedFontAuthoredFamilies = new Map();
     // Release this deck's decoded raster bitmaps (GPU-backed), duotone-recoloured
     // rasters, and SVG object URLs promptly; all three caches are keyed by
     // `_fetchImage`.
