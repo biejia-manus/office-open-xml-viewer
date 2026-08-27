@@ -97,8 +97,8 @@ describe('render worker progressive layout', () => {
     recorder.publications.forEach((publication, index) => {
       expect(recorder.servedAtPublish[index]).toBe(publication.pageCount);
       expect(publication.pageSizes).toHaveLength(publication.pageCount);
-      // Unbounded paginator lookahead means no truncation cut is provably
-      // stable, so every publication is provisional.
+      // Later convergence can still replace a checkpoint, so publications stay
+      // provisional even though the canonical source is never truncated.
       expect(publication.exact).toBe(false);
     });
     // Monotonic: a shrinking page count would jump the viewport under a reader.

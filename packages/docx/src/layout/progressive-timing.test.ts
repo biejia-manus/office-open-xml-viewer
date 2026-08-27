@@ -21,15 +21,14 @@ import { setDocumentLayoutValidation } from './validation-policy.js';
  * Per document shape: how long until a paintable prefix exists, how long until
  * the authoritative layout exists, and what one straight-through blocking pass
  * costs. From those, the two ratios that actually matter — the time-to-first-
- * page win, and the price the growing-prefix chain pays for it.
+ * page win, and the price checkpoint composition pays for it.
  *
  * The last two columns split what would otherwise be one indistinguishable
- * overhead number. `repeated work` is the growing-prefix chain measured with
- * yielding disabled, which is the quantity `progressive.ts` claims a ratio-4
- * geometric series keeps below a third of one layout — so this checks that
- * claim rather than trusting it. `slicing` is what spreading the same work over
- * event-loop turns adds on top; it buys responsiveness, and in worker mode it
- * is also what keeps the worker able to answer render requests mid-pagination.
+ * overhead number. `checkpoint overhead` measures composing immutable,
+ * paintable snapshots from the SAME resumable pagination session with yielding
+ * disabled. `slicing` is what spreading that session over event-loop turns adds
+ * on top; it buys responsiveness, and in worker mode it also keeps the worker
+ * able to answer render requests mid-pagination.
  *
  * ## What it does NOT measure — read before quoting any number
  *
@@ -165,7 +164,6 @@ describe.skipIf(!ENABLED)('progressive layout latency', () => {
         progressive.services,
         options,
         {
-          hasPaginationFields: progressive.source.hasPaginationFields,
           scheduler: { yieldToHost },
           onPreview: (preview) => {
             firstPreviewMs ??= performance.now() - started;
@@ -176,10 +174,9 @@ describe.skipIf(!ENABLED)('progressive layout latency', () => {
       const progressiveMs = performance.now() - started;
       const measureCalls = measureTextCalls() - callsBefore;
 
-      // 2. Progressive again, but never yielding. Separates the chain's
-      //    repeated-prefix work from the cost of spreading it over event-loop
-      //    turns — without this the two are indistinguishable, and the
-      //    repeated-work claim in progressive.ts cannot be checked.
+      // 2. Progressive again, but never yielding. Separates checkpoint
+      //    composition from the cost of spreading one resumable session over
+      //    event-loop turns.
       const unslicedFixture = fixture(shape, paragraphs);
       const unslicedStart = performance.now();
       await layoutDocumentProgressively(
@@ -187,7 +184,6 @@ describe.skipIf(!ENABLED)('progressive layout latency', () => {
         unslicedFixture.services,
         options,
         {
-          hasPaginationFields: unslicedFixture.source.hasPaginationFields,
           scheduler: { sliceMs: Number.POSITIVE_INFINITY },
           onPreview: () => {},
         },
@@ -226,7 +222,7 @@ describe.skipIf(!ENABLED)('progressive layout latency', () => {
 
     const lines = [
       '',
-      '| shape | body | pages | first preview | progressive total | unsliced | blocking | speedup to 1st page | repeated work | slicing | pre-paint block | longest block | yields |',
+      '| shape | body | pages | first preview | progressive total | unsliced | blocking | speedup to 1st page | checkpoint overhead | slicing | pre-paint block | longest block | yields |',
       '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
       ...rows.map((row) => {
         const first = row.firstPreviewMs === null ? 'none' : `${fixed(row.firstPreviewMs)}ms`;

@@ -1108,7 +1108,7 @@ export class DocxDocument {
     setLayoutView(view?: Readonly<{
         showTrackedChanges?: boolean;
         currentDate?: Date | number;
-    }>): void;
+    }>): Promise<void>;
     getBookmarkPage(bookmarkName: string): number | undefined;
     pageSize(pageIndex: number): {
         widthPt: number;
@@ -1198,7 +1198,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     zoomOut(): void;
     fitWidth(): void;
     fitPage(): void;
-    setShowTrackedChanges(value: boolean): void;
+    setShowTrackedChanges(value: boolean): Promise<void>;
     scrollToPage(index: number, opts?: {
         behavior?: 'auto' | 'smooth';
     }): void;
@@ -1350,6 +1350,8 @@ export class DocxViewer implements ZoomableViewer {
     load(source: string | ArrayBuffer): Promise<void>;
     get pageCount(): number;
     get currentPage(): number;
+    get layoutComplete(): boolean;
+    whenLayoutComplete(): Promise<void>;
     get canvasElement(): HTMLCanvasElement;
     goToPage(index: number): Promise<void>;
     nextPage(): Promise<void>;
@@ -1377,7 +1379,7 @@ export interface DocxViewerOptions extends Omit<RenderPageOptions, 'onTextRun'>,
     onSelectionContextChange?: (context: DocxSelectionContext | null) => void;
     onContextMenu?: (event: ViewerContextMenuEvent<DocxSelectionContext>) => void;
     findHighlightColors?: FindHighlightColors;
-    onPageChange?: (index: number, total: number) => void;
+    onPageChange?: (index: number, total: number, layoutComplete: boolean) => void;
     zoomMin?: number;
     zoomMax?: number;
     onScaleChange?: (scale: number) => void;

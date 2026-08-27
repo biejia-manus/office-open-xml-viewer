@@ -61,7 +61,6 @@ describe('progressive layout handover', () => {
       services,
       layoutOptions,
       {
-        hasPaginationFields: source.hasPaginationFields,
         onPreview: (preview) => {
           store.prime(layoutOptions, preview.layout);
           // The store now answers with the provisional pages — this is exactly
@@ -95,21 +94,18 @@ describe('progressive layout handover', () => {
     const store = retained.layoutVariants;
     const layoutOptions = normalizeLayoutOptions(undefined, DEFAULT_CURRENT_DATE_MS);
 
-    const previewGeometry: { widthPt: number; heightPt: number }[] = [];
+    let previewGeometry: { widthPt: number; heightPt: number }[] = [];
     const full = await layoutDocumentProgressively(
       source.bodyLayoutInput,
       services,
       layoutOptions,
       {
-        hasPaginationFields: source.hasPaginationFields,
         onPreview: (preview) => {
           store.prime(layoutOptions, preview.layout);
-          for (const page of preview.layout.pages) {
-            previewGeometry.push({
-              widthPt: page.geometry.widthPt,
-              heightPt: page.geometry.heightPt,
-            });
-          }
+          previewGeometry = preview.layout.pages.map((page) => ({
+            widthPt: page.geometry.widthPt,
+            heightPt: page.geometry.heightPt,
+          }));
         },
       },
     );
@@ -136,7 +132,6 @@ describe('progressive layout handover', () => {
       source.bodyLayoutInput,
       services,
       markupOptions,
-      { hasPaginationFields: source.hasPaginationFields },
     );
     store.prime(markupOptions, markup, true);
 

@@ -242,6 +242,23 @@ function production(state, table, para, group) {
       + '    buildLayout: (options) => layoutDocument(source, layoutServices, options) });\n'
       + '  return { layoutServices, layoutVariants: variants.store, defaultCurrentDateMs };\n'
       + '}\n');
+  write(root, 'packages/docx/src/render-worker-metadata.ts',
+    'export function projectRenderWorkerLayoutMeta(layout, source, review) {\n'
+      + '  const renderedRunIndex = textRunSourceIndexForDocument(layout);\n'
+      + '  return {\n'
+      + '    pageCount: layout.pages.length,\n'
+      + '    pageSizes: layout.pages.map((page) => page.geometry),\n'
+      + '    bookmarkPages: [...buildBookmarkPageMap(layout)],\n'
+      + '    commentAnchorRanges: collectLayoutSourceCommentRangesIfPresent(review.comments, source, renderedRunIndex),\n'
+      + '    revisionAnchorRanges: collectLayoutSourceRevisionRangesIfPresent(review.revisions, source, renderedRunIndex),\n'
+      + '  };\n'
+      + '}\n'
+      + 'export function renderWorkerLayoutMeta(doc, review, currentDateMs, showTrackedChanges) {\n'
+      + '  const source = layoutSourceStoreOf(doc.layoutServices);\n'
+      + '  const layout = doc.layoutVariants.layoutFor(normalizeLayoutOptions(\n'
+      + '    currentDateMs, doc.defaultCurrentDateMs, showTrackedChanges));\n'
+      + '  return projectRenderWorkerLayoutMeta(layout, source, review);\n'
+      + '}\n');
   write(root, 'packages/docx/src/render-worker.ts',
     "import { renderLayoutSourceToCanvas } from './renderer.js';\n"
       + "import { retainRenderWorkerDocumentLayout } from './render-worker-layout.js';\n"
@@ -250,11 +267,14 @@ function production(state, table, para, group) {
       + '  const layoutOptions = normalizeLayoutOptions(req.currentDateMs,\n'
       + '    req.defaultCurrentDateMs, req.showTrackedChanges);\n'
       + '  const layout = doc.layoutVariants.layoutFor(layoutOptions);\n'
-      + '  const pageSizes = layout.pages.map((page) => page.geometry);\n'
-      + '  const meta = { pageCount: layout.pages.length,\n'
-      + '    pageSizes,\n'
-      + '    bookmarkPages: [...buildBookmarkPageMap(layout)] };\n'
+      + '  const reviewIndexInput = { comments: [], revisions: [] };\n'
+      + '  const meta = {\n'
+      + '    ...projectRenderWorkerLayoutMeta(layout, source, reviewIndexInput) };\n'
       + '  return { doc, meta };\n'
+      + '}\n'
+      + 'export function selectWorkerLayoutView(doc, reviewIndexInput, req) {\n'
+      + '  return renderWorkerLayoutMeta(\n'
+      + '    doc, reviewIndexInput, req.currentDateMs, req.showTrackedChanges);\n'
       + '}\n'
       + 'export function renderWorkerPage(doc, canvas, req, options) {\n'
       + '  const source = layoutSourceStoreOf(doc.layoutServices);\n'
@@ -1892,25 +1912,28 @@ test('worker retention rejects declarations outside its exact ownership seam', (
 });
 
 test('worker parse metadata comes from the retained selected-variant route', () => {
-  for (const [name, from, to] of [
-    ['foreign metadata layout', 'doc.layoutVariants.layoutFor(layoutOptions)', 'foreignLayout'],
-    ['derived metadata layout', 'doc.layoutVariants.layoutFor(layoutOptions)', 'layoutForMetadata(doc)'],
+  for (const [name, file, from, to] of [
+    ['foreign metadata layout', 'render-worker.ts', 'doc.layoutVariants.layoutFor(layoutOptions)', 'foreignLayout'],
+    ['derived metadata layout', 'render-worker.ts', 'doc.layoutVariants.layoutFor(layoutOptions)', 'layoutForMetadata(doc)'],
     // Reporting the DEFAULT variant is the specific regression this pin exists
     // for: a tracked-changes or explicit-date load paginates differently, so
     // default-variant metadata describes pages the worker will never paint.
-    ['default metadata layout', 'doc.layoutVariants.layoutFor(layoutOptions)', 'doc.layoutVariants.defaultLayout'],
-    ['foreign metadata variant', 'layoutFor(layoutOptions)', 'layoutFor(foreignOptions)'],
+    ['default metadata layout', 'render-worker.ts', 'doc.layoutVariants.layoutFor(layoutOptions)', 'doc.layoutVariants.defaultLayout'],
+    ['foreign metadata variant', 'render-worker.ts', 'layoutFor(layoutOptions)', 'layoutFor(foreignOptions)'],
     // The selected variant must come from the request's own view fields, not a
     // fabricated one, or the worker paginates a view the host never asked for.
-    ['derived metadata variant', 'normalizeLayoutOptions(req.currentDateMs,', 'normalizeLayoutOptions(Date.now(),'],
-    ['dropped tracked-changes axis', 'req.defaultCurrentDateMs, req.showTrackedChanges)', 'req.defaultCurrentDateMs, false)'],
-    ['foreign metadata page count', 'pageCount: layout.pages.length', 'pageCount: foreignLayout.pages.length'],
-    ['foreign metadata page sizes', 'const pageSizes = layout.pages.map', 'const pageSizes = foreignLayout.pages.map'],
-    ['foreign metadata bookmarks', 'buildBookmarkPageMap(layout)', 'buildBookmarkPageMap(foreignLayout)'],
+    ['derived metadata variant', 'render-worker.ts', 'normalizeLayoutOptions(req.currentDateMs,', 'normalizeLayoutOptions(Date.now(),'],
+    ['dropped tracked-changes axis', 'render-worker.ts', 'req.defaultCurrentDateMs, req.showTrackedChanges)', 'req.defaultCurrentDateMs, false)'],
+    ['foreign initial projection', 'render-worker.ts', 'projectRenderWorkerLayoutMeta(layout, source, reviewIndexInput)', 'projectRenderWorkerLayoutMeta(foreignLayout, source, reviewIndexInput)'],
+    ['dropped runtime tracked axis', 'render-worker.ts', 'req.currentDateMs, req.showTrackedChanges)', 'req.currentDateMs, false)'],
+    ['foreign metadata page count', 'render-worker-metadata.ts', 'pageCount: layout.pages.length', 'pageCount: foreignLayout.pages.length'],
+    ['foreign metadata page sizes', 'render-worker-metadata.ts', 'pageSizes: layout.pages.map', 'pageSizes: foreignLayout.pages.map'],
+    ['foreign metadata bookmarks', 'render-worker-metadata.ts', 'buildBookmarkPageMap(layout)', 'buildBookmarkPageMap(foreignLayout)'],
+    ['foreign runtime metadata layout', 'render-worker-metadata.ts', 'doc.layoutVariants.layoutFor(normalizeLayoutOptions(', 'foreignLayoutFor(normalizeLayoutOptions('],
   ]) {
     const root = initializeCanonicalFixture(`docx-layout-boundary-worker-metadata-${name}-`);
-    const path = join(root, 'packages/docx/src/render-worker.ts');
-    write(root, 'packages/docx/src/render-worker.ts',
+    const path = join(root, `packages/docx/src/${file}`);
+    write(root, `packages/docx/src/${file}`,
       readFileSync(path, 'utf8').replace(from, to));
     expectDiagnostic(root, 'WORKER_LAYOUT_SELECTION', name, '--final');
   }

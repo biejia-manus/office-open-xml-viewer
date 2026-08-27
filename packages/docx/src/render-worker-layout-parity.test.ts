@@ -19,6 +19,7 @@ import { createLayoutServices } from './layout-runtime.js';
 import { layoutDocument } from './document-layout.js';
 import { DocxDocument } from './document.js';
 import { retainRenderWorkerDocumentLayout } from './render-worker-layout.js';
+import { renderWorkerLayoutMeta } from './render-worker-metadata.js';
 import { stableFingerprint } from './layout/fingerprint.js';
 import { buildBookmarkPageMap } from './bookmark-nav.js';
 import { textRunsForSelectedPage } from './text-run-projection.js';
@@ -29,6 +30,7 @@ import {
   DocumentPullWorker,
   MaterializedDocumentCursorArchive,
 } from './document-pull-worker.js';
+import { syntheticDocxModel } from './testing/synthetic-document.js';
 
 function services(): LayoutServices {
   return Object.freeze({
@@ -179,6 +181,21 @@ function metadataForDefaultLayout(
 }
 
 describe('render worker canonical layout parity', () => {
+  it('projects page metadata from the runtime-selected tracked-changes variant', () => {
+    const model = syntheticDocxModel('tracked', { paragraphs: 120 });
+    const source = layoutSourceStore(model);
+    const layoutServices = createLayoutServices(source, { measureContext: measureContext() });
+    const retained = retainRenderWorkerDocumentLayout(source, layoutServices, 0);
+    const review = { comments: model.comments ?? [], revisions: model.revisions ?? [] };
+
+    const finalMeta = renderWorkerLayoutMeta(retained, review, 0, false);
+    const markupMeta = renderWorkerLayoutMeta(retained, review, 0, true);
+
+    expect(markupMeta.pageCount).not.toBe(finalMeta.pageCount);
+    expect(markupMeta.pageSizes).toHaveLength(markupMeta.pageCount);
+    expect(finalMeta.pageSizes).toHaveLength(finalMeta.pageCount);
+  });
+
   it('exposes identical review metadata in main and worker modes', () => {
     const model = realModel();
     model.revisions = [{ kind: 'insertion', author: 'Reviewer', text: 'field' }];
@@ -532,6 +549,9 @@ describe('render worker canonical layout parity', () => {
     const collect = {
       type: 'collectRuns', id: 3, pageIndex: 0, opts: { currentDate: 20 },
     } satisfies RenderWorkerRequest;
+    const layoutMetaRequest = {
+      type: 'selectLayoutView', id: 6, currentDateMs: 20, showTrackedChanges: true,
+    } satisfies RenderWorkerRequest;
     const parsed = {
       type: 'parsedMeta', id: 1,
       meta: { pageCount: 1, revisions: [], comments: [], footnotes: [], endnotes: [], pageSizes: [], bookmarkPages: [] },
@@ -545,6 +565,16 @@ describe('render worker canonical layout parity', () => {
     } satisfies RenderWorkerResponse;
     const runsCollected = {
       type: 'runsCollected', id: 3, runs: [],
+    } satisfies RenderWorkerResponse;
+    const layoutMetaResponse = {
+      type: 'layoutViewSelected', id: 6,
+      meta: {
+        pageCount: 1,
+        pageSizes: [{ widthPt: 595, heightPt: 842 }],
+        bookmarkPages: [],
+        commentAnchorRanges: [],
+        revisionAnchorRanges: [],
+      },
     } satisfies RenderWorkerResponse;
     const progressiveParse = {
       type: 'parse', id: 5, data: new ArrayBuffer(0), useGoogleFonts: false,
@@ -585,12 +615,16 @@ describe('render worker canonical layout parity', () => {
     ]);
     expect(Object.keys(render).sort()).toEqual(['id', 'opts', 'pageIndex', 'type']);
     expect(Object.keys(collect).sort()).toEqual(['id', 'opts', 'pageIndex', 'type']);
+    expect(Object.keys(layoutMetaRequest).sort()).toEqual([
+      'currentDateMs', 'id', 'showTrackedChanges', 'type',
+    ]);
     expect(Object.keys(parsed).sort()).toEqual(['id', 'meta', 'type']);
     expect(Object.keys(verticalFallback).sort()).toEqual([
       'generation', 'id', 'operationId', 'sessionId', 'type',
     ]);
     expect(Object.keys(pageRendered).sort()).toEqual(['bitmap', 'id', 'runs', 'type']);
     expect(Object.keys(runsCollected).sort()).toEqual(['id', 'runs', 'type']);
+    expect(Object.keys(layoutMetaResponse).sort()).toEqual(['id', 'meta', 'type']);
     expect(Object.keys(progressiveParse).sort()).toEqual([
       'currentDateMs', 'data', 'defaultCurrentDateMs', 'id', 'progressiveLayout',
       'resourcePolicy', 'showTrackedChanges', 'type', 'useGoogleFonts',

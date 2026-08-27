@@ -84,6 +84,7 @@ import { layoutDocumentInputAsync } from './layout/document.js';
 import { layoutDocumentProgressively } from './layout/progressive.js';
 import { PaginationAbortError } from './layout/pagination-scheduler.js';
 import { normalizeLayoutOptions } from './layout/options.js';
+import { publishDocxLayout } from './document-layout-events.js';
 
 /** Options for {@link DocxDocument.load}. Extends the shared load-options type
  *  from `@silurus/ooxml-core` (`useGoogleFonts`, `resourceLimits`, and the
@@ -138,16 +139,15 @@ export interface LoadOptions extends CoreLoadOptions {
    * finish laying the rest out in the background.
    *
    * A large document otherwise shows nothing at all until every page has been
-   * paginated. With this on, the first pages are laid out on their own — a real
-   * layout of a short document, produced by the ordinary pagination path — and
-   * handed over immediately, so the viewer can paint while the full layout is
-   * still running. {@link DocxDocument.pageCount} therefore starts small and
-   * grows, the way Word's page count settles during background repagination.
+   * paginated. With this on, the canonical paginator publishes composed
+   * checkpoints while continuing from the same suspended session, so the
+   * viewer can paint without replaying a growing source prefix.
+   * {@link DocxDocument.pageCount} therefore starts small and grows, the way
+   * Word's page count settles during background repagination.
    *
-   * The pages published early are the same pages the finished layout will show,
-   * except in documents whose headers or footers carry PAGE/NUMPAGES fields,
-   * where the displayed totals cannot be known before the last page is laid out.
-   * The finished layout is byte-identical to a blocking load either way.
+   * Early pages are provisional because later header/footer, field or anchored
+   * object convergence can still repaginate them. The finished layout is
+   * byte-identical to a blocking load either way.
    *
    * Await {@link DocxDocument.whenLayoutComplete} before anything that needs the
    * whole document: page-count-sensitive UI, text search, bookmark navigation,
@@ -174,10 +174,8 @@ export interface LoadOptions extends CoreLoadOptions {
    * Called each time progressive layout publishes more pages, before the
    * authoritative layout replaces them.
    *
-   * `pageCount` is the pages available so far. `exact` is false when the
-   * document's headers or footers carry PAGE/NUMPAGES, whose totals cannot be
-   * known until the last page exists — those pages are shown but their numbering
-   * still settles.
+   * `pageCount` is the pages available so far. `exact` is currently always
+   * false because a later convergence pass can still replace those pages.
    */
   onLayoutPartial?: (progress: Readonly<{ pageCount: number; exact: boolean }>) => void;
   /**
@@ -318,6 +316,9 @@ export class DocxDocument {
    *  so liveness is tracked here instead and re-armed by every worker push. */
   private _parseWatchdog: ReturnType<typeof setTimeout> | undefined;
   private _parseWatchdogMs: number | undefined;
+  /** Latest runtime layout-view request. Worker replies may arrive out of
+   * order; only this generation may atomically install its variant + metadata. */
+  private _layoutViewGeneration = 0;
   private _mode: 'main' | 'worker' = 'main';
   private _threeD: ChartThreeDRenderer | undefined;
   private _regionMap: ChartRegionMapRenderer | undefined;
@@ -576,7 +577,7 @@ export class DocxDocument {
           const progressiveDocument = doc;
           const abort = new AbortController();
           progressiveDocument._layoutAbort = abort;
-          // The opening preview is itself laid out in scheduler slices, so the
+          // The opening checkpoint is itself laid out in scheduler slices, so the
           // first publication arrives asynchronously — this deferred is what
           // load() resolves on, exactly as the worker path's firstPublication.
           const firstPublication = deferred<void>();
@@ -586,13 +587,17 @@ export class DocxDocument {
             services,
             layoutOptions,
             {
-              hasPaginationFields: doc._source.hasPaginationFields,
               scheduler: { ...scheduler, signal: abort.signal },
               onPreview: (preview) => {
                 store.prime(layoutOptions, preview.layout, published);
                 progressiveDocument._bookmarkPages = null;
                 if (published) {
-                  // A later step of the chain: more pages are now available.
+                  // A later checkpoint: more pages are now available.
+                  publishDocxLayout(progressiveDocument, {
+                    pageCount: preview.layout.pages.length,
+                    exact: preview.exact,
+                    complete: false,
+                  });
                   opts.onLayoutPartial?.({
                     pageCount: preview.layout.pages.length,
                     exact: preview.exact,
@@ -600,6 +605,11 @@ export class DocxDocument {
                 } else {
                   progressiveDocument._layoutComplete = false;
                   published = true;
+                  publishDocxLayout(progressiveDocument, {
+                    pageCount: preview.layout.pages.length,
+                    exact: preview.exact,
+                    complete: false,
+                  });
                   firstPublication.resolve();
                 }
               },
@@ -611,6 +621,11 @@ export class DocxDocument {
             // The prefix's bookmark map described a 2-page document.
             progressiveDocument._bookmarkPages = null;
             progressiveDocument._layoutComplete = true;
+            publishDocxLayout(progressiveDocument, {
+              pageCount: layout.pages.length,
+              exact: true,
+              complete: true,
+            });
             opts.onLayoutComplete?.();
             // Nothing was published: there was nothing to show early, so
             // load() resolves here, on the layout that would have been built
@@ -637,6 +652,12 @@ export class DocxDocument {
             }
             progressiveDocument._layoutError = error;
             progressiveDocument._layoutComplete = true;
+            publishDocxLayout(progressiveDocument, {
+              pageCount: progressiveDocument.pageCount,
+              exact: false,
+              complete: true,
+              error,
+            });
             opts.onLayoutComplete?.(error);
           });
           await firstPublication.promise;
@@ -760,6 +781,11 @@ export class DocxDocument {
     if (res.type !== 'layoutPartial' || !progressive) return;
     this._applyLayoutPartial(res.partial);
     if (progressive.published) {
+      publishDocxLayout(this, {
+        pageCount: res.partial.pageCount,
+        exact: res.partial.exact,
+        complete: false,
+      });
       progressive.onPartial?.({
         pageCount: res.partial.pageCount,
         exact: res.partial.exact,
@@ -771,6 +797,11 @@ export class DocxDocument {
     // document, not as an extension of one — same rule main mode follows.
     progressive.published = true;
     this._layoutComplete = false;
+    publishDocxLayout(this, {
+      pageCount: res.partial.pageCount,
+      exact: res.partial.exact,
+      complete: false,
+    });
     progressive.firstPublication.resolve();
   }
 
@@ -813,6 +844,11 @@ export class DocxDocument {
     const progressive = this._progressive;
     if (!progressive) return;
     this._layoutComplete = true;
+    publishDocxLayout(this, {
+      pageCount: meta.pageCount,
+      exact: true,
+      complete: true,
+    });
     // A load whose worker published nothing resolves here instead — there was
     // never anything to show early, so `load()` waited for the real document.
     progressive.firstPublication.resolve();
@@ -845,9 +881,10 @@ export class DocxDocument {
    *  time, but it may not go quiet: treat silence as a wedged worker. */
   private _onParseWentSilent(): void {
     const progressive = this._progressive;
+    const silenceMs = this._parseWatchdogMs;
     this._clearParseWatchdog();
     const error = new Error(
-      `worker layout produced no progress for ${this._parseWatchdogMs}ms`,
+      `worker layout produced no progress for ${silenceMs}ms`,
     );
     if (progressive && !progressive.published) {
       // load() has not resolved yet, so this can still be its rejection.
@@ -855,6 +892,12 @@ export class DocxDocument {
     } else if (progressive) {
       this._layoutError = error;
       this._layoutComplete = true;
+      publishDocxLayout(this, {
+        pageCount: this.pageCount,
+        exact: false,
+        complete: true,
+        error,
+      });
       progressive.onComplete?.(error);
     }
     this._bridge.terminate();
@@ -977,6 +1020,12 @@ export class DocxDocument {
         }
         this._layoutError = error;
         this._layoutComplete = true;
+        publishDocxLayout(this, {
+          pageCount: this.pageCount,
+          exact: false,
+          complete: true,
+          error,
+        });
         progressive.onComplete?.(error);
       },
     );
@@ -997,6 +1046,7 @@ export class DocxDocument {
     this._clearParseWatchdog();
     this._parseRequestId = null;
     this._progressive = null;
+    this._layoutViewGeneration++;
     this._bridge.terminate();
     this._document = null;
     this._source = null;
@@ -1296,26 +1346,49 @@ export class DocxDocument {
    * whichever one the renderer is actually painting. Viewers call this when the
    * user toggles the markup view.
    *
-   * Switching to a variant that has never been built pays for building it on
-   * the next geometry read — unavoidable, since the variant genuinely
-   * repaginates the document. The guarantee progressive layout makes is about
-   * the INITIAL variant: that one is never built behind your back.
+   * In worker mode the switch resolves after the worker has produced matching
+   * metadata; until then the previous variant remains active, so synchronous
+   * geometry can never describe different pages from paint. Main mode records
+   * the variant synchronously and builds it on the next geometry read.
    */
-  setLayoutView(
+  async setLayoutView(
     view: Readonly<{ showTrackedChanges?: boolean; currentDate?: Date | number }> = {},
-  ): void {
+  ): Promise<void> {
     const runtime = documentLayoutRuntimeOf(this);
-    runtime.activeLayoutOptions = normalizeLayoutOptions(
+    const next = normalizeLayoutOptions(
       view.currentDate,
       runtime.defaultCurrentDateMs,
       view.showTrackedChanges === true,
     );
+    const generation = ++this._layoutViewGeneration;
+    const active = runtime.activeLayoutOptions;
+    if (
+      active?.currentDateMs === next.currentDateMs &&
+      (active.showTrackedChanges === true) === (next.showTrackedChanges === true)
+    ) return;
+    if (this._mode === 'worker' && this._meta) {
+      const res = await this._bridge.request(
+        (id) => ({
+          type: 'selectLayoutView',
+          id,
+          currentDateMs: next.currentDateMs,
+          showTrackedChanges: next.showTrackedChanges === true,
+        }) satisfies RenderWorkerRequest,
+      );
+      if (generation !== this._layoutViewGeneration) return;
+      const variant = res as Extract<RenderWorkerResponse, { type: 'layoutViewSelected' }>;
+      // Install selection and geometry in one turn. Until this point every
+      // synchronous getter and option fill-in remains on the previous variant.
+      runtime.activeLayoutOptions = next;
+      this._meta = { ...this._meta, ...variant.meta };
+      this._invalidateLayoutDerivedCaches();
+      return;
+    }
+
+    runtime.activeLayoutOptions = next;
     // Bookmark pages and the review anchor caches are derived from the
     // layout, so they belong to the variant that produced them.
-    this._bookmarkPages = null;
-    this._commentAnchorRanges = null;
-    this._revisionAnchorRanges = null;
-    this._reviewTextRunSourceIndex = null;
+    this._invalidateLayoutDerivedCaches();
   }
 
   /** Lazily build (and cache) the `bookmarkName → page index` map from either

@@ -67,7 +67,6 @@ describe('progressive layout builds only the variant being viewed', () => {
       services,
       markupOptions,
       {
-        hasPaginationFields: source.hasPaginationFields,
         onPreview: (preview) => { store.prime(markupOptions, preview.layout); },
       },
     );
@@ -88,7 +87,6 @@ describe('progressive layout builds only the variant being viewed', () => {
       source.bodyLayoutInput,
       services,
       markupOptions,
-      { hasPaginationFields: source.hasPaginationFields },
     );
     store.prime(markupOptions, markup, true);
     builds.length = 0;
@@ -112,7 +110,6 @@ describe('progressive layout builds only the variant being viewed', () => {
       source.bodyLayoutInput,
       services,
       dated,
-      { hasPaginationFields: source.hasPaginationFields },
     );
     store.prime(dated, layout, true);
     builds.length = 0;

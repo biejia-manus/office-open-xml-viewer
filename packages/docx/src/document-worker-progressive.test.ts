@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { BoundedRawPartCache } from '@silurus/ooxml-core/internal/bounded-raw-part-cache';
 import { WorkerBridge, type WorkerLike } from '@silurus/ooxml-core';
 import { DocxDocument } from './document';
-import { attachDocumentLayoutRuntime } from './layout/runtime-state.js';
+import { attachDocumentLayoutRuntime, documentLayoutRuntimeOf } from './layout/runtime-state.js';
 import type {
   DocumentLayoutPartial,
   DocumentMeta,
@@ -82,6 +82,7 @@ function progressiveDocument(opts: {
     _source: null,
     _meta: null,
     _layoutComplete: true,
+    _layoutViewGeneration: 0,
     // Field initializers the real constructor runs; destroy() reads them.
     _rawParts: new BoundedRawPartCache({ maxEntries: 4, maxBytes: 1024 }),
     _embeddedFontFaces: [],
@@ -310,7 +311,9 @@ describe('worker-mode progressive load', () => {
 
       // Going quiet is what is not allowed.
       vi.advanceTimersByTime(1_001);
-      await expect(harness.parsed).rejects.toThrow(/no progress/);
+      await expect(harness.parsed).rejects.toThrow(
+        'worker layout produced no progress for 1000ms',
+      );
       expect(harness.terminated()).toBe(true);
     } finally {
       vi.useRealTimers();
@@ -364,5 +367,105 @@ describe('progressive pushes and request correlation', () => {
     worker.emit({ type: 'parsedMeta', id: 1, meta: fullMeta(40) });
     await expect(parse).resolves.toMatchObject({ type: 'parsedMeta' });
     expect(unsolicited).toHaveLength(2);
+  });
+});
+
+describe('worker layout-view metadata switch', () => {
+  it('keeps the old variant active until matching worker geometry is ready', async () => {
+    let resolveMeta!: (value: RenderWorkerResponse) => void;
+    const metaResponse = new Promise<RenderWorkerResponse>((resolve) => {
+      resolveMeta = resolve;
+    });
+    const requests: RenderWorkerRequest[] = [];
+    const document = Object.create(DocxDocument.prototype) as DocxDocument;
+    Object.assign(document, {
+      _mode: 'worker',
+      _document: null,
+      _source: null,
+      _meta: fullMeta(11),
+      _layoutViewGeneration: 0,
+      _bridge: {
+        request: (factory: (id: number) => RenderWorkerRequest) => {
+          requests.push(factory(23));
+          return metaResponse;
+        },
+      },
+    });
+    attachDocumentLayoutRuntime(document, 0);
+    const runtime = documentLayoutRuntimeOf(document);
+    runtime.activeLayoutOptions = { currentDateMs: 0, showTrackedChanges: false };
+
+    const switching = Promise.resolve(document.setLayoutView({ showTrackedChanges: true }));
+
+    // Until the worker has paginated the requested variant, both synchronous
+    // geometry and option fill-in must remain on the installed final view.
+    expect(document.pageCount).toBe(11);
+    expect(requests).toEqual([{
+      type: 'selectLayoutView',
+      id: 23,
+      currentDateMs: 0,
+      showTrackedChanges: true,
+    }]);
+
+    resolveMeta({
+      type: 'layoutViewSelected',
+      id: 23,
+      meta: {
+        pageCount: 13,
+        pageSizes: Array.from({ length: 13 }, () => ({ ...PAGE })),
+        bookmarkPages: [['outro', 12]],
+        commentAnchorRanges: [],
+        revisionAnchorRanges: [],
+      },
+    } as unknown as RenderWorkerResponse);
+    await switching;
+
+    expect(document.pageCount).toBe(13);
+    expect(document.pageSize(12)).toEqual(PAGE);
+  });
+
+  it('a request for the installed view cancels an older in-flight switch', async () => {
+    let resolveMarkup!: (value: RenderWorkerResponse) => void;
+    const markupResponse = new Promise<RenderWorkerResponse>((resolve) => {
+      resolveMarkup = resolve;
+    });
+    const requests: RenderWorkerRequest[] = [];
+    const document = Object.create(DocxDocument.prototype) as DocxDocument;
+    Object.assign(document, {
+      _mode: 'worker',
+      _document: null,
+      _source: null,
+      _meta: fullMeta(11),
+      _layoutViewGeneration: 0,
+      _bridge: {
+        request: (factory: (id: number) => RenderWorkerRequest) => {
+          requests.push(factory(29));
+          return markupResponse;
+        },
+      },
+    });
+    attachDocumentLayoutRuntime(document, 0);
+    documentLayoutRuntimeOf(document).activeLayoutOptions = {
+      currentDateMs: 0,
+      showTrackedChanges: false,
+    };
+
+    const markup = document.setLayoutView({ showTrackedChanges: true });
+    await document.setLayoutView({ showTrackedChanges: false });
+    resolveMarkup({
+      type: 'layoutViewSelected',
+      id: 29,
+      meta: {
+        pageCount: 13,
+        pageSizes: Array.from({ length: 13 }, () => ({ ...PAGE })),
+        bookmarkPages: [],
+        commentAnchorRanges: [],
+        revisionAnchorRanges: [],
+      },
+    } as unknown as RenderWorkerResponse);
+    await markup;
+
+    expect(requests).toHaveLength(1);
+    expect(document.pageCount).toBe(11);
   });
 });

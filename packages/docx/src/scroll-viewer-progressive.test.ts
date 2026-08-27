@@ -162,7 +162,7 @@ describe('DocxScrollViewer — growing page count', () => {
     viewer.destroy();
   });
 
-  it('moves the document to the markup variant when tracked changes are toggled', () => {
+  it('moves the document to the markup variant when tracked changes are toggled', async () => {
     installDom();
     const engine = new FakeDocxEngine(20, PAGE);
     const viewer = DocxScrollViewer.fromDocument(
@@ -171,14 +171,14 @@ describe('DocxScrollViewer — growing page count', () => {
     );
     expect(engine.layoutViews).toEqual([]);
 
-    viewer.setShowTrackedChanges(true);
+    await viewer.setShowTrackedChanges(true);
     expect(engine.layoutViews).toEqual([
       { showTrackedChanges: true, currentDate: undefined },
     ]);
     viewer.destroy();
   });
 
-  it('recycles out-of-range slots when the markup variant is shorter', () => {
+  it('recycles out-of-range slots when the markup variant is shorter', async () => {
     // Hiding vs showing deletions changes the page count. Toggling to a SHORTER
     // variant while scrolled deep used to leave slots asking for pages that no
     // longer exist, which surfaced as a RangeError and a blank page.
@@ -195,7 +195,7 @@ describe('DocxScrollViewer — growing page count', () => {
     // The toggle shortens the document under the reader.
     engine.setPageCount(3);
     engine.renderCalls.length = 0;
-    viewer.setShowTrackedChanges(true);
+    await viewer.setShowTrackedChanges(true);
 
     expect(viewer.pageCount).toBe(3);
     // Every page requested AFTER the toggle must exist in the shorter variant.

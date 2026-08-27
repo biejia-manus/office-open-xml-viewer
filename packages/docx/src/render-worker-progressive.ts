@@ -20,9 +20,8 @@
  * reasons. It has no `self` or WASM dependency, so tests exercise it directly
  * (see `render-worker-progressive.test.ts`) instead of standing up a Worker.
  * And `render-worker.ts`'s metadata route is AST-pinned by
- * `scripts/check-docx-layout-boundaries.mjs` to exactly one `layout` /
- * `pageSizes` / `meta` declaration, so the partials' geometry has to be built
- * somewhere else.
+ * `scripts/check-docx-layout-boundaries.mjs` to the selected variant and the
+ * shared metadata projector, so the partial projection remains isolated here.
  *
  * ## Why the worker's metadata route stays a single line
  *
@@ -112,7 +111,6 @@ export async function paginateRenderWorkerDocumentProgressively(
     doc.layoutServices,
     layoutOptions,
     {
-      hasPaginationFields: source.hasPaginationFields,
       scheduler: { signal, onProgress: (committedPages) => publisher.progress(committedPages) },
       onPreview: (preview) => {
         // `replace` is false for the first publication (nothing to replace) and
