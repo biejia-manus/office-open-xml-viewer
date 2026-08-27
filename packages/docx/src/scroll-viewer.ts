@@ -324,10 +324,21 @@ export class DocxScrollViewer implements ZoomableViewer {
   /** Second half of the visible-page latch: a document that grows under the
    *  viewport changes `total` without changing `topIndex`. */
   private _lastReportedTotal = -1;
+  /** Completion is observable callback state too: an authoritative publication
+   * can replace a provisional layout without changing its page count. */
+  private _lastReportedLayoutComplete: boolean | null = null;
   /** Subscription to the document currently installed by `_documentOwner`.
    *  Failed and stale acquisitions never replace it, so they cannot revoke the
    *  retained document's authority to publish background layout progress. */
   private _layoutUnsubscribe: (() => void) | null = null;
+  /** Page prefix currently represented by the native scroll extent. A
+   * progressive document may already expose a larger pageCount; later
+   * provisional publications are coalesced until the reader reaches this
+   * presented tail, so background pagination cannot resize the scrollbar under
+   * an otherwise idle viewport. */
+  private _presentedPageCount = 0;
+  /** Newest provisional publication not yet admitted to scroll geometry. */
+  private _pendingLayoutPublication: DocxLayoutPublication | null = null;
   private _scrollListener: (() => void) | null = null;
   private _selectionChangeListener: (() => void) | null = null;
   private _selectionContextKey = 'null';
@@ -423,7 +434,7 @@ export class DocxScrollViewer implements ZoomableViewer {
    *  survives as the "no shadow" sentinel (a `||` would treat `false` as absent
    *  and wrongly re-apply the default). Applied by `_applyPageShadow` at EVERY
    *  canvas-creation site (`_acquireSlot` and the double-buffer spare in
-   *  `_settleSlot`) so a recycled/re-mounted slot and a settle-swapped spare all
+   *  `_refreshSlotAtomically`) so a recycled/re-mounted slot and a swapped spare all
    *  carry it. */
   private readonly _pageShadow: string | false;
   private readonly _find = new DocxFindController(
@@ -647,6 +658,7 @@ export class DocxScrollViewer implements ZoomableViewer {
           for (const [idx, slot] of [...this._slots]) this._recycleSlot(idx, slot);
           this._lastTopIndex = -1;
           this._lastReportedTotal = -1;
+          this._lastReportedLayoutComplete = null;
         }
       });
       if (!doc) return;
@@ -704,6 +716,8 @@ export class DocxScrollViewer implements ZoomableViewer {
 
   private _bindLayoutDocument(doc: DocxDocument): void {
     this._unbindLayoutDocument();
+    this._presentedPageCount = doc.pageCount;
+    this._pendingLayoutPublication = null;
     let initial = true;
     this._layoutUnsubscribe = subscribeDocxLayout(
       doc,
@@ -726,6 +740,8 @@ export class DocxScrollViewer implements ZoomableViewer {
   private _unbindLayoutDocument(): void {
     this._layoutUnsubscribe?.();
     this._layoutUnsubscribe = null;
+    this._presentedPageCount = 0;
+    this._pendingLayoutPublication = null;
   }
 
   private _onLayoutPublication(doc: DocxDocument, publication: DocxLayoutPublication): void {
@@ -735,10 +751,74 @@ export class DocxScrollViewer implements ZoomableViewer {
       return;
     }
     this._find.invalidate();
-    // Provisional pages can change in place. The authoritative publication also
-    // replaces every provisional page, even if its page count happens to match.
-    if (!publication.exact || publication.complete) this._invalidateRenderedSlots();
+    if (!publication.complete) {
+      // Keep only the newest background prefix. pageCount and callbacks still
+      // report what the document can serve, but the native scrollbar stays on
+      // the prefix the reader has actually been shown until they reach its end.
+      // This turns many pagination checkpoints into one demand-driven extent
+      // update without guessing the eventual number of pages.
+      this._pendingLayoutPublication = publication;
+      if (this._lastRange) this._emitVisiblePageChange(this._lastRange);
+      // The first non-empty prefix has no existing scroll geometry to preserve,
+      // and a shrinking prefix cannot leave now-invalid pages mounted.
+      if (
+        this._presentedPageCount === 0 ||
+        publication.pageCount < this._presentedPageCount
+      ) {
+        this._pendingLayoutPublication = null;
+        this._applyLayoutPublication(publication);
+        return;
+      }
+      // If the reader is already looking at the presented tail, waiting for a
+      // future `scroll` event can strand them there: attempting to wheel past a
+      // native scroll maximum does not necessarily emit one. Reveal immediately
+      // in that case; this is reader-driven growth, not background churn.
+      this._revealPendingLayoutAtPresentedTail();
+      return;
+    }
+    this._pendingLayoutPublication = null;
+    this._applyLayoutPublication(publication);
+  }
+
+  /** Admit one layout publication to scroll geometry and refresh every mounted
+   * page atomically. The old canvas remains visible while main mode paints an
+   * off-DOM replacement; worker mode already commits ImageBitmap pixels in one
+   * synchronous transfer. */
+  private _applyLayoutPublication(publication: DocxLayoutPublication): void {
+    const mounted = [...this._slots];
+    this._presentedPageCount = publication.pageCount;
+    // Supersede spares/bitmaps dispatched for an earlier publication. The
+    // newest layout is the only one allowed to swap into a live slot.
+    this._renderEpoch++;
     this.relayout();
+    for (const [page, slot] of mounted) {
+      if (page >= this._presentedPageCount || this._slots.get(page) !== slot) continue;
+      this._refreshSlotAtomically(page, slot);
+    }
+  }
+
+  private _revealPendingLayoutAtPresentedTail(): void {
+    const publication = this._pendingLayoutPublication;
+    if (!publication || this._presentedPageCount === 0) return;
+    const visible = computeVisibleWindow(
+      this._scrollGeometry,
+      this._scrollHost.scrollTop,
+      this._scrollHost.clientHeight,
+      0,
+    );
+    if (visible.end < this._presentedPageCount - 1) return;
+    this._pendingLayoutPublication = null;
+    this._applyLayoutPublication(publication);
+  }
+
+  /** Admit a coalesced prefix before an explicit navigation targets one of its
+   * pages. Background growth stays geometry-neutral, but a caller asking for an
+   * already-published page must not be clamped to the old presented tail. */
+  private _revealPendingLayoutThroughPage(page: number): void {
+    const publication = this._pendingLayoutPublication;
+    if (!publication || page < this._presentedPageCount) return;
+    this._pendingLayoutPublication = null;
+    this._applyLayoutPublication(publication);
   }
 
   /** CSS px width of page `i` at the current scale. */
@@ -877,6 +957,12 @@ export class DocxScrollViewer implements ZoomableViewer {
    * instead of being routed through the background onError channel. */
   private _relayout(initialRenders?: Promise<void>[]): void {
     if (!this._doc) return;
+    // Non-progressive/authoritative engines have no pending prefix boundary.
+    // Keep the historical relayout escape hatch able to observe an injected
+    // engine whose final page count changed between calls.
+    if (this._doc.layoutComplete !== false && this._pendingLayoutPublication === null) {
+      this._presentedPageCount = this._doc.pageCount;
+    }
     // Establish the base fit scale on the first layout that has a positive
     // width. Zoom (T4) layers its own multiplier on top of this; here we only
     // set the base. An explicit `_scaleEstablished` flag (NOT a `_scale === 1`
@@ -928,7 +1014,7 @@ export class DocxScrollViewer implements ZoomableViewer {
   }
 
   private _recomputeHeights(): void {
-    const n = this._doc!.pageCount;
+    const n = Math.min(this._presentedPageCount, this._doc!.pageCount);
     const h = new Array<number>(n);
     for (let i = 0; i < n; i++) h[i] = this._pageHeightPx(i);
     this._heights = h;
@@ -1020,27 +1106,8 @@ export class DocxScrollViewer implements ZoomableViewer {
 
   private _onScroll(): void {
     if (!this._doc || !this._scaleEstablished) return;
+    this._revealPendingLayoutAtPresentedTail();
     this._mountVisible(undefined, false);
-  }
-
-  /**
-   * Force every mounted slot to repaint on the next mount pass.
-   *
-   * `_renderSlot` short-circuits when a slot already holds the page it is being
-   * asked for, which is what stops scrolling from repainting unchanged pages.
-   * When the underlying layout is REPLACED — progressive layout swapping its
-   * provisional prefix for the authoritative one — that guard is exactly wrong:
-   * the page index is unchanged but its content may not be (a footer's
-   * PAGE/NUMPAGES total is only knowable once the last page exists). Clearing
-   * the slot identities makes the next `_mountVisible` re-render in place,
-   * without unmounting and re-creating the slots, so nothing blanks.
-   */
-  private _invalidateRenderedSlots(): void {
-    this._renderEpoch++;
-    for (const slot of this._slots.values()) {
-      slot.renderedPage = -1;
-      slot.renderedScale = -1;
-    }
   }
 
   /** Mount/recycle slots for the current visible window. */
@@ -1070,11 +1137,11 @@ export class DocxScrollViewer implements ZoomableViewer {
         // Re-position (offsets shift after a spacer/height change).
         const slot = this._slots.get(i)!;
         this._positionSlot(slot, i, r);
-        // Repaint only if this slot's identity was cleared — `_renderSlot`
-        // returns null when the slot already holds page `i`, so ordinary
-        // scrolling and resizing still never re-render a mounted page. The one
-        // caller that clears it is `_invalidateRenderedSlots`, for a layout
-        // replaced underneath the pages on screen.
+        // `_renderSlot` returns null when the slot already holds page `i`, so
+        // ordinary scrolling and resizing never re-render a mounted page.
+        // Layout replacement and zoom settle use `_refreshSlotAtomically`
+        // separately so the live canvas remains painted until its replacement
+        // is ready.
         const render = this._renderSlot(i, slot, initialRenders === undefined);
         if (initialRenders && render) initialRenders.push(render);
       }
@@ -1085,28 +1152,34 @@ export class DocxScrollViewer implements ZoomableViewer {
   /**
    * Fire `onVisiblePageChange`, but only on an actual change.
    *
-   * The latch is the (topIndex, total) PAIR. Watching the index alone was
-   * enough while a document's page count was fixed at load; under progressive
-   * layout the count grows while the user sits at the top of page 1, and an
-   * index-only latch leaves a "page 1 of 2" indicator stranded at the preview
-   * count until they happen to scroll. Both emit paths — mount and zoom
-   * preview — funnel through here so navigation still never double-fires.
+   * The latch is the (topIndex, total, complete) tuple. Watching the index alone
+   * was enough while a document's page count was fixed at load; under
+   * progressive layout the count can grow while the user sits at the top, and
+   * the authoritative publication can retain the same count while changing
+   * `complete` to true. Every emit path funnels through here so unchanged state
+   * still never double-fires.
    */
   private _emitVisiblePageChange(r: VisibleRange): void {
     if (!this._doc) return;
     const total = this._doc.pageCount;
-    if (r.topIndex === this._lastTopIndex && total === this._lastReportedTotal) return;
+    const complete = this.layoutComplete;
+    if (
+      r.topIndex === this._lastTopIndex &&
+      total === this._lastReportedTotal &&
+      complete === this._lastReportedLayoutComplete
+    ) return;
     this._lastTopIndex = r.topIndex;
     this._lastReportedTotal = total;
-    this._opts.onVisiblePageChange?.(r.topIndex, total, this.layoutComplete);
+    this._lastReportedLayoutComplete = complete;
+    this._opts.onVisiblePageChange?.(r.topIndex, total, complete);
   }
 
   /** Apply the resolved page-canvas shadow (design: recipe drop shadow by
    *  default, `false` ⇒ none). Single source so `_acquireSlot` and the
-   *  double-buffer spare in `_settleSlot` stay in lock-step — a spare that missed
-   *  this would lose the shadow on the settle swap. `box-shadow` never affects
-   *  layout, so this is safe to (re)set on a live/pooled canvas without shifting
-   *  any offset. */
+   *  double-buffer spare in `_refreshSlotAtomically` stay in lock-step — a spare
+   *  that missed this would lose the shadow on the settle swap. `box-shadow`
+   *  never affects layout, so this is safe to (re)set on a live/pooled canvas
+   *  without shifting any offset. */
   private _applyPageShadow(canvas: HTMLCanvasElement): void {
     if (this._pageShadow !== false) canvas.style.boxShadow = this._pageShadow;
   }
@@ -1530,7 +1603,7 @@ export class DocxScrollViewer implements ZoomableViewer {
       // Clear any preview transform first: a settle re-render lands at the
       // current scale, so the overlay's `scale()` from `_previewSlot` is stale
       // and the rebuilt spans already sit at the crisp geometry (mirrors the
-      // main-mode `_settleSlot` clear).
+      // main-mode `_refreshSlotAtomically` clear).
       if (slot.textLayer) {
         slot.textLayer.style.transform = '';
         slot.textLayer.style.transformOrigin = '';
@@ -1904,12 +1977,12 @@ export class DocxScrollViewer implements ZoomableViewer {
       // Skip slots already at the current scale (a slot that entered the window
       // during the burst mounted fresh at the current scale — nothing to settle).
       if (slot.renderedScale === this._scale) continue;
-      this._settleSlot(i, slot);
+      this._refreshSlotAtomically(i, slot);
     }
   }
 
   /**
-   * Settle-render one slot at the current scale (design §7 mechanism 3).
+   * Refresh one mounted slot without exposing an intermediate blank frame.
    *
    * WORKER: re-dispatch the bitmap render into the SAME canvas. The worker path
    * sizes the device buffer and `transferFromImageBitmap`s it in ONE synchronous
@@ -1926,7 +1999,7 @@ export class DocxScrollViewer implements ZoomableViewer {
    * DISCARDED — the pooled unit is the slot, not the canvas). The old canvas keeps
    * showing the stretched preview until the instant of the swap — blank-free.
    */
-  private _settleSlot(i: number, slot: PageSlot): void {
+  private _refreshSlotAtomically(i: number, slot: PageSlot): void {
     if (!this._doc) return;
     const dpr = this._dpr();
     const widthPx = this._pageWidthPx(i);
@@ -2047,8 +2120,12 @@ export class DocxScrollViewer implements ZoomableViewer {
     // spacer and mount window all follow the new page count, and a shrinking
     // document must recycle slots that are now out of range rather than ask for
     // pages that no longer exist.
-    this._invalidateRenderedSlots();
-    this.relayout();
+    this._pendingLayoutPublication = null;
+    this._applyLayoutPublication({
+      pageCount: doc?.pageCount ?? 0,
+      exact: true,
+      complete: doc?.layoutComplete !== false,
+    });
   }
 
   /**
@@ -2073,6 +2150,7 @@ export class DocxScrollViewer implements ZoomableViewer {
   scrollToPage(index: number, opts?: { behavior?: 'auto' | 'smooth' }): void {
     if (!this._doc || this._doc.pageCount === 0 || !this._scaleEstablished) return;
     const clamped = Math.max(0, Math.min(index, this._doc.pageCount - 1));
+    this._revealPendingLayoutThroughPage(clamped);
     // Recompute offsets from the current heights (independent of scrollTop).
     const r = computeVisibleWindow(
       this._scrollGeometry,
@@ -2099,6 +2177,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     target: Readonly<{ x: number; y: number; w: number; h: number }>,
     opts?: { behavior?: 'auto' | 'smooth' },
   ): void {
+    this._revealPendingLayoutThroughPage(page);
     const range = computeVisibleWindow(
       this._scrollGeometry,
       0,

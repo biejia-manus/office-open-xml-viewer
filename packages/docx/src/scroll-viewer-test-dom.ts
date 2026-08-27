@@ -372,6 +372,7 @@ export class FakeDocxEngine {
   feedTextRuns?: DocxTextRunInfo[];
   comments: DocComment[] = [];
   commentAnchors: CommentAnchorRange[] = [];
+  private _layoutComplete = true;
   constructor(
     private _pageCount: number,
     // Uniform-page convention: a single-element `_sizes` array means EVERY page
@@ -386,6 +387,9 @@ export class FakeDocxEngine {
   setPageCount(pageCount: number): void {
     this._pageCount = pageCount;
   }
+  setLayoutComplete(layoutComplete: boolean): void {
+    this._layoutComplete = layoutComplete;
+  }
   /** Recorded {@link setLayoutView} calls — the viewer must move the document's
    *  active layout variant when its tracked-changes view toggles, BEFORE it
    *  reads any geometry from the new variant. */
@@ -397,6 +401,9 @@ export class FakeDocxEngine {
 
   get pageCount(): number {
     return this._pageCount;
+  }
+  get layoutComplete(): boolean {
+    return this._layoutComplete;
   }
   /** Mirrors the real `DocxDocument.mode` fact (document.ts) — the exact fact the
    *  viewer constructor reads to decide the render path (main ⇒ renderPage,

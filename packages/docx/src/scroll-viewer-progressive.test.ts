@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DocxScrollViewer } from './scroll-viewer.js';
+import { publishDocxLayout } from './document-layout-events.js';
 import {
   FakeDocxEngine,
   installDom,
@@ -27,7 +28,153 @@ function spacerOf(container: FakeEl): FakeEl {
   return container.children[0].children[0].children[0];
 }
 
+function scrollHostOf(container: FakeEl): FakeEl {
+  return container.children[0].children[0];
+}
+
+async function settlePromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe('DocxScrollViewer — growing page count', () => {
+  it('admits the first non-empty prefix immediately', () => {
+    installDom();
+    const container = makeContainer(700, 500);
+    const engine = new FakeDocxEngine(0, PAGE);
+    const doc = engine.asDoc();
+    const viewer = DocxScrollViewer.fromDocument(
+      container as unknown as HTMLElement,
+      doc,
+    );
+    expect(parseFloat(spacerOf(container).style.height || '0')).toBe(0);
+
+    engine.setLayoutComplete(false);
+    engine.setPageCount(3);
+    publishDocxLayout(doc, { pageCount: 3, exact: false, complete: false });
+
+    expect(parseFloat(spacerOf(container).style.height)).toBeGreaterThan(0);
+    expect(scrollHostOf(container).children.some((child) =>
+      child.children.some((nested) => nested.tag === 'canvas'))).toBe(true);
+    viewer.destroy();
+  });
+
+  it('coalesces background page growth until the reader reaches the presented tail', () => {
+    installDom();
+    const container = makeContainer(700, 500);
+    const engine = new FakeDocxEngine(4, PAGE);
+    const doc = engine.asDoc();
+    const fires: Array<[number, number, boolean]> = [];
+    const viewer = DocxScrollViewer.fromDocument(
+      container as unknown as HTMLElement,
+      doc,
+      { onVisiblePageChange: (top, total, complete) => fires.push([top, total, complete]) },
+    );
+    const initialHeight = parseFloat(spacerOf(container).style.height);
+
+    engine.setLayoutComplete(false);
+    engine.setPageCount(8);
+    publishDocxLayout(doc, { pageCount: 8, exact: false, complete: false });
+    engine.setPageCount(16);
+    publishDocxLayout(doc, { pageCount: 16, exact: false, complete: false });
+
+    // pageCount/callbacks report the newest available pages, but a background
+    // publication does not resize the native scrollbar under an idle reader.
+    expect(viewer.pageCount).toBe(16);
+    expect(parseFloat(spacerOf(container).style.height)).toBe(initialHeight);
+    expect(fires.at(-1)).toEqual([0, 16, false]);
+
+    // Once the reader actually reaches the end of the presented prefix, the
+    // newest coalesced publication is revealed in one step.
+    const scrollHost = scrollHostOf(container);
+    scrollHost.scrollTop = initialHeight;
+    scrollHost.dispatch('scroll');
+    expect(parseFloat(spacerOf(container).style.height)).toBeGreaterThan(initialHeight);
+    viewer.destroy();
+  });
+
+  it('reveals a coalesced prefix when programmatic navigation targets it', () => {
+    installDom();
+    const container = makeContainer(700, 500);
+    const engine = new FakeDocxEngine(4, PAGE);
+    const doc = engine.asDoc();
+    const viewer = DocxScrollViewer.fromDocument(
+      container as unknown as HTMLElement,
+      doc,
+    );
+    const initialHeight = parseFloat(spacerOf(container).style.height);
+
+    engine.setLayoutComplete(false);
+    engine.setPageCount(16);
+    publishDocxLayout(doc, { pageCount: 16, exact: false, complete: false });
+    viewer.scrollToPage(12);
+
+    expect(parseFloat(spacerOf(container).style.height)).toBeGreaterThan(initialHeight);
+    expect(viewer.topVisiblePage).toBe(12);
+    viewer.destroy();
+  });
+
+  it('reveals growth immediately when the reader is already at the presented tail', () => {
+    installDom();
+    const container = makeContainer(700, 500);
+    const engine = new FakeDocxEngine(4, PAGE);
+    const doc = engine.asDoc();
+    const viewer = DocxScrollViewer.fromDocument(
+      container as unknown as HTMLElement,
+      doc,
+    );
+    const initialHeight = parseFloat(spacerOf(container).style.height);
+    const scrollHost = scrollHostOf(container);
+    scrollHost.scrollTop = initialHeight - scrollHost.clientHeight;
+    scrollHost.dispatch('scroll');
+
+    engine.setLayoutComplete(false);
+    engine.setPageCount(12);
+    publishDocxLayout(doc, { pageCount: 12, exact: false, complete: false });
+
+    // A wheel gesture at a native scroll maximum may not emit `scroll`, so the
+    // publication itself must open the next prefix for a reader already there.
+    expect(parseFloat(spacerOf(container).style.height)).toBeGreaterThan(initialHeight);
+    viewer.destroy();
+  });
+
+  it('keeps the painted canvas visible until an authoritative main-mode refresh is ready', async () => {
+    installDom();
+    const container = makeContainer(700, 500);
+    const engine = new FakeDocxEngine(2, PAGE, 'main', true);
+    const doc = engine.asDoc();
+    const viewer = DocxScrollViewer.fromDocument(
+      container as unknown as HTMLElement,
+      doc,
+    );
+    for (const call of [...engine.renderCalls]) call.resolve();
+    await settlePromises();
+
+    const scrollHost = scrollHostOf(container);
+    const firstWrapper = scrollHost.children.find((child) =>
+      child.children.some((nested) => nested.tag === 'canvas'))!;
+    const oldCanvas = firstWrapper.children.find((child) => child.tag === 'canvas')!;
+    const oldResizeCount = oldCanvas._deviceResizes.length;
+    const initialHeight = parseFloat(spacerOf(container).style.height);
+    engine.renderCalls.length = 0;
+
+    engine.setPageCount(6);
+    engine.setLayoutComplete(true);
+    publishDocxLayout(doc, { pageCount: 6, exact: true, complete: true });
+
+    const refresh = engine.renderCalls.find((call) => call.page === 0)!;
+    expect(parseFloat(spacerOf(container).style.height)).toBeGreaterThan(initialHeight);
+    expect(refresh.canvas).not.toBe(oldCanvas);
+    expect(firstWrapper.children).toContain(oldCanvas);
+    expect(oldCanvas._deviceResizes).toHaveLength(oldResizeCount);
+
+    refresh.resolve();
+    await settlePromises();
+    expect(firstWrapper.children).not.toContain(oldCanvas);
+    expect(firstWrapper.children).toContain(refresh.canvas);
+    viewer.destroy();
+  });
+
   it('extends the scroll region when layout completes', () => {
     installDom();
     const container = makeContainer(700, 500);
@@ -70,7 +217,7 @@ describe('DocxScrollViewer — growing page count', () => {
     viewer.destroy();
   });
 
-  it('repaints pages in place when the layout underneath them is replaced', () => {
+  it('repaints pages atomically when the layout underneath them is replaced', () => {
     installDom();
     const container = makeContainer(700, 500);
     const engine = new FakeDocxEngine(2, PAGE);
@@ -88,9 +235,8 @@ describe('DocxScrollViewer — growing page count', () => {
 
     // Replacing the layout must, because a page's content can change without
     // its index changing (a footer's PAGE/NUMPAGES total, for one).
-    (viewer as unknown as { _invalidateRenderedSlots(): void })._invalidateRenderedSlots();
     engine.setPageCount(80);
-    viewer.relayout();
+    publishDocxLayout(engine.asDoc(), { pageCount: 80, exact: true, complete: true });
     expect(engine.renderCalls.length).toBeGreaterThan(paintedProvisionally);
     viewer.destroy();
   });
@@ -125,6 +271,25 @@ describe('DocxScrollViewer — growing page count', () => {
     engine.setPageCount(80);
     viewer.relayout();
     expect(fires).toEqual([[0, 2, true], [0, 80, true]]);
+    viewer.destroy();
+  });
+
+  it('re-fires when layout completes without changing the page count', () => {
+    installDom();
+    const fires: Array<[number, number, boolean]> = [];
+    const engine = new FakeDocxEngine(4, PAGE);
+    engine.setLayoutComplete(false);
+    const doc = engine.asDoc();
+    const viewer = DocxScrollViewer.fromDocument(
+      makeContainer(700, 500) as unknown as HTMLElement,
+      doc,
+      { onVisiblePageChange: (top, total, complete) => fires.push([top, total, complete]) },
+    );
+    expect(fires).toEqual([[0, 4, false]]);
+
+    engine.setLayoutComplete(true);
+    publishDocxLayout(doc, { pageCount: 4, exact: true, complete: true });
+    expect(fires).toEqual([[0, 4, false], [0, 4, true]]);
     viewer.destroy();
   });
 
