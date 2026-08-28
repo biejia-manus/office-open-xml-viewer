@@ -131,4 +131,64 @@ describe('DocxViewer progressive layout', () => {
       ._loadingLayer.style.display).toBe('none');
     viewer.destroy();
   });
+
+  it('waits for authoritative pages before a full-document find', async () => {
+    installDom();
+    const engine = new FakeDocxEngine(1, PAGE);
+    engine.setLayoutComplete(false);
+    engine.feedTextRuns = [{
+      text: 'opening', x: 0, y: 0, w: 10, h: 10, fontSize: 10, font: '10px serif',
+    }];
+    const doc = engine.asDoc();
+    const viewer = DocxViewer.fromDocument(
+      makeEl('canvas') as unknown as HTMLCanvasElement,
+      doc,
+    ) as DocxViewer;
+    const findController = (viewer as unknown as { _find: { find: unknown } })._find;
+    const laterMatch = {
+      matchIndex: 0,
+      text: 'later',
+      location: { page: 2, runIndex: 0, startOffset: 0, endOffset: 5 },
+    };
+    const findSpy = vi.spyOn(
+      findController as { find: (query: string) => Promise<unknown[]> },
+      'find',
+    ).mockResolvedValue([laterMatch]);
+    const find = viewer.findText('later');
+    await Promise.resolve();
+    expect(engine.renderCalls.filter((call) => call.page > 0)).toHaveLength(0);
+
+    engine.feedTextRuns = [{
+      text: 'later', x: 0, y: 0, w: 10, h: 10, fontSize: 10, font: '10px serif',
+    }];
+    engine.setPageCount(3);
+    engine.setLayoutComplete(true);
+    publishDocxLayout(doc, { pageCount: 3, exact: true, complete: true });
+    await expect(find).resolves.toEqual([laterMatch]);
+    expect(findSpy).toHaveBeenCalledWith('later', {});
+    viewer.destroy();
+  });
+
+  it('does not start a deferred find after clearFind()', async () => {
+    installDom();
+    const engine = new FakeDocxEngine(1, PAGE);
+    engine.setLayoutComplete(false);
+    const doc = engine.asDoc();
+    const viewer = DocxViewer.fromDocument(
+      makeEl('canvas') as unknown as HTMLCanvasElement,
+      doc,
+    ) as DocxViewer;
+    const findController = (viewer as unknown as { _find: { find: unknown } })._find;
+    const findSpy = vi.spyOn(findController as { find: (query: string) => Promise<unknown[]> }, 'find');
+
+    const pending = viewer.findText('later');
+    viewer.clearFind();
+    engine.setPageCount(3);
+    engine.setLayoutComplete(true);
+    publishDocxLayout(doc, { pageCount: 3, exact: true, complete: true });
+
+    await expect(pending).resolves.toEqual([]);
+    expect(findSpy).not.toHaveBeenCalled();
+    viewer.destroy();
+  });
 });

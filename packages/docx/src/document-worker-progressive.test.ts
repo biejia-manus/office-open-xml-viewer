@@ -1,8 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { BoundedRawPartCache } from '@silurus/ooxml-core/internal/bounded-raw-part-cache';
+import { ProgressiveLayoutLifecycle } from '@silurus/ooxml-core/internal/progressive-layout-lifecycle';
+import { ProgressiveLayoutObserverNotifier } from '@silurus/ooxml-core/internal/progressive-layout-observers';
 import { WorkerBridge, type WorkerLike } from '@silurus/ooxml-core';
 import { DocxDocument } from './document';
 import { attachDocumentLayoutRuntime, documentLayoutRuntimeOf } from './layout/runtime-state.js';
+import { subscribeDocxLayout } from './document-layout-events.js';
 import type {
   DocumentLayoutPartial,
   DocumentMeta,
@@ -31,6 +34,8 @@ function partial(pageCount: number, over: Partial<DocumentLayoutPartial> = {}): 
     pageCount,
     pageSizes: Array.from({ length: pageCount }, () => ({ ...PAGE })),
     bookmarkPages: [['intro', 0]],
+    commentAnchorRanges: [],
+    revisionAnchorRanges: [],
     exact: false,
     ...over,
   };
@@ -81,7 +86,8 @@ function progressiveDocument(opts: {
     _document: null,
     _source: null,
     _meta: null,
-    _layoutComplete: true,
+    _layoutLifecycle: new ProgressiveLayoutLifecycle(),
+    _layoutObservers: new ProgressiveLayoutObserverNotifier(),
     _layoutViewGeneration: 0,
     // Field initializers the real constructor runs; destroy() reads them.
     _rawParts: new BoundedRawPartCache({ maxEntries: 4, maxBytes: 1024 }),
@@ -123,6 +129,7 @@ function progressiveDocument(opts: {
       return { promise, resolve, reject };
     })(),
     published: false,
+    settled: false,
   };
 
   const parsed = (document as unknown as {
@@ -196,8 +203,7 @@ describe('worker-mode progressive load', () => {
     // Review data established by the first publication survives later ones,
     // which deliberately do not re-send it.
     expect(harness.document.comments).toHaveLength(1);
-    // Anchor projections are whole-document joins; the worker omits them from a
-    // prefix rather than ship truncated ones.
+    // Prefix projections are authoritative for the pages already published.
     expect(harness.document.commentAnchorRanges()).toEqual([]);
     // Identity-stable, so a per-frame consumer caching on identity does not
     // rebuild every draw.
@@ -259,6 +265,27 @@ describe('worker-mode progressive load', () => {
     expect(progress).toEqual([{ committedUnits: 17 }]);
   });
 
+  it('keeps observer exceptions out of the authoritative layout result', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const harness = progressiveDocument({
+      onProgress: () => { throw new Error('progress observer failed'); },
+      onPartial: () => { throw new Error('partial observer failed'); },
+      onComplete: () => { throw new Error('complete observer failed'); },
+    });
+
+    harness.push({ type: 'layoutPartial', forId: 11, partial: partial(2, { review: REVIEW }) });
+    await harness.parsed;
+    harness.push({ type: 'layoutProgress', forId: 11, committedPages: 3 });
+    harness.push({ type: 'layoutPartial', forId: 11, partial: partial(4) });
+    harness.settle({ type: 'parsedMeta', id: 11, meta: fullMeta(5) });
+
+    await expect(harness.document.waitUntilLayoutComplete()).resolves.toBeUndefined();
+    expect(harness.document.layoutComplete).toBe(true);
+    expect(harness.document.pageCount).toBe(5);
+    expect(consoleError).toHaveBeenCalledTimes(3);
+    consoleError.mockRestore();
+  });
+
   it('rejects load() when the worker fails before publishing anything', async () => {
     let completed = 0;
     const harness = progressiveDocument({ onComplete: () => { completed += 1; } });
@@ -281,6 +308,7 @@ describe('worker-mode progressive load', () => {
 
     await expect(harness.document.waitUntilLayoutComplete()).rejects.toThrow('background layout failed');
     expect(errors).toHaveLength(1);
+    expect(harness.document.layoutComplete).toBe(false);
     // The provisional pages stay usable; only the completion is lost.
     expect(harness.document.pageCount).toBe(2);
   });
@@ -320,6 +348,46 @@ describe('worker-mode progressive load', () => {
         'worker layout produced no progress for 1000ms',
       );
       expect(harness.terminated()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a post-publication silence failure as the single terminal result', async () => {
+    vi.useFakeTimers();
+    try {
+      const completions: unknown[] = [];
+      const publications: unknown[] = [];
+      const harness = progressiveDocument({
+        timeoutMs: 1_000,
+        onComplete: (error) => completions.push(error),
+      });
+      const unsubscribe = subscribeDocxLayout(
+        harness.document,
+        () => ({ pageCount: harness.document.pageCount, exact: false, complete: false }),
+        (publication) => {
+          if (publication.error) publications.push(publication.error);
+        },
+        () => {},
+      );
+      harness.push({
+        type: 'layoutPartial',
+        forId: 11,
+        partial: partial(2, { review: REVIEW }),
+      });
+      await harness.parsed;
+
+      vi.advanceTimersByTime(1_001);
+      expect(harness.terminated()).toBe(true);
+      const silenceError = completions[0];
+      expect(silenceError).toBeInstanceOf(Error);
+      harness.fail(new Error('Worker terminated'));
+      await Promise.resolve();
+
+      await expect(harness.document.waitUntilLayoutComplete()).rejects.toBe(silenceError);
+      expect(completions).toEqual([silenceError]);
+      expect(publications).toEqual([silenceError]);
+      unsubscribe();
     } finally {
       vi.useRealTimers();
     }
@@ -487,7 +555,8 @@ describe('worker layout-view metadata switch', () => {
       _document: null,
       _source: null,
       _meta: null,
-      _layoutComplete: true,
+      _layoutLifecycle: new ProgressiveLayoutLifecycle(),
+      _layoutObservers: new ProgressiveLayoutObserverNotifier(),
       _layoutViewGeneration: 0,
       _parseRequestId: null,
       _bridge: {

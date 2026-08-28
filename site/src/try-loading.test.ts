@@ -43,7 +43,7 @@ describe('Try Yours parsing progress', () => {
     const branch = renderer.match(/if \(ext === 'pptx'\) \{([\s\S]*?)\n  \}\n\n  const host/)?.[1] ?? '';
     expect(branch).toContain("mode: 'worker'");
     expect(branch).toContain('progressiveLayout: true');
-    expect(branch).toContain('viewer.waitUntilLayoutComplete()');
+    expect(branch).toContain('viewer.waitUntilLayoutComplete().then(mountAllSlides)');
   });
 
   it('keeps the preview frame for XLSX as well as DOCX and PPTX', () => {

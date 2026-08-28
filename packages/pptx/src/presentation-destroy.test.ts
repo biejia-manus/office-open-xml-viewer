@@ -7,6 +7,7 @@ import {
   type FontPreloadEntry,
 } from '@silurus/ooxml-core';
 import { BoundedRawPartCache } from '@silurus/ooxml-core/internal/bounded-raw-part-cache';
+import { ProgressiveLayoutLifecycle } from '@silurus/ooxml-core/internal/progressive-layout-lifecycle';
 import { PptxPresentation } from './presentation';
 import { loadEmbeddedFonts } from './embedded-fonts';
 import type { PptxEmbeddedFontRef } from './worker-protocol';
@@ -99,6 +100,7 @@ describe('PptxPresentation.destroy() — rejects in-flight worker requests', () 
     instance._googleFontFaces = [];
     instance._embeddedFontFaces = [];
     instance._layoutWaiters = new Set();
+    instance._layoutLifecycle = new ProgressiveLayoutLifecycle();
     instance._fetchImage = () => Promise.resolve(new Blob());
     return { pres: instance as unknown as DestroyProbe, bridge, worker };
   }

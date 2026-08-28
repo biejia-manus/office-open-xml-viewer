@@ -2030,7 +2030,6 @@ export interface SectionProps {
     lineNumbering?: LineNumbering | null;
     vAlign?: string | null;
 }
-export function setDocumentLayoutValidation(next: boolean): void;
 export type ShapeFill = {
     fillType: 'solid';
     color: string;

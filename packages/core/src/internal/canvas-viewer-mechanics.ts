@@ -526,6 +526,11 @@ export class StaticCanvasRenderDispatcher {
 /** Shared render-error delivery, with a permanent close gate for teardown. */
 export class CanvasViewerErrorRouter {
   private closed = false;
+  private readonly handled = new WeakSet<Error>();
+  /** Awaiters for the same background lifecycle reported by reportBackground.
+   * This is deliberately narrower than all Viewer promises: an unrelated find
+   * or render operation must never suppress a terminal layout notification. */
+  private backgroundLifecycleOwners = 0;
 
   constructor(
     private readonly viewerName: string,
@@ -535,8 +540,53 @@ export class CanvasViewerErrorRouter {
   report(error: unknown): void {
     if (this.closed) return;
     const normalized = error instanceof Error ? error : new Error(String(error));
+    if (this.handled.has(normalized)) return;
+    this.handled.add(normalized);
     if (this.onError) this.onError(normalized);
     else console.error(`[ooxml] ${this.viewerName} render failed:`, normalized);
+  }
+
+  /** Claim an Error for another explicit callback so derived render rejections
+   * cannot deliver the same terminal failure again through onError. */
+  markHandled(error: unknown): void {
+    if (this.closed || !(error instanceof Error)) return;
+    this.handled.add(error);
+  }
+
+  /** Keep a terminal background failure on the Promise channel while an
+   * explicit awaitable Viewer operation is waiting for that same lifecycle.
+   * Mark the exact Error identity before rethrowing; unrelated background
+   * failures must never be hidden merely because another Promise is pending. */
+  async ownAwaitable<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      this.markHandled(error);
+      throw error;
+    }
+  }
+
+  /** Claim the background lifecycle while an explicit public Promise waits for
+   * it. Publication and Promise rejection can cross any number of async jobs;
+   * synchronous ownership makes their single-channel contract deterministic. */
+  async ownBackgroundLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+    this.backgroundLifecycleOwners++;
+    try {
+      return await this.ownAwaitable(operation);
+    } finally {
+      this.backgroundLifecycleOwners--;
+    }
+  }
+
+  /** Route an unowned background failure, or claim it for an explicit callback
+   * owner or an explicit Promise awaiting this same lifecycle. */
+  reportBackground(error: unknown, explicitCallbackOwner = false): void {
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    if (explicitCallbackOwner || this.backgroundLifecycleOwners > 0) {
+      this.markHandled(normalized);
+      return;
+    }
+    this.report(normalized);
   }
 
   close(): void {

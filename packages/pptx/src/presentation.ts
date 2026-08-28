@@ -49,6 +49,8 @@ import {
   type WorkerRendererDescriptors,
 } from '@silurus/ooxml-core/worker';
 import { BoundedRawPartCache } from '@silurus/ooxml-core/internal/bounded-raw-part-cache';
+import { ProgressiveLayoutLifecycle } from '@silurus/ooxml-core/internal/progressive-layout-lifecycle';
+import { ProgressiveLayoutObserverNotifier } from '@silurus/ooxml-core/internal/progressive-layout-observers';
 import { PPTX_GOOGLE_FONTS } from './google-fonts';
 import {
   findPreflightMimeType,
@@ -82,6 +84,7 @@ import {
   type PptxSlidePoint,
 } from './element-selection';
 import { publishPptxLayout } from './presentation-layout-events';
+import { yieldToHostTaskQueue } from './worker-task-scheduler';
 
 /** Options for {@link PptxPresentation.load}. */
 export type LoadOptions = CoreLoadOptions & {
@@ -106,11 +109,13 @@ export type LoadOptions = CoreLoadOptions & {
    * ScrollViewer's extent and scrollbar stable while later slides prepare.
    */
   progressiveLayout?: boolean;
-  /** Called as the sequential preflight commits slides. */
+  /** Called as the sequential preflight commits slides. Observer failures are isolated. */
   onLayoutProgress?: (progress: Readonly<ProgressiveLayoutProgress>) => void;
-  /** Called for each additional paintable prefix after `load()` resolves. */
+  /** Called for each additional paintable prefix after `load()` resolves. Observer failures are isolated. */
   onLayoutPartial?: (progress: Readonly<ProgressiveLayoutPartial>) => void;
-  /** Called once background preflight completes, or with its failure. */
+  /** Called once background preflight completes, or with its failure. Only
+   * fires when progressive loading actually deferred work after `load()`.
+   * Observer failures are isolated. */
   onLayoutComplete?: (error?: unknown) => void;
 };
 
@@ -136,6 +141,7 @@ interface ProgressiveLoad {
   readonly onComplete?: LoadOptions['onLayoutComplete'];
   readonly firstPublication: Deferred<void>;
   published: boolean;
+  deferred: boolean;
   settled: boolean;
 }
 
@@ -217,11 +223,13 @@ export class PptxPresentation {
   private _preflight: PresentationPreflight | null = null;
   /** Paintable prefix under progressiveLayout; final slideCount is bootstrap-owned. */
   private _availableSlideCount = 0;
-  private _layoutComplete = true;
+  private readonly _layoutLifecycle = new ProgressiveLayoutLifecycle();
+  private readonly _layoutObservers = new ProgressiveLayoutObserverNotifier();
   private _layoutCompletion: Promise<void> | null = null;
-  private _layoutError: unknown = undefined;
   private _parseRequestId: number | null = null;
   private _progressive: ProgressiveLoad | null = null;
+  private _progressiveWatchdog: ReturnType<typeof setTimeout> | undefined;
+  private _progressiveWatchdogMs: number | undefined;
   private readonly _layoutWaiters = new Set<() => void>();
   private _slides: PptxSlideRepository | null = null;
   private _slidePullClient: PptxSlidePullClient | null = null;
@@ -384,6 +392,7 @@ export class PptxPresentation {
             onComplete: opts.onLayoutComplete,
             firstPublication: deferred<void>(),
             published: false,
+            deferred: false,
             settled: false,
           } satisfies ProgressiveLoad
         : undefined;
@@ -591,6 +600,12 @@ export class PptxPresentation {
         });
         await ensureFonts();
         this._applyProgressivePrefix(builder.snapshot(), progressive);
+        if (slideIndex === 0 && progressive.deferred) {
+          // Match the worker-mode acknowledgement gate: once the opening slide
+          // is publishable, let load() continuations enqueue its paint/resource
+          // work before preflight starts pulling the next slide.
+          await yieldToHostTaskQueue();
+        }
       }
       await embeddedFontLoad;
       this._finishProgressiveLayout(builder.finish(), progressive);
@@ -611,6 +626,7 @@ export class PptxPresentation {
     renderers: WorkerRendererDescriptors | undefined,
     progressive: ProgressiveLoad,
   ): Promise<void> {
+    this._progressiveWatchdogMs = timeoutMs;
     const parsed = this._bridge.request(
       (id) => {
         this._parseRequestId = id;
@@ -620,8 +636,12 @@ export class PptxPresentation {
         } satisfies RenderWorkerRequest;
       },
       [buffer],
-      { timeoutMs },
+      // Healthy progressive work may exceed this interval while continuing to
+      // publish slides. Measure silence between publications instead of using
+      // an absolute deadline for the authoritative final response.
+      { timeoutMs: false },
     );
+    this._rearmProgressiveWatchdog();
     this._layoutCompletion = parsed.then(
       (response) => {
         this._parseRequestId = null;
@@ -671,6 +691,7 @@ export class PptxPresentation {
       !this._progressive
     ) return;
     try {
+      this._rearmProgressiveWatchdog();
       if (response.usage) this._metrics?.observeUsage(response.usage);
       if (response.bootstrap) this._bootstrap = normalizePresentationBootstrap(response.bootstrap);
       const bootstrap = this._bootstrap;
@@ -687,8 +708,28 @@ export class PptxPresentation {
         }),
         this._progressive,
       );
+      // Acknowledge only after Window crosses a task boundary. load() promise
+      // continuations can enqueue the opening-slide render first; Worker message
+      // ordering then handles that request before this ACK releases preflight of
+      // the next slide.
+      void yieldToHostTaskQueue().then(() => {
+        if (this._destroyed || this._parseRequestId !== response.forId) return;
+        this._bridge.post({
+          kind: 'continuePresentationPreflight',
+          forId: response.forId,
+          availableSlides: response.availableSlides,
+        } satisfies RenderWorkerRequest);
+      }).catch((error) => {
+        if (this._destroyed || this._parseRequestId !== response.forId || !this._progressive) return;
+        this._failProgressiveLayout(error, this._progressive);
+        this._bridge.terminate();
+      });
     } catch (error) {
       this._failProgressiveLayout(error, this._progressive);
+      // The worker is blocked on this publication's acknowledgement. A
+      // malformed prefix cannot be acknowledged safely, so terminate the
+      // bridge to reject the pending parse request and settle `_layoutCompletion`.
+      this._bridge.terminate();
     }
   }
 
@@ -699,9 +740,19 @@ export class PptxPresentation {
     if (progressive.settled || this._destroyed) return;
     this._preflight = prefix;
     this._availableSlideCount = prefix.slides.length;
-    this._layoutComplete = false;
+    if (!progressive.published && prefix.slides.length === prefix.slideCount) {
+      // Nothing remains deferred. Keep the prefix internal until the
+      // authoritative finish path publishes one complete snapshot; callers of
+      // load() must not observe a provisional lifecycle for a one-slide deck.
+      progressive.published = true;
+      progressive.deferred = false;
+      return;
+    }
+    this._layoutLifecycle.begin();
     this._wakeLayoutWaiters();
-    progressive.onProgress?.({ committedUnits: this._availableSlideCount });
+    this._layoutObservers.notify(
+      'onLayoutProgress', progressive.onProgress, { committedUnits: this._availableSlideCount },
+    );
     publishPptxLayout(this, {
       availableSlides: this._availableSlideCount,
       slideCount: this.slideCount,
@@ -710,10 +761,11 @@ export class PptxPresentation {
     });
     if (!progressive.published) {
       progressive.published = true;
+      progressive.deferred = prefix.slides.length < prefix.slideCount;
       progressive.firstPublication.resolve();
       return;
     }
-    progressive.onPartial?.({
+    this._layoutObservers.notify('onLayoutPartial', progressive.onPartial, {
       availableUnits: this._availableSlideCount,
       totalUnits: this.slideCount,
       exact: false,
@@ -726,10 +778,11 @@ export class PptxPresentation {
   ): void {
     if (progressive.settled || this._destroyed) return;
     progressive.settled = true;
+    this._clearProgressiveWatchdog();
     this._preflight = preflight;
     this._bootstrap ??= preflight;
     this._availableSlideCount = preflight.slideCount;
-    this._layoutComplete = true;
+    this._layoutLifecycle.succeed();
     this._wakeLayoutWaiters();
     progressive.firstPublication.resolve();
     publishPptxLayout(this, {
@@ -738,28 +791,30 @@ export class PptxPresentation {
       exact: true,
       complete: true,
     });
-    if (progressive.published) progressive.onComplete?.();
+    if (progressive.deferred) {
+      this._layoutObservers.notify('onLayoutComplete', progressive.onComplete);
+    }
   }
 
   private _failProgressiveLayout(error: unknown, progressive: ProgressiveLoad): void {
     if (progressive.settled) return;
     progressive.settled = true;
+    this._clearProgressiveWatchdog();
     if (this._destroyed) return;
     if (!progressive.published) {
       progressive.firstPublication.reject(error);
       return;
     }
-    this._layoutError = error;
-    this._layoutComplete = true;
+    const layoutError = this._layoutLifecycle.fail(error);
     this._wakeLayoutWaiters();
     publishPptxLayout(this, {
       availableSlides: this._availableSlideCount,
       slideCount: this.slideCount,
       exact: false,
-      complete: true,
-      error,
+      complete: false,
+      error: layoutError,
     });
-    progressive.onComplete?.(error);
+    this._layoutObservers.notify('onLayoutComplete', progressive.onComplete, layoutError);
   }
 
   private _wakeLayoutWaiters(): void {
@@ -767,15 +822,34 @@ export class PptxPresentation {
     this._layoutWaiters.clear();
   }
 
+  private _rearmProgressiveWatchdog(): void {
+    if (this._progressiveWatchdogMs === undefined) return;
+    clearTimeout(this._progressiveWatchdog);
+    this._progressiveWatchdog = setTimeout(() => {
+      const progressive = this._progressive;
+      const silenceMs = this._progressiveWatchdogMs;
+      if (!progressive || progressive.settled || silenceMs === undefined || this._destroyed) return;
+      const error = new Error(`worker layout produced no progress for ${silenceMs}ms`);
+      this._failProgressiveLayout(error, progressive);
+      this._bridge.terminate();
+    }, this._progressiveWatchdogMs);
+  }
+
+  private _clearProgressiveWatchdog(): void {
+    clearTimeout(this._progressiveWatchdog);
+    this._progressiveWatchdog = undefined;
+    this._progressiveWatchdogMs = undefined;
+  }
+
   private async _waitForSlide(slideIndex: number): Promise<void> {
     while (
       !this._destroyed &&
       slideIndex >= this._availableSlideCount &&
-      !this._layoutComplete
+      !this._layoutLifecycle.settled
     ) {
       await new Promise<void>((resolve) => this._layoutWaiters.add(resolve));
     }
-    if (this._layoutComplete) await this.waitUntilLayoutComplete();
+    if (slideIndex >= this._availableSlideCount) await this.waitUntilLayoutComplete();
   }
 
   private _assertSlideIndex(slideIndex: number): void {
@@ -790,13 +864,13 @@ export class PptxPresentation {
   /** Slides whose compact facts and full model can currently be painted. */
   get availableSlideCount(): number { return this._availableSlideCount; }
 
-  /** False only while an opt-in progressive preflight continues. */
-  get layoutComplete(): boolean { return this._layoutComplete; }
+  /** True only when every slide is paintable; remains false after background failure. */
+  get layoutComplete(): boolean { return this._layoutLifecycle.complete; }
 
   /** Wait until all slides are paintable; rethrows a post-load background failure. */
   async waitUntilLayoutComplete(): Promise<void> {
     if (this._layoutCompletion) await this._layoutCompletion;
-    if (this._layoutError !== undefined) throw this._layoutError;
+    this._layoutLifecycle.throwIfFailed();
   }
 
   /** Slide width in EMU. */
@@ -817,8 +891,9 @@ export class PptxPresentation {
    * Speaker-notes text for a slide (`ppt/notesSlides/notesSlideN.xml`,
    * ECMA-376 §13.3.5 — Notes Slide). Returns the notes-body text as a single
    * string (paragraphs joined with `\n`), or `null` when the slide has no
-   * notes part. The notes are parsed at {@link load} time, so this is a
-   * synchronous lookup.
+   * notes part. This is a synchronous lookup. During progressive loading its
+   * answer is authoritative only for `slideIndex < availableSlideCount`; await
+   * {@link waitUntilLayoutComplete} before scanning the whole deck.
    *
    * `slideIndex` is 0-based. Unlike navigation methods it is *not* clamped:
    * an out-of-range or non-integer index returns `null` rather than the notes
@@ -842,7 +917,9 @@ export class PptxPresentation {
    * share this compact mode-independent projection; modern replies remain
    * nested under their root. Use it for fully custom UI, or opt into the
    * ScrollViewer's marker-and-card view. Returns `[]` for an invalid or
-   * comment-free slide. */
+   * comment-free slide. During progressive loading, `[]` for an unavailable
+   * slide means "not known yet"; inspect only `slideIndex < availableSlideCount`
+   * or await {@link waitUntilLayoutComplete} before a whole-deck scan. */
   getComments(slideIndex: number): readonly Readonly<PptxComment>[] {
     return Number.isInteger(slideIndex)
       ? (this._preflight?.slides[slideIndex]?.comments ?? [])
@@ -854,7 +931,9 @@ export class PptxPresentation {
    * (`<p:sld show="0">`, ECMA-376 §19.3.1.38). Like {@link getNotes} the index
    * is NOT clamped — out-of-range / non-integer ⇒ `false`. This is a *fact*
    * about the model; deciding what to do with a hidden slide (skip / dim) is the
-   * caller's policy (see {@link PptxViewer}'s `hiddenSlideMode` modes).
+   * caller's policy (see {@link PptxViewer}'s `hiddenSlideMode` modes). During
+   * progressive loading this fact is authoritative only below
+   * {@link availableSlideCount}; await completion before scanning every slide.
    */
   isHidden(slideIndex: number): boolean {
     return Number.isInteger(slideIndex)
@@ -1273,6 +1352,7 @@ export class PptxPresentation {
   /** Terminate the worker and release all resources. */
   destroy(): void {
     this._destroyed = true;
+    this._clearProgressiveWatchdog();
     this._slidePullClient?.cancelAll();
     this._bridge.terminate();
     this._slides?.clear();
@@ -1281,9 +1361,8 @@ export class PptxPresentation {
     this._bootstrap = null;
     this._preflight = null;
     this._availableSlideCount = 0;
-    this._layoutComplete = true;
+    this._layoutLifecycle.succeed();
     this._layoutCompletion = null;
-    this._layoutError = undefined;
     this._progressive = null;
     this._parseRequestId = null;
     this._wakeLayoutWaiters();

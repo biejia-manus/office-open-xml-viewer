@@ -484,8 +484,8 @@ mean pages available so far, not the final total. The page callbacks fire again
 when that count grows, even if the visible page does not change. Await
 `waitUntilLayoutComplete()` before printing, exporting, or snapshotting a final count.
 In-document `NUMPAGES` fields are repainted with their authoritative value after
-pagination converges. See the [progressive layout guide](https://ooxml-viewer.com/docx#progressive-layout)
-and [DOCX API reference](https://ooxml-viewer.com/api/docx).
+pagination converges. See the [progressive layout guide](https://ooxml.silurus.dev/docx#progressive-layout)
+and [DOCX API reference](https://ooxml.silurus.dev/api/docx).
 
 ### Progressive PPTX layout
 
@@ -512,8 +512,8 @@ Unlike DOCX pagination, a PPTX bootstrap already provides the final slide list
 and uniform dimensions. `slideCount` and the ScrollViewer's scroll extent are
 therefore stable from first paint; `availableSlideCount` grows as the paintable
 opening prefix is prepared. Scrolling ahead shows a loading state without
-changing the scrollbar length. See the [PPTX progressive layout guide](https://ooxml-viewer.com/pptx#progressive-layout)
-and [PPTX API reference](https://ooxml-viewer.com/api/pptx).
+changing the scrollbar length. See the [PPTX progressive layout guide](https://ooxml.silurus.dev/pptx#progressive-layout)
+and [PPTX API reference](https://ooxml.silurus.dev/api/pptx).
 
 For presentations, `enableMediaPlayback: true` makes embedded audio and video
 interactive inside the real viewport plus `mediaOverscan` slides. Other mounted
@@ -522,8 +522,10 @@ animation loops.
 
 Both viewers also expose `relayout()` (force a re-fit when the container resizes
 in a way a `ResizeObserver` cannot see — e.g. a late web-font load),
-`onVisiblePageChange` / `onVisibleSlideChange` (fires when the top-most visible
-page/slide, or the page count, changes), and `onError` (async per-page render failures are routed
+`onVisiblePageChange` (fires when the top-most visible page, provisional DOCX
+page count, or completion state changes), `onVisibleSlideChange` (fires when the
+top-most visible slide or PPTX completion state changes; its slide count is
+final from first paint), and `onError` (async per-page render failures are routed
 here instead of crashing the scroll loop). The parse/render knobs from the
 headless engines (`mode`, `useGoogleFonts`, `resourceLimits`, the deprecated
 `maxZipEntryBytes` alias, `math`, `dpr`) are accepted too.

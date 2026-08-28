@@ -35,6 +35,8 @@ import {
   type WorkerRendererDescriptors,
 } from '@silurus/ooxml-core/worker';
 import { BoundedRawPartCache } from '@silurus/ooxml-core/internal/bounded-raw-part-cache';
+import { ProgressiveLayoutLifecycle } from '@silurus/ooxml-core/internal/progressive-layout-lifecycle';
+import { ProgressiveLayoutObserverNotifier } from '@silurus/ooxml-core/internal/progressive-layout-observers';
 import type { DocxDocumentModel, RenderPageOptions, WorkerRequest, WorkerResponse, DocComment, DocNote, DocRevision } from './types';
 import { renderLayoutSourceToCanvas, documentHasMath, prepareMathRuns, type DocxTextRunInfo } from './renderer';
 import { createLayoutServices } from './layout-runtime.js';
@@ -61,7 +63,10 @@ import type {
 } from './worker-protocol';
 import { retainRenderWorkerDocumentLayout } from './render-worker-layout.js';
 import { textRunsForSelectedPage } from './text-run-projection.js';
-import { textRunSourceIndexForDocument } from './layout/text-index.js';
+import {
+  reviewProjectionIndexForDocument,
+  type ReviewProjectionIndex,
+} from './layout/text-index.js';
 import {
   hitTestSelectedDocxElementContext,
   type DocxElementContextOptions,
@@ -86,6 +91,7 @@ import { layoutDocumentInputAsync } from './layout/document.js';
 import { layoutDocumentProgressively } from './layout/progressive.js';
 import { PaginationAbortError } from './layout/pagination-scheduler.js';
 import { normalizeLayoutOptions, type LayoutOptions } from './layout/options.js';
+import type { LayoutVariantStore } from './layout/variant-store.js';
 import { publishDocxLayout } from './document-layout-events.js';
 
 /** Options for {@link DocxDocument.load}. Extends the shared load-options type
@@ -115,9 +121,10 @@ export interface LoadOptions extends CoreLoadOptions {
    *
    * Layout is unchanged — this only spreads it over event-loop turns — so the
    * document that eventually loads is byte-identical either way. What changes is
-   * that the thread doing the work (the main thread in `mode: 'main'`, the
-   * render worker in `mode: 'worker'`) stays responsive while a large document
-   * paginates. `load()` still resolves only once layout is complete.
+   * that the main thread stays responsive while a large document paginates.
+   * In `mode: 'worker'`, pagination is already off the UI thread; this option
+   * has no additional effect unless progressive layout is enabled. `load()`
+   * still resolves only once layout is complete.
    *
    * Off by default: for small documents the slicing is pure overhead, and
    * existing callers should not silently change scheduling behaviour.
@@ -133,7 +140,10 @@ export interface LoadOptions extends CoreLoadOptions {
    * progress reporting, not a page count.
    *
    * Implies {@link sliceLayout} in main mode, since a blocking layout cannot
-   * deliver progress the UI could act on.
+   * deliver progress the UI could act on. Worker mode reports this callback
+   * when {@link progressiveLayout} is enabled; an ordinary worker load does not
+   * publish intermediate pagination progress. Observer failures are reported
+   * and isolated from the layout result.
    */
   onLayoutProgress?: (progress: Readonly<ProgressiveLayoutProgress>) => void;
   /**
@@ -169,7 +179,8 @@ export interface LoadOptions extends CoreLoadOptions {
   /**
    * Called once the full layout has replaced the provisional one, or with the
    * failure if background layout threw. Only fires when
-   * {@link progressiveLayout} actually deferred work.
+   * {@link progressiveLayout} actually deferred work. Observer failures are
+   * reported and isolated from the layout result.
    */
   onLayoutComplete?: (error?: unknown) => void;
   /**
@@ -179,7 +190,8 @@ export interface LoadOptions extends CoreLoadOptions {
    * `availableUnits` is the pages available so far. `totalUnits` is omitted
    * because pagination does not know the final page count yet. `exact` is
    * currently always false because a later convergence pass can still replace
-   * those pages.
+   * those pages. Observer failures are reported and isolated from the layout
+   * result.
    */
   onLayoutPartial?: (progress: Readonly<ProgressiveLayoutPartial>) => void;
   /**
@@ -244,6 +256,9 @@ interface WorkerProgressiveLoad {
    *  `load()` waits on. */
   readonly firstPublication: Deferred<void>;
   published: boolean;
+  /** Exactly one of authoritative success, parse failure, watchdog failure, or
+   * teardown may terminate this worker progressive session. */
+  settled: boolean;
 }
 
 interface Deferred<T> {
@@ -300,13 +315,12 @@ export class DocxDocument {
   /** One immutable review snapshot backs both the public detached records and
    * lazy anchor projections. It is captured once per load in both render modes. */
   private _review: ReviewSnapshot = EMPTY_REVIEW_SNAPSHOT;
-  /** Progressive layout only: false while the authoritative layout is still
-   *  being built in the background. Always true for an ordinary load. */
-  private _layoutComplete = true;
-  /** Settles when background layout finishes; never rejects (the failure is
-   *  retained in `_layoutError` and re-thrown by `waitUntilLayoutComplete`). */
+  /** Separates successful completion from terminal background failure. */
+  private readonly _layoutLifecycle = new ProgressiveLayoutLifecycle();
+  private readonly _layoutObservers = new ProgressiveLayoutObserverNotifier();
+  /** Settles when background layout finishes; never rejects (the lifecycle
+   *  retains a failure and `waitUntilLayoutComplete` re-throws it). */
   private _layoutCompletion: Promise<void> | null = null;
-  private _layoutError: unknown = undefined;
   /** Cancels background layout when the document is destroyed or replaced. */
   private _layoutAbort: AbortController | null = null;
   /** Lazily-built `bookmarkName → 0-based page index` map for internal hyperlink
@@ -321,8 +335,8 @@ export class DocxDocument {
   /** Lazily-computed §17.13.5 revision source ranges (main mode; worker mode
    * reads them from metadata). */
   private _revisionAnchorRanges: readonly RevisionAnchorRange[] | null = null;
-  /** Shared lightweight index for comment and revision anchor projections. */
-  private _reviewTextRunSourceIndex: ReadonlyMap<string, ReadonlySet<number>> | null = null;
+  /** Shared one-pass index for comment and revision anchor projections. */
+  private _reviewProjectionIndex: ReviewProjectionIndex | null = null;
   /** Correlation id of the in-flight worker `parse`. Progressive pushes name it
    *  in `forId`; ids are monotonic and never reused, so a push carrying any
    *  other id belongs to a parse this document has already moved past. */
@@ -489,6 +503,7 @@ export class DocxDocument {
               abort: new AbortController(),
               firstPublication: deferred<void>(),
               published: false,
+              settled: false,
             }
           : undefined,
       );
@@ -552,6 +567,7 @@ export class DocxDocument {
         preparedMath = await prepareMathRuns(doc._document, opts.math);
       }
       if (doc._mode === 'main' && doc._document && doc._source) {
+        const layoutDocument = doc;
         const runtime = documentLayoutRuntimeOf(doc);
         runtime.services = createLayoutServices(doc._source, {
           localMetrics: localMetrics?.metrics,
@@ -586,7 +602,9 @@ export class DocxDocument {
         if (!layoutOptions) throw new Error('Active layout view was not recorded at load');
         const scheduler = {
           onProgress: opts.onLayoutProgress
-            ? (committedPages: number) => opts.onLayoutProgress?.({ committedUnits: committedPages })
+            ? (committedPages: number) => layoutDocument._layoutObservers.notify(
+              'onLayoutProgress', opts.onLayoutProgress, { committedUnits: committedPages },
+            )
             : undefined,
         };
         if (deferrable && opts.progressiveLayout) {
@@ -610,7 +628,8 @@ export class DocxDocument {
               onPreview: (preview) => {
                 if (!ownsPublication) return;
                 const first = publishedLayout === null;
-                const retainedPreview = store.replaceIfCurrent(
+                const retainedPreview = progressiveDocument._replaceMainLayoutPublication(
+                  store,
                   layoutOptions,
                   publishedLayout,
                   preview.layout,
@@ -623,7 +642,6 @@ export class DocxDocument {
                   return;
                 }
                 publishedLayout = retainedPreview;
-                progressiveDocument._bookmarkPages = null;
                 if (!first) {
                   // This background session still owns its store entry, but a
                   // runtime view switch may have selected a different entry.
@@ -636,12 +654,12 @@ export class DocxDocument {
                     exact: preview.exact,
                     complete: false,
                   });
-                  opts.onLayoutPartial?.({
+                  progressiveDocument._layoutObservers.notify('onLayoutPartial', opts.onLayoutPartial, {
                     availableUnits: preview.layout.pages.length,
                     exact: preview.exact,
                   });
                 } else {
-                  progressiveDocument._layoutComplete = false;
+                  progressiveDocument._layoutLifecycle.begin();
                   publishDocxLayout(progressiveDocument, {
                     pageCount: preview.layout.pages.length,
                     exact: preview.exact,
@@ -655,16 +673,15 @@ export class DocxDocument {
             // Replace only the exact prefix this drain last published. A newer
             // synchronous rebuild of the same variant owns the key otherwise.
             if (ownsPublication) {
-              const authoritative = store.replaceIfCurrent(
+              const authoritative = progressiveDocument._replaceMainLayoutPublication(
+                store,
                 layoutOptions,
                 publishedLayout,
                 layout,
               );
               if (authoritative === null) ownsPublication = false;
             }
-            // The prefix's bookmark map described a 2-page document.
-            progressiveDocument._bookmarkPages = null;
-            progressiveDocument._layoutComplete = true;
+            progressiveDocument._layoutLifecycle.succeed();
             publishDocxLayout(progressiveDocument, {
               // A runtime view switch can complete before this original
               // session. Publish the geometry the document actually exposes,
@@ -673,7 +690,11 @@ export class DocxDocument {
               exact: true,
               complete: true,
             });
-            opts.onLayoutComplete?.();
+            if (publishedLayout !== null) {
+              progressiveDocument._layoutObservers.notify(
+                'onLayoutComplete', opts.onLayoutComplete,
+              );
+            }
             // Nothing was published: there was nothing to show early, so
             // load() resolves here, on the layout that would have been built
             // anyway. Resolving an already-resolved deferred is a no-op.
@@ -694,18 +715,19 @@ export class DocxDocument {
             // not that layout failed. Settle quietly: there is nobody left to
             // tell, and `waitUntilLayoutComplete` must not reject for it.
             if (error instanceof PaginationAbortError) {
-              progressiveDocument._layoutComplete = true;
+              progressiveDocument._layoutLifecycle.succeed();
               return;
             }
-            progressiveDocument._layoutError = error;
-            progressiveDocument._layoutComplete = true;
+            const layoutError = progressiveDocument._layoutLifecycle.fail(error);
             publishDocxLayout(progressiveDocument, {
               pageCount: progressiveDocument.pageCount,
               exact: false,
-              complete: true,
-              error,
+              complete: false,
+              error: layoutError,
             });
-            opts.onLayoutComplete?.(error);
+            progressiveDocument._layoutObservers.notify(
+              'onLayoutComplete', opts.onLayoutComplete, layoutError,
+            );
           });
           await firstPublication.promise;
         } else if (deferrable && (opts.sliceLayout || opts.onLayoutProgress)) {
@@ -821,8 +843,11 @@ export class DocxDocument {
     // the watchdog is asking about.
     this._rearmParseWatchdog();
     const progressive = this._progressive;
+    if (progressive?.settled) return;
     if (res.type === 'layoutProgress') {
-      progressive?.onProgress?.({ committedUnits: res.committedPages });
+      this._layoutObservers.notify(
+        'onLayoutProgress', progressive?.onProgress, { committedUnits: res.committedPages },
+      );
       return;
     }
     if (res.type !== 'layoutPartial' || !progressive) return;
@@ -839,7 +864,7 @@ export class DocxDocument {
         exact: res.partial.exact,
         complete: false,
       });
-      progressive.onPartial?.({
+      this._layoutObservers.notify('onLayoutPartial', progressive.onPartial, {
         availableUnits: res.partial.pageCount,
         exact: res.partial.exact,
       });
@@ -849,7 +874,7 @@ export class DocxDocument {
     // `onLayoutPartial`: the caller is about to see these pages as the loaded
     // document, not as an extension of one — same rule main mode follows.
     progressive.published = true;
-    this._layoutComplete = false;
+    this._layoutLifecycle.begin();
     publishDocxLayout(this, {
       pageCount: res.partial.pageCount,
       exact: res.partial.exact,
@@ -878,9 +903,8 @@ export class DocxDocument {
       comments: review?.comments ?? [],
       footnotes: review?.footnotes ?? [],
       endnotes: review?.endnotes ?? [],
-      // The two anchor projections are whole-document joins; only the
-      // authoritative `parsedMeta` carries them. Absent is a shape
-      // `DocumentMeta` already documents as supported.
+      commentAnchorRanges: partial.commentAnchorRanges,
+      revisionAnchorRanges: partial.revisionAnchorRanges,
     };
     if (partial.review) {
       this._review = snapshotReviewData(partial.review.comments, partial.review.revisions);
@@ -892,6 +916,7 @@ export class DocxDocument {
   private _onAuthoritativeMeta(meta: DocumentMeta): void {
     this._clearParseWatchdog();
     const progressive = this._progressive;
+    if (progressive?.settled) return;
     if (!progressive || this._isLayoutViewActive(progressive.layoutOptions) || !this._meta) {
       this._meta = meta;
     } else {
@@ -911,7 +936,8 @@ export class DocxDocument {
     this._invalidateLayoutDerivedCaches();
     this._review = snapshotReviewData(meta.comments, meta.revisions);
     if (!progressive) return;
-    this._layoutComplete = true;
+    progressive.settled = true;
+    this._layoutLifecycle.succeed();
     publishDocxLayout(this, {
       pageCount: this.pageCount,
       exact: true,
@@ -920,7 +946,9 @@ export class DocxDocument {
     // A load whose worker published nothing resolves here instead — there was
     // never anything to show early, so `load()` waited for the real document.
     progressive.firstPublication.resolve();
-    if (progressive.published) progressive.onComplete?.();
+    if (progressive.published) {
+      this._layoutObservers.notify('onLayoutComplete', progressive.onComplete);
+    }
   }
 
   /** Bookmark pages and the review anchor projections are derived from the
@@ -929,7 +957,25 @@ export class DocxDocument {
     this._bookmarkPages = null;
     this._commentAnchorRanges = null;
     this._revisionAnchorRanges = null;
-    this._reviewTextRunSourceIndex = null;
+    this._reviewProjectionIndex = null;
+  }
+
+  /** Atomically advance one main-thread layout publication and invalidate only
+   * the derived projections that belong to the layout the document currently
+   * exposes. An inactive progressive variant may continue draining in the
+   * background, but it must neither stale nor evict the active variant's
+   * bookmark/review caches. */
+  private _replaceMainLayoutPublication(
+    store: LayoutVariantStore,
+    options: LayoutOptions,
+    expected: DeepReadonly<DocumentLayout> | null,
+    next: DeepReadonly<DocumentLayout>,
+  ): DeepReadonly<DocumentLayout> | null {
+    const retained = store.replaceIfCurrent(options, expected, next);
+    if (retained !== null && this._isLayoutViewActive(options)) {
+      this._invalidateLayoutDerivedCaches();
+    }
+    return retained;
   }
 
   /** Whether synchronous geometry and paint currently select this normalized
@@ -960,21 +1006,32 @@ export class DocxDocument {
     const error = new Error(
       `worker layout produced no progress for ${silenceMs}ms`,
     );
-    if (progressive && !progressive.published) {
-      // load() has not resolved yet, so this can still be its rejection.
-      progressive.firstPublication.reject(error);
-    } else if (progressive) {
-      this._layoutError = error;
-      this._layoutComplete = true;
-      publishDocxLayout(this, {
-        pageCount: this.pageCount,
-        exact: false,
-        complete: true,
-        error,
-      });
-      progressive.onComplete?.(error);
-    }
+    if (progressive) this._failWorkerProgressive(progressive, error);
     this._bridge.terminate();
+  }
+
+  /** Single terminal failure authority for worker progressive layout. The
+   * watchdog terminates the worker after calling this method; the resulting
+   * bridge rejection is therefore a duplicate and is ignored by `settled`. */
+  private _failWorkerProgressive(
+    progressive: WorkerProgressiveLoad,
+    cause: unknown,
+  ): void {
+    if (progressive.settled) return;
+    progressive.settled = true;
+    this._clearParseWatchdog();
+    if (!progressive.published) {
+      progressive.firstPublication.reject(cause);
+      return;
+    }
+    const layoutError = this._layoutLifecycle.fail(cause);
+    publishDocxLayout(this, {
+      pageCount: this.pageCount,
+      exact: false,
+      complete: false,
+      error: layoutError,
+    });
+    this._layoutObservers.notify('onLayoutComplete', progressive.onComplete, layoutError);
   }
 
   /** The variant fields the worker `parse` carries, derived from the SAME
@@ -1054,6 +1111,7 @@ export class DocxDocument {
           // main mode exactly as the ordinary parse does; load()'s main-mode
           // block then lays it out — progressively — on this thread.
           this._clearParseWatchdog();
+          progressive.settled = true;
           this._progressive = null;
           this._layoutAbort = null;
           const adapted = await materializeDocumentPullAdapterSession(
@@ -1079,28 +1137,17 @@ export class DocxDocument {
       (error: unknown) => {
         this._parseRequestId = null;
         this._clearParseWatchdog();
+        if (progressive.settled) return;
         // Destroyed or replaced mid-layout: the worker was terminated on
         // purpose, there is nobody left to tell, and waitUntilLayoutComplete() must
         // not reject for it. Exactly how main mode treats PaginationAbortError.
         if (progressive.abort.signal.aborted) {
-          this._layoutComplete = true;
+          progressive.settled = true;
+          this._layoutLifecycle.succeed();
           progressive.firstPublication.resolve();
           return;
         }
-        if (!progressive.published) {
-          // load() has not resolved yet, so this is still its rejection.
-          progressive.firstPublication.reject(error);
-          return;
-        }
-        this._layoutError = error;
-        this._layoutComplete = true;
-        publishDocxLayout(this, {
-          pageCount: this.pageCount,
-          exact: false,
-          complete: true,
-          error,
-        });
-        progressive.onComplete?.(error);
+        this._failWorkerProgressive(progressive, error);
       },
     );
     this._rearmParseWatchdog();
@@ -1130,7 +1177,7 @@ export class DocxDocument {
     this._bookmarkPages = null;
     this._commentAnchorRanges = null;
     this._revisionAnchorRanges = null;
-    this._reviewTextRunSourceIndex = null;
+    this._reviewProjectionIndex = null;
     this._rawParts.clear();
     // Release the embedded fonts this document added to the shared FontFaceSet
     // (main mode). Refcounted in core: a font also used by another open document
@@ -1246,13 +1293,14 @@ export class DocxDocument {
   /**
    * Whether every page has been laid out.
    *
-   * Only ever false under `progressiveLayout`, between `load()` resolving on the
-   * document's opening pages and the full layout replacing them. While false,
-   * {@link pageCount} reports the pages available so far, not the document's
-   * total.
+   * True only after the authoritative layout succeeds. Under
+   * `progressiveLayout`, it is false between `load()` resolving on the opening
+   * pages and successful completion, and remains false after a background
+   * failure. While false, {@link pageCount} is not an authoritative total;
+   * {@link waitUntilLayoutComplete} distinguishes pending work from failure.
    */
   get layoutComplete(): boolean {
-    return this._layoutComplete;
+    return this._layoutLifecycle.complete;
   }
 
   /**
@@ -1265,7 +1313,7 @@ export class DocxDocument {
    */
   async waitUntilLayoutComplete(): Promise<void> {
     if (this._layoutCompletion) await this._layoutCompletion;
-    if (this._layoutError !== undefined) throw this._layoutError;
+    this._layoutLifecycle.throwIfFailed();
   }
 
   /** The render mode this engine was loaded with ('main' | 'worker'). A fact for
@@ -1302,8 +1350,9 @@ export class DocxDocument {
   }
 
   /** ECMA-376 §17.13.5 body-story revision events in document order. Available
-   * in both main and worker modes; rendering always projects the accepted final
-   * state. Consumers may use these detached records in their own review UI. */
+   * in both main and worker modes. Rendering uses the accepted final state by
+   * default; `showTrackedChanges` opts into the markup projection. Consumers may
+   * use these detached records in their own review UI. */
   get revisions(): readonly Readonly<DocRevision>[] {
     return this._reviewSnapshot().revisions;
   }
@@ -1315,11 +1364,15 @@ export class DocxDocument {
    * `DocxTextRunInfo.source`, covering body, headers, footers, notes, and text
    * boxes. Join it to rendered geometry with `sourceRunIndex`. Mode-agnostic:
    * main mode resolves lazily from the retained source; worker mode returns the
-   * same projection in metadata. Returns `[]` when no anchors exist.
+   * same projection in metadata. During progressive loading it covers the
+   * currently available page prefix; await {@link waitUntilLayoutComplete}
+   * before treating an empty or partial result as whole-document authority.
    */
   commentAnchorRanges(): readonly CommentAnchorRange[] {
     if (this._meta) return this._meta.commentAnchorRanges ?? NO_COMMENT_ANCHOR_RANGES;
     if (!this._document || !this._source) return [];
+    const comments = this._reviewSnapshot().comments;
+    if (comments.length === 0) return NO_COMMENT_ANCHOR_RANGES;
     const runtime = documentLayoutRuntimeOf(this);
     const services = runtime.services;
     if (!services) throw new Error('Document layout services are not initialized');
@@ -1331,11 +1384,17 @@ export class DocxDocument {
     if (!store) throw new Error('Document layout variant store is not initialized');
     const active = runtime.activeLayoutOptions;
     const layout = active ? store.layoutFor(active) : store.defaultLayout;
-    this._reviewTextRunSourceIndex ??= textRunSourceIndexForDocument(layout);
+    this._reviewProjectionIndex ??= reviewProjectionIndexForDocument(layout);
+    const projectionOptions = (this._layoutLifecycle?.complete ?? true)
+      ? undefined
+      : {
+          completedSourceKeys: this._reviewProjectionIndex.completedSourceKeys,
+        };
     this._commentAnchorRanges ??= collectLayoutSourceCommentRangesIfPresent(
-      this._reviewSnapshot().comments,
+      comments,
       this._source,
-      this._reviewTextRunSourceIndex,
+      this._reviewProjectionIndex.renderedRunIndex,
+      projectionOptions,
     );
     return this._commentAnchorRanges;
   }
@@ -1344,10 +1403,14 @@ export class DocxDocument {
    * intervals. Join them to `collectPageRuns()` with
    * `resolveRevisionAnchorRuns()`. Deletions and move sources use the nearest
    * deterministic final-state text position because accepted rendering gives
-   * their own content no geometry. Mode-agnostic. */
+   * their own content no geometry. Mode-agnostic. During progressive loading
+   * this projects the available prefix; await {@link waitUntilLayoutComplete}
+   * before a whole-document review scan. */
   revisionAnchorRanges(): readonly RevisionAnchorRange[] {
     if (this._meta) return this._meta.revisionAnchorRanges ?? NO_REVISION_ANCHOR_RANGES;
     if (!this._document || !this._source) return [];
+    const revisions = this._reviewSnapshot().revisions;
+    if (revisions.length === 0) return NO_REVISION_ANCHOR_RANGES;
     const runtime = documentLayoutRuntimeOf(this);
     const services = runtime.services;
     if (!services) throw new Error('Document layout services are not initialized');
@@ -1356,11 +1419,17 @@ export class DocxDocument {
     if (!store) throw new Error('Document layout variant store is not initialized');
     const active = runtime.activeLayoutOptions;
     const layout = active ? store.layoutFor(active) : store.defaultLayout;
-    this._reviewTextRunSourceIndex ??= textRunSourceIndexForDocument(layout);
+    this._reviewProjectionIndex ??= reviewProjectionIndexForDocument(layout);
+    const projectionOptions = (this._layoutLifecycle?.complete ?? true)
+      ? undefined
+      : {
+          completedSourceKeys: this._reviewProjectionIndex.completedSourceKeys,
+        };
     this._revisionAnchorRanges ??= collectLayoutSourceRevisionRangesIfPresent(
-      this._reviewSnapshot().revisions,
+      revisions,
       this._source,
-      this._reviewTextRunSourceIndex,
+      this._reviewProjectionIndex.renderedRunIndex,
+      projectionOptions,
     );
     return this._revisionAnchorRanges;
   }
@@ -1487,7 +1556,9 @@ export class DocxDocument {
    * `onHyperlinkClick` default (or an integrator) turns the anchor into a page
    * and calls {@link DocxViewer.goToPage} (or scrolls the scroll viewer to it).
    * Works in BOTH `main` and `worker` mode (the map rides along in the worker
-   * meta, built from the same paginated pages as `pageSizes`).
+   * meta, built from the same paginated pages as `pageSizes`). During
+   * progressive loading, `undefined` means only "not in the available prefix";
+   * await {@link waitUntilLayoutComplete} before concluding it is absent.
    */
   getBookmarkPage(bookmarkName: string): number | undefined {
     return this._getBookmarkPages()?.get(bookmarkName);

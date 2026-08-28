@@ -149,13 +149,16 @@ export interface LoadOptions {
    */
   onResourceMetrics?: (metrics: OoxmlResourceMetrics) => void;
   /**
-   * Reject the parse request if the parser worker does not answer within this
-   * many milliseconds. Opt-in safety net for a wedged or crashed worker that
-   * would otherwise leave `load()` pending forever. **Default: unlimited** —
-   * parsing a large document with heavy embedded media can legitimately take
-   * tens of seconds, so no timeout is imposed unless you set one. A worker that
-   * throws or fails to load already rejects immediately regardless of this
-   * value; this bound only covers the "silent, never-responds" case.
+   * Opt-in worker liveness limit in milliseconds. For an ordinary load it is
+   * the response deadline for the parse request. When progressive DOCX/PPTX
+   * preparation runs in `mode: 'worker'`, it becomes a silence interval that is restarted by each layout
+   * progress or partial publication, so a busy worker is not timed out merely
+   * because the complete document takes longer. Silence before the first
+   * publication rejects `load()`; silence after `load()` has resolved leaves
+   * `layoutComplete` false and makes `waitUntilLayoutComplete()` reject (and is
+   * also delivered to the layout-completion/error callback when configured).
+   * **Default: unlimited.** A worker that throws or fails to load rejects
+   * immediately regardless of this value.
    */
   workerTimeoutMs?: number;
   /**

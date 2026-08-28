@@ -13,7 +13,10 @@ import { layoutFingerprint } from './layout/invariants.js';
 import { normalizeLayoutOptions } from './layout/options.js';
 import { layoutDocumentProgressively } from './layout/progressive.js';
 import { setDocumentLayoutValidation } from './layout/validation-policy.js';
-import type { DocumentLayout } from './layout/types.js';
+import type { DeepReadonly, DocumentLayout } from './layout/types.js';
+import type { LayoutVariantStore } from './layout/variant-store.js';
+import { DocxDocument } from './document.js';
+import type { DocParagraph } from './types.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The document-level contract for progressive layout, exercised through the
@@ -50,6 +53,22 @@ afterAll(() => {
 });
 
 describe('progressive layout handover', () => {
+  it('does not publish a progressive lifecycle for a small one-page document', async () => {
+    const { source, services } = retain('plain', 4);
+    const layoutOptions = normalizeLayoutOptions(undefined, DEFAULT_CURRENT_DATE_MS);
+    let publications = 0;
+
+    const layout = await layoutDocumentProgressively(
+      source.bodyLayoutInput,
+      services,
+      layoutOptions,
+      { onPreview: () => { publications += 1; } },
+    );
+
+    expect(layout.pages).toHaveLength(1);
+    expect(publications).toBe(0);
+  });
+
   it('serves provisional pages, then the authoritative layout', async () => {
     const { source, services, retained } = retain('plain', 300);
     const store = retained.layoutVariants;
@@ -86,6 +105,108 @@ describe('progressive layout handover', () => {
     expect(layoutFingerprint(store.defaultLayout as DocumentLayout))
       .toBe(layoutFingerprint(blocking));
   }, 300_000);
+
+  it('refreshes bookmark and review projections as the active main-mode prefix advances', () => {
+    const model = syntheticDocxModel('plain', { paragraphs: 300 });
+    const laterParagraph = model.body[280] as DocParagraph;
+    laterParagraph.bookmarks = ['later-bookmark'];
+    laterParagraph.commentMarks = [
+      { id: '42', kind: 'rangeStart', runIndex: 0 },
+      { id: '42', kind: 'rangeEnd', runIndex: 1 },
+      { id: '42', kind: 'reference', runIndex: 1 },
+    ];
+    laterParagraph.runs[0]!.revision = { kind: 'deletion', id: '84' };
+    model.comments = [{ id: '42', text: 'later comment' }];
+    model.revisions = [{ kind: 'deletion', id: '84', text: 'later revision' }];
+
+    const source = layoutSourceStore(model);
+    const services = createLayoutServices(source);
+    const retained = retainRenderWorkerDocumentLayout(
+      source,
+      services,
+      DEFAULT_CURRENT_DATE_MS,
+    );
+    const store = retained.layoutVariants;
+    const layoutOptions = normalizeLayoutOptions(undefined, DEFAULT_CURRENT_DATE_MS);
+    const full = paginateBody(source.bodyLayoutInput, services, layoutOptions);
+    expect(full.pages.length).toBeGreaterThan(1);
+    const prefix = { ...full, pages: full.pages.slice(0, 1) } as DocumentLayout;
+
+    const document = Object.create(DocxDocument.prototype) as DocxDocument;
+    const lifecycle = { complete: false };
+    Object.assign(document, {
+      _document: model,
+      _source: source,
+      _meta: null,
+      _review: { comments: model.comments, revisions: model.revisions },
+      _bookmarkPages: null,
+      _commentAnchorRanges: null,
+      _revisionAnchorRanges: null,
+      _reviewProjectionIndex: null,
+      _layoutLifecycle: lifecycle,
+    });
+    attachDocumentLayoutRuntime(document, DEFAULT_CURRENT_DATE_MS);
+    const runtime = documentLayoutRuntimeOf(document);
+    runtime.services = services;
+    runtime.activeLayoutOptions = layoutOptions;
+
+    type MainPublicationHarness = {
+      _replaceMainLayoutPublication(
+        variantStore: LayoutVariantStore,
+        options: typeof layoutOptions,
+        expected: DeepReadonly<DocumentLayout> | null,
+        next: DeepReadonly<DocumentLayout>,
+      ): DeepReadonly<DocumentLayout> | null;
+    };
+    const publications = document as unknown as MainPublicationHarness;
+    const retainedPrefix = publications._replaceMainLayoutPublication(
+      store,
+      layoutOptions,
+      null,
+      prefix,
+    );
+    expect(retainedPrefix).not.toBeNull();
+
+    // Cache the first publication exactly as a viewer does while it is visible.
+    expect(document.getBookmarkPage('later-bookmark')).toBeUndefined();
+    expect(document.commentAnchorRanges()).toEqual([]);
+    expect(document.revisionAnchorRanges()).toEqual([]);
+
+    expect(publications._replaceMainLayoutPublication(
+      store,
+      layoutOptions,
+      retainedPrefix,
+      full,
+    )).not.toBeNull();
+    lifecycle.complete = true;
+    expect(document.getBookmarkPage('later-bookmark')).toBeGreaterThan(0);
+    const [commentRange] = document.commentAnchorRanges();
+    expect(commentRange?.commentId).toBe('42');
+    expect(commentRange?.geometryFallback).toEqual(expect.any(Object));
+    const [revisionRange] = document.revisionAnchorRanges();
+    expect(revisionRange?.revisionIndex).toBe(0);
+    expect(revisionRange?.geometryFallback).toEqual(expect.any(Object));
+  }, 300_000);
+
+  it('returns identity-stable empty review projections without touching layout services', () => {
+    const document = Object.create(DocxDocument.prototype) as DocxDocument;
+    Object.assign(document, {
+      _document: {},
+      _source: {},
+      _meta: null,
+      _review: { comments: [], revisions: [] },
+      _commentAnchorRanges: null,
+      _revisionAnchorRanges: null,
+      _reviewProjectionIndex: null,
+    });
+
+    const comments = document.commentAnchorRanges();
+    const revisions = document.revisionAnchorRanges();
+    expect(document.commentAnchorRanges()).toBe(comments);
+    expect(document.revisionAnchorRanges()).toBe(revisions);
+    expect(comments).toEqual([]);
+    expect(revisions).toEqual([]);
+  });
 
   it('keeps geometry stable across the handover for the pages already shown', async () => {
     // The provisional pages a user has already seen must not move when the real

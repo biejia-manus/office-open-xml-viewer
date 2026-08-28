@@ -25,8 +25,9 @@
  *
  * - ON by default under a test runner, so every suite (and therefore CI) keeps
  *   the path-precise reports.
- * - OFF otherwise; an embedder diagnosing a layout defect against a production
- *   build can re-enable it via the exported `setDocumentLayoutValidation`.
+ * - OFF otherwise. Internal tests and benchmarks can change the policy
+ *   explicitly when they need to compare validated and production-equivalent
+ *   execution.
  *
  * Freezing is NOT part of this policy and always runs: retained-layout
  * immutability is load-bearing (the identity WeakSets here and in
@@ -54,10 +55,9 @@ export function documentLayoutValidationEnabled(): boolean {
 /**
  * Turn the retained-layout contract checks on or off for this realm.
  *
- * Exposed as an explicit switch rather than an implicit `NODE_ENV` sniff inside
- * the layout code so an embedder can opt into full validation in production
- * while diagnosing a layout defect. `DocxDocument.load({ debug: true })` calls
- * this for the same reason.
+ * This is an internal test and benchmark control, not a public runtime option.
+ * Keeping the mutable policy inside the layout module avoids exposing realm-wide
+ * process state as part of the document API.
  */
 export function setDocumentLayoutValidation(next: boolean): void {
   enabled = next;

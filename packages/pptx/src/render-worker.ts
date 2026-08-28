@@ -36,6 +36,7 @@ import type {
 } from './worker-protocol';
 import { findPptxElementBoundsByIds, hitTestPptxSlideContext } from './element-selection';
 import { excludeEmbeddedFontFamilies, loadEmbeddedFonts } from './embedded-fonts';
+import { ProgressivePreflightGate } from './progressive-preflight-gate';
 
 const host = new WasmParserHost<PptxArchive>(init, {
   freeArchive: (archive) => archive.free(),
@@ -59,6 +60,7 @@ let preflightBuilder: PresentationPreflightBuilder | null = null;
 let slides: PptxSlideRepository | null = null;
 let availableSlideCount = 0;
 const slideAvailabilityWaiters = new Set<() => void>();
+const progressivePreflightGate = new ProgressivePreflightGate();
 let generation = 0;
 let nextOperationId = 1;
 type PresentationLifecycleState = 'empty' | 'opening' | 'ready' | 'failed';
@@ -135,6 +137,7 @@ function getFontBytes(path: string): Promise<Uint8Array> {
 }
 
 async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'parse' }>) {
+  progressivePreflightGate.reset();
   await slidePull.reset();
   slides?.clear();
   slides = null;
@@ -192,6 +195,9 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
       const slide = preflightBuilder.latestSlide;
       if (!slide) throw new Error(`PPTX progressive preflight lost slide ${index}`);
       wakeSlideAvailabilityWaiters();
+      // Register before publishing so even an immediate host acknowledgement
+      // cannot race past the checkpoint.
+      const hostAcknowledgement = progressivePreflightGate.wait(request.id, availableSlideCount);
       post({
         kind: 'presentationLayoutPartial',
         forId: request.id,
@@ -201,6 +207,7 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
         fontPreloadNames: preflightBuilder.currentFontPreloadNames,
         usage: resourceUsage,
       });
+      await hostAcknowledgement;
     }
     preflight = preflightBuilder.finish();
     preflightBuilder = null;
@@ -268,6 +275,10 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
   const request = event.data;
   if (request.kind === 'init') {
     host.setWasmInput(decodeDataUrl(request.wasmUrl) ?? request.wasmUrl);
+    return;
+  }
+  if (request.kind === 'continuePresentationPreflight') {
+    progressivePreflightGate.continue(request.forId, request.availableSlides);
     return;
   }
 
@@ -403,6 +414,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
       wakeSlideAvailabilityWaiters();
     }
     if (request.kind === 'parse') {
+      progressivePreflightGate.reset();
       slides?.clear();
       slides = null;
       preflight = null;

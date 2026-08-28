@@ -251,6 +251,51 @@ describe('CanvasViewerErrorRouter', () => {
     expect(onError).toHaveBeenCalledOnce();
     expect(onError.mock.calls[0][0]).toEqual(new Error('failure'));
   });
+
+  it('delivers one Error identity once and respects an explicit callback owner', () => {
+    const onError = vi.fn();
+    const router = new CanvasViewerErrorRouter('TestViewer', onError);
+    const repeated = new Error('repeated');
+    router.report(repeated);
+    router.report(repeated);
+
+    const explicitlyHandled = new Error('handled elsewhere');
+    router.markHandled(explicitlyHandled);
+    router.report(explicitlyHandled);
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(repeated);
+  });
+
+  it('keeps a terminal failure on the active Promise channel', async () => {
+    const onError = vi.fn();
+    const router = new CanvasViewerErrorRouter('TestViewer', onError);
+    const failure = new Error('layout failed');
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_resolve, rejectPromise) => { reject = rejectPromise; });
+    const awaited = router.ownBackgroundLifecycle(() => pending);
+
+    router.reportBackground(failure);
+    reject(failure);
+
+    await expect(awaited).rejects.toBe(failure);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('does not hide an unrelated background failure while a Promise is pending', async () => {
+    const onError = vi.fn();
+    const router = new CanvasViewerErrorRouter('TestViewer', onError);
+    let resolve!: () => void;
+    const pending = new Promise<void>((resolvePromise) => { resolve = resolvePromise; });
+    const awaited = router.ownAwaitable(() => pending);
+    const unrelated = new Error('unrelated render failure');
+
+    router.reportBackground(unrelated);
+    expect(onError).toHaveBeenCalledWith(unrelated);
+
+    resolve();
+    await awaited;
+  });
 });
 
 class Resource {

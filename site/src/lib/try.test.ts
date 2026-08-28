@@ -70,6 +70,7 @@ vi.mock('@silurus/ooxml-docx', () => {
 vi.mock('@silurus/ooxml-pptx', () => {
   class PptxScrollViewer {
     slideCount = 6;
+    availableSlideCount = 6;
     destroyed = false;
     readonly relayout = vi.fn();
     readonly events: string[] = [];
@@ -84,13 +85,17 @@ vi.mock('@silurus/ooxml-pptx', () => {
     }
     load(): Promise<void> {
       this.events.push('load');
-      if (this.opts.progressiveLayout && mocks.deferPptxLayout) this.layoutComplete = false;
+      if (this.opts.progressiveLayout && mocks.deferPptxLayout) {
+        this.layoutComplete = false;
+        this.availableSlideCount = 2;
+      }
       return Promise.resolve();
     }
     waitUntilLayoutComplete(): Promise<void> {
       if (this.layoutComplete) return Promise.resolve();
       return new Promise<void>((resolve) => {
         this.resolveLayout = () => {
+          this.availableSlideCount = this.slideCount;
           this.layoutComplete = true;
           resolve();
         };
@@ -277,10 +282,15 @@ describe('Try Yours ScrollViewer integration', () => {
     const result = await renderFile(stage(), file('progressive.pptx'));
     const viewer = mocks.pptx[0];
 
-    expect(result.units).toBe(6);
+    expect(result.units).toBe(2);
     expect(result.finalUnits).toBeDefined();
+    expect(viewer.opts.overscan).toBe(0);
+    expect(viewer.relayout).not.toHaveBeenCalled();
+
     viewer.resolveLayout();
     await expect(result.finalUnits).resolves.toBe(6);
+    expect(viewer.opts.overscan).toBe(6);
+    expect(viewer.relayout).toHaveBeenCalledTimes(1);
   });
 
   it.each([
