@@ -13,6 +13,10 @@ import {
   documentLayoutRuntimeOf,
 } from './layout/runtime-state.js';
 import { normalizeLayoutOptions } from './layout/options.js';
+import {
+  docxLayoutViewRequester,
+  publishDocxLayoutView,
+} from './document-layout-view.js';
 
 /** Test-only adapter for mechanics cases that need a preloaded engine. Public
  * callers use `DocxScrollViewer.fromDocument()` directly. */
@@ -443,13 +447,25 @@ export class FakeDocxEngine {
   layoutViews: Array<{ showTrackedChanges?: boolean; currentDate?: Date | number }> = [];
 
   setLayoutView(view: { showTrackedChanges?: boolean; currentDate?: Date | number }): void {
-    this.layoutViews.push(view);
-    this.layoutView = {
+    this.layoutViews.push({
+      showTrackedChanges: view.showTrackedChanges,
+      currentDate: view.currentDate,
+    });
+    const requester = (view as typeof view & {
+      [docxLayoutViewRequester]?: object;
+    })[docxLayoutViewRequester];
+    const next = {
       showTrackedChanges: view.showTrackedChanges === true,
       currentDate: typeof view.currentDate === 'number'
         ? view.currentDate
         : view.currentDate?.getTime() ?? this.layoutView.currentDate,
     };
+    if (
+      this.layoutView.showTrackedChanges === next.showTrackedChanges
+      && this.layoutView.currentDate === next.currentDate
+    ) return;
+    this.layoutView = next;
+    publishDocxLayoutView(this.asDoc(), requester);
   }
 
   get pageCount(): number {

@@ -1,6 +1,11 @@
 import { DocxDocument } from './document';
 import type { LoadOptions } from './document';
-import { activeDocxLayoutViewOf } from './document-layout-view.js';
+import {
+  activeDocxLayoutViewOf,
+  selectDocxLayoutView,
+  subscribeDocxLayoutView,
+  type DocxLayoutViewPublication,
+} from './document-layout-view.js';
 import type { RenderPageOptions } from './types';
 import type { DocxTextRunInfo } from './renderer';
 import { buildDocxTextLayer } from './text-layer';
@@ -151,6 +156,7 @@ export class DocxViewer implements ZoomableViewer {
   private _elementContext: DocxElementContext | null = null;
   private _elementHitGeneration = 0;
   private _layoutViewGeneration = 0;
+  private _layoutViewPublicationGeneration = 0;
   private _navigationGeneration = 0;
   private _layoutUnsubscribe: (() => void) | null = null;
   /** Latest default internal-link navigation; a newer click supersedes an older
@@ -824,8 +830,14 @@ export class DocxViewer implements ZoomableViewer {
   private _bindLayoutDocument(doc: DocxDocument): void {
     this._unbindLayoutDocument();
     this._layoutFailed = false;
+    this._layoutViewPublicationGeneration = 0;
+    const unsubscribeView = subscribeDocxLayoutView(
+      doc,
+      (publication) => this._onLayoutViewPublication(doc, publication),
+      (error) => this._reportRenderError(error),
+    );
     let initial = true;
-    this._layoutUnsubscribe = subscribeDocxLayout(
+    const unsubscribeLayout = subscribeDocxLayout(
       doc,
       () => ({
         pageCount: doc.pageCount,
@@ -841,6 +853,10 @@ export class DocxViewer implements ZoomableViewer {
       },
       (error) => this._reportRenderError(error),
     );
+    this._layoutUnsubscribe = () => {
+      unsubscribeLayout();
+      unsubscribeView();
+    };
   }
 
   private _unbindLayoutDocument(): void {
@@ -863,6 +879,28 @@ export class DocxViewer implements ZoomableViewer {
     }
     this._find.invalidate();
     this._currentPage = Math.max(0, Math.min(this._currentPage, publication.pageCount - 1));
+    void this._render().catch((error) => this._reportRenderError(error));
+  }
+
+  private _onLayoutViewPublication(
+    doc: DocxDocument,
+    publication: DocxLayoutViewPublication,
+  ): void {
+    if (
+      this._destroyed
+      || doc !== this._doc
+      || publication.generation <= this._layoutViewPublicationGeneration
+    ) return;
+    this._layoutViewPublicationGeneration = publication.generation;
+    if (publication.requester === this) return;
+    this._layoutViewGeneration++;
+    this._opts = {
+      ...this._opts,
+      currentDate: publication.view.currentDate,
+      showTrackedChanges: publication.view.showTrackedChanges,
+    };
+    this._find.invalidate();
+    this._currentPage = Math.max(0, Math.min(this._currentPage, doc.pageCount - 1));
     void this._render().catch((error) => this._reportRenderError(error));
   }
 
@@ -917,20 +955,23 @@ export class DocxViewer implements ZoomableViewer {
     if ((this._opts.showTrackedChanges === true) === value) {
       // Still forward the installed value: it cancels an older in-flight
       // worker switch that has not become this viewer's state yet.
-      await doc?.setLayoutView?.({
+      if (doc) await selectDocxLayoutView(doc, {
         showTrackedChanges: value,
         currentDate: this._opts.currentDate,
-      });
+      }, this);
       return;
     }
     const nextOptions = { ...this._opts, showTrackedChanges: value };
     // The markup view paginates differently, so the document's geometry
     // accessors must follow it — and the current page may no longer exist:
     // hiding deletions can shorten the document past where the reader is.
-    await doc?.setLayoutView?.({
-      showTrackedChanges: value,
-      currentDate: nextOptions.currentDate,
-    });
+    const selected = doc
+      ? await selectDocxLayoutView(doc, {
+          showTrackedChanges: value,
+          currentDate: nextOptions.currentDate,
+        }, this)
+      : true;
+    if (!selected) return;
     if (this._destroyed || generation !== this._layoutViewGeneration || doc !== this._doc) return;
     this._opts = nextOptions;
     this._find.invalidate();
