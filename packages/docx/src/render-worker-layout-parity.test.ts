@@ -208,7 +208,9 @@ describe('render worker canonical layout parity', () => {
     const paragraph = model.body[0] as Extract<BodyElement, { type: 'paragraph' }>;
     const baseRun = paragraph.runs[0] as Extract<DocParagraph['runs'][number], { type: 'text' }>;
     paragraph.runs = [
-      { ...baseRun, text: 'opening '.repeat(4_000) },
+      // Keep the review anchor beyond the first page without making this
+      // metadata test depend on laying out an unnecessarily large document.
+      { ...baseRun, text: 'opening '.repeat(1_000) },
       {
         ...baseRun,
         text: 'future review anchor',
