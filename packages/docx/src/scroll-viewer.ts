@@ -19,6 +19,7 @@ import { eventTargetsDataAttributeWithin } from '@silurus/ooxml-core/internal/do
 import type { ReadOnlyCommentMarginGeometry } from '@silurus/ooxml-core/internal/read-only-comment-decoration';
 import { DocxDocument } from './document';
 import type { LoadOptions } from './document';
+import { activeDocxLayoutViewOf } from './document-layout-view.js';
 import type { DocxTextRunInfo } from './renderer';
 import { buildDocxTextLayer } from './text-layer';
 import { DocxFindController, type DocxMatchLocation } from './find';
@@ -462,17 +463,24 @@ export class DocxScrollViewer implements ZoomableViewer {
   /**
    * Create a Scroll Viewer that borrows an already-loaded document.
    *
-   * The document's render mode is authoritative. The returned Viewer cannot
-   * load another source, and destroying it leaves the caller-owned document
-   * open. The initial virtual window is laid out during construction.
+   * The document's render mode and active layout view are authoritative. The
+   * returned Viewer cannot load another source, and destroying it leaves the
+   * caller-owned document open. The initial virtual window is laid out during
+   * construction.
    */
   static fromDocument(
     container: HTMLElement,
     document: DocxDocument,
     opts: Omit<DocxScrollViewerOptions, keyof LoadOptions> = {},
   ): Omit<DocxScrollViewer, 'load'> {
+    const layoutView = activeDocxLayoutViewOf(document);
     return new DocxScrollViewer(container, {
       ...opts,
+      // The caller-owned document has already selected these pagination axes.
+      // Seed the viewer from that authoritative state: LoadOptions are omitted
+      // from this factory's opts and its local defaults can therefore disagree.
+      currentDate: layoutView.currentDate,
+      showTrackedChanges: layoutView.showTrackedChanges,
       [borrowedDocumentOption]: document,
     } as InternalDocxScrollViewerOptions);
   }

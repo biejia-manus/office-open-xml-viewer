@@ -8,6 +8,11 @@ import type { DocxElementContext, DocxPagePoint } from './selection-context';
 import type { DocComment } from './types';
 import type { DocxElementContextOptions } from './element-context';
 import { DocxScrollViewer, type DocxScrollViewerOptions } from './scroll-viewer';
+import {
+  attachDocumentLayoutRuntime,
+  documentLayoutRuntimeOf,
+} from './layout/runtime-state.js';
+import { normalizeLayoutOptions } from './layout/options.js';
 
 /** Test-only adapter for mechanics cases that need a preloaded engine. Public
  * callers use `DocxScrollViewer.fromDocument()` directly. */
@@ -354,6 +359,26 @@ export interface RenderCall {
  *  observable. */
 export class FakeDocxEngine {
   destroyed = false;
+  /** The layout view selected by load()/setLayoutView(). Borrowing viewers must
+   *  inherit this instead of silently falling back to their option defaults. */
+  get layoutView(): Readonly<{
+    showTrackedChanges: boolean;
+    currentDate: number;
+  }> {
+    const runtime = documentLayoutRuntimeOf(this);
+    return {
+      showTrackedChanges: runtime.activeLayoutOptions?.showTrackedChanges === true,
+      currentDate: runtime.activeLayoutOptions?.currentDateMs ?? runtime.defaultCurrentDateMs,
+    };
+  }
+  set layoutView(view: Readonly<{ showTrackedChanges: boolean; currentDate: number }>) {
+    const runtime = documentLayoutRuntimeOf(this);
+    runtime.activeLayoutOptions = normalizeLayoutOptions(
+      view.currentDate,
+      runtime.defaultCurrentDateMs,
+      view.showTrackedChanges,
+    );
+  }
   renderCalls: RenderCall[] = [];
   bitmapCalls: RenderCall[] = [];
   createdBitmaps: Array<{ width: number; height: number; close: ReturnType<typeof vi.fn> }> = [];
@@ -384,7 +409,9 @@ export class FakeDocxEngine {
     private _sizes: Array<{ widthPt: number; heightPt: number }>,
     private _mode: 'main' | 'worker' = 'main',
     private deferred = false,
-  ) {}
+  ) {
+    attachDocumentLayoutRuntime(this, 0);
+  }
   /** Grow (or shrink) the document, as progressive layout does when the
    *  authoritative layout replaces the provisional prefix. */
   setPageCount(pageCount: number): void {
@@ -417,6 +444,12 @@ export class FakeDocxEngine {
 
   setLayoutView(view: { showTrackedChanges?: boolean; currentDate?: Date | number }): void {
     this.layoutViews.push(view);
+    this.layoutView = {
+      showTrackedChanges: view.showTrackedChanges === true,
+      currentDate: typeof view.currentDate === 'number'
+        ? view.currentDate
+        : view.currentDate?.getTime() ?? this.layoutView.currentDate,
+    };
   }
 
   get pageCount(): number {

@@ -1,5 +1,6 @@
 import { DocxDocument } from './document';
 import type { LoadOptions } from './document';
+import { activeDocxLayoutViewOf } from './document-layout-view.js';
 import type { RenderPageOptions } from './types';
 import type { DocxTextRunInfo } from './renderer';
 import { buildDocxTextLayer } from './text-layer';
@@ -163,17 +164,21 @@ export class DocxViewer implements ZoomableViewer {
   /**
    * Create a Viewer that borrows an already-loaded document.
    *
-   * The document's render mode is authoritative. The returned Viewer cannot
-   * load another source, and destroying it leaves the caller-owned document
-   * open. Call {@link goToPage} to render the initial page.
+   * The document's render mode and active layout view are authoritative. The
+   * returned Viewer cannot load another source, and destroying it leaves the
+   * caller-owned document open. Call {@link goToPage} to render the initial
+   * page.
    */
   static fromDocument(
     canvas: HTMLCanvasElement,
     document: DocxDocument,
     opts: Omit<DocxViewerOptions, keyof LoadOptions> = {},
   ): Omit<DocxViewer, 'load'> {
+    const layoutView = activeDocxLayoutViewOf(document);
     return new DocxViewer(canvas, {
       ...opts,
+      currentDate: layoutView.currentDate,
+      showTrackedChanges: layoutView.showTrackedChanges,
       [borrowedDocumentOption]: document,
     } as InternalDocxViewerOptions);
   }

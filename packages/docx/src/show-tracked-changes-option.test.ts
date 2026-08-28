@@ -76,6 +76,10 @@ describe('DocxViewer — showTrackedChanges option', () => {
 async function setupScroll(
   opts: Record<string, unknown> = {},
   mode: 'main' | 'worker' = 'main',
+  layoutView?: Readonly<{
+    showTrackedChanges: boolean;
+    currentDate: number;
+  }>,
 ) {
   installDom();
   const container = makeContainer(200, 400);
@@ -88,6 +92,10 @@ async function setupScroll(
     ],
     mode,
   );
+  engine.layoutView = layoutView ?? {
+    showTrackedChanges: opts.showTrackedChanges === true,
+    currentDate: typeof opts.currentDate === 'number' ? opts.currentDate : 0,
+  };
   const v = makeBorrowedDocxScrollViewer(container as unknown as HTMLElement, {
     document: engine.asDoc(),
     gap: 10,
@@ -107,6 +115,38 @@ async function setupScroll(
 }
 
 describe('DocxScrollViewer — showTrackedChanges option (main mode)', () => {
+  it('inherits an already-loaded document\'s active markup view', async () => {
+    const currentDate = 1_700_000_000_000;
+    const { v, engine } = await setupScroll(
+      {},
+      'main',
+      { showTrackedChanges: true, currentDate },
+    );
+    expect(engine.renderCalls.length).toBeGreaterThan(0);
+    for (const call of engine.renderCalls) {
+      expect(call.showTrackedChanges).toBe(true);
+      expect(call.currentDate).toBe(currentDate);
+    }
+
+    const before = engine.renderCalls.length;
+    await v.setShowTrackedChanges(false);
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The first OFF is a real transition, not a stale-state no-op, and it keeps
+    // the borrowed document's other layout axis intact.
+    expect(engine.renderCalls.length).toBeGreaterThan(before);
+    expect(engine.layoutViews.at(-1)).toEqual({
+      showTrackedChanges: false,
+      currentDate,
+    });
+    for (const call of engine.renderCalls.slice(before)) {
+      expect(call.showTrackedChanges ?? false).toBe(false);
+      expect(call.currentDate).toBe(currentDate);
+    }
+    v.destroy();
+  });
+
   it('renders the final view by default', async () => {
     const { v, engine } = await setupScroll();
     expect(engine.renderCalls.length).toBeGreaterThan(0);
