@@ -272,9 +272,9 @@ export interface LayoutTextSeg extends LayoutSegSource {
   /** Parser-independent UTF-16 ranges occupied by authored
    * `<w:noBreakHyphen/>` glyphs. Neither edge is a legal line boundary. */
   noBreakRanges?: readonly Readonly<{ start: number; end: number }>[];
-  /** Word-observed external-URL syntax breaks, as segment-local UTF-16 offsets. */
+  /** Registered external-URL syntax breaks, as segment-local UTF-16 offsets. */
   externalLinkBreakOffsets?: readonly number[];
-  /** This segment starts after a Word-observed external-URL syntax break. */
+  /** This segment starts after a registered external-URL syntax break. */
   externalLinkBreakBefore?: true;
   /** ECMA-376 §17.3.2.34 `<w:snapToGrid>` — false opts this run out of the
    *  section character grid without changing paragraph line-grid policy. */
@@ -3669,9 +3669,9 @@ export function buildSegments(
     }
   }
 
-  // Word treats path/query separators in a displayed external URL as ordinary
-  // line opportunities. Analyse the complete semantic link across formatting
-  // seams first, then project the opportunities onto the existing segments.
+  // Project the registered `word-external-link-syntax-breaks` opportunities
+  // across the complete semantic link and all formatting seams first, then
+  // distribute them onto the existing segments.
   // Segments stay intact unless a real overflow selects one of those offsets,
   // preserving contextual shaping, decoration geometry, and paint identity on
   // lines that do not wrap.
