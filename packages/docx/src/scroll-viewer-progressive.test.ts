@@ -393,4 +393,27 @@ describe('DocxScrollViewer — growing page count', () => {
     expect(canvases.length).toBeLessThan(10);
     viewer.destroy();
   });
+
+  it('does not start a deferred full-document find after clearFind()', async () => {
+    installDom();
+    const engine = new FakeDocxEngine(1, PAGE);
+    engine.setLayoutComplete(false);
+    const doc = engine.asDoc();
+    const viewer = DocxScrollViewer.fromDocument(
+      makeContainer(700, 500) as unknown as HTMLElement,
+      doc,
+    ) as DocxScrollViewer;
+    const findController = (viewer as unknown as { _find: { find: unknown } })._find;
+    const findSpy = vi.spyOn(findController as { find: (query: string) => Promise<unknown[]> }, 'find');
+
+    const pending = viewer.findText('later');
+    viewer.clearFind();
+    engine.setPageCount(3);
+    engine.setLayoutComplete(true);
+    publishDocxLayout(doc, { pageCount: 3, exact: true, complete: true });
+
+    await expect(pending).resolves.toEqual([]);
+    expect(findSpy).not.toHaveBeenCalled();
+    viewer.destroy();
+  });
 });

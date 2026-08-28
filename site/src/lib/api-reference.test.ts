@@ -110,6 +110,8 @@ describe('official-site API reference', () => {
       expect(progressive?.desc, apiClass.name).toContain('pages available so far');
       expect(progressive?.detailsHref, apiClass.name).toBe('/docx#progressive-layout');
       expect(options.map(({ name }) => name), apiClass.name).toEqual(expect.arrayContaining([
+        'showTrackedChanges',
+        'currentDate',
         'sliceLayout',
         'onLayoutProgress',
         'onLayoutPartial',
@@ -119,11 +121,13 @@ describe('official-site API reference', () => {
         .toContain('availableUnits: number; totalUnits?: number; exact: boolean');
       expect(options.find(({ name }) => name === 'onLayoutComplete')?.type, apiClass.name)
         .toBe('(error?: unknown) => void');
+      expect(options.find(({ name }) => name === 'currentDate')?.desc, apiClass.name)
+        .toContain('layout variant');
 
       const pageCount = apiClass.methods.find(({ sig }) => sig === 'get pageCount(): number');
       expect(pageCount?.desc, apiClass.name).toContain('available so far');
-      expect(apiClass.methods.find(({ sig }) => sig === 'get layoutComplete(): boolean'), apiClass.name)
-        .toBeDefined();
+      expect(apiClass.methods.find(({ sig }) => sig === 'get layoutComplete(): boolean')?.desc, apiClass.name)
+        .toContain('remains false');
       expect(apiClass.methods.find(({ sig }) => sig === 'waitUntilLayoutComplete(): Promise<void>')?.desc, apiClass.name)
         .toContain('authoritative full layout');
     }
@@ -150,8 +154,8 @@ describe('official-site API reference', () => {
         .toContain('availableUnits: number; totalUnits?: number; exact: boolean');
       expect(apiClass.methods.find(({ sig }) => sig === 'get availableSlideCount(): number'), apiClass.name)
         .toBeDefined();
-      expect(apiClass.methods.find(({ sig }) => sig === 'get layoutComplete(): boolean'), apiClass.name)
-        .toBeDefined();
+      expect(apiClass.methods.find(({ sig }) => sig === 'get layoutComplete(): boolean')?.desc, apiClass.name)
+        .toContain('remains false');
       expect(apiClass.methods.find(({ sig }) => sig === 'waitUntilLayoutComplete(): Promise<void>'), apiClass.name)
         .toBeDefined();
     }

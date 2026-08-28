@@ -121,4 +121,65 @@ describe('PptxViewer progressive layout', () => {
     expect(viewer.slideIndex).toBe(2);
     viewer.destroy();
   });
+
+  it('settles superseded navigation immediately instead of waiting for another layout publication', async () => {
+    const canvas = mountCanvas();
+    const engine = new FakePptxEngine(3, WIDTH, HEIGHT);
+    engine.setLayoutProgress(1, false);
+    const viewer = PptxViewer.fromPresentation(
+      canvas as unknown as HTMLCanvasElement,
+      engine.asPres(),
+    ) as PptxViewer;
+
+    let firstSettled = false;
+    const first = viewer.goToSlide(2).then(() => { firstSettled = true; });
+    await viewer.goToSlide(0);
+    await first;
+
+    expect(firstSettled).toBe(true);
+    expect(viewer.slideIndex).toBe(0);
+    viewer.destroy();
+  });
+
+  it('keeps a concurrent progressive failure on the canceled navigation Promise channel', async () => {
+    const canvas = mountCanvas();
+    const engine = new FakePptxEngine(3, WIDTH, HEIGHT);
+    engine.setLayoutProgress(1, false);
+    const onError = vi.fn();
+    const viewer = PptxViewer.fromPresentation(
+      canvas as unknown as HTMLCanvasElement,
+      engine.asPres(),
+      { onError },
+    ) as PptxViewer;
+    const failure = new Error('layout failed during navigation cancellation');
+
+    const navigation = viewer.goToSlide(2);
+    void viewer.goToSlide(0);
+    engine.setLayoutProgress(1, false, failure);
+
+    await expect(navigation).rejects.toBe(failure);
+    expect(onError).not.toHaveBeenCalled();
+    viewer.destroy();
+  });
+
+  it('does not lose a layout failure when clearFind supersedes a progressive search', async () => {
+    const canvas = mountCanvas();
+    const engine = new FakePptxEngine(3, WIDTH, HEIGHT);
+    engine.setLayoutProgress(1, false);
+    const onError = vi.fn();
+    const viewer = PptxViewer.fromPresentation(
+      canvas as unknown as HTMLCanvasElement,
+      engine.asPres(),
+      { onError },
+    ) as PptxViewer;
+    const failure = new Error('layout failed during find cancellation');
+
+    const find = viewer.findText('needle');
+    viewer.clearFind();
+    engine.setLayoutProgress(1, false, failure);
+
+    await expect(find).rejects.toBe(failure);
+    expect(onError).not.toHaveBeenCalled();
+    viewer.destroy();
+  });
 });

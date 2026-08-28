@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { DocxScrollViewer } from './scroll-viewer.js';
 import { DocxDocument } from './document.js';
+import { publishDocxLayout } from './document-layout-events.js';
 import { installDom, makeContainer, makeEl, makeBorrowedDocxScrollViewer, FakeDocxEngine, type FakeEl } from './scroll-viewer-test-dom.js';
 import * as docxIndex from './index.js';
 import type { DocxElementContext } from './selection-context.js';
@@ -162,6 +163,166 @@ describe('DocxScrollViewer — skeleton (T1)', () => {
 });
 
 describe('DocxScrollViewer — opt-in comment cards', () => {
+  it.each(['main', 'worker'] as const)(
+    'shows opening-page comments immediately in progressive %s mode',
+    async (mode) => {
+      installDom();
+      const engine = new FakeDocxEngine(3, [{ widthPt: 612, heightPt: 792 }], mode);
+      const source = { story: 'body', storyInstance: 'body', path: [0] } as const;
+      engine.setLayoutComplete(false);
+      engine.comments = [{ id: 'opening', author: 'Ada', text: 'Opening review' }];
+      engine.commentAnchors = [{
+        commentId: 'opening', source, startRunIndex: 0, endRunIndex: 1,
+        reference: { source, runIndex: 1, affinity: 'preceding' },
+      }] as CommentAnchorRange[];
+      engine.feedTextRuns = [{
+        text: 'opening', source, sourceRunIndex: 0,
+        x: 20, y: 20, w: 80, h: 14, fontSize: 12, font: '12px sans-serif',
+      }];
+      const viewer = DocxScrollViewer.fromDocument(
+        makeContainer() as unknown as HTMLElement,
+        engine.asDoc(),
+        { comments: true, overscan: 0 },
+      ) as DocxScrollViewer;
+      const slots = (viewer as unknown as {
+        _slots: Map<number, { commentTintLayer: FakeEl | null; commentMargin: FakeEl | null }>;
+      })._slots;
+
+      expect([...slots.values()].every((slot) =>
+        slot.commentTintLayer !== null && slot.commentMargin !== null)).toBe(true);
+      viewer.destroy();
+    },
+  );
+
+  it('keeps authored page screen position stable when a left review rail appears', () => {
+    installDom();
+    const engine = new FakeDocxEngine(3, [{ widthPt: 612, heightPt: 792 }], 'worker');
+    const source = { story: 'body', storyInstance: 'body', path: [2] } as const;
+    engine.setLayoutComplete(false);
+    engine.comments = [{ id: 'later-left', author: 'Ada', text: 'Later review' }];
+    engine.commentAnchors = [];
+    const doc = engine.asDoc();
+    const container = makeContainer();
+    const viewer = DocxScrollViewer.fromDocument(
+      container as unknown as HTMLElement,
+      doc,
+      { comments: { side: 'left' }, overscan: 0 },
+    ) as DocxScrollViewer;
+    const state = viewer as unknown as {
+      _reviewOriginPx: number;
+      _slots: Map<number, { wrapper: FakeEl }>;
+    };
+    const scrollHost = container.children[0]!.children[0]!;
+    const spacer = scrollHost.children[0]!;
+    let browserScrollLeft = 0;
+    Object.defineProperty(scrollHost, 'scrollLeft', {
+      configurable: true,
+      get: () => browserScrollLeft,
+      set: (value: number) => {
+        const max = Math.max(0, parseFloat(spacer.style.width) - scrollHost.clientWidth);
+        browserScrollLeft = Math.min(max, Math.max(0, value));
+      },
+    });
+    const openingLeft = state._slots.get(0)!.wrapper.style.left;
+    const authoredLeft = Number(openingLeft.match(/calc\(([-\d.]+)px/)?.[1]);
+    const openingScreenX = authoredLeft + state._reviewOriginPx - scrollHost.scrollLeft;
+
+    engine.commentAnchors = [{
+      commentId: 'later-left', source, startRunIndex: 0, endRunIndex: 1,
+      reference: { source, runIndex: 1, affinity: 'preceding' },
+    }] as CommentAnchorRange[];
+    engine.setLayoutComplete(true);
+    publishDocxLayout(doc, { pageCount: 3, exact: true, complete: true });
+
+    expect(state._slots.get(0)!.wrapper.style.left).toBe(openingLeft);
+    expect(state._reviewOriginPx).toBeGreaterThan(0);
+    expect(scrollHost.scrollLeft).toBe(state._reviewOriginPx);
+    expect(authoredLeft + state._reviewOriginPx - scrollHost.scrollLeft).toBe(openingScreenX);
+    scrollHost.scrollTop = 10_000;
+    scrollHost.dispatch('scroll');
+    expect(state._slots.get(2)!.wrapper.style.left).toBe(openingLeft);
+    viewer.relayout();
+    expect(state._slots.get(2)!.wrapper.style.left).toBe(openingLeft);
+    expect(authoredLeft + state._reviewOriginPx - scrollHost.scrollLeft).toBe(openingScreenX);
+    viewer.destroy();
+  });
+
+  it.each(['main', 'worker'] as const)(
+    'waits for a later progressive %s-mode comment instead of treating it as absent',
+    async (mode) => {
+      installDom();
+      const engine = new FakeDocxEngine(3, [{ widthPt: 612, heightPt: 792 }], mode);
+      const source = { story: 'body', storyInstance: 'body', path: [2] } as const;
+      const anchors = [{
+        commentId: 'later', source, startRunIndex: 0, endRunIndex: 1,
+        reference: { source, runIndex: 1, affinity: 'preceding' },
+      }] as CommentAnchorRange[];
+      engine.setLayoutComplete(false);
+      engine.comments = [{ id: 'later', author: 'Ada', text: 'Later review' }];
+      engine.commentAnchors = [];
+      engine.collectPageRuns = async (page) => page === 2 ? [{
+        text: 'later', source, sourceRunIndex: 0,
+        x: 20, y: 20, w: 80, h: 14, fontSize: 12, font: '12px sans-serif',
+      }] : [];
+      const doc = engine.asDoc();
+      const container = makeContainer();
+      const viewer = DocxScrollViewer.fromDocument(
+        container as unknown as HTMLElement,
+        doc,
+        { comments: true },
+      ) as DocxScrollViewer;
+      const state = viewer as unknown as {
+        _slots: Map<number, {
+          canvas: FakeEl;
+          dispatcher: unknown;
+          wrapper: FakeEl;
+          commentTintLayer: FakeEl | null;
+          commentMargin: FakeEl | null;
+        }>;
+      };
+      const spacer = container.children[0]!.children[0]!.children[0]!;
+      const scrollHost = container.children[0]!.children[0]!;
+      scrollHost.scrollTop = 17;
+      const openingScale = viewer.getScale();
+      const openingHeight = spacer.style.height;
+      const openingWidth = parseFloat(spacer.style.width);
+      const openingSlots = new Map(state._slots);
+      const openingLeft = state._slots.get(0)!.wrapper.style.left;
+      expect([...state._slots.values()].every((slot) =>
+        slot.commentTintLayer !== null && slot.commentMargin !== null)).toBe(true);
+
+      let settled = false;
+      const navigation = viewer.goToComment('later').then((result) => {
+        settled = true;
+        return result;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      engine.commentAnchors = anchors;
+      engine.setPageCount(3);
+      engine.setLayoutComplete(true);
+      publishDocxLayout(doc, { pageCount: 3, exact: true, complete: true });
+      expect([...state._slots.values()].every((slot) =>
+        slot.commentTintLayer !== null && slot.commentMargin !== null)).toBe(true);
+      expect(viewer.getScale()).toBe(openingScale);
+      expect(spacer.style.height).toBe(openingHeight);
+      expect(scrollHost.scrollTop).toBe(17);
+      expect(parseFloat(spacer.style.width)).toBeGreaterThan(openingWidth);
+      for (const [index, openingSlot] of openingSlots) {
+        expect(state._slots.get(index)?.canvas).toBe(openingSlot.canvas);
+        expect(state._slots.get(index)?.dispatcher).toBe(openingSlot.dispatcher);
+        expect(state._slots.get(index)?.wrapper.style.left).toBe(openingLeft);
+      }
+      await expect(navigation).resolves.toBe(true);
+      expect(state._slots.get(2)?.wrapper.style.left).toBe(openingLeft);
+      viewer.relayout();
+      expect(state._slots.get(2)?.wrapper.style.left).toBe(openingLeft);
+      viewer.destroy();
+    },
+  );
+
   it('can keep authored range highlighting while an application owns the comment list', async () => {
     installDom();
     const engine = new FakeDocxEngine(1, [{ widthPt: 612, heightPt: 792 }]);
@@ -351,9 +512,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
       { comments: true },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
-    const scrollHost = container.children[0]!.children[0]!;
-    const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
-    expect(page.children.some((child) => child.style.cssText.includes('overflow-y:auto'))).toBe(false);
+    expect((viewer as unknown as { _commentMarginExtent(): number })._commentMarginExtent()).toBe(0);
     viewer.destroy();
   });
 
@@ -368,9 +527,7 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
       { comments: true },
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
-    const scrollHost = container.children[0]!.children[0]!;
-    const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
-    expect(page.children.some((child) => child.style.cssText.includes('overflow-y:auto'))).toBe(false);
+    expect((viewer as unknown as { _commentMarginExtent(): number })._commentMarginExtent()).toBe(0);
     viewer.destroy();
   });
 

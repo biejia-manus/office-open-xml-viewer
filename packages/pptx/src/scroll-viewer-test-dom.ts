@@ -429,7 +429,9 @@ export class FakePptxEngine {
     this._layoutComplete = complete;
     this._layoutFailure = error;
     this._resolveLayout = null;
-    if (!complete) {
+    if (error !== undefined) {
+      this._layoutDeferred = Promise.resolve();
+    } else if (!complete) {
       this._layoutDeferred = new Promise<void>((resolve) => { this._resolveLayout = resolve; });
     }
     publishPptxLayout(this, {

@@ -134,6 +134,9 @@ export class DocxViewer implements ZoomableViewer {
   private _elementLayer: HTMLDivElement | null = null;
   /** IX2 — find state (per-page runs, matches, active cursor). */
   private _find: DocxFindController;
+  /** Covers the pre-search progressive wait that the controller's own
+   * generation cannot see until find() starts. */
+  private _findRequestGeneration = 0;
   /** A 2d context used only to measure text for highlight geometry (its own
    *  1×1 offscreen canvas, so measuring never touches the visible canvas). */
   private _measureCtx: CanvasRenderingContext2D | null = null;
@@ -149,7 +152,11 @@ export class DocxViewer implements ZoomableViewer {
   private _layoutViewGeneration = 0;
   private _navigationGeneration = 0;
   private _layoutUnsubscribe: (() => void) | null = null;
+  /** Latest default internal-link navigation; a newer click supersedes an older
+   * one that is still waiting for progressive pagination. */
+  private _internalHyperlinkGeneration = 0;
   private readonly _layoutWaiters = new Set<() => void>();
+  private _layoutFailed = false;
   private readonly _loadingLayer: HTMLDivElement;
   private _elementClickListener: ((event: MouseEvent) => void) | null = null;
   private _contextMenuListener: ((event: MouseEvent) => void) | null = null;
@@ -297,6 +304,7 @@ export class DocxViewer implements ZoomableViewer {
         this._invalidateElementContext(false);
         elementInvalidated = true;
         this._renderDispatcher.begin();
+        this._findRequestGeneration++;
         this._find.invalidate();
         this._unbindLayoutDocument();
       });
@@ -322,14 +330,16 @@ export class DocxViewer implements ZoomableViewer {
     return this._currentPage;
   }
 
-  /** Whether every page has been laid out. */
+  /** True only after the authoritative document layout succeeds. */
   get layoutComplete(): boolean {
     return this._doc?.layoutComplete ?? true;
   }
 
-  /** Resolve once the authoritative layout has replaced any provisional pages. */
+  /** Resolve after authoritative layout; rejects if background pagination fails. */
   async waitUntilLayoutComplete(): Promise<void> {
-    await this._doc?.waitUntilLayoutComplete?.();
+    await this._errorRouter.ownBackgroundLifecycle(async () => {
+      await this._doc?.waitUntilLayoutComplete?.();
+    });
   }
 
   /** The underlying <canvas> element. */
@@ -483,8 +493,21 @@ export class DocxViewer implements ZoomableViewer {
     query: string,
     opts: FindMatchesOptions = {},
   ): Promise<FindMatch<DocxMatchLocation>[]> {
-    if (!this._doc) return [];
-    const matches = await this._find.find(query, opts);
+    const doc = this._doc;
+    if (!doc) return [];
+    const generation = ++this._findRequestGeneration;
+    // Preserve the established synchronous empty-query cancellation contract.
+    // A real full-document search must wait for authoritative pagination or its
+    // result would silently describe only the opening prefix.
+    if (query.length > 0 && !doc.layoutComplete) {
+      await this._errorRouter.ownBackgroundLifecycle(() => doc.waitUntilLayoutComplete());
+      if (this._destroyed || this._doc !== doc || generation !== this._findRequestGeneration) {
+        return [];
+      }
+    }
+    const matches = await this._errorRouter.ownAwaitable(
+      () => this._find.find(query, opts),
+    );
     // Redraw the current page's highlights (matches on it become visible without
     // navigating). Cheap DOM geometry — no page re-render.
     this._redrawHighlights();
@@ -508,6 +531,7 @@ export class DocxViewer implements ZoomableViewer {
 
   /** IX2 — clear all highlights and reset the find state. */
   clearFind(): void {
+    this._findRequestGeneration++;
     this._find.invalidate();
     this._redrawHighlights();
   }
@@ -671,6 +695,7 @@ export class DocxViewer implements ZoomableViewer {
   destroy(): void {
     if (this._destroyed) return;
     this._destroyed = true;
+    this._findRequestGeneration++;
     this._layoutViewGeneration++;
     this._unbindLayoutDocument();
     // First line: block any render rejection racing in from surfacing on a dead
@@ -793,6 +818,7 @@ export class DocxViewer implements ZoomableViewer {
 
   private _bindLayoutDocument(doc: DocxDocument): void {
     this._unbindLayoutDocument();
+    this._layoutFailed = false;
     let initial = true;
     this._layoutUnsubscribe = subscribeDocxLayout(
       doc,
@@ -815,6 +841,7 @@ export class DocxViewer implements ZoomableViewer {
   private _unbindLayoutDocument(): void {
     this._layoutUnsubscribe?.();
     this._layoutUnsubscribe = null;
+    this._layoutFailed = false;
     this._cancelPendingNavigation();
   }
 
@@ -822,7 +849,11 @@ export class DocxViewer implements ZoomableViewer {
     if (this._destroyed || doc !== this._doc) return;
     this._wakeLayoutWaiters();
     if (publication.error !== undefined) {
-      this._reportRenderError(publication.error);
+      this._layoutFailed = true;
+      this._errorRouter.reportBackground(
+        publication.error,
+        this._opts.onLayoutComplete !== undefined,
+      );
       return;
     }
     this._find.invalidate();
@@ -835,16 +866,21 @@ export class DocxViewer implements ZoomableViewer {
     page: number,
     generation: number,
   ): Promise<void> {
-    while (
-      !this._destroyed
-      && generation === this._navigationGeneration
-      && doc === this._doc
-      && page >= doc.pageCount
-      && !doc.layoutComplete
-    ) {
-      await new Promise<void>((resolve) => { this._layoutWaiters.add(resolve); });
-    }
-    if (doc === this._doc && doc.layoutComplete) await doc.waitUntilLayoutComplete();
+    await this._errorRouter.ownBackgroundLifecycle(async () => {
+      while (
+        !this._destroyed
+        && generation === this._navigationGeneration
+        && doc === this._doc
+        && page >= doc.pageCount
+        && !doc.layoutComplete
+        && !this._layoutFailed
+      ) {
+        await new Promise<void>((resolve) => { this._layoutWaiters.add(resolve); });
+      }
+      if (doc === this._doc && (doc.layoutComplete || this._layoutFailed)) {
+        await doc.waitUntilLayoutComplete();
+      }
+    });
   }
 
   private _wakeLayoutWaiters(): void {
@@ -999,12 +1035,24 @@ export class DocxViewer implements ZoomableViewer {
         openExternalHyperlink(target.url, undefined, this._hostWindow);
         return;
       }
-      // Internal anchor (IX-nav): map the bookmark name to its destination page
-      // and navigate. `undefined` ⇒ no bookmark of that name ⇒ inert.
-      const page = this._doc?.getBookmarkPage(target.ref);
-      if (page !== undefined) {
-        void this.goToPage(page).catch((error) => this._reportRenderError(error));
-      }
+      const doc = this._doc;
+      if (!doc) return;
+      const generation = ++this._internalHyperlinkGeneration;
+      void this._navigateInternalHyperlink(doc, target.ref, generation)
+        .catch((error) => this._reportRenderError(error));
     };
+  }
+
+  private async _navigateInternalHyperlink(
+    doc: DocxDocument,
+    ref: string,
+    generation: number,
+  ): Promise<void> {
+    if (!doc.layoutComplete) await doc.waitUntilLayoutComplete();
+    if (this._destroyed || this._doc !== doc || generation !== this._internalHyperlinkGeneration) {
+      return;
+    }
+    const page = doc.getBookmarkPage(ref);
+    if (page !== undefined) await this.goToPage(page);
   }
 }

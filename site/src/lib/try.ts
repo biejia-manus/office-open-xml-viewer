@@ -139,19 +139,27 @@ export async function renderFile(stage: HTMLElement, file: File): Promise<Render
       viewer.destroy();
       throw new SupersededRenderError();
     }
-    // Browser-native Find only sees mounted DOM. Keep every selectable overlay
-    // mounted in Try Yours by setting the finite parsed slide count as overscan;
-    // the package default remains virtualized for normal integrations.
-    viewerOptions.overscan = viewer.slideCount;
-    viewer.relayout();
     activeCleanup = () => viewer.destroy();
+
+    const mountAllSlides = (): number => {
+      assertCurrentRender(generation);
+      // Native Find needs every slide's text layer in the DOM. Keep the opening
+      // progressive window virtualized, then expand only after every slide is
+      // paintable so unfinished slides do not create a deck-wide waiter set.
+      viewerOptions.overscan = viewer.slideCount;
+      viewer.relayout();
+      return viewer.slideCount;
+    };
+
+    if (viewer.layoutComplete) {
+      return { format: 'pptx', units: mountAllSlides(), unitLabel: 'slide' };
+    }
+
     return {
       format: 'pptx',
-      units: viewer.slideCount,
+      units: viewer.availableSlideCount,
       unitLabel: 'slide',
-      ...(viewer.layoutComplete
-        ? {}
-        : { finalUnits: viewer.waitUntilLayoutComplete().then(() => viewer.slideCount) }),
+      finalUnits: viewer.waitUntilLayoutComplete().then(mountAllSlides),
     };
   }
 

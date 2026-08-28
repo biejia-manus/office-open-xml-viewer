@@ -243,14 +243,25 @@ function production(state, table, para, group) {
       + '  return { layoutServices, layoutVariants: variants.store, defaultCurrentDateMs };\n'
       + '}\n');
   write(root, 'packages/docx/src/render-worker-metadata.ts',
-    'export function projectRenderWorkerLayoutMeta(layout, source, review) {\n'
-      + '  const renderedRunIndex = textRunSourceIndexForDocument(layout);\n'
+    'export function projectRenderWorkerLayoutMeta(layout, source, review, options = {}) {\n'
+      + '  const hasComments = review.comments.length > 0;\n'
+      + '  const hasRevisions = review.revisions.length > 0;\n'
+      + '  const reviewIndex = hasComments || hasRevisions\n'
+      + '    ? reviewProjectionIndexForDocument(layout)\n'
+      + '    : undefined;\n'
+      + '  const reviewProjection = options.provisional && reviewIndex\n'
+      + '    ? { completedSourceKeys: reviewIndex.completedSourceKeys }\n'
+      + '    : undefined;\n'
       + '  return {\n'
       + '    pageCount: layout.pages.length,\n'
       + '    pageSizes: layout.pages.map((page) => page.geometry),\n'
       + '    bookmarkPages: [...buildBookmarkPageMap(layout)],\n'
-      + '    commentAnchorRanges: collectLayoutSourceCommentRangesIfPresent(review.comments, source, renderedRunIndex),\n'
-      + '    revisionAnchorRanges: collectLayoutSourceRevisionRangesIfPresent(review.revisions, source, renderedRunIndex),\n'
+      + '    commentAnchorRanges: hasComments\n'
+      + '      ? collectLayoutSourceCommentRangesIfPresent(review.comments, source, reviewIndex!.renderedRunIndex, reviewProjection)\n'
+      + '      : [],\n'
+      + '    revisionAnchorRanges: hasRevisions\n'
+      + '      ? collectLayoutSourceRevisionRangesIfPresent(review.revisions, source, reviewIndex!.renderedRunIndex, reviewProjection)\n'
+      + '      : [],\n'
       + '  };\n'
       + '}\n'
       + 'export function renderWorkerLayoutMeta(doc, review, currentDateMs, showTrackedChanges) {\n'
@@ -1929,6 +1940,9 @@ test('worker parse metadata comes from the retained selected-variant route', () 
     ['foreign metadata page count', 'render-worker-metadata.ts', 'pageCount: layout.pages.length', 'pageCount: foreignLayout.pages.length'],
     ['foreign metadata page sizes', 'render-worker-metadata.ts', 'pageSizes: layout.pages.map', 'pageSizes: foreignLayout.pages.map'],
     ['foreign metadata bookmarks', 'render-worker-metadata.ts', 'buildBookmarkPageMap(layout)', 'buildBookmarkPageMap(foreignLayout)'],
+    ['foreign review projection index', 'render-worker-metadata.ts', 'reviewProjectionIndexForDocument(layout)', 'reviewProjectionIndexForDocument(foreignLayout)'],
+    ['unconditional comment projection', 'render-worker-metadata.ts', 'commentAnchorRanges: hasComments', 'commentAnchorRanges: true'],
+    ['foreign comment run index', 'render-worker-metadata.ts', 'reviewIndex!.renderedRunIndex', 'foreignReviewIndex.renderedRunIndex'],
     ['foreign runtime metadata layout', 'render-worker-metadata.ts', 'doc.layoutVariants.layoutFor(normalizeLayoutOptions(', 'foreignLayoutFor(normalizeLayoutOptions('],
   ]) {
     const root = initializeCanonicalFixture(`docx-layout-boundary-worker-metadata-${name}-`);

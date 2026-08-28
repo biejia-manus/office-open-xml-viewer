@@ -81,7 +81,7 @@ const GFONTS = { name: 'useGoogleFonts', type: 'boolean', def: 'false', desc: 'L
 const PASSWORD = { name: 'password', type: 'string', def: 'undefined', desc: 'Password for an Agile-encrypted OOXML file. Available on self-loading Viewer constructors and headless load(); borrowed fromDocument(), fromPresentation(), and fromWorkbook() factories omit load-only options because their engine is already loaded.', emphasis: 'Available on self-loading Viewer constructors and headless load()' };
 const DPR = { name: 'dpr', type: 'number', def: 'devicePixelRatio', desc: 'Device pixel ratio for the backing store (crispness on HiDPI).' };
 const WASM_URL = { name: 'wasmUrl', type: 'string | URL', def: 'bundled asset', desc: 'Override the URL the parser worker fetches the WebAssembly module from. By default each format resolves the `*_parser_bg.wasm` asset that ships next to its bundle (relative to the module URL); set this to serve it from a CDN or a self-hosted path instead (a relative value resolves against the document URL). Pointing it at a mismatched or missing file makes load() reject when the worker instantiates it.', emphasis: 'Override the URL the parser worker fetches the WebAssembly module from.' };
-const WORKER_TIMEOUT = { name: 'workerTimeoutMs', type: 'number', def: 'unlimited', desc: 'Reject the parse if the worker does not answer within this many ms — an opt-in safety net for a wedged / crashed worker that would otherwise leave load() pending forever. Unlimited by default (a large document with heavy media can legitimately take tens of seconds). A worker that throws or fails to load already rejects immediately regardless; this only covers the "silent, never-responds" case.', emphasis: 'Reject the parse if the worker does not answer within this many ms' };
+const WORKER_TIMEOUT = { name: 'workerTimeoutMs', type: 'number', def: 'unlimited', desc: 'Opt-in worker liveness limit. Ordinary worker requests use it as their response deadline. Worker-mode progressive loads restart this silence interval whenever the worker reports progress. This allows active long-running work to continue. Silence before first paint rejects load(); silence afterward keeps layoutComplete false and rejects waitUntilLayoutComplete(), while configured completion/error callbacks receive the failure. Worker exceptions still reject immediately. Unlimited by default.', emphasis: 'Worker-mode progressive loads restart this silence interval whenever the worker reports progress.' };
 const MATH = { name: 'math', type: 'MathRenderer', def: 'undefined', desc: 'Opt-in OMML equation engine (MathJax + STIX Two Math, ~3 MB). Import it from the separate @silurus/ooxml/math entry — `import { math } from "@silurus/ooxml/math"` — and pass it to render equations in either mode. Omit it and equations are skipped; the MathJax asset is not fetched. When passed, that standalone asset is fetched lazily the first time a document contains an equation.', emphasis: 'Opt-in OMML equation engine (MathJax + STIX Two Math, ~3 MB).' };
 const THREE_D = { name: 'threeD', type: 'ChartThreeDRenderer', def: 'undefined', desc: 'Opt-in model-space 3-D chart renderer. Import `threeD` from the separate `@silurus/ooxml/three-d` entry and inject it once. Omit it to use the canonical 2-D fallback and avoid loading or evaluating the mesh/camera implementation in main mode. The self-contained worker asset retains the worker-side implementation. It renders the view angle authored in OOXML in main and worker modes.', emphasis: 'Opt-in model-space 3-D chart renderer.' };
 const REGION_MAP = { name: 'regionMap', type: 'ChartRegionMapRenderer', def: 'undefined', desc: 'Opt-in offline ChartEx Region Map renderer using a pinned, public-domain Natural Earth country asset. Import `regionMap` from `@silurus/ooxml/region-map` and inject it once. Unsupported cached or sub-country views fail closed. The built-in renderer works in main and worker modes.', emphasis: 'Opt-in offline ChartEx Region Map renderer' };
@@ -115,18 +115,34 @@ const DOCX_PROGRESSIVE_LAYOUT: ApiOption = {
   detailsHref: '/docx#progressive-layout',
   detailsLabel: 'Progressive layout guide',
 };
+const DOCX_SHOW_TRACKED_CHANGES: ApiOption = {
+  name: 'showTrackedChanges',
+  type: 'boolean',
+  def: 'false',
+  desc: 'Select the tracked-change markup layout from the initial load. Insertions use author-coloured underlines, deletions use author-coloured strikethroughs, and changed lines receive margin bars. Because this changes line breaks and pagination, set the initial view here and use setLayoutView() or setShowTrackedChanges() for later changes.',
+};
+const DOCX_CURRENT_DATE: ApiOption = {
+  name: 'currentDate',
+  type: 'Date | number',
+  def: 'load time',
+  desc: 'Date used to resolve DATE and TIME fields. It participates in the retained layout variant, so pass it at load time when deterministic field values or pagination are required.',
+};
+const DOCX_LAYOUT_VIEW_OPTIONS: readonly ApiOption[] = [
+  DOCX_SHOW_TRACKED_CHANGES,
+  DOCX_CURRENT_DATE,
+];
 const DOCX_SLICE_LAYOUT: ApiOption = {
   name: 'sliceLayout',
   type: 'boolean',
   def: 'false',
-  desc: 'Yield to the browser between pagination slices while load() still waits for the complete document. Use progressiveLayout instead when opening pages should become available before full pagination finishes.',
+  desc: 'In main mode, yield to the browser between pagination slices while load() still waits for the complete document. Worker mode already keeps pagination off the UI thread; without progressiveLayout this option has no additional effect there. Use progressiveLayout when opening pages should become available before full pagination finishes.',
   detailsHref: '/docx#progressive-layout',
   detailsLabel: 'Progressive layout guide',
 };
 const DOCX_LAYOUT_PROGRESS: ApiOption = {
   name: 'onLayoutProgress',
   type: '(progress: Readonly<{ committedUnits: number }>) => void',
-  desc: 'Receive pagination telemetry from resumable layout passes. committedUnits can move backward while convergence revises provisional work; it counts pages, so use pageCount and the Viewer page callbacks for application navigation UI.',
+  desc: 'Receive pagination telemetry from resumable layout passes. It implies sliced layout in main mode and is also delivered by progressiveLayout in main or worker mode; a non-progressive worker load does not publish intermediate progress. committedUnits can move backward while convergence revises provisional work; it counts pages, so use pageCount and the Viewer page callbacks for application navigation UI. Observer exceptions are reported once and never change the layout result.',
   emphasis: 'committedUnits can move backward while convergence revises provisional work',
   detailsHref: '/docx#progressive-layout',
   detailsLabel: 'Progressive layout guide',
@@ -134,14 +150,14 @@ const DOCX_LAYOUT_PROGRESS: ApiOption = {
 const DOCX_LAYOUT_PARTIAL: ApiOption = {
   name: 'onLayoutPartial',
   type: '(progress: Readonly<{ availableUnits: number; totalUnits?: number; exact: boolean }>) => void',
-  desc: 'Receive each later provisional page publication after the initial load publication. availableUnits is the pages available so far; totalUnits is omitted until DOCX pagination knows the final count, and exact is currently always false.',
+  desc: 'Receive each later provisional page publication after the initial load publication. availableUnits is the pages available so far; totalUnits is omitted until DOCX pagination knows the final count, and exact is currently always false. Observer exceptions are reported once and never change the layout result.',
   detailsHref: '/docx#progressive-layout',
   detailsLabel: 'Progressive layout guide',
 };
 const DOCX_LAYOUT_COMPLETE: ApiOption = {
   name: 'onLayoutComplete',
   type: '(error?: unknown) => void',
-  desc: 'Called once the authoritative full layout replaces the provisional one, or with the background failure. It fires only when progressiveLayout actually deferred work after load() resolved.',
+  desc: 'Called once the authoritative full layout replaces the provisional one, or with the background failure. It fires only when progressiveLayout actually deferred work after load() resolved. Observer exceptions are reported once and never change the layout result.',
   detailsHref: '/docx#progressive-layout',
   detailsLabel: 'Progressive layout guide',
 };
@@ -157,21 +173,21 @@ const PPTX_PROGRESSIVE_LAYOUT: ApiOption = {
 const PPTX_LAYOUT_PROGRESS: ApiOption = {
   name: 'onLayoutProgress',
   type: '(progress: Readonly<{ committedUnits: number }>) => void',
-  desc: 'Called as the sequential preflight commits each paintable slide. committedUnits counts slides.',
+  desc: 'Called as the sequential preflight commits each paintable slide. committedUnits counts slides. Observer exceptions are reported once and never change the layout result.',
   detailsHref: '/pptx#progressive-layout',
   detailsLabel: 'Progressive layout guide',
 };
 const PPTX_LAYOUT_PARTIAL: ApiOption = {
   name: 'onLayoutPartial',
   type: '(progress: Readonly<{ availableUnits: number; totalUnits?: number; exact: boolean }>) => void',
-  desc: 'Called for each additional paintable prefix after load() resolves. availableUnits counts paintable slides, totalUnits is the final slide count, and exact is false until completion.',
+  desc: 'Called for each additional paintable prefix after load() resolves. availableUnits counts paintable slides, totalUnits is the final slide count, and exact is false until completion. Observer exceptions are reported once and never change the layout result.',
   detailsHref: '/pptx#progressive-layout',
   detailsLabel: 'Progressive layout guide',
 };
 const PPTX_LAYOUT_COMPLETE: ApiOption = {
   name: 'onLayoutComplete',
   type: '(error?: unknown) => void',
-  desc: 'Called once every slide is paintable, or with the background failure. It fires only when progressiveLayout deferred work after load() resolved.',
+  desc: 'Called once every slide is paintable, or with the background failure. It fires only when progressiveLayout deferred work after load() resolved. Observer exceptions are reported once and never change the layout result.',
   detailsHref: '/pptx#progressive-layout',
   detailsLabel: 'Progressive layout guide',
 };
@@ -256,12 +272,12 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
         { sig: 'get slideIndex(): number', desc: 'Current slide index.' },
         { sig: 'get slideCount(): number', desc: 'Total slides (0 until loaded).' },
         { sig: 'get availableSlideCount(): number', desc: 'Paintable opening-slide prefix. Equals slideCount outside progressive loading.' },
-        { sig: 'get layoutComplete(): boolean', desc: 'Whether every slide is paintable.' },
+        { sig: 'get layoutComplete(): boolean', desc: 'True only when every slide is paintable. It remains false if background preparation fails; waitUntilLayoutComplete() reports that failure.' },
         { sig: 'waitUntilLayoutComplete(): Promise<void>', desc: 'Wait until every slide is paintable; rejects if background preflight fails.' },
         { sig: 'get hiddenSlideMode(): "show" | "skip" | "dim"', desc: 'The current hidden-slide mode.' },
         { sig: 'setHiddenSlideMode(mode: "show" | "skip" | "dim"): Promise<void>', desc: 'Switch the hidden-slide mode at runtime and re-render. Entering `skip` while on a hidden slide advances to the nearest visible slide.' },
-        { sig: 'get visibleSlideCount(): number', desc: 'Number of non-hidden slides (the absolute slideCount is unchanged).' },
-        { sig: 'getNotes(slideIndex: number): string | null', desc: 'Speaker-notes text for a slide (0-based); null when the slide has no notes part or the index is out of range.' },
+        { sig: 'get visibleSlideCount(): number', desc: 'Number of non-hidden slides. During progressive loading this is provisional until layoutComplete; the absolute slideCount remains unchanged.' },
+        { sig: 'getNotes(slideIndex: number): string | null', desc: 'Speaker-notes text for a slide (0-based). During progressive loading the answer is authoritative only below availableSlideCount; await waitUntilLayoutComplete() before scanning the whole deck.' },
         { sig: 'get canvasElement(): HTMLCanvasElement', desc: 'The underlying canvas.' },
         { sig: 'getSelectionContext(options?: PptxSelectionContextOptions): PptxSelectionContext | null', desc: 'Return the current bounded, JSON-serializable text or element focus snapshot. Throws after destroy().' },
         RESOURCE_METRICS_METHOD,
@@ -277,13 +293,14 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
         { sig: 'static load(source, options?): Promise<PptxPresentation>', desc: 'Parse a deck from a URL or ArrayBuffer. With progressiveLayout, resolve when the opening slide is paintable.' },
         { sig: 'get slideCount(): number', desc: 'Total slides.' },
         { sig: 'get availableSlideCount(): number', desc: 'Paintable opening-slide prefix; slideCount remains final throughout.' },
-        { sig: 'get layoutComplete(): boolean', desc: 'Whether every slide is paintable.' },
+        { sig: 'get layoutComplete(): boolean', desc: 'True only when every slide is paintable. It remains false if background preparation fails; waitUntilLayoutComplete() reports that failure.' },
         { sig: 'waitUntilLayoutComplete(): Promise<void>', desc: 'Wait until every slide is paintable; rejects if background preflight fails.' },
         { sig: 'renderSlide(canvas, index, opts?: { width?, dpr?, onTextRun?, dim? }): Promise<void>', desc: 'Render one slide into the given canvas at the given width. `onTextRun` receives each rendered segment as `PptxTextRunInfo`, including the source shape’s slide-local `shapeId` when authored, so callers can build a transparent selection overlay or stable shape mapping; `dim` (a DimOptions) paints a translucent wash over the finished slide (hidden-slide dimming). Equations render when a `math` engine was passed to `load`. Unavailable in `mode: "worker"` — use renderSlideToBitmap.' },
         { sig: 'renderSlideToBitmap(index, opts?: { width?, dpr?, dim? }): Promise<ImageBitmap>', desc: 'Render one slide and return it as an ImageBitmap (both modes; in worker mode slide paint, equations, ChartEx, 3-D charts and Region Maps run off the main thread). `dim` paints a translucent overlay over the slide (hidden-slide dimming). The bitmap is caller-owned: pass it to `transferFromImageBitmap` (which consumes it) or call `bitmap.close()`.', emphasis: 'The bitmap is caller-owned: pass it to `transferFromImageBitmap` (which consumes it) or call `bitmap.close()`.' },
         { sig: 'presentSlide(canvas, index, opts?: PresentSlideOptions): Promise<PresentationHandle>', desc: 'Render a slide and attach canvas-native audio/video playback, returning a handle with play() / pause() / destroy(). Initial render and media acquisition failures reject this Promise. PresentSlideOptions.onError observes decode or playback failures that occur only after the handle has been returned. Works in both modes — in `mode: "worker"` the base slide and text-run geometry are produced off-thread and the video overlay is composited on the main thread.' },
-        { sig: 'getNotes(slideIndex: number): string | null', desc: 'Speaker-notes text for a slide (0-based; ECMA-376 §13.3.5). Returns null when the slide has no notes part or the index is out of range.' },
-        { sig: 'getComments(slideIndex: number): readonly Readonly<PptxComment>[]', desc: 'Detached comment threads for one slide. Modern comments expose slide, drawing-element, or text-range anchors; classic comments retain their authored slide point.' },
+        { sig: 'getNotes(slideIndex: number): string | null', desc: 'Speaker-notes text for a slide (0-based; ECMA-376 §13.3.5). During progressive loading, null for an index at or beyond availableSlideCount means the slide is not ready, not necessarily that it has no notes. Await completion before a whole-deck scan.' },
+        { sig: 'getComments(slideIndex: number): readonly Readonly<PptxComment>[]', desc: 'Detached comment threads for one slide. During progressive loading, results are authoritative only below availableSlideCount; await waitUntilLayoutComplete() before scanning the whole deck. Modern comments expose slide, drawing-element, or text-range anchors; classic comments retain their authored slide point.' },
+        { sig: 'isHidden(slideIndex: number): boolean', desc: 'Whether a slide is authored as hidden. During progressive loading, results are authoritative only below availableSlideCount; await completion before scanning every slide.' },
         { sig: 'get slideWidth(): number', desc: 'Slide width in EMU (0 until loaded).' },
         { sig: 'get slideHeight(): number', desc: 'Slide height in EMU (0 until loaded).' },
         { sig: 'get mode(): "main" | "worker"', desc: 'The render mode this engine was loaded with. A borrowed engine’s mode decides whether slides render via renderSlide (main) or renderSlideToBitmap (worker).' },
@@ -345,7 +362,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
         { sig: 'relayout(): void', desc: 'Force a re-fit + re-mount of the visible window. Called automatically after load / resize / zoom; use it when the container resizes in a way a ResizeObserver cannot observe (e.g. a late web-font load). Idempotent.' },
         { sig: 'get slideCount(): number', desc: 'Total slides (0 until loaded).' },
         { sig: 'get availableSlideCount(): number', desc: 'Paintable opening-slide prefix; the full scroll extent already uses slideCount.' },
-        { sig: 'get layoutComplete(): boolean', desc: 'Whether every slide is paintable.' },
+        { sig: 'get layoutComplete(): boolean', desc: 'True only when every slide is paintable. It remains false if background preparation fails; waitUntilLayoutComplete() reports that failure.' },
         { sig: 'waitUntilLayoutComplete(): Promise<void>', desc: 'Wait until every slide is paintable; rejects if background preflight fails.' },
         { sig: 'get topVisibleSlide(): number', desc: 'Index of the top-most visible slide.' },
         { sig: 'getSelectionContext(options?: PptxSelectionContextOptions): PptxSelectionContext | null', desc: 'Return the current mounted text selection, selected comment thread, or clicked-element context.' },
@@ -366,7 +383,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
         GFONTS,
         PASSWORD,
         { name: 'enableTextSelection', type: 'boolean', def: 'false', desc: 'Overlay a transparent text layer for native selection & copy.' },
-        { name: 'showTrackedChanges', type: 'boolean', def: 'false', desc: 'ECMA-376 §17.13.5 tracked-change view. Default: the FINAL state (deletions and moved-away text hidden). `true` renders the markup view: insertions underlined and deletions struck through in a stable per-author colour, with a margin change bar beside changed lines. A layout axis — the two views paginate differently.' },
+        ...DOCX_LAYOUT_VIEW_OPTIONS,
         { name: 'enableElementSelection', type: 'boolean', def: 'false', desc: 'Enable read-only picture, chart, and shape selection with a non-editable outline and element context. No editor model is added.' },
         { name: 'onSelectionContextChange', type: '(context: DocxSelectionContext | null) => void', desc: 'Receive bounded detached text or element context. This callback does not enable element hit-testing by itself.' },
         CONTEXT_MENU('DocxSelectionContext'),
@@ -403,7 +420,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
         ...findMethods('DocxMatchLocation'),
         { sig: 'get pageCount(): number', desc: 'Pages available so far (0 until loaded); authoritative only when layoutComplete is true.' },
         { sig: 'get currentPage(): number', desc: 'Current page index.' },
-        { sig: 'get layoutComplete(): boolean', desc: 'True when pageCount and the document layout are authoritative; false while progressive layout is still publishing pages.' },
+        { sig: 'get layoutComplete(): boolean', desc: 'True only after the authoritative document layout succeeds. It is false while progressive layout is publishing pages and remains false if background pagination fails; waitUntilLayoutComplete() reports that failure.' },
         { sig: 'waitUntilLayoutComplete(): Promise<void>', desc: 'Wait for the authoritative full layout before operations that require the final page count. Rejects if background pagination fails after load() resolved.' },
         { sig: 'get canvasElement(): HTMLCanvasElement', desc: 'The underlying canvas.' },
         { sig: 'getSelectionContext(options?: DocxSelectionContextOptions): DocxSelectionContext | null', desc: 'Return the current bounded native-text or clicked-element snapshot. Throws after destroy().' },
@@ -415,17 +432,18 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
       name: 'DocxDocument',
       ctor: 'await DocxDocument.load(source, options?)',
       note: 'Headless engine — render any page into any canvas you supply.',
-      options: [GFONTS, PASSWORD, WASM_URL, ZIP, RESOURCE_LIMITS, RESOURCE_METRICS, DEBUG, WORKER_TIMEOUT, MATH, THREE_D, REGION_MAP, CHART_EX, MODE, DOCX_PROGRESSIVE_LAYOUT, DOCX_SLICE_LAYOUT, DOCX_LAYOUT_PROGRESS, DOCX_LAYOUT_PARTIAL, DOCX_LAYOUT_COMPLETE],
+      options: [GFONTS, PASSWORD, WASM_URL, ZIP, RESOURCE_LIMITS, RESOURCE_METRICS, DEBUG, WORKER_TIMEOUT, MATH, THREE_D, REGION_MAP, CHART_EX, MODE, ...DOCX_LAYOUT_VIEW_OPTIONS, DOCX_PROGRESSIVE_LAYOUT, DOCX_SLICE_LAYOUT, DOCX_LAYOUT_PROGRESS, DOCX_LAYOUT_PARTIAL, DOCX_LAYOUT_COMPLETE],
       methods: [
         { sig: 'static load(source, options?): Promise<DocxDocument>', desc: 'Parse a document from a URL or ArrayBuffer. With progressiveLayout, resolve when the opening pages are paintable while pagination continues in the background.' },
         { sig: 'get comments(): readonly Readonly<DocComment>[]', desc: 'Immutable detached comments and replies stored in the document.' },
         { sig: 'get revisions(): readonly Readonly<DocRevision>[]', desc: 'Immutable detached WordprocessingML body-story insertion, deletion, and move records. This is the current DOCX change-history API, not a cross-format revision contract.' },
-        { sig: 'commentAnchorRanges(): readonly CommentAnchorRange[]', desc: 'Logical comment ranges that can be joined to rendered text runs.' },
+        { sig: 'commentAnchorRanges(): readonly CommentAnchorRange[]', desc: 'Logical comment ranges for the currently available page prefix. Await waitUntilLayoutComplete() before treating this as a full-document projection.' },
         { sig: 'getCommentThreads(pageIndex: number, options?: DocxPageCommentThreadsOptions): Promise<readonly Readonly<ResolvedDocxCommentThread>[]>', desc: 'Resolve top-level threads with rendered anchor geometry on one page. Cross-page ranges and repeating stories can occur in more than one page result; each result contains only that page’s rectangles.' },
-        { sig: 'revisionAnchorRanges(): readonly RevisionAnchorRange[]', desc: 'Logical tracked-change ranges that can be joined to rendered text runs.' },
+        { sig: 'revisionAnchorRanges(): readonly RevisionAnchorRange[]', desc: 'Logical tracked-change ranges for the currently available page prefix. Await waitUntilLayoutComplete() before treating this as a full-document projection.' },
+        { sig: 'getBookmarkPage(name: string): number | undefined', desc: 'Resolve a bookmark in the currently available page prefix. Await waitUntilLayoutComplete() before concluding that an unresolved name is absent from the document.' },
         { sig: 'collectPageRuns(index, options?): Promise<DocxTextRunInfo[]>', desc: 'Collect the same immutable text-run geometry emitted while rendering one page.' },
         { sig: 'get pageCount(): number', desc: 'Pages available so far; authoritative only when layoutComplete is true.' },
-        { sig: 'get layoutComplete(): boolean', desc: 'True when pageCount and the document layout are authoritative; false while progressive layout is still publishing pages.' },
+        { sig: 'get layoutComplete(): boolean', desc: 'True only after the authoritative document layout succeeds. It is false while progressive layout is publishing pages and remains false if background pagination fails; waitUntilLayoutComplete() reports that failure.' },
         { sig: 'waitUntilLayoutComplete(): Promise<void>', desc: 'Wait for the authoritative full layout. Rejects if background pagination fails after load() resolved.' },
         { sig: 'pageSize(pageIndex: number): { widthPt, heightPt }', desc: 'Page size in pt for a page (ECMA-376 §17.6.13 / §17.6.11 — per section, so a mixed portrait/landscape document returns different sizes per page). Available in both modes; index is clamped. `{ 0, 0 }` means "not loaded". Returns a fresh object per call.', emphasis: '`{ 0, 0 }` means "not loaded".' },
         { sig: 'get mode(): "main" | "worker"', desc: 'The render mode this engine was loaded with. A borrowed engine’s mode decides whether pages render via renderPage (main) or renderPageToBitmap (worker).' },
@@ -453,7 +471,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
         { name: 'zoomMin / zoomMax', type: 'number', def: '0.1 / 4', desc: 'Absolute zoom scale bounds (10%–400%).' },
         { name: 'refitOnResize', type: 'boolean', def: 'true', desc: 'Re-fit to the container width when it resizes. Set false to preserve an absolute scale independently of viewport width; explicit fitWidth() / fitPage() still work.' },
         { name: 'enableTextSelection', type: 'boolean', def: 'false', desc: 'Overlay a transparent, selectable text layer per page for native copy in both render modes.' },
-        { name: 'showTrackedChanges', type: 'boolean', def: 'false', desc: 'ECMA-376 §17.13.5 tracked-change view. Default: the FINAL state (deletions and moved-away text hidden). `true` renders the markup view: insertions underlined and deletions struck through in a stable per-author colour, with a margin change bar beside changed lines. A layout axis — the two views paginate differently.' },
+        ...DOCX_LAYOUT_VIEW_OPTIONS,
         { name: 'comments', type: 'boolean | DocxCommentsOptions', def: 'false', desc: 'Show read-only document comment highlights, message icons, and built-in margin cards. Pass `cards: false` for an application-owned list that retains Viewer-owned range highlighting, or `markers: false` to hide only the icons. The options object also controls resolved-thread visibility, side, and optional connectors. Theme cards, highlights, and markers with CSS custom properties or documented classes on the Viewer container.', detailsHref: '/review-ui', detailsLabel: 'Comment UI guide' },
         { name: 'enableElementSelection', type: 'boolean', def: 'false', desc: 'Enable read-only drawing selection on mounted pages with a non-editable outline and element context.' },
         { name: 'onSelectionContextChange', type: '(context: DocxSelectionContext | null) => void', desc: 'Receive bounded detached text, selected-comment, or element context for external AI/MCP integrations. This callback does not enable element hit-testing.' },
@@ -492,7 +510,7 @@ export const apiReference: Record<'docx' | 'xlsx' | 'pptx', ApiClass[]> = {
         { sig: 'relayout(): void', desc: 'Force a re-fit + re-mount of the visible window. Called automatically after load / resize / zoom; use it when the container resizes in a way a ResizeObserver cannot observe (e.g. a late web-font load). Idempotent.' },
         { sig: 'get pageCount(): number', desc: 'Pages available so far (0 until loaded); authoritative only when layoutComplete is true.' },
         { sig: 'get topVisiblePage(): number', desc: 'Index of the top-most visible page.' },
-        { sig: 'get layoutComplete(): boolean', desc: 'True when pageCount and the document layout are authoritative; false while progressive layout is still publishing pages.' },
+        { sig: 'get layoutComplete(): boolean', desc: 'True only after the authoritative document layout succeeds. It is false while progressive layout is publishing pages and remains false if background pagination fails; waitUntilLayoutComplete() reports that failure.' },
         { sig: 'waitUntilLayoutComplete(): Promise<void>', desc: 'Wait for the authoritative full layout before operations that require the final page count. Rejects if background pagination fails after load() resolved.' },
         { sig: 'getSelectionContext(options?: DocxSelectionContextOptions): DocxSelectionContext | null', desc: 'Return the current mounted text selection, selected comment thread, or clicked-element context.' },
         RESOURCE_METRICS_METHOD,

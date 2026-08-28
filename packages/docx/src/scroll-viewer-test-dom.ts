@@ -373,6 +373,9 @@ export class FakeDocxEngine {
   comments: DocComment[] = [];
   commentAnchors: CommentAnchorRange[] = [];
   private _layoutComplete = true;
+  private _layoutCompletion: Promise<void> = Promise.resolve();
+  private _resolveLayoutCompletion: (() => void) | null = null;
+  private _layoutFailure: unknown = undefined;
   constructor(
     private _pageCount: number,
     // Uniform-page convention: a single-element `_sizes` array means EVERY page
@@ -388,7 +391,24 @@ export class FakeDocxEngine {
     this._pageCount = pageCount;
   }
   setLayoutComplete(layoutComplete: boolean): void {
+    if (!layoutComplete && this._layoutComplete) {
+      this._layoutCompletion = new Promise<void>((resolve) => {
+        this._resolveLayoutCompletion = resolve;
+      });
+    }
     this._layoutComplete = layoutComplete;
+    this._layoutFailure = undefined;
+    if (layoutComplete) {
+      this._resolveLayoutCompletion?.();
+      this._resolveLayoutCompletion = null;
+    }
+  }
+  setLayoutFailure(error: unknown): void {
+    this._layoutComplete = false;
+    this._layoutFailure = error;
+    this._resolveLayoutCompletion?.();
+    this._resolveLayoutCompletion = null;
+    this._layoutCompletion = Promise.resolve();
   }
   /** Recorded {@link setLayoutView} calls — the viewer must move the document's
    *  active layout variant when its tracked-changes view toggles, BEFORE it
@@ -404,6 +424,11 @@ export class FakeDocxEngine {
   }
   get layoutComplete(): boolean {
     return this._layoutComplete;
+  }
+  waitUntilLayoutComplete(): Promise<void> {
+    return this._layoutCompletion.then(() => {
+      if (this._layoutFailure !== undefined) throw this._layoutFailure;
+    });
   }
   /** Mirrors the real `DocxDocument.mode` fact (document.ts) — the exact fact the
    *  viewer constructor reads to decide the render path (main ⇒ renderPage,

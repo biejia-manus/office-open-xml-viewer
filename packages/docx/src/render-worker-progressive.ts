@@ -38,13 +38,16 @@
  * reads would be worse than not previewing at all: the whole progressive pass
  * would be discarded AND a second full layout built.
  */
-import { buildBookmarkPageMap } from './bookmark-nav.js';
 import { layoutDocumentProgressively } from './layout/progressive.js';
 import type { DeepReadonly, DocumentLayout } from './layout/types.js';
 import type { LayoutOptions } from './layout/options.js';
 import type { LayoutSourceStore } from './layout/layout-source-store.js';
 import type { RetainedRenderWorkerDocumentLayout } from './render-worker-layout.js';
 import type { DocumentLayoutPartial } from './worker-protocol.js';
+import {
+  projectRenderWorkerLayoutMeta,
+  type RenderWorkerReviewIndexInput,
+} from './render-worker-metadata.js';
 
 /** One provisional publication: the geometry a host needs to grow its page
  *  count, its `pageSize` answers and its scroll extent. Structurally the wire's
@@ -70,14 +73,11 @@ export interface RenderWorkerLayoutPublisher {
 function publicationOf(
   layout: DocumentLayout | DeepReadonly<DocumentLayout>,
   exact: boolean,
+  source: LayoutSourceStore,
+  review: RenderWorkerReviewIndexInput,
 ): RenderWorkerLayoutPublication {
   return {
-    pageCount: layout.pages.length,
-    pageSizes: layout.pages.map((page) => ({
-      widthPt: page.geometry.widthPt,
-      heightPt: page.geometry.heightPt,
-    })),
-    bookmarkPages: [...buildBookmarkPageMap(layout)],
+    ...projectRenderWorkerLayoutMeta(layout, source, review, { provisional: true }),
     exact,
   };
 }
@@ -105,6 +105,7 @@ export async function paginateRenderWorkerDocumentProgressively(
   publisher: RenderWorkerLayoutPublisher,
   layoutOptions: LayoutOptions,
   signal?: AbortSignal,
+  review: RenderWorkerReviewIndexInput = { comments: [], revisions: [] },
 ): Promise<void> {
   const store = doc.layoutVariants;
   let publishedLayout: DeepReadonly<DocumentLayout> | null = null;
@@ -129,7 +130,7 @@ export async function paginateRenderWorkerDocumentProgressively(
           return;
         }
         publishedLayout = retainedPreview;
-        publisher.publish(publicationOf(preview.layout, preview.exact));
+        publisher.publish(publicationOf(preview.layout, preview.exact, source, review));
       },
     },
   );

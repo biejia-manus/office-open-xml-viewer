@@ -81,6 +81,7 @@ export type PptxWorkerResponse =
 // while complete Slide models never cross into Window.
 export type RenderWorkerRequest =
   | { kind: 'init'; wasmUrl: string }
+  | { kind: 'continuePresentationPreflight'; forId: number; availableSlides: number }
   | {
       kind: 'parse';
       id: number;

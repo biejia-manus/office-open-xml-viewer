@@ -2380,12 +2380,19 @@ function workerMetadataAuthorityIsCanonical(source) {
     && ts.isSpreadElement(bookmarkValue.elements[0])
     ? bookmarkValue.elements[0]
     : null;
-  const commentCall = ts.isPropertyAssignment(comments)
-    ? callOf(unwrapStaticExpression(comments.initializer), 'collectLayoutSourceCommentRangesIfPresent')
+  const commentValue = ts.isPropertyAssignment(comments)
+    ? unwrapStaticExpression(comments.initializer)
     : null;
-  const revisionCall = ts.isPropertyAssignment(revisions)
-    ? callOf(unwrapStaticExpression(revisions.initializer), 'collectLayoutSourceRevisionRangesIfPresent')
+  const revisionValue = ts.isPropertyAssignment(revisions)
+    ? unwrapStaticExpression(revisions.initializer)
     : null;
+  const commentCall = commentValue && ts.isConditionalExpression(commentValue)
+    ? callOf(unwrapStaticExpression(commentValue.whenTrue), 'collectLayoutSourceCommentRangesIfPresent')
+    : null;
+  const revisionCall = revisionValue && ts.isConditionalExpression(revisionValue)
+    ? callOf(unwrapStaticExpression(revisionValue.whenTrue), 'collectLayoutSourceRevisionRangesIfPresent')
+    : null;
+  const reviewIndexCalls = callsNamed(projector.body, 'reviewProjectionIndexForDocument');
   if (!ts.isPropertyAssignment(pageCount)
     || pageCount.initializer.getText(source) !== 'layout.pages.length'
     || !pageSizesCall
@@ -2395,10 +2402,20 @@ function workerMetadataAuthorityIsCanonical(source) {
     || pageSizesCall.expression.expression.getText(source) !== 'layout.pages'
     || !bookmarkSpread
     || callOf(bookmarkSpread.expression, 'buildBookmarkPageMap')?.arguments[0]?.getText(source) !== 'layout'
+    || reviewIndexCalls.length !== 1
+    || reviewIndexCalls[0].arguments.map((argument) => argument.getText(source)).join(',') !== 'layout'
+    || !commentValue
+    || !ts.isConditionalExpression(commentValue)
+    || !revisionValue
+    || !ts.isConditionalExpression(revisionValue)
+    || commentValue.condition.getText(source) !== 'hasComments'
+    || commentValue.whenFalse.getText(source) !== '[]'
+    || revisionValue.condition.getText(source) !== 'hasRevisions'
+    || revisionValue.whenFalse.getText(source) !== '[]'
     || commentCall?.arguments.map((argument) => argument.getText(source)).join(',')
-      !== 'review.comments,source,renderedRunIndex'
+      !== 'review.comments,source,reviewIndex!.renderedRunIndex,reviewProjection'
     || revisionCall?.arguments.map((argument) => argument.getText(source)).join(',')
-      !== 'review.revisions,source,renderedRunIndex') return false;
+      !== 'review.revisions,source,reviewIndex!.renderedRunIndex,reviewProjection') return false;
 
   const selector = selectors[0];
   const sources = variableDeclarationsNamed(selector, 'source');

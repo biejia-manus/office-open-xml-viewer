@@ -16,12 +16,6 @@ export type {
   ViewerCommentThreadContext,
 } from '@silurus/ooxml-core';
 export { buildDocxTextLayer } from './text-layer';
-// The path-precise plain-data pre-pass is a development-time diagnostic: on
-// under a test runner, off in production, where its duplicate graph walk costs
-// real layout time. Fatal checks (non-finite geometry, layout invariants) run
-// unconditionally either way. Exposed so an embedder can re-enable the precise
-// error paths while diagnosing a layout defect against a production build.
-export { setDocumentLayoutValidation } from './layout/validation-policy';
 export {
   readDocxTextSelectionContext,
   type DocxSelectionContext,

@@ -60,12 +60,9 @@ export type DocumentLayoutMeta = Pick<
  * Provisional layout geometry published by the render worker while it is still
  * paginating under `progressiveLayout`.
  *
- * Deliberately a strict SUBSET of {@link DocumentMeta}. The two anchor-range
- * fields are omitted because building them needs a whole-document run index
- * (`textRunSourceIndexForDocument`), which costs more per publication than the
- * publication saves — and a prefix's answers would be wrong for the pages that
- * do not exist yet. `DocumentMeta` already treats both as absent-tolerant, so
- * the host simply leaves them unset until the authoritative `parsedMeta`.
+ * Layout-derived indexes describe exactly the published prefix. They come from
+ * the same projector as authoritative metadata, so opening pages have the same
+ * bookmark, comment and tracked-change capabilities in main and worker modes.
  */
 export interface DocumentLayoutPartial {
   /** Pages published so far — NOT the document's total. */
@@ -76,6 +73,10 @@ export interface DocumentLayoutPartial {
    *  built from the prefix pages this publication just laid out. Anchors beyond
    *  the prefix are simply absent until layout completes. */
   bookmarkPages: [string, number][];
+  /** Comment anchors resolvable within the published prefix. */
+  commentAnchorRanges?: CommentAnchorRange[];
+  /** Revision anchors resolvable within the published prefix. */
+  revisionAnchorRanges?: RevisionAnchorRange[];
   /** Whether these pages are known to match the final layout. Always false
    *  today because later convergence can still replace a checkpoint. */
   exact: boolean;
