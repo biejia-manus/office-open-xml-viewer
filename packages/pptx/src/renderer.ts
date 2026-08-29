@@ -193,6 +193,12 @@ export interface PptxTextRunInfo {
   shapeH: number;
   /** Shape rotation in degrees (clockwise). */
   rotation: number;
+  /** Mirror the selection frame horizontally before any text-body rotation. */
+  shapeFlipH?: boolean;
+  /** Mirror the selection frame vertically before any text-body rotation. */
+  shapeFlipV?: boolean;
+  /** Plain-text separator appended after this table cell by the selection layer. */
+  tableCellSeparator?: '\t' | '\n';
   /**
    * Additional rotation from a vertical text body (`vert="vert"` → 90,
    * `vert="vert270"` → -90). The CSS overlay must add this to `rotation`.
@@ -5827,7 +5833,14 @@ export function applyFrameTransform(
   ctx.translate(-(x + w / 2), -(y + h / 2));
 }
 
-export function renderTable(ctx: CanvasRenderingContext2D, el: TableElement, scale: number, slideNumber?: number, rc: RenderContext = { themeMajorFont: null, themeMinorFont: null, dpr: 1 }) {
+export function renderTable(
+  ctx: CanvasRenderingContext2D,
+  el: TableElement,
+  scale: number,
+  slideNumber?: number,
+  rc: RenderContext = { themeMajorFont: null, themeMinorFont: null, dpr: 1 },
+  onTextRun?: TextRunCallback,
+) {
   ctx.save();
   applyFrameTransform(ctx, el, scale);
   const x0 = emuToPx(el.x, scale);
@@ -5930,6 +5943,43 @@ export function renderTable(ctx: CanvasRenderingContext2D, el: TableElement, sca
     for (let ri = 0; ri < el.rows.length; ri++) { rowTop[ri] = y; y += rowHeights[ri]; }
   }
 
+  // The canvas rotates/flips the complete graphic frame around the authored
+  // table centre. The selection overlay groups runs by their cell-sized text
+  // frame, so move each cell centre through that same outer transform and carry
+  // the rotation/flips to the DOM group. Applying the transform around the
+  // moved cell centre is geometrically equivalent to applying it around the
+  // complete table centre, while preserving the cell as the local frame for
+  // vertical text-body rotation.
+  const frameW = emuToPx(el.width, scale);
+  const frameH = emuToPx(el.height, scale);
+  const frameCx = x0 + frameW / 2;
+  const frameCy = y0 + frameH / 2;
+  const rotationRad = (el.rotation * Math.PI) / 180;
+  const rotationCos = Math.cos(rotationRad);
+  const rotationSin = Math.sin(rotationRad);
+  const tableTextRunForCell = (
+    separator: '\t' | '\n',
+  ): TextRunCallback | undefined => onTextRun
+    ? (run) => {
+        let dx = run.shapeX + run.shapeW / 2 - frameCx;
+        let dy = run.shapeY + run.shapeH / 2 - frameCy;
+        if (el.flipH) dx = -dx;
+        if (el.flipV) dy = -dy;
+        const cellCx = frameCx + rotationCos * dx - rotationSin * dy;
+        const cellCy = frameCy + rotationSin * dx + rotationCos * dy;
+        onTextRun({
+          ...run,
+          ...(el.id === undefined ? {} : { shapeId: el.id }),
+          shapeX: cellCx - run.shapeW / 2,
+          shapeY: cellCy - run.shapeH / 2,
+          rotation: el.rotation,
+          ...(el.flipH ? { shapeFlipH: true } : {}),
+          ...(el.flipV ? { shapeFlipV: true } : {}),
+          tableCellSeparator: separator,
+        });
+      }
+    : undefined;
+
   // ECMA-376 border-collapse: paint every cell's fill + text body FIRST, then
   // every cell's borders, so a neighbouring cell's background fill can never
   // overpaint the half of a shared gridline an adjacent cell already drew.
@@ -5977,7 +6027,7 @@ export function renderTable(ctx: CanvasRenderingContext2D, el: TableElement, sca
   }
 
   // Pass 1: fills + text bodies.
-  for (const { cell, colX, rowY, cellW, cellH } of jobs) {
+  for (const { cell, colX, rowY, cellW, cellH, ci, span } of jobs) {
     const fillPaint = resolveShapeFill(
       cell.fill,
       ctx,
@@ -5995,7 +6045,23 @@ export function renderTable(ctx: CanvasRenderingContext2D, el: TableElement, sca
     // (e.g. white header text on an accent fill); a run's explicit colour wins.
     if (cell.textBody) {
       const cellDefaultColor = cell.textColor ? hexToRgba(cell.textColor) : null;
-      renderTextBody(ctx, cell.textBody, colX, rowY, cellW, cellH, scale, cellDefaultColor, 0, false, false, '#000000', slideNumber, rc);
+      renderTextBody(
+        ctx,
+        cell.textBody,
+        colX,
+        rowY,
+        cellW,
+        cellH,
+        scale,
+        cellDefaultColor,
+        0,
+        false,
+        false,
+        '#000000',
+        slideNumber,
+        rc,
+        tableTextRunForCell(ci + span >= numCols ? '\n' : '\t'),
+      );
     }
   }
 
@@ -6598,7 +6664,14 @@ async function renderSlideLeased(
     } else if (el.type === 'picture') {
       await renderPicture(ctx, el, scale, superseded, opts.fetchImage);
     } else if (el.type === 'table') {
-      renderTable(ctx, el, scale, slideNumber, rc);
+      const elementTextRun: TextRunCallback | undefined = onTextRun
+        ? (run) => onTextRun({
+            ...run,
+            elementIndex,
+            origin: slide.elementSources?.[elementIndex]?.origin ?? 'slide',
+          })
+        : undefined;
+      renderTable(ctx, el, scale, slideNumber, rc, elementTextRun);
     } else if (el.type === 'media') {
       await renderMedia(
         ctx,

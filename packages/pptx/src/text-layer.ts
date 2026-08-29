@@ -60,12 +60,22 @@ export function buildPptxTextLayer(
 
   // Group runs by shape (same shapeX/shapeY/rotation)
   type ShapeKey = string;
-  const shapeMap = new Map<ShapeKey, { div: HTMLDivElement; x: number; y: number; w: number; h: number; rot: number }>();
+  const shapeMap = new Map<ShapeKey, {
+    div: HTMLDivElement;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    rot: number;
+    tableCellSeparator?: '\t' | '\n';
+  }>();
 
   const ownerDocument = layer.ownerDocument ?? document;
   for (const [runIndex, run] of runs.entries()) {
     const totalRot = run.rotation + (run.textBodyRotation ?? 0);
-    const key = `${run.shapeX},${run.shapeY},${run.shapeW},${run.shapeH},${totalRot}`;
+    const flipH = run.shapeFlipH === true;
+    const flipV = run.shapeFlipV === true;
+    const key = `${run.shapeX},${run.shapeY},${run.shapeW},${run.shapeH},${totalRot},${flipH},${flipV},${run.tableCellSeparator ?? ''}`;
     if (!shapeMap.has(key)) {
       const div = ownerDocument.createElement('div');
       // The shape frame is placed as a % of the slide box so it tracks the
@@ -81,11 +91,26 @@ export function buildPptxTextLayer(
         // not autofit. Match the canvas renderer by keeping those runs selectable;
         // the outer slide text layer still clips anything past the slide edge.
         `pointer-events:all;overflow:visible;`;
-      if (totalRot !== 0) {
+      if (flipH || flipV) {
+        const textBodyRotation = run.textBodyRotation ?? 0;
+        div.style.transformOrigin = 'center center';
+        div.style.transform =
+          `rotate(${run.rotation}deg) ` +
+          `scale(${flipH ? -1 : 1}, ${flipV ? -1 : 1})` +
+          (textBodyRotation === 0 ? '' : ` rotate(${textBodyRotation}deg)`);
+      } else if (totalRot !== 0) {
         div.style.transformOrigin = 'center center';
         div.style.transform = `rotate(${totalRot}deg)`;
       }
-      shapeMap.set(key, { div, x: run.shapeX, y: run.shapeY, w: run.shapeW, h: run.shapeH, rot: totalRot });
+      shapeMap.set(key, {
+        div,
+        x: run.shapeX,
+        y: run.shapeY,
+        w: run.shapeW,
+        h: run.shapeH,
+        rot: totalRot,
+        tableCellSeparator: run.tableCellSeparator,
+      });
       layer.appendChild(div);
     }
 
@@ -127,5 +152,21 @@ export function buildPptxTextLayer(
       });
     }
     shape.div.appendChild(span);
+  }
+
+  // Absolutely positioned cell groups do not contribute whitespace to the
+  // browser's copied plain text. Add an invisible terminal text node per cell
+  // so an ordinary native selection crossing cells serializes in row-major
+  // order with tabs between columns and a line break at the row boundary. This
+  // does not change pointer hit-testing or introduce a cell-range selection
+  // model; partial text selection inside a cell remains browser-native.
+  for (const shape of shapeMap.values()) {
+    if (shape.tableCellSeparator === undefined) continue;
+    const separator = ownerDocument.createElement('span');
+    separator.textContent = shape.tableCellSeparator;
+    separator.style.cssText =
+      'position:absolute;left:100%;top:100%;font:1px sans-serif;line-height:1px;' +
+      'white-space:pre;color:transparent;pointer-events:none;';
+    shape.div.appendChild(separator);
   }
 }

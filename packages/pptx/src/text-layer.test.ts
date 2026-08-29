@@ -136,6 +136,25 @@ describe('buildPptxTextLayer (extracted from PptxViewer._buildTextLayer)', () =>
     expect(layer.children.length).toBe(2);
   });
 
+  it('preserves table cell boundaries as tabs and line breaks for native copy', () => {
+    vi.stubGlobal('document', { createElement: (t: string) => makeEl(t) });
+    const layer = makeEl('div');
+    buildPptxTextLayer(
+      layer as unknown as HTMLDivElement,
+      [
+        run({ text: 'A', shapeX: 0, tableCellSeparator: '\t' }),
+        run({ text: 'B', shapeX: 100, tableCellSeparator: '\n' }),
+      ],
+      960,
+      540,
+    );
+
+    expect(layer.children.map((group) => group.children.map((child) => child.textContent))).toEqual([
+      ['A', '\t'],
+      ['B', '\n'],
+    ]);
+  });
+
   it('applies a CSS rotate() to a rotated shape (rotation + textBodyRotation)', () => {
     vi.stubGlobal('document', { createElement: (t: string) => makeEl(t) });
     const layer = makeEl('div');
@@ -147,6 +166,22 @@ describe('buildPptxTextLayer (extracted from PptxViewer._buildTextLayer)', () =>
     // string, so the recording stub records them under their camelCase keys.
     expect(shapeDiv.style.transformOrigin).toBe('center center');
     expect(shapeDiv.style.transform).toBe('rotate(120deg)');
+  });
+
+  it('composes a table-frame flip between its frame and text-body rotations', () => {
+    vi.stubGlobal('document', { createElement: (t: string) => makeEl(t) });
+    const layer = makeEl('div');
+    buildPptxTextLayer(
+      layer as unknown as HTMLDivElement,
+      [run({ rotation: 30, textBodyRotation: 90, shapeFlipH: true })],
+      960,
+      540,
+    );
+
+    expect(layer.children[0].style.transformOrigin).toBe('center center');
+    expect(layer.children[0].style.transform).toBe(
+      'rotate(30deg) scale(-1, 1) rotate(90deg)',
+    );
   });
 
   it('does not set a transform for an unrotated shape', () => {
