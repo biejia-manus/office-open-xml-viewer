@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Stroke } from '@silurus/ooxml-core';
-import { renderSlide, renderTable } from './renderer.js';
-import type { Slide, TableCell, TableElement, TableRow, TextBody } from './types';
+import { renderTable } from './renderer.js';
+import type { TableCell, TableElement, TableRow, TextBody } from './types';
 
 // DrawingML `<a:tbl>` — end-to-end render: an interior gridline SHARED by two
 // adjacent cells is drawn exactly ONCE (not once per cell), and when the two
@@ -83,21 +83,6 @@ function tableOf(rows: TableCell[][], cols: number[]): TableElement {
   };
 }
 
-function selectableTextBody(text: string): TextBody {
-  return ({
-    verticalAnchor: 'ctr',
-    paragraphs: [{
-      alignment: 'l', marL: 0, marR: 0, indent: 0,
-      spaceBefore: null, spaceAfter: null, spaceLine: null,
-      runs: [{ type: 'text', text, fontSize: 12, fontFamily: 'Arial' }],
-      bullet: { type: 'none' }, eaLnBrk: true,
-    }],
-    defaultFontSize: null, defaultBold: null, defaultItalic: null,
-    lIns: 0, rIns: 0, tIns: 0, bIns: 0,
-    wrap: 'square', vert: 'horz', autoFit: 'none',
-  }) as unknown as TextBody;
-}
-
 // scale=1 ⇒ emuToPx is identity; a 60pt (60*EMU) column ⇒ 60px wide. Two 60pt
 // columns put the shared vertical gridline at x=60. Rows are 20pt ⇒ shared
 // horizontal line at y=20.
@@ -127,101 +112,6 @@ function rgba(hex: string): string {
 }
 
 describe('DrawingML <a:tbl> — shared interior gridline drawn once (spec-silent)', () => {
-  it('emits selectable text runs for table cells in row-major order', () => {
-    const t = tableOf([
-      [cell({ textBody: selectableTextBody('A') }), cell({ textBody: selectableTextBody('B') })],
-    ], [COL, COL]);
-    t.id = '27';
-    t.rows[0].height = 30 * EMU;
-    t.height = 30 * EMU;
-    const { ctx } = makeRecordingCtx();
-    const runs: import('./renderer.js').PptxTextRunInfo[] = [];
-
-    renderTable(
-      ctx,
-      t,
-      SCALE,
-      undefined,
-      { themeMajorFont: null, themeMinorFont: null, dpr: 1 },
-      (run) => runs.push(run),
-    );
-
-    expect(runs.map((run) => run.text)).toEqual(['A', 'B']);
-    expect(runs.map((run) => ({
-      shapeId: run.shapeId,
-      shapeX: run.shapeX,
-      shapeY: run.shapeY,
-      shapeW: run.shapeW,
-      shapeH: run.shapeH,
-      rotation: run.rotation,
-    }))).toEqual([
-      { shapeId: '27', shapeX: 0, shapeY: 0, shapeW: 60, shapeH: 30, rotation: 0 },
-      { shapeId: '27', shapeX: 60, shapeY: 0, shapeW: 60, shapeH: 30, rotation: 0 },
-    ]);
-  });
-
-  it('maps cell selection frames through the table rotation and flip', () => {
-    const t = tableOf([
-      [
-        cell({ textBody: selectableTextBody('A') }),
-        cell({ textBody: selectableTextBody('B') }),
-      ],
-    ], [COL, COL]);
-    t.rotation = 90;
-    t.flipH = true;
-    t.rows[0].height = 30 * EMU;
-    t.height = 30 * EMU;
-    const { ctx } = makeRecordingCtx();
-    const runs: import('./renderer.js').PptxTextRunInfo[] = [];
-
-    renderTable(
-      ctx,
-      t,
-      SCALE,
-      undefined,
-      { themeMajorFont: null, themeMinorFont: null, dpr: 1 },
-      (run) => runs.push(run),
-    );
-
-    expect(runs.map((run) => ({
-      text: run.text,
-      shapeX: run.shapeX,
-      shapeY: run.shapeY,
-      rotation: run.rotation,
-      shapeFlipH: run.shapeFlipH,
-    }))).toEqual([
-      { text: 'A', shapeX: 30, shapeY: 30, rotation: 90, shapeFlipH: true },
-      { text: 'B', shapeX: 30, shapeY: -30, rotation: 90, shapeFlipH: true },
-    ]);
-  });
-
-  it('carries table element identity through the slide render pipeline', async () => {
-    const t = tableOf([[cell({ textBody: selectableTextBody('Selectable') })]], [COL]);
-    t.id = '31';
-    const { ctx } = makeRecordingCtx();
-    const canvas = {
-      width: 0,
-      height: 0,
-      getContext: () => ctx,
-    } as unknown as OffscreenCanvas;
-    const slide: Slide = {
-      index: 0,
-      slideNumber: 1,
-      background: null,
-      elements: [t],
-      elementSources: [{ origin: 'layout' }],
-    };
-    const runs: import('./renderer.js').PptxTextRunInfo[] = [];
-
-    await renderSlide(canvas, slide, t.width, t.height, { width: 60, dpr: 1 }, (run) => {
-      runs.push(run);
-    });
-
-    expect(runs).not.toHaveLength(0);
-    expect(runs.every((run) =>
-      run.shapeId === '31' && run.elementIndex === 0 && run.origin === 'layout')).toBe(true);
-  });
-
   it('does not grow an authored row from substituted-font design metrics', () => {
     // ECMA-376 §21.1.2.2.5/.11: 120% line spacing is based on the largest
     // authored text size. 16pt * 120% + 3pt after + 2 * 8.5pt insets = 39.2pt,

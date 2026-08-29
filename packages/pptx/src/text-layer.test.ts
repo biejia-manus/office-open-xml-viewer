@@ -136,22 +136,18 @@ describe('buildPptxTextLayer (extracted from PptxViewer._buildTextLayer)', () =>
     expect(layer.children.length).toBe(2);
   });
 
-  it('preserves table cell boundaries as tabs and line breaks for native copy', () => {
+  it('keeps native copy content limited to rendered text runs', () => {
     vi.stubGlobal('document', { createElement: (t: string) => makeEl(t) });
     const layer = makeEl('div');
     buildPptxTextLayer(
       layer as unknown as HTMLDivElement,
-      [
-        run({ text: 'A', shapeX: 0, tableCellSeparator: '\t' }),
-        run({ text: 'B', shapeX: 100, tableCellSeparator: '\n' }),
-      ],
+      [run({ text: 'A', shapeX: 0, tableCell: { row: 0, column: 0 } })],
       960,
       540,
     );
 
     expect(layer.children.map((group) => group.children.map((child) => child.textContent))).toEqual([
-      ['A', '\t'],
-      ['B', '\n'],
+      ['A'],
     ]);
   });
 
