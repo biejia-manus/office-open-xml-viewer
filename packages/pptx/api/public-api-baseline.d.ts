@@ -1556,7 +1556,10 @@ export interface PptxTextRunInfo {
     rotation: number;
     shapeFlipH?: boolean;
     shapeFlipV?: boolean;
-    tableCellSeparator?: '\t' | '\n';
+    tableCell?: Readonly<{
+        row: number;
+        column: number;
+    }>;
     textBodyRotation?: number;
     hyperlink?: HyperlinkTarget;
 }
