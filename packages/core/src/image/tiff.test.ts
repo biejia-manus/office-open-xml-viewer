@@ -128,6 +128,22 @@ describe('TIFF 6.0 decoder', () => {
     expect(decodeTiffRgba(malformed)).toBeNull();
   });
 
+  it('validates every strip range before allocating the decoded raster', () => {
+    const malformed = cmykTiff({
+      width: 8192,
+      height: 4096,
+      rowsPerStrip: 4096,
+      pixels: [],
+    });
+    const allocate = vi.fn(() => {
+      throw new Error('decoded raster allocation must follow strip validation');
+    });
+    vi.stubGlobal('Uint8ClampedArray', allocate);
+
+    expect(decodeTiffRgba(malformed)).toBeNull();
+    expect(allocate).not.toHaveBeenCalled();
+  });
+
   it('rasterizes decoded pixels through an auxiliary canvas, not browser TIFF decoding', async () => {
     const captured: number[] = [];
     const canvas = class {
