@@ -7,6 +7,20 @@ the corresponding minor release.
 
 ## Unreleased
 
+## 0.84.1 — 2026-09-01
+
+Compatible patch release tightening the Word compatibility boundaries introduced
+in 0.84.0, with no integration changes.
+
+- **legacy text-box margins:** honor authored VML text-box insets even when a
+  document also contains the legacy automatic-inset marker, matching Word's
+  documented behavior.
+- **table row layout:** limit the observed Word page-break adjustment to the
+  verified paragraph cases and restore the previous behavior for other table
+  layouts.
+- **compatibility:** no option, method or existing default is removed or
+  renamed. No application migration is required from 0.84.0.
+
 ## 0.84.0 — 2026-09-01
 
 Compatible minor release adding opt-in TIFF image rendering across Word, Excel

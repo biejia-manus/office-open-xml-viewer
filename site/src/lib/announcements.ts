@@ -36,6 +36,35 @@ export interface Announcement {
 
 export const announcements: readonly Announcement[] = [
   {
+    slug: 'v0841-word-layout-refinements',
+    date: '2026-09-01',
+    label: 'Release note',
+    version: 'v0.84.1',
+    title: 'Word layout refinements in v0.84.1',
+    summary: 'v0.84.1 improves legacy text-box spacing and keeps page-break behavior carefully limited to the Word documents it was designed for.',
+    audience: 'Applications that display DOCX files. Existing setup and viewer options continue to work unchanged.',
+    sections: [
+      {
+        title: 'More faithful, more focused',
+        kind: 'summary',
+        paragraphs: [
+          'Legacy Word text boxes now keep their authored inner spacing in an additional setting combination. Table rows also stay together at the verified Word page boundaries, while other table layouts keep their previous behavior.',
+        ],
+        bullets: [
+          'Preserve authored spacing in more legacy Word text boxes.',
+          'Keep the page-break adjustment limited to the verified cases.',
+          'Upgrade without changing application code.',
+        ],
+      },
+      {
+        title: 'Upgrading',
+        paragraphs: [
+          'No migration is required from v0.84.0. TIFF support and existing viewer integrations remain unchanged.',
+        ],
+      },
+    ],
+  },
+  {
     slug: 'v084-tiff-images',
     date: '2026-09-01',
     label: 'Release note',
