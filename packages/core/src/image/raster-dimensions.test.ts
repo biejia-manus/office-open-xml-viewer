@@ -183,6 +183,25 @@ function jpegMalformedSegLen(): Uint8Array {
   return b;
 }
 
+function tiffHeader(w: number, h: number, byteOrder: 'little' | 'big'): Uint8Array {
+  const little = byteOrder === 'little';
+  const bytes = new Uint8Array(38);
+  const view = new DataView(bytes.buffer);
+  bytes.set(little ? [0x49, 0x49] : [0x4d, 0x4d], 0);
+  view.setUint16(2, 42, little);
+  view.setUint32(4, 8, little);
+  view.setUint16(8, 2, little);
+  view.setUint16(10, 256, little);
+  view.setUint16(12, 4, little);
+  view.setUint32(14, 1, little);
+  view.setUint32(18, w, little);
+  view.setUint16(22, 257, little);
+  view.setUint16(24, 4, little);
+  view.setUint32(26, 1, little);
+  view.setUint32(30, h, little);
+  return bytes;
+}
+
 describe('sniffRasterDimensions — reads declared pixel dimensions from the header', () => {
   it('reads PNG IHDR dimensions', () => {
     expect(sniffRasterDimensions(pngHeader(1920, 1080))).toEqual({ width: 1920, height: 1080 });
@@ -223,6 +242,13 @@ describe('sniffRasterDimensions — reads declared pixel dimensions from the hea
     expect(sniffRasterDimensions(jpegHeader(3264, 2448, 400))).toEqual({
       width: 3264,
       height: 2448,
+    });
+  });
+
+  it.each(['little', 'big'] as const)('reads TIFF IFD dimensions (%s endian)', (byteOrder) => {
+    expect(sniffRasterDimensions(tiffHeader(776, 31, byteOrder))).toEqual({
+      width: 776,
+      height: 31,
     });
   });
 

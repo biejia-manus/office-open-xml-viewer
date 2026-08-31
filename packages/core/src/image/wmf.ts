@@ -43,6 +43,7 @@ import { rasterExceedsBudget, sniffRasterDimensions } from './raster-dimensions.
 import { MAX_RASTER_PIXELS, OoxmlDecodedImageLimitError } from './pixel-budget.js';
 import { createAuxCanvas } from '../canvas/aux-canvas.js';
 import { closeImageBitmapIfSupported } from './image-bitmap-lifecycle.js';
+import { isTiff, type TiffRenderer } from './tiff-contract.js';
 
 // WMF record function codes (the subset we act on; others are skipped by size).
 const META = {
@@ -798,6 +799,8 @@ export interface DecodeRasterOptions {
    *  the HEURISTIC note on {@link playWmf}/deviceInteriorEdges). Default false =
    *  spec-clean (every edge drawn). docx opts IN when it re-points to core. */
   suppressBoundaryFrame?: boolean;
+  /** Optional TIFF codec. Omitted TIFF parts take the null-bitmap path. */
+  tiff?: TiffRenderer;
 }
 
 /**
@@ -816,6 +819,8 @@ export interface DecodeRasterOptions {
  *   - {@link isEmf} → rasterize via {@link ./emf.ts}#renderEmfToBitmap at
  *     {@link wmfRasterTarget}(widthPt, heightPt). An EMF that produces no
  *     geometry returns `null`.
+ *   - {@link isTiff} → decode the supported TIFF 6.0 class through the shared
+ *     software rasterizer because browsers generally cannot decode TIFF.
  *   - otherwise → `createImageBitmap(blob)` (PNG/JPEG/GIF/BMP/WEBP…).
  *
  * Returns `null` (never throws on an unsupported metafile) so every caller can
@@ -829,7 +834,7 @@ export async function decodeRasterOrMetafile(
   data: Blob,
   opts: DecodeRasterOptions = {},
 ): Promise<ImageBitmap | null> {
-  const { widthPt = 0, heightPt = 0, suppressBoundaryFrame = false } = opts;
+  const { widthPt = 0, heightPt = 0, suppressBoundaryFrame = false, tiff } = opts;
 
   // Sniff a header prefix, not the whole blob. `isEmf` reads bytes 40-43 (u32@40
   // == " EMF") and `isWmf` at most the 18-byte standard header, and the raster
@@ -857,16 +862,21 @@ export async function decodeRasterOrMetafile(
     );
   }
   // Decode-bomb guard: if the header declares a recognized raster (PNG/JPEG/GIF/
-  // BMP/WEBP) whose pixel dimensions exceed the shared budget, refuse it BEFORE
-  // `createImageBitmap` allocates a multi-GB surface. An unrecognized header
-  // cannot be rejected before decode, so the decoded dimensions are validated
-  // immediately afterwards and the surface is closed before it can be retained.
+  // BMP/WEBP/TIFF) whose pixel dimensions exceed the shared budget, refuse it
+  // before either a browser decoder or an injected codec can allocate a large
+  // surface. An unrecognized header is validated immediately after decode.
   const rasterDimensions = sniffRasterDimensions(head);
   if (rasterDimensions && rasterExceedsBudget(rasterDimensions)) {
     throw new OoxmlDecodedImageLimitError(
       'image-pixels',
       MAX_RASTER_PIXELS,
       rasterDimensions.width * rasterDimensions.height,
+    );
+  }
+  if (isTiff(head)) {
+    if (!tiff) return null;
+    return enforceDecodedBitmapBudget(
+      await tiff.render(new Uint8Array(await data.arrayBuffer())),
     );
   }
   return enforceDecodedBitmapBudget(await createImageBitmap(data));
