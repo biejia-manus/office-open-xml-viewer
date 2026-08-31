@@ -890,10 +890,9 @@ function partialRow(
     || cell.next.paragraphLineStart !== cellCursors[index]?.paragraphLineStart
     || cell.next.nestedFragmentIndex !== cellCursors[index]?.nestedFragmentIndex
   );
-  // Word treats a row fragment as one horizontal band for parallel paragraph
-  // cells. Keep that Office-observed choice behind its compatibility boundary;
-  // ECMA-376 §17.4.6 does not define the cross-cell cut selection, and the
-  // controlled evidence does not extend this rule to nested-table children.
+  // The compatibility authority owns the cross-cell cut selection that
+  // ECMA-376 §17.4.6 leaves undefined. This call site deliberately checks only
+  // paragraph children; nested tables retain their own fragmentation path.
   const hasUnfinishedParagraphWithoutProgress = selectedCells.some((cell, index) => (
     !cell.complete
     && !cellMadeProgress(cell, index)
