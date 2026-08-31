@@ -7,6 +7,20 @@ the corresponding minor release.
 
 ## Unreleased
 
+## 0.83.2 — 2026-09-01
+
+Compatible patch release improving zoom controls and Word compatibility, with
+no integration changes.
+
+- **consistent zoom steps:** Ctrl/Command + mouse-wheel zoom now advances by
+  the same percentage steps as the viewer controls across Word, Excel and
+  PowerPoint, including the VS Code extension.
+- **Word legacy layout:** retain positioned VML content, its authored wrapping,
+  and field-result formatting more faithfully so older Word documents keep
+  their intended page composition.
+- **compatibility:** no option, method or existing default is removed or
+  renamed. No application migration is required from 0.83.1.
+
 ## 0.83.1 — 2026-08-30
 
 Compatible patch release adding native text selection inside PowerPoint tables
