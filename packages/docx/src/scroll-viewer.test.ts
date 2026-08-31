@@ -1489,8 +1489,8 @@ describe('DocxScrollViewer — zoom (T4)', () => {
 
     // Ctrl+wheel (deltaY<0 = zoom in): scale increases, preventDefault called.
     const ctrlPrevent = vi.fn();
-    scrollHost.dispatch('wheel', { deltaY: -100, ctrlKey: true, metaKey: false, preventDefault: ctrlPrevent });
-    expect(v.scaleForTest()).toBeGreaterThan(before);
+    scrollHost.dispatch('wheel', { deltaY: -100, deltaMode: 0, ctrlKey: true, metaKey: false, preventDefault: ctrlPrevent });
+    expect(v.scaleForTest()).toBeCloseTo(before * 1.1, 10);
     expect(ctrlPrevent).toHaveBeenCalledTimes(1);
     v.destroy();
   });
