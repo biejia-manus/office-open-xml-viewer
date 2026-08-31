@@ -21,6 +21,9 @@ and PowerPoint files.
   implementation remains outside default main-mode format graphs when omitted.
 - **full-featured first-party viewers:** enable TIFF alongside the other
   first-party optional renderers in Try Yours and the VS Code extension.
+- **Word layout fidelity:** preserve authored inner margins in legacy text
+  boxes, and keep a multi-cell table row together when the remaining page has
+  no legal break point shared by every unfinished cell.
 - **compatibility:** no existing option, method or default is removed or
   renamed. Applications only need to import the new module when TIFF images are
   required.

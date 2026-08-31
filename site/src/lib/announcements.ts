@@ -75,6 +75,12 @@ await viewer.load(source);`,
         ],
       },
       {
+        title: 'More faithful Word page layout',
+        paragraphs: [
+          'Word documents now preserve the intended inner margins of legacy text boxes and avoid separating parallel table-cell content when a row has no safe place to break on the current page.',
+        ],
+      },
+      {
         title: 'Upgrading',
         paragraphs: [
           'No migration is required. Existing applications keep the same defaults, and applications that do not display TIFF images do not need to add the module.',
