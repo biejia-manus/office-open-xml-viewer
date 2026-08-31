@@ -6181,10 +6181,15 @@ fn classify_field(instr: &str) -> String {
 }
 
 fn has_mergeformat_switch(instr: &str) -> bool {
-    let tokens = instr.split_whitespace().collect::<Vec<_>>();
-    tokens
-        .windows(2)
-        .any(|pair| pair[0] == "\\*" && pair[1].eq_ignore_ascii_case("MERGEFORMAT"))
+    let mut tokens = instr.split_whitespace();
+    let mut previous = tokens.next();
+    for token in tokens {
+        if previous == Some("\\*") && token.eq_ignore_ascii_case("MERGEFORMAT") {
+            return true;
+        }
+        previous = Some(token);
+    }
+    false
 }
 
 /// True when `a` and `b` would render identically but for their `text`
@@ -11136,11 +11141,13 @@ fn vml_word_anchor_choice(style: &str, axis: &str) -> AnchorAxisChoiceWire {
             )
         };
     let authored_offset = || {
-        // Part 4 §19.1.2.19: `left`/`top` locate the content block and
-        // `margin-left`/`margin-top` locate its margin from the shape anchor.
-        // Word persists absolute VML offsets in these declarations, so the
-        // `absolute` positioning mode selects their combined numeric position;
-        // it is not an alignment value at the relative-frame origin.
+        // Part 4 §19.1.2.19 defines the two authored numeric components;
+        // MS-OE376 §2.1.1692(ee-ff) says Office combines each pair. Its note
+        // (r) is in tension with current Word output for the exact
+        // `mso-position-*:absolute` token: Word retains the combined value as
+        // the page/margin offset rather than moving the object to the relative
+        // frame origin. Keep that compatibility interpretation restricted to
+        // this numeric offset branch; align and percent values never enter it.
         let leading = vml_css_length_pt(style, leading_property).unwrap_or(0.0);
         let margin = vml_css_length_pt(style, margin_property).unwrap_or(0.0);
         leading + margin
@@ -14474,6 +14481,28 @@ mod tests {
         assert_eq!(field.fallback_text, "2");
         assert_eq!(field.font_size, 6.5);
         assert_eq!(field.font_size_cs, Some(6.5));
+    }
+
+    #[test]
+    fn complex_numpages_without_mergeformat_keeps_instruction_format() {
+        let runs = parse_para(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>
+               <w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:instrText>NUMPAGES</w:instrText></w:r>
+               <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+               <w:r><w:rPr><w:sz w:val="13"/></w:rPr><w:t>2</w:t></w:r>
+               <w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            &RunFmt::default(),
+            &StyleMap::parse(""),
+        );
+        let field = runs
+            .iter()
+            .find_map(|run| match run {
+                DocRun::Field(field) => Some(field.as_ref()),
+                _ => None,
+            })
+            .expect("NUMPAGES field run");
+
+        assert_eq!(field.font_size, 10.0);
     }
 
     #[test]
@@ -27153,7 +27182,7 @@ mod vml_pict_tests {
             r##"<w:document{ns}><w:body>
               <w:p><w:r><w:pict>
                 <v:shape id="s1" type="#_x0000_t75"
-                  style="position:absolute;left:2pt;margin-left:3pt;top:5pt;margin-top:7pt;width:40pt;height:20pt;mso-position-horizontal-relative:page;mso-position-vertical-relative:page">
+                  style="position:absolute;left:2pt;margin-left:3pt;top:5pt;margin-top:7pt;width:40pt;height:20pt;mso-position-horizontal-relative:page;mso-position-vertical-relative:page;mso-wrap-style:square">
                   <v:imagedata r:id="rIdImg"/>
                 </v:shape>
               </w:pict></w:r></w:p>
