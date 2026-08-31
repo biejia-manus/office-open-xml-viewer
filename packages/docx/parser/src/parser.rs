@@ -10642,7 +10642,7 @@ fn parse_vml_pict(
     let anchor_acquisition =
         anchor.then(|| vml_word_anchor_acquisition(shape, style, width_pt, height_pt));
     let [text_inset_l, text_inset_t, text_inset_r, text_inset_b] =
-        vml_textbox_insets(shape, text_box_node);
+        vml_textbox_insets(text_box_node);
 
     Some(ShapeRun {
         inline: false,
@@ -10957,46 +10957,52 @@ fn parse_vml_length_pt(value: &str) -> Option<f64> {
     number.trim().parse::<f64>().ok().map(|n| n * scale)
 }
 
-fn parse_vml_textbox_inset_parts<'a>(
-    parts: impl Iterator<Item = &'a str>,
-    defaults: [f64; 4],
-) -> Option<[f64; 4]> {
-    let mut result = defaults;
-    for (index, part) in parts.enumerate() {
-        if index >= result.len() {
+fn parse_vml_textbox_inset(raw: &str, defaults: [f64; 4]) -> Option<[f64; 4]> {
+    fn push_value(result: &mut [f64; 4], index: &mut usize, part: &str) -> Option<()> {
+        if *index >= result.len() {
             return None;
         }
-        if part.trim().is_empty() {
-            continue;
+        result[*index] = parse_vml_length_pt(part).filter(|value| value.is_finite())?;
+        *index += 1;
+        Some(())
+    }
+
+    let mut result = defaults;
+    let mut index = 0;
+
+    if raw.contains(',') {
+        for comma_part in raw.split(',') {
+            let mut found_value = false;
+            for part in comma_part.split_ascii_whitespace() {
+                found_value = true;
+                push_value(&mut result, &mut index, part)?;
+            }
+            if !found_value {
+                if index >= result.len() {
+                    return None;
+                }
+                index += 1;
+            }
         }
-        result[index] = parse_vml_length_pt(part).filter(|value| value.is_finite())?;
+    } else {
+        for part in raw.split_ascii_whitespace() {
+            push_value(&mut result, &mut index, part)?;
+        }
     }
     Some(result)
 }
 
 /// ECMA-376 Part 4 §19.1.2.22 `v:textbox@inset` names the physical left,
 /// top, right, and bottom text margins. Values may be comma- or space-separated;
-/// omitted components retain their normative 0.1in/0.05in defaults. When
-/// `o:insetmode="auto"` asks the producer to calculate margins, keep the same
-/// deterministic defaults used before authored custom insets were supported.
-fn vml_textbox_insets(shape: roxmltree::Node, text_box: Option<roxmltree::Node>) -> [f64; 4] {
+/// omitted components retain their normative 0.1in/0.05in defaults.
+/// [MS-OE376] §2.1.1713(f),(i) records that Word always uses the authored
+/// `inset` and does not support `insetmode`, so the DOCX parser deliberately
+/// ignores `o:insetmode` instead of inventing auto-calculated margins.
+fn vml_textbox_insets(text_box: Option<roxmltree::Node>) -> [f64; 4] {
     const DEFAULTS: [f64; 4] = [7.2, 3.6, 7.2, 3.6];
     let Some(text_box) = text_box else {
         return DEFAULTS;
     };
-    let inset_mode = text_box
-        .attributes()
-        .find(|attribute| attribute.name() == "insetmode")
-        .map(|attribute| attribute.value())
-        .or_else(|| {
-            shape
-                .attributes()
-                .find(|attribute| attribute.name() == "insetmode")
-                .map(|attribute| attribute.value())
-        });
-    if inset_mode.is_some_and(|mode| mode.trim().eq_ignore_ascii_case("auto")) {
-        return DEFAULTS;
-    }
     let Some(raw) = text_box
         .attributes()
         .find(|attribute| attribute.name() == "inset")
@@ -11004,11 +11010,7 @@ fn vml_textbox_insets(shape: roxmltree::Node, text_box: Option<roxmltree::Node>)
     else {
         return DEFAULTS;
     };
-    if raw.contains(',') {
-        parse_vml_textbox_inset_parts(raw.split(','), DEFAULTS).unwrap_or(DEFAULTS)
-    } else {
-        parse_vml_textbox_inset_parts(raw.split_ascii_whitespace(), DEFAULTS).unwrap_or(DEFAULTS)
-    }
+    parse_vml_textbox_inset(raw, DEFAULTS).unwrap_or(DEFAULTS)
 }
 
 /// Parse VML's `x,y` point-pair grammar used by `<v:line from/to>`.
@@ -23777,7 +23779,37 @@ mod txbx_block_wire_tests {
             .children()
             .find(|node| node.is_element() && node.tag_name().name() == "textbox");
 
-        assert_eq!(vml_textbox_insets(shape, text_box), [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(vml_textbox_insets(text_box), [1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn vml_textbox_uses_authored_insets_when_insetmode_is_auto() {
+        let xml = r##"<v:shape xmlns:v="urn:schemas-microsoft-com:vml"
+                    xmlns:o="urn:schemas-microsoft-com:office:office"
+                    o:insetmode="auto">
+                    <v:textbox inset="1pt,2pt,3pt,4pt" o:insetmode="auto"/>
+                  </v:shape>"##;
+        let document = roxmltree::Document::parse(xml).expect("VML fixture");
+        let shape = document.root_element();
+        let text_box = shape
+            .children()
+            .find(|node| node.is_element() && node.tag_name().name() == "textbox");
+
+        assert_eq!(vml_textbox_insets(text_box), [1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn vml_textbox_accepts_mixed_comma_and_space_separators() {
+        let xml = r##"<v:shape xmlns:v="urn:schemas-microsoft-com:vml">
+                    <v:textbox inset="1pt 2pt, 3pt,4pt"/>
+                  </v:shape>"##;
+        let document = roxmltree::Document::parse(xml).expect("VML fixture");
+        let shape = document.root_element();
+        let text_box = shape
+            .children()
+            .find(|node| node.is_element() && node.tag_name().name() == "textbox");
+
+        assert_eq!(vml_textbox_insets(text_box), [1.0, 2.0, 3.0, 4.0]);
     }
 
     #[test]

@@ -160,6 +160,7 @@ function paginate(
   source: RetainedTableAcquisition,
   firstPageHeightPt: number,
   freshPageHeightPt: number,
+  compatibility: 'word' | 'standard' = 'standard',
 ): readonly (TableFragmentLayout | null)[] {
   const pages: Array<TableFragmentLayout | null> = [];
   let cursor: TableFragmentCursor | null = startTableFragmentCursor();
@@ -182,7 +183,7 @@ function paginate(
         availableBounds: { xPt: 0, yPt: 0, widthPt: 100, heightPt: availableHeightPt },
       },
       services: {} as LayoutServices,
-      compatibility: 'standard',
+      compatibility,
       page: {
         physicalPageIndex: pageIndex,
         displayPageNumber: pageIndex + 1,
@@ -280,7 +281,7 @@ describe('retained table pagination across pages', () => {
     // both cells instead of emitting the short cell alone on the first page.
     const source = acquisition([parallelRow(0, [[20], [30]])]);
 
-    const pages = paginate(source, 25, 100);
+    const pages = paginate(source, 25, 100, 'word');
 
     expect(pages[0]).toBeNull();
     expect(sourceRows(pages)).toEqual([[0, 0]]);
@@ -295,7 +296,7 @@ describe('retained table pagination across pages', () => {
     // so the longer cell may continue while the shorter cell is complete.
     const source = acquisition([parallelRow(0, [[20, 20, 20], [20]])]);
 
-    const pages = paginate(source, 25, 100);
+    const pages = paginate(source, 25, 100, 'word');
 
     expect(sourceRows(pages)).toEqual([[0, 0], [0, 1]]);
     expect(pages[0]?.rows[0]?.cells.map((cell) => cell.contentRanges)).toEqual([
@@ -313,13 +314,25 @@ describe('retained table pagination across pages', () => {
     // parallel cell's first indivisible line crosses the page cut.
     const source = acquisition([parallelRow(0, [[10, 10], [30]])]);
 
-    const pages = paginate(source, 25, 100);
+    const pages = paginate(source, 25, 100, 'word');
 
     expect(pages[0]).toBeNull();
     expect(sourceRows(pages)).toEqual([[0, 0]]);
     expect(pages[1]?.rows[0]?.cells.map((cell) => cell.contentRanges)).toEqual([
       [{ kind: 'whole', blockIndex: 0 }],
       [{ kind: 'whole', blockIndex: 0 }],
+    ]);
+  });
+
+  it('does not apply the Word-observed common row cut in standard mode', () => {
+    const source = acquisition([parallelRow(0, [[20], [30]])]);
+
+    const pages = paginate(source, 25, 100, 'standard');
+
+    expect(sourceRows(pages)).toEqual([[0, 0], [0, 1]]);
+    expect(pages[0]?.rows[0]?.cells.map((cell) => cell.contentRanges)).toEqual([
+      [{ kind: 'paragraph', blockIndex: 0, lineStart: 0, lineEnd: 1 }],
+      [],
     ]);
   });
 

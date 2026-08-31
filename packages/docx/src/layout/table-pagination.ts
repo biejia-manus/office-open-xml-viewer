@@ -16,7 +16,10 @@ import {
   mergeEndRow,
   tableRowBoundaryFootprintsPt,
 } from './table.js';
-import { wordClipsOverPageCantSplitRow } from './table-compatibility.js';
+import {
+  wordClipsOverPageCantSplitRow,
+  wordRelocatesParallelParagraphRowCut,
+} from './table-compatibility.js';
 import type {
   FlowBlockPlacement,
   FloatRegistryDeltaPt,
@@ -887,14 +890,19 @@ function partialRow(
     || cell.next.paragraphLineStart !== cellCursors[index]?.paragraphLineStart
     || cell.next.nestedFragmentIndex !== cellCursors[index]?.nestedFragmentIndex
   );
-  // A row fragment is a single horizontal band shared by every cell. If an
-  // unfinished cell cannot reach even its first legal child boundary inside
-  // that band, a cut would pass through that child's line/block. Other cells
-  // fitting independently does not make that horizontal cut legal. Relocate
-  // the row (or retry it in the fresh band) instead. Cells already completed
-  // by an earlier fragment, empty cells, and vMerge continuations remain valid
-  // without page-local content.
-  if (selectedCells.some((cell, index) => !cell.complete && !cellMadeProgress(cell, index))) {
+  // Word treats a row fragment as one horizontal band for parallel paragraph
+  // cells. Keep that Office-observed choice behind its compatibility boundary;
+  // ECMA-376 §17.4.6 does not define the cross-cell cut selection, and the
+  // controlled evidence does not extend this rule to nested-table children.
+  const hasUnfinishedParagraphWithoutProgress = selectedCells.some((cell, index) => (
+    !cell.complete
+    && !cellMadeProgress(cell, index)
+    && row.cells[index]?.blocks[cellCursors[index]?.blockIndex ?? 0]?.layout.kind === 'paragraph'
+  ));
+  if (wordRelocatesParallelParagraphRowCut({
+    compatibility: context.compatibility,
+    hasUnfinishedParagraphWithoutProgress,
+  })) {
     return { selected: null, next: cursor, complete: false };
   }
   const madeProgress = selectedCells.some(cellMadeProgress);
