@@ -185,12 +185,19 @@ export function decodeTiffRgba(bytes: Uint8Array): DecodedTiff | null {
     return null;
   }
   const bytesPerRow = width * samples;
-  const output = new Uint8ClampedArray(pixels * 4);
+  // Validate all source ranges before reserving the potentially large decoded
+  // raster. Malformed metadata must fail without first consuming the pixel budget.
   for (let strip = 0; strip < stripCount; strip++) {
     const firstRow = strip * rowsPerStrip;
     const rowCount = Math.min(rowsPerStrip, height - firstRow);
     const required = rowCount * bytesPerRow;
     if (byteCounts[strip] < required || !directory.reader.contains(offsets[strip], required)) return null;
+  }
+
+  const output = new Uint8ClampedArray(pixels * 4);
+  for (let strip = 0; strip < stripCount; strip++) {
+    const firstRow = strip * rowsPerStrip;
+    const rowCount = Math.min(rowsPerStrip, height - firstRow);
     for (let row = 0; row < rowCount; row++) {
       let source = offsets[strip] + row * bytesPerRow;
       let destination = (firstRow + row) * width * 4;

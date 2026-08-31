@@ -10570,9 +10570,14 @@ fn parse_vml_pict(
     // Body blocks from <v:textbox><w:txbxContent>. VML and WPS share the same
     // CT_TxbxContent parser/wire; textPath still suppresses only the legacy
     // body-text paint projection, not preservation of authored content.
-    let text_box_content_node = shape
+    let text_box_node = shape
         .descendants()
-        .find(|n| n.is_element() && n.tag_name().name() == "txbxContent");
+        .find(|n| n.is_element() && n.tag_name().name() == "textbox");
+    let text_box_content_node = text_box_node.and_then(|text_box| {
+        text_box
+            .descendants()
+            .find(|n| n.is_element() && n.tag_name().name() == "txbxContent")
+    });
     let (text_box_content, parsed_legacy_blocks) = match text_box_content_node {
         Some(content) if text_path.is_some() => {
             // Before B2, a VML textPath suppressed txbxContent before parsing,
@@ -10636,6 +10641,8 @@ fn parse_vml_pict(
         && vml_word_has_complete_anchor_reference(shape, style);
     let anchor_acquisition =
         anchor.then(|| vml_word_anchor_acquisition(shape, style, width_pt, height_pt));
+    let [text_inset_l, text_inset_t, text_inset_r, text_inset_b] =
+        vml_textbox_insets(shape, text_box_node);
 
     Some(ShapeRun {
         inline: false,
@@ -10666,14 +10673,13 @@ fn parse_vml_pict(
         flip_h,
         flip_v,
         text_path,
-        // VML t202 text-box default insets are the OOXML defaults (§21.1.2.1.1).
         text_blocks,
         text_box_content,
         text_anchor: None,
-        text_inset_l: 91440.0 / 12700.0,
-        text_inset_t: 45720.0 / 12700.0,
-        text_inset_r: 91440.0 / 12700.0,
-        text_inset_b: 45720.0 / 12700.0,
+        text_inset_l,
+        text_inset_t,
+        text_inset_r,
+        text_inset_b,
         anchor_acquisition,
         ..Default::default()
     })
@@ -10949,6 +10955,60 @@ fn parse_vml_length_pt(value: &str) -> Option<f64> {
         (value.as_str(), 1.0)
     };
     number.trim().parse::<f64>().ok().map(|n| n * scale)
+}
+
+fn parse_vml_textbox_inset_parts<'a>(
+    parts: impl Iterator<Item = &'a str>,
+    defaults: [f64; 4],
+) -> Option<[f64; 4]> {
+    let mut result = defaults;
+    for (index, part) in parts.enumerate() {
+        if index >= result.len() {
+            return None;
+        }
+        if part.trim().is_empty() {
+            continue;
+        }
+        result[index] = parse_vml_length_pt(part).filter(|value| value.is_finite())?;
+    }
+    Some(result)
+}
+
+/// ECMA-376 Part 4 §19.1.2.22 `v:textbox@inset` names the physical left,
+/// top, right, and bottom text margins. Values may be comma- or space-separated;
+/// omitted components retain their normative 0.1in/0.05in defaults. When
+/// `o:insetmode="auto"` asks the producer to calculate margins, keep the same
+/// deterministic defaults used before authored custom insets were supported.
+fn vml_textbox_insets(shape: roxmltree::Node, text_box: Option<roxmltree::Node>) -> [f64; 4] {
+    const DEFAULTS: [f64; 4] = [7.2, 3.6, 7.2, 3.6];
+    let Some(text_box) = text_box else {
+        return DEFAULTS;
+    };
+    let inset_mode = text_box
+        .attributes()
+        .find(|attribute| attribute.name() == "insetmode")
+        .map(|attribute| attribute.value())
+        .or_else(|| {
+            shape
+                .attributes()
+                .find(|attribute| attribute.name() == "insetmode")
+                .map(|attribute| attribute.value())
+        });
+    if inset_mode.is_some_and(|mode| mode.trim().eq_ignore_ascii_case("auto")) {
+        return DEFAULTS;
+    }
+    let Some(raw) = text_box
+        .attributes()
+        .find(|attribute| attribute.name() == "inset")
+        .map(|attribute| attribute.value())
+    else {
+        return DEFAULTS;
+    };
+    if raw.contains(',') {
+        parse_vml_textbox_inset_parts(raw.split(','), DEFAULTS).unwrap_or(DEFAULTS)
+    } else {
+        parse_vml_textbox_inset_parts(raw.split_ascii_whitespace(), DEFAULTS).unwrap_or(DEFAULTS)
+    }
 }
 
 /// Parse VML's `x,y` point-pair grammar used by `<v:line from/to>`.
@@ -23669,6 +23729,55 @@ mod txbx_block_wire_tests {
         )
         .expect("VML shape");
         assert_complete_wire(&shape);
+    }
+
+    #[test]
+    fn vml_textbox_preserves_authored_physical_edge_insets() {
+        let xml = r##"<w:pict
+                  xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                  xmlns:v="urn:schemas-microsoft-com:vml">
+                  <v:shape id="tb1" type="#_x0000_t202"
+                      style="position:relative;width:200pt;height:100pt">
+                    <v:textbox inset="12mm,5mm,0,"><w:txbxContent>
+                      <w:p><w:r><w:t>Inset text</w:t></w:r></w:p>
+                    </w:txbxContent></v:textbox>
+                  </v:shape>
+                </w:pict>"##;
+        let document = roxmltree::Document::parse(xml).expect("VML fixture");
+        let mut num_map = NumberingMap::default();
+        let shape = parse_vml_pict(
+            &StyleMap::default(),
+            &mut num_map,
+            document.root_element(),
+            &ThemeColors::default(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            DepthGuard::root(),
+        )
+        .expect("VML shape");
+
+        assert!((shape.text_inset_l - 12.0 * 72.0 / 25.4).abs() < 1e-9);
+        assert!((shape.text_inset_t - 5.0 * 72.0 / 25.4).abs() < 1e-9);
+        assert_eq!(shape.text_inset_r, 0.0);
+        assert_eq!(
+            shape.text_inset_b, 3.6,
+            "ECMA-376 Part 4 §19.1.2.22: a missing component uses its default",
+        );
+    }
+
+    #[test]
+    fn vml_textbox_accepts_space_separated_insets() {
+        let xml = r##"<v:shape xmlns:v="urn:schemas-microsoft-com:vml">
+                    <v:textbox inset="1pt 2pt 3pt 4pt"/>
+                  </v:shape>"##;
+        let document = roxmltree::Document::parse(xml).expect("VML fixture");
+        let shape = document.root_element();
+        let text_box = shape
+            .children()
+            .find(|node| node.is_element() && node.tag_name().name() == "textbox");
+
+        assert_eq!(vml_textbox_insets(shape, text_box), [1.0, 2.0, 3.0, 4.0]);
     }
 
     #[test]

@@ -882,11 +882,22 @@ function partialRow(
     availableContentHeightPt,
     context,
   ));
-  const madeProgress = selectedCells.some((cell, index) => (
+  const cellMadeProgress = (cell: SelectedCell, index: number) => (
     cell.next.blockIndex !== cellCursors[index]?.blockIndex
     || cell.next.paragraphLineStart !== cellCursors[index]?.paragraphLineStart
     || cell.next.nestedFragmentIndex !== cellCursors[index]?.nestedFragmentIndex
-  ));
+  );
+  // A row fragment is a single horizontal band shared by every cell. If an
+  // unfinished cell cannot reach even its first legal child boundary inside
+  // that band, a cut would pass through that child's line/block. Other cells
+  // fitting independently does not make that horizontal cut legal. Relocate
+  // the row (or retry it in the fresh band) instead. Cells already completed
+  // by an earlier fragment, empty cells, and vMerge continuations remain valid
+  // without page-local content.
+  if (selectedCells.some((cell, index) => !cell.complete && !cellMadeProgress(cell, index))) {
+    return { selected: null, next: cursor, complete: false };
+  }
+  const madeProgress = selectedCells.some(cellMadeProgress);
   if (!madeProgress) return { selected: null, next: cursor, complete: false };
 
   const complete = selectedCells.every((cell) => cell.complete);

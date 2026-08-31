@@ -7,6 +7,27 @@ the corresponding minor release.
 
 ## Unreleased
 
+## 0.84.0 — 2026-09-01
+
+Compatible minor release adding opt-in TIFF image rendering across Word, Excel
+and PowerPoint files.
+
+- **TIFF images:** render the supported uncompressed, 8-bit, chunky
+  process-CMYK TIFF 6.0 image class in DOCX, XLSX and PPTX, in both main and
+  worker modes. Unsupported TIFF classes fail closed without aborting the
+  surrounding document render.
+- **opt-in package boundary:** expose one shared `@silurus/ooxml/tiff` entry and
+  one `tiff` option across all three format viewers and document engines. The
+  implementation remains outside default main-mode format graphs when omitted.
+- **full-featured first-party viewers:** enable TIFF alongside the other
+  first-party optional renderers in Try Yours and the VS Code extension.
+- **Word layout fidelity:** preserve authored inner margins in legacy text
+  boxes, and keep a multi-cell table row together when the remaining page has
+  no legal break point shared by every unfinished cell.
+- **compatibility:** no existing option, method or default is removed or
+  renamed. Applications only need to import the new module when TIFF images are
+  required.
+
 ## 0.83.2 — 2026-09-01
 
 Compatible patch release improving zoom controls and Word compatibility, with
