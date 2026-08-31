@@ -1151,6 +1151,7 @@ interface LoadOptions__emitterCollision1 {
     threeD?: ChartThreeDRenderer;
     regionMap?: ChartRegionMapRenderer;
     chartEx?: ChartExRenderer;
+    tiff?: TiffRenderer;
 }
 export interface MathAccent {
     kind: 'accent';
@@ -1840,6 +1841,9 @@ export interface TableInfo {
     band1HorizontalDxf?: number;
     band2HorizontalDxf?: number;
     columns: TableColumnInfo[];
+}
+export interface TiffRenderer {
+    render(bytes: Uint8Array): Promise<ImageBitmap | null>;
 }
 export interface TileInfo {
     tx?: number;

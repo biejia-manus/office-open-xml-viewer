@@ -44,6 +44,7 @@
     "./internal/comment-context": "./src/internal/comment-context.ts",
     "./internal/runtime-generation": "./src/internal/runtime-generation.ts",
     "./internal/three-d-renderer": "./src/chart/three-d-renderer.ts",
+    "./internal/tiff-renderer": "./src/image/tiff.ts",
     "./internal/virtual-scroll": "./src/internal/virtual-scroll.ts",
     "./internal/script-preload-accumulator": "./src/internal/script-preload-accumulator.ts",
     "./internal/wasm-runtime-generation": "./src/internal/wasm-runtime-generation.ts",

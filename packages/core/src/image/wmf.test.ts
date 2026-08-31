@@ -882,6 +882,49 @@ describe('decodeRasterOrMetafile', () => {
     expect(cib).toHaveBeenCalledTimes(1);
   });
 
+  it('a TIFF is skipped without the opt-in codec and decoded when supplied', async () => {
+    const bytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 1, 2, 3, 4]);
+    const blob = new Blob([bytes as BlobPart], { type: 'image/tiff' });
+    const browserDecode = vi.fn();
+    vi.stubGlobal('createImageBitmap', browserDecode);
+
+    await expect(decodeRasterOrMetafile(blob)).resolves.toBeNull();
+    expect(browserDecode).not.toHaveBeenCalled();
+
+    const bitmap = { width: 8, height: 4, close() {} } as unknown as ImageBitmap;
+    const render = vi.fn(async (input: Uint8Array) => {
+      expect(Array.from(input)).toEqual(Array.from(bytes));
+      return bitmap;
+    });
+    await expect(decodeRasterOrMetafile(blob, { tiff: { render } })).resolves.toBe(bitmap);
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(browserDecode).not.toHaveBeenCalled();
+  });
+
+  it('rejects an oversized TIFF before invoking an injected codec', async () => {
+    const bytes = new Uint8Array(38);
+    const view = new DataView(bytes.buffer);
+    bytes.set([0x49, 0x49], 0);
+    view.setUint16(2, 42, true);
+    view.setUint32(4, 8, true);
+    view.setUint16(8, 2, true);
+    view.setUint16(10, 256, true);
+    view.setUint16(12, 4, true);
+    view.setUint32(14, 1, true);
+    view.setUint32(18, 32_767, true);
+    view.setUint16(22, 257, true);
+    view.setUint16(24, 4, true);
+    view.setUint32(26, 1, true);
+    view.setUint32(30, 32_767, true);
+    const render = vi.fn();
+
+    await expect(decodeRasterOrMetafile(
+      new Blob([bytes as BlobPart], { type: 'image/tiff' }),
+      { tiff: { render } },
+    )).rejects.toMatchObject({ code: 'ooxml-decoded-image-limit' });
+    expect(render).not.toHaveBeenCalled();
+  });
+
   it('closes and rejects an oversized decode when the header was unrecognized', async () => {
     const close = vi.fn();
     vi.stubGlobal(

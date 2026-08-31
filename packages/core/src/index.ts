@@ -253,6 +253,7 @@ export {
   decodeRasterOrMetafile,
   type DecodeRasterOptions,
 } from './image/wmf';
+export type { TiffRenderer } from './image/tiff-contract';
 // Raster pixel-dimension budget + header sniff (decode-bomb guard, RB1). Shared
 // caps live in `./image/pixel-budget`; `decodeRasterOrMetafile` uses the sniff to
 // refuse an over-budget PNG/JPEG/GIF/BMP/WEBP before `createImageBitmap`.

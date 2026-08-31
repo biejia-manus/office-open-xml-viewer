@@ -42,6 +42,7 @@ import {
   MAX_DECODED_IMAGE_BYTES,
   OoxmlDecodedImageLimitError,
 } from './pixel-budget.js';
+import type { TiffRenderer } from './tiff-contract.js';
 
 type FetchImage = (path: string, mime: string) => Promise<Blob>;
 export type DecodedBitmapCacheOwner = object;
@@ -245,6 +246,8 @@ export interface CachedBitmapOptions {
   /** Enable the docx cosmetic window/device-frame suppression heuristic. Default
    *  false = spec-clean. Only docx opts in. */
   suppressBoundaryFrame?: boolean;
+  /** Optional TIFF codec retained by the owning document. */
+  tiff?: TiffRenderer;
 }
 
 interface ProducedBitmap {
@@ -392,7 +395,7 @@ export function getCachedBitmapByPath(
   fetchImage: FetchImage,
   opts: CachedBitmapOptions = {},
 ): Promise<ImageBitmap | null> {
-  const { widthPt = 0, heightPt = 0, suppressBoundaryFrame = false } = opts;
+  const { widthPt = 0, heightPt = 0, suppressBoundaryFrame = false, tiff } = opts;
   return getCachedDecodedBitmap(
     BASE_CACHE_NAMESPACE,
     imagePath,
@@ -403,6 +406,7 @@ export function getCachedBitmapByPath(
         widthPt,
         heightPt,
         suppressBoundaryFrame,
+        tiff,
       });
       return { bitmap, owned: true };
     },

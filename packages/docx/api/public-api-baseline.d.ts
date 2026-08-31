@@ -1580,14 +1580,6 @@ export interface LoadOptions extends LoadOptions__emitterCollision1 {
     showTrackedChanges?: boolean;
     currentDate?: Date | number;
 }
-interface ProgressiveLayoutPartial {
-    availableUnits: number;
-    totalUnits?: number;
-    exact: boolean;
-}
-interface ProgressiveLayoutProgress {
-    committedUnits: number;
-}
 interface LoadOptions__emitterCollision1 {
     useGoogleFonts?: boolean;
     password?: string;
@@ -1601,6 +1593,7 @@ interface LoadOptions__emitterCollision1 {
     threeD?: ChartThreeDRenderer;
     regionMap?: ChartRegionMapRenderer;
     chartEx?: ChartExRenderer;
+    tiff?: TiffRenderer;
 }
 export interface MatchRunSlice {
     runIndex: number;
@@ -1895,6 +1888,14 @@ export interface PatternFill {
     fg: string;
     bg: string;
     preset: string;
+}
+interface ProgressiveLayoutPartial {
+    availableUnits: number;
+    totalUnits?: number;
+    exact: boolean;
+}
+interface ProgressiveLayoutProgress {
+    committedUnits: number;
 }
 export interface PTabRun {
     alignment: 'left' | 'center' | 'right';
@@ -2227,6 +2228,9 @@ export interface TextPath {
 export interface TextSelectionContextOptions {
     readonly maxTextCharacters?: number;
     readonly maxRunLocators?: number;
+}
+export interface TiffRenderer {
+    render(bytes: Uint8Array): Promise<ImageBitmap | null>;
 }
 export interface TileInfo {
     tx?: number;
