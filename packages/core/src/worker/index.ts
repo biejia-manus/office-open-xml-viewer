@@ -35,6 +35,7 @@ export {
   type PullSessionInsufficientCreditDetails,
 } from './pull-credit-error.js';
 export { exactTransferableArrayBuffer } from './transfer.js';
+export { postOwnedImageBitmap } from './owned-image-bitmap-transfer.js';
 export {
   assertWorkerRendererDescriptor,
   workerRendererDescriptors,

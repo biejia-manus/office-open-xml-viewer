@@ -1062,7 +1062,7 @@ describe('acquireBitmapCacheLease (render-pass liveness)', () => {
     expect(closeDerived).toHaveBeenCalledTimes(2);
   });
 
-  it('honours a caller-configured aggregate budget above the adaptive default', async () => {
+  it('honours a caller-configured aggregate budget above the strict default', async () => {
     const width = 4096;
     const height = 4096; // 64 MiB per RGBA surface; three need 192 MiB.
     vi.stubGlobal(

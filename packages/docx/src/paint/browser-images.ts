@@ -24,6 +24,7 @@ import type {
   DeepReadonly,
   ImagePaintResourceDescriptor,
   PaintResourceDescriptor,
+  RasterPaintOccurrence,
 } from '../layout/types.js';
 
 export type DecodedImage = ImageBitmap | HTMLImageElement;
@@ -223,9 +224,24 @@ export async function decodeRaster(
 
 function imageDecodeRequests(
   descriptors: readonly DeepReadonly<PaintResourceDescriptor>[],
+  rasterPaintOccurrences: readonly DeepReadonly<RasterPaintOccurrence>[],
   devicePixelsPerPoint?: number,
 ): ImageDecodeRequest[] {
   const requests = new Map<string, ImageDecodeRequest>();
+  const demandByResource = new Map<string, { widthPt: number; heightPt: number }>();
+  for (const occurrence of rasterPaintOccurrences) {
+    if (occurrence.resourceKind !== 'image' && occurrence.resourceKind !== 'picture-bullet') {
+      continue;
+    }
+    if (!Number.isFinite(occurrence.widthPt) || occurrence.widthPt <= 0
+      || !Number.isFinite(occurrence.heightPt) || occurrence.heightPt <= 0) continue;
+    const key = `${occurrence.resourceKind}:${occurrence.resourceKey}`;
+    const prior = demandByResource.get(key);
+    demandByResource.set(key, {
+      widthPt: Math.max(prior?.widthPt ?? 0, occurrence.widthPt),
+      heightPt: Math.max(prior?.heightPt ?? 0, occurrence.heightPt),
+    });
+  }
   const images = descriptors
     .filter((descriptor): descriptor is DeepReadonly<ImagePaintResourceDescriptor> => (
       descriptor.kind === 'image' || descriptor.kind === 'picture-bullet'
@@ -235,11 +251,13 @@ function imageDecodeRequests(
       - (right.documentOrder ?? Number.MAX_SAFE_INTEGER)
     ));
   for (const image of images) {
+    const demand = demandByResource.get(`${image.kind}:${image.resourceKey}`);
+    if (!demand) continue;
     const raster = metafileRasterSize(
       image.mimeType,
       image.srcRect,
-      image.intrinsicSize.widthPt,
-      image.intrinsicSize.heightPt,
+      demand.widthPt,
+      demand.heightPt,
     );
     if (!raster) continue;
     const request: ImageDecodeRequest = {
@@ -255,8 +273,8 @@ function imageDecodeRequests(
     const target = devicePixelsPerPoint === undefined
       ? null
       : sourceRasterTargetSize(
-          image.intrinsicSize.widthPt * devicePixelsPerPoint,
-          image.intrinsicSize.heightPt * devicePixelsPerPoint,
+          demand.widthPt * devicePixelsPerPoint,
+          demand.heightPt * devicePixelsPerPoint,
           image.srcRect,
         );
     if (target) {
@@ -276,73 +294,82 @@ function imageDecodeRequests(
     }
   }
   const naturalSizeChartKeys = new Set<string>();
+  const chartOccurrencesByResource = new Map<string, DeepReadonly<RasterPaintOccurrence>[]>();
+  for (const occurrence of rasterPaintOccurrences) {
+    if (occurrence.resourceKind !== 'chart') continue;
+    const prior = chartOccurrencesByResource.get(occurrence.resourceKey) ?? [];
+    if (!chartOccurrencesByResource.has(occurrence.resourceKey)) {
+      chartOccurrencesByResource.set(occurrence.resourceKey, prior);
+    }
+    prior.push(occurrence);
+  }
   for (const descriptor of descriptors) {
-    if (descriptor.kind !== 'chart'
-      || !Number.isFinite(descriptor.intrinsicSize.widthPt)
-      || descriptor.intrinsicSize.widthPt <= 0
-      || !Number.isFinite(descriptor.intrinsicSize.heightPt)
-      || descriptor.intrinsicSize.heightPt <= 0) continue;
-    const frame = {
-      widthPt: descriptor.intrinsicSize.widthPt,
-      heightPt: descriptor.intrinsicSize.heightPt,
-      targetWidthPx: devicePixelsPerPoint === undefined
-        ? undefined
-        : descriptor.intrinsicSize.widthPt * devicePixelsPerPoint,
-      targetHeightPx: devicePixelsPerPoint === undefined
-        ? undefined
-        : descriptor.intrinsicSize.heightPt * devicePixelsPerPoint,
-    };
-    const usages = collectChartImageFillUsages(
-      descriptor.model as import('@silurus/ooxml-core').ChartModel,
-    ).map(usage => ({ usage, size: chartImageFillUsageSize(usage, frame) }));
-    if (usages.some(({ size }) => size === null)) continue;
-    for (const { usage, size } of usages) {
-      if (!size) continue;
-      const fill = usage.fill;
-      const raster = metafileRasterSize(
-        fill.mimeType,
-        fill.srcRect,
-        size.widthPt,
-        size.heightPt,
-      );
-      if (!raster) continue;
-      const request: ImageDecodeRequest = {
-        cacheKey: chartImageFillKey(fill),
-        imagePath: fill.imagePath,
-        mimeType: fill.mimeType,
-        ...(fill.svgImagePath === undefined ? {} : { svgImagePath: fill.svgImagePath }),
-        ...(fill.duotone === undefined ? {} : { duotone: fill.duotone }),
-        widthPt: raster.widthPt,
-        heightPt: raster.heightPt,
-        hasCrop: fill.srcRect != null,
-        failClosedOnDuotoneFailure: true,
-        ...(!usage.preserveNaturalSize && size.targetWidthPx && size.targetHeightPx
-          ? { targetWidthPx: size.targetWidthPx, targetHeightPx: size.targetHeightPx }
-          : {}),
+    if (descriptor.kind !== 'chart') continue;
+    for (const occurrence of chartOccurrencesByResource.get(descriptor.resourceKey) ?? []) {
+      if (!Number.isFinite(occurrence.widthPt) || occurrence.widthPt <= 0
+        || !Number.isFinite(occurrence.heightPt) || occurrence.heightPt <= 0) continue;
+      const frame = {
+        widthPt: occurrence.widthPt,
+        heightPt: occurrence.heightPt,
+        targetWidthPx: devicePixelsPerPoint === undefined
+          ? undefined
+          : occurrence.widthPt * devicePixelsPerPoint,
+        targetHeightPx: devicePixelsPerPoint === undefined
+          ? undefined
+          : occurrence.heightPt * devicePixelsPerPoint,
       };
-      const key = requestKey(request);
-      const existing = requests.get(key);
-      if (!existing) {
-        requests.set(key, request);
-      } else {
-        existing.widthPt = Math.max(existing.widthPt, request.widthPt);
-        existing.heightPt = Math.max(existing.heightPt, request.heightPt);
-        existing.hasCrop ||= request.hasCrop;
-      }
-      if (usage.preserveNaturalSize) naturalSizeChartKeys.add(key);
-      const merged = requests.get(key) as ImageDecodeRequest;
-      if (naturalSizeChartKeys.has(key)) {
-        merged.targetWidthPx = undefined;
-        merged.targetHeightPx = undefined;
-      } else {
-        merged.targetWidthPx = Math.max(
-          merged.targetWidthPx ?? 0,
-          request.targetWidthPx ?? 0,
-        ) || undefined;
-        merged.targetHeightPx = Math.max(
-          merged.targetHeightPx ?? 0,
-          request.targetHeightPx ?? 0,
-        ) || undefined;
+      const usages = collectChartImageFillUsages(
+        descriptor.model as import('@silurus/ooxml-core').ChartModel,
+      ).map(usage => ({ usage, size: chartImageFillUsageSize(usage, frame) }));
+      if (usages.some(({ size }) => size === null)) continue;
+      for (const { usage, size } of usages) {
+        if (!size) continue;
+        const fill = usage.fill;
+        const raster = metafileRasterSize(
+          fill.mimeType,
+          fill.srcRect,
+          size.widthPt,
+          size.heightPt,
+        );
+        if (!raster) continue;
+        const request: ImageDecodeRequest = {
+          cacheKey: chartImageFillKey(fill),
+          imagePath: fill.imagePath,
+          mimeType: fill.mimeType,
+          ...(fill.svgImagePath === undefined ? {} : { svgImagePath: fill.svgImagePath }),
+          ...(fill.duotone === undefined ? {} : { duotone: fill.duotone }),
+          widthPt: raster.widthPt,
+          heightPt: raster.heightPt,
+          hasCrop: fill.srcRect != null,
+          failClosedOnDuotoneFailure: true,
+          ...(!usage.preserveNaturalSize && size.targetWidthPx && size.targetHeightPx
+            ? { targetWidthPx: size.targetWidthPx, targetHeightPx: size.targetHeightPx }
+            : {}),
+        };
+        const key = requestKey(request);
+        const existing = requests.get(key);
+        if (!existing) {
+          requests.set(key, request);
+        } else {
+          existing.widthPt = Math.max(existing.widthPt, request.widthPt);
+          existing.heightPt = Math.max(existing.heightPt, request.heightPt);
+          existing.hasCrop ||= request.hasCrop;
+        }
+        if (usage.preserveNaturalSize) naturalSizeChartKeys.add(key);
+        const merged = requests.get(key) as ImageDecodeRequest;
+        if (naturalSizeChartKeys.has(key)) {
+          merged.targetWidthPx = undefined;
+          merged.targetHeightPx = undefined;
+        } else {
+          merged.targetWidthPx = Math.max(
+            merged.targetWidthPx ?? 0,
+            request.targetWidthPx ?? 0,
+          ) || undefined;
+          merged.targetHeightPx = Math.max(
+            merged.targetHeightPx ?? 0,
+            request.targetHeightPx ?? 0,
+          ) || undefined;
+        }
       }
     }
   }
@@ -351,6 +378,7 @@ function imageDecodeRequests(
 
 export async function preloadPaintImages(
   descriptors: readonly DeepReadonly<PaintResourceDescriptor>[],
+  rasterPaintOccurrences: readonly DeepReadonly<RasterPaintOccurrence>[],
   fetchImage: DocxFetchImage | undefined,
   tiff?: TiffRenderer,
   devicePixelsPerPoint?: number,
@@ -369,7 +397,11 @@ export async function preloadPaintImages(
         workerDecoder: svgDecoder,
       })
     : getCachedSvgImageByPath(path, fetchImage);
-  const requests = imageDecodeRequests(descriptors, devicePixelsPerPoint);
+  const requests = imageDecodeRequests(
+    descriptors,
+    rasterPaintOccurrences,
+    devicePixelsPerPoint,
+  );
   const demands = (await Promise.all(requests.map(async (request) => {
     if (!request.targetWidthPx || !request.targetHeightPx) return null;
     // DrawingML pixel effects consume the authored source grid. They may

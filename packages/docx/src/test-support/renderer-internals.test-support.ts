@@ -8,7 +8,7 @@ import {
   type DocxFetchImage,
 } from '../paint/browser-images.js';
 import { paintResourceRegistryOf } from '../layout/runtime-state.js';
-import type { LayoutServices } from '../layout/types.js';
+import type { LayoutServices, RasterPaintOccurrence } from '../layout/types.js';
 
 const EMPTY_DOCUMENT = {
   section: {
@@ -53,8 +53,25 @@ export async function preloadImages(
   const registry = services
     ? paintResourceRegistryOf(services)
     : layoutSourceStore(doc).paintResources;
+  // Legacy unit tests call the image preloader without producing a page layout.
+  // Production render paths always supply occurrences from retained geometry.
+  const rasterPaintOccurrences: RasterPaintOccurrence[] = registry.descriptors.flatMap(
+    (descriptor) => (
+      descriptor.kind === 'image'
+        || descriptor.kind === 'picture-bullet'
+        || descriptor.kind === 'chart'
+        ? [{
+            resourceKey: descriptor.resourceKey,
+            resourceKind: descriptor.kind,
+            widthPt: descriptor.intrinsicSize.widthPt,
+            heightPt: descriptor.intrinsicSize.heightPt,
+          }]
+        : []
+    ),
+  );
   return preloadPaintImages(
     registry.descriptors,
+    rasterPaintOccurrences,
     fetchImage,
     tiff,
     devicePixelsPerPoint,

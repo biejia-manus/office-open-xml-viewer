@@ -510,6 +510,39 @@ describe('docx lazy image bytes', () => {
     );
   });
 
+  it('rejects a default display-target working set above 128 MiB before decode', async () => {
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    png.set([0x49, 0x48, 0x44, 0x52], 12);
+    const view = new DataView(png.buffer);
+    view.setUint32(16, 4096);
+    view.setUint32(20, 4096);
+    const fetchImage = vi.fn(async () => new Blob([png as BlobPart], { type: 'image/png' }));
+    const image = (imagePath: string) => ({
+      type: 'image', imagePath, mimeType: 'image/png', widthPt: 4096, heightPt: 4096,
+    });
+    const doc = {
+      body: [{
+        type: 'paragraph',
+        runs: [
+          image('word/media/a.png'),
+          image('word/media/b.png'),
+          image('word/media/c.png'),
+        ],
+      }],
+      headers: {},
+      footers: {},
+    } as unknown as DocxDocumentModel;
+
+    await expect(preloadImages(doc, fetchImage, undefined, 1)).rejects.toMatchObject({
+      code: 'ooxml-decoded-image-limit',
+      metric: 'active-decoded-bytes',
+      limit: 128 * 1024 * 1024,
+      observed: 4096 * 4096 * 4 * 3,
+    });
+    expect(globalThis.createImageBitmap).not.toHaveBeenCalled();
+  });
+
   it('threads the opt-in TIFF codec through the DOCX image path', async () => {
     const bytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]);
     const bitmap = { width: 8, height: 4, close() {} } as unknown as ImageBitmap;
