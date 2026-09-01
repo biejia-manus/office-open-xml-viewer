@@ -131,10 +131,16 @@ const SHARED_PAINT_IMPORTS = new Map([
     // resulting CanvasImageSource keyed by the immutable resource record.
     ['rasterizeMathSvg', 'value'],
     ['metafileRasterSize', 'value'],
+    // Paint-time image admission uses the completed layout box and effective
+    // DPR to choose a retained decode. These resource-policy primitives neither
+    // measure nor feed geometry back into DocumentLayout.
+    ['MAX_RASTER_PIXELS', 'value'],
     ['paintDrawingMLShape', 'value'],
     ['withVertFeature', 'value'],
     ['preferVectorBlip', 'value'],
     ['releaseOwnedBitmap', 'value'],
+    ['resolvedCachedBitmapVariantKey', 'value'],
+    ['sourceRasterTargetSize', 'value'],
     ['PT_TO_PX', 'value'],
     // Shared fill resolution keeps gradient/no-fill semantics identical across
     // DOCX, PPTX, and XLSX painters; paint may consume it but not layout APIs.

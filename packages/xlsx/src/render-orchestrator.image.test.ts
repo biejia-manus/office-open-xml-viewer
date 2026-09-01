@@ -178,11 +178,38 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     expect(fetchImage).toHaveBeenCalledWith('xl/media/image2.png', 'image/png');
   });
 
-  it('prefetchImages warms picture-marker blips once for synchronous chart paint', async () => {
-    vi.stubGlobal('createImageBitmap', vi.fn(async (blob: Blob) => new FakeBitmap(blob.type)));
-    const fetchImage = vi.fn(async (path: string, mime: string) =>
-      new Blob([new TextEncoder().encode(path)], { type: mime }),
-    );
+  it('threads anchor geometry and effective DPR into oversized raster decoding', async () => {
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    png.set([0x49, 0x48, 0x44, 0x52], 12);
+    new DataView(png.buffer).setUint32(16, 12_090);
+    new DataView(png.buffer).setUint32(20, 9_063);
+    const decode = vi.fn(async (_source: unknown, _options?: ImageBitmapOptions) => new FakeBitmap('poster'));
+    vi.stubGlobal('createImageBitmap', decode);
+    const fetchImage = vi.fn(async () => new Blob([png as BlobPart], { type: 'image/png' }));
+    const ws = worksheetWithImages();
+    ws.shapeGroups = [];
+
+    await prefetchImages(ws, new Map(), fetchImage, { effectiveDpr: 2 });
+
+    expect(decode).toHaveBeenCalledOnce();
+    const options = decode.mock.calls[0]?.[1] as ImageBitmapOptions | undefined;
+    expect(options).toMatchObject({ resizeQuality: 'high' });
+    expect(options?.resizeWidth).toBeGreaterThan(0);
+    expect(options?.resizeWidth).toBeLessThan(12_090);
+  });
+
+  it('prefetchImages sizes oversized chart picture fills from the chart anchor', async () => {
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    png.set([0x49, 0x48, 0x44, 0x52], 12);
+    new DataView(png.buffer).setUint32(16, 12_090);
+    new DataView(png.buffer).setUint32(20, 9_063);
+    const decode = vi.fn(async (_source: unknown, _options?: ImageBitmapOptions) =>
+      new FakeBitmap('chart-picture'));
+    vi.stubGlobal('createImageBitmap', decode);
+    const fetchImage = vi.fn(async (_path: string, mime: string) =>
+      new Blob([png as BlobPart], { type: mime }));
     const ws = worksheetWithImages();
     ws.images = [];
     ws.shapeGroups = [];
@@ -207,9 +234,16 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
       },
     } as Worksheet['charts'][number]];
     const cache = new Map<string, CanvasImageSource | null>();
-    await prefetchImages(ws, cache, fetchImage);
+    await prefetchImages(ws, cache, fetchImage, { effectiveDpr: 2 });
     expect(fetchImage).toHaveBeenCalledOnce();
     expect(fetchImage).toHaveBeenCalledWith('xl/media/chart-marker.png', 'image/png');
+    expect(decode).toHaveBeenCalledOnce();
+    expect(decode.mock.calls[0]?.[1]).toMatchObject({
+      // Four authored 64-character columns resolve to 2048 CSS px in this
+      // fixture; at DPR 2 the full chart-bound source request is 4096 px wide.
+      resizeWidth: 4_096,
+      resizeQuality: 'high',
+    });
     expect(cache.has(chartImageFillKey({
       fillType: 'image', stretch: true, imagePath: 'xl/media/chart-marker.png', mimeType: 'image/png',
     }))).toBe(true);

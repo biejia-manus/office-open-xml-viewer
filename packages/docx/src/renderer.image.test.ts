@@ -58,6 +58,33 @@ describe('docx lazy image bytes', () => {
     expect((globalThis.createImageBitmap as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
   });
 
+  it('threads the laid-out device-pixel target into an oversized raster decode', async () => {
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    png.set([0x49, 0x48, 0x44, 0x52], 12);
+    new DataView(png.buffer).setUint32(16, 12_090);
+    new DataView(png.buffer).setUint32(20, 9_063);
+    const fetchImage = vi.fn(async () => new Blob([png as BlobPart], { type: 'image/png' }));
+    const doc = {
+      body: [{
+        type: 'paragraph',
+        runs: [{
+          type: 'image', imagePath: 'word/media/poster.png', mimeType: 'image/png',
+          widthPt: 100, heightPt: 50,
+        }],
+      }],
+      headers: {},
+      footers: {},
+    } as unknown as DocxDocumentModel;
+
+    await preloadImages(doc, fetchImage, undefined, 2);
+
+    expect(globalThis.createImageBitmap).toHaveBeenCalledWith(
+      expect.any(Blob),
+      expect.objectContaining({ resizeWidth: 200, resizeQuality: 'high' }),
+    );
+  });
+
   it('threads the opt-in TIFF codec through the DOCX image path', async () => {
     const bytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]);
     const bitmap = { width: 8, height: 4, close() {} } as unknown as ImageBitmap;

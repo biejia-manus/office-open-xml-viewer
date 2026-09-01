@@ -3903,6 +3903,7 @@ mod tests {
         let fill = Fill::Image {
             image_path: "ppt/media/image2.jpeg".to_owned(),
             mime_type: "image/jpeg".to_owned(),
+            src_rect: None,
             fill_rect: None,
             tile: None,
             alpha: None,
@@ -4810,7 +4811,7 @@ mod tests {
     /// ECMA-376 §20.1.8.14 + §20.1.8.58 + §20.1.8.30 — a `bgPr > blipFill`
     /// with a `stretch > fillRect` (incl. negative overscan edges) parses into
     /// `Fill::Image` carrying the resolved zip path + mime, the fractional
-    /// fillRect, and the alphaModFix alpha. Mirrors sample-12 slide1's background.
+    /// source crop, fillRect, and alphaModFix alpha.
     #[test]
     fn test_parse_background_blip_fill_stretch() {
         let xml = r#"<p:cSld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
@@ -4819,6 +4820,7 @@ mod tests {
             <p:bg><p:bgPr>
                 <a:blipFill>
                     <a:blip r:embed="rId2"><a:alphaModFix amt="80000"/></a:blip>
+                    <a:srcRect l="25000" r="10000"/>
                     <a:stretch><a:fillRect t="-9000" b="-9000"/></a:stretch>
                 </a:blipFill>
                 <a:effectLst/>
@@ -4836,6 +4838,7 @@ mod tests {
             Fill::Image {
                 image_path,
                 mime_type,
+                src_rect,
                 fill_rect,
                 tile,
                 alpha,
@@ -4843,6 +4846,9 @@ mod tests {
             } => {
                 assert_eq!(image_path, "ppt/media/image1.jpeg");
                 assert_eq!(mime_type, "image/jpeg");
+                let sr = src_rect.expect("srcRect should be present");
+                assert!((sr.l - 0.25).abs() < 1e-9, "l={}", sr.l);
+                assert!((sr.r - 0.1).abs() < 1e-9, "r={}", sr.r);
                 let fr = fill_rect.expect("fillRect should be present");
                 assert!((fr.t - (-0.09)).abs() < 1e-9, "t={}", fr.t);
                 assert!((fr.b - (-0.09)).abs() < 1e-9, "b={}", fr.b);

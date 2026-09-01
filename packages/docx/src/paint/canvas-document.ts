@@ -180,7 +180,12 @@ export async function renderSelectedDocumentPage<TTextRun>(
 
     let images;
     try {
-      images = await preloadPaintImages(options.registry.descriptors, options.fetchImage, options.tiff);
+      images = await preloadPaintImages(
+        options.registry.descriptors,
+        options.fetchImage,
+        options.tiff,
+        scale * effectiveDpr,
+      );
     } catch (error) {
       if (superseded()) return;
       throw error;

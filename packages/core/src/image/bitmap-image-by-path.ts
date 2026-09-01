@@ -1,7 +1,7 @@
 // Decoded-bitmap cache for raster / metafile blips shared by the docx, pptx and
 // xlsx renderers, for the lazy byte-on-demand image pipeline. The sibling of
 // `svg-image-by-path.ts`: same per-document (per-`fetchImage`) shape, keyed by
-// path plus any raster resolution band, but the drawable here is an
+// path plus any required raster resolution variant, but the drawable here is an
 // `ImageBitmap` (GPU-backed) decoded via the
 // shared `decodeRasterOrMetafile` rather than an `<img>`. Decoding an inlined
 // base64 image to an ImageBitmap is expensive, and the same picture is otherwise
@@ -36,7 +36,12 @@
 // `dropDecodedBitmapCache` closes every base and derived surface the same way
 // (through the promise), for prompt release on the owning viewer's `destroy()`.
 
-import { decodeRasterOrMetafile } from './wmf';
+import {
+  decodeRasterOrMetafile,
+  decodeRasterOrMetafileWithInspection,
+} from './raster-or-metafile.js';
+import { inspectRasterBlob, type RasterBlobInspection } from './raster-blob-inspection.js';
+import { rasterExceedsBudget } from './raster-dimensions.js';
 import { closeImageBitmapIfSupported } from './image-bitmap-lifecycle.js';
 import { withDecodedImageSlot } from './decode-gate.js';
 import {
@@ -74,6 +79,36 @@ interface BitmapCacheState {
 }
 
 const bitmapCacheByFetch = new WeakMap<DecodedBitmapCacheOwner, BitmapCacheState>();
+
+interface RasterSourceProfile {
+  readonly inspection: RasterBlobInspection;
+  initialBlob?: Blob;
+}
+
+const rasterProfilesByOwner = new WeakMap<DecodedBitmapCacheOwner, Map<string, Promise<RasterSourceProfile>>>();
+
+function rasterProfileFor(
+  owner: DecodedBitmapCacheOwner,
+  imagePath: string,
+  mimeType: string,
+  fetchImage: FetchImage,
+): Promise<RasterSourceProfile> {
+  let profiles = rasterProfilesByOwner.get(owner);
+  if (!profiles) {
+    profiles = new Map();
+    rasterProfilesByOwner.set(owner, profiles);
+  }
+  const existing = profiles.get(imagePath);
+  if (existing) return existing;
+  const promise = fetchImage(imagePath, mimeType)
+    .then(async (blob) => ({ inspection: await inspectRasterBlob(blob), initialBlob: blob }))
+    .catch((error) => {
+      profiles?.delete(imagePath);
+      throw error;
+    });
+  profiles.set(imagePath, promise);
+  return promise;
+}
 
 function bitmapCacheFor(owner: DecodedBitmapCacheOwner): BitmapCacheState {
   let state = bitmapCacheByFetch.get(owner);
@@ -249,31 +284,31 @@ export interface CachedBitmapOptions {
   suppressBoundaryFrame?: boolean;
   /** Optional TIFF codec retained by the owning document. */
   tiff?: TiffRenderer;
-  /** Desired width of the full raster source in device pixels. Requests are
-   * quantized into stable bands so nearby zoom levels reuse one decode. */
+  /** Desired width of the full raster source in device pixels. */
   targetWidthPx?: number;
   /** Desired height of the full raster source in device pixels. */
   targetHeightPx?: number;
+  /** Retained base-surface pixel ceiling for multi-surface effect pipelines. */
+  maxRetainedPixels?: number;
 }
 
-const SMALL_RASTER_TARGET_MAX = 64;
-const RASTER_TARGET_QUANTUM = 64;
-
-function rasterTargetBand(value: number | undefined): number | undefined {
+function normalizedRasterTarget(value: number | undefined): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || !(value > 0)) return undefined;
-  const rounded = Math.ceil(value);
-  if (rounded <= SMALL_RASTER_TARGET_MAX) {
-    return 2 ** Math.ceil(Math.log2(rounded));
-  }
-  return Math.ceil(rounded / RASTER_TARGET_QUANTUM) * RASTER_TARGET_QUANTUM;
+  return Math.ceil(value);
 }
 
 function normalizedBitmapOptions(opts: CachedBitmapOptions): CachedBitmapOptions {
   return {
     ...opts,
-    targetWidthPx: rasterTargetBand(opts.targetWidthPx),
-    targetHeightPx: rasterTargetBand(opts.targetHeightPx),
+    targetWidthPx: normalizedRasterTarget(opts.targetWidthPx),
+    targetHeightPx: normalizedRasterTarget(opts.targetHeightPx),
   };
+}
+
+function hasRestrictedPixelLimit(opts: CachedBitmapOptions): boolean {
+  return Number.isSafeInteger(opts.maxRetainedPixels)
+    && (opts.maxRetainedPixels ?? 0) > 0
+    && (opts.maxRetainedPixels as number) < MAX_DECODED_IMAGE_BYTES / 4;
 }
 
 /** Stable base key shared by the base and derived decoded-surface caches. */
@@ -281,10 +316,80 @@ export function cachedBitmapVariantKey(
   imagePath: string,
   opts: CachedBitmapOptions = {},
 ): string {
-  const width = rasterTargetBand(opts.targetWidthPx);
-  const height = rasterTargetBand(opts.targetHeightPx);
+  const width = normalizedRasterTarget(opts.targetWidthPx);
+  const height = normalizedRasterTarget(opts.targetHeightPx);
   const pathKey = `${imagePath.length}:${imagePath}`;
-  return width && height ? `raster:${pathKey}:${width}x${height}` : `native:${pathKey}`;
+  const pixelLimit = Number.isSafeInteger(opts.maxRetainedPixels) && (opts.maxRetainedPixels ?? 0) > 0
+    ? Math.min(opts.maxRetainedPixels as number, MAX_DECODED_IMAGE_BYTES / 4)
+    : MAX_DECODED_IMAGE_BYTES / 4;
+  return width && height
+    ? `raster:${pathKey}:${width}x${height}:p${pixelLimit}`
+    : `native:${pathKey}`;
+}
+
+function reusableResolutionVariantKey(
+  owner: DecodedBitmapCacheOwner,
+  imagePath: string,
+  opts: CachedBitmapOptions,
+): string | undefined {
+  const requestedWidth = normalizedRasterTarget(opts.targetWidthPx);
+  const requestedHeight = normalizedRasterTarget(opts.targetHeightPx);
+  if (!requestedWidth || !requestedHeight) return undefined;
+  const pixelLimit = Number.isSafeInteger(opts.maxRetainedPixels) && (opts.maxRetainedPixels ?? 0) > 0
+    ? Math.min(opts.maxRetainedPixels as number, MAX_DECODED_IMAGE_BYTES / 4)
+    : MAX_DECODED_IMAGE_BYTES / 4;
+  const pathKey = `${imagePath.length}:${imagePath}`;
+  const prefix = `${BASE_CACHE_PREFIX}raster:${pathKey}:`;
+  let best: { key: string; pixels: number } | undefined;
+  for (const key of bitmapCacheByFetch.get(owner)?.entries.keys() ?? []) {
+    if (!key.startsWith(prefix)) continue;
+    const match = /^(\d+)x(\d+):p(\d+)$/.exec(key.slice(prefix.length));
+    if (!match) continue;
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    if (Number(match[3]) !== pixelLimit || width < requestedWidth || height < requestedHeight) continue;
+    const pixels = width * height;
+    if (!best || pixels < best.pixels) best = { key: key.slice(BASE_CACHE_PREFIX.length), pixels };
+  }
+  return best?.key;
+}
+
+function profileNeedsResolutionVariant(
+  profile: RasterSourceProfile,
+  opts: CachedBitmapOptions = {},
+): boolean {
+  const pixelLimit = Number.isSafeInteger(opts.maxRetainedPixels) && (opts.maxRetainedPixels ?? 0) > 0
+    ? Math.min(opts.maxRetainedPixels as number, MAX_DECODED_IMAGE_BYTES / 4)
+    : MAX_DECODED_IMAGE_BYTES / 4;
+  return profile.inspection.format !== 'tiff'
+    && profile.inspection.dimensions !== null
+    && (rasterExceedsBudget(profile.inspection.dimensions)
+      || profile.inspection.dimensions.width * profile.inspection.dimensions.height > pixelLimit);
+}
+
+/** Resolve the actual base-cache key after source inspection. In-budget rasters
+ * and metafiles remain path-native even when callers supply a display target;
+ * only a source that must be downsampled receives resolution variants. */
+export async function resolvedCachedBitmapVariantKey(
+  imagePath: string,
+  mimeType: string,
+  fetchImage: FetchImage,
+  opts: CachedBitmapOptions = {},
+): Promise<string> {
+  const normalized = normalizedBitmapOptions(opts);
+  if (!normalized.targetWidthPx || !normalized.targetHeightPx) {
+    return cachedBitmapVariantKey(imagePath);
+  }
+  const nativeKey = `${BASE_CACHE_PREFIX}${cachedBitmapVariantKey(imagePath)}`;
+  if (!hasRestrictedPixelLimit(normalized)
+    && bitmapCacheByFetch.get(fetchImage)?.entries.has(nativeKey)) {
+    return cachedBitmapVariantKey(imagePath);
+  }
+  const profile = await rasterProfileFor(fetchImage, imagePath, mimeType, fetchImage);
+  return profileNeedsResolutionVariant(profile, normalized)
+    ? reusableResolutionVariantKey(fetchImage, imagePath, normalized)
+      ?? cachedBitmapVariantKey(imagePath, normalized)
+    : cachedBitmapVariantKey(imagePath);
 }
 
 interface ProducedBitmap {
@@ -440,24 +545,48 @@ export function getCachedBitmapByPath(
     tiff,
     targetWidthPx,
     targetHeightPx,
+    maxRetainedPixels,
   } = normalized;
-  return getCachedDecodedBitmap(
-    BASE_CACHE_NAMESPACE,
-    cachedBitmapVariantKey(imagePath, normalized),
-    fetchImage,
-    async () => {
-      const blob = await fetchImage(imagePath, mimeType);
-      const bitmap = await decodeRasterOrMetafile(blob, {
-        widthPt,
-        heightPt,
-        suppressBoundaryFrame,
-        tiff,
-        targetWidthPx,
-        targetHeightPx,
-      });
-      return { bitmap, owned: true };
-    },
-  );
+  const decode = (cacheKey: string, initial?: RasterSourceProfile) => {
+    const initialBlob = initial?.initialBlob;
+    if (initial) initial.initialBlob = undefined;
+    return getCachedDecodedBitmap(
+      BASE_CACHE_NAMESPACE,
+      cacheKey,
+      fetchImage,
+      async () => {
+        const blob = initialBlob ?? await fetchImage(imagePath, mimeType);
+        const decodeOpts = {
+          widthPt,
+          heightPt,
+          suppressBoundaryFrame,
+          tiff,
+          targetWidthPx,
+          targetHeightPx,
+          maxRetainedPixels,
+        };
+        const bitmap = initial
+          ? await decodeRasterOrMetafileWithInspection(blob, decodeOpts, initial.inspection)
+          : await decodeRasterOrMetafile(blob, decodeOpts);
+        return { bitmap, owned: true };
+      },
+    );
+  };
+  if (!targetWidthPx || !targetHeightPx) {
+    return decode(cachedBitmapVariantKey(imagePath));
+  }
+  const nativeKey = `${BASE_CACHE_PREFIX}${cachedBitmapVariantKey(imagePath)}`;
+  if (!hasRestrictedPixelLimit(normalized)
+    && bitmapCacheByFetch.get(fetchImage)?.entries.has(nativeKey)) {
+    return decode(cachedBitmapVariantKey(imagePath));
+  }
+  return rasterProfileFor(fetchImage, imagePath, mimeType, fetchImage).then((profile) => decode(
+    profileNeedsResolutionVariant(profile, normalized)
+      ? reusableResolutionVariantKey(fetchImage, imagePath, normalized)
+        ?? cachedBitmapVariantKey(imagePath, normalized)
+      : cachedBitmapVariantKey(imagePath),
+    profile,
+  ));
 }
 
 /**
@@ -484,6 +613,7 @@ export function peekCachedBitmapByPath(
  * deferred to the last lease release, so the pass never draws a closed bitmap.
  */
 export function dropDecodedBitmapCache(owner: DecodedBitmapCacheOwner): void {
+  rasterProfilesByOwner.delete(owner);
   const state = bitmapCacheByFetch.get(owner);
   if (!state) return;
   for (const entry of state.entries.values()) {

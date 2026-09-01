@@ -123,6 +123,49 @@ describe('getCachedDuotoneBitmapByPath', () => {
     dropBitmapCacheByPath(fetchImage);
   });
 
+  it('sizes the base so the full duotone working set stays within one byte budget', async () => {
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    png.set([0x49, 0x48, 0x44, 0x52], 12);
+    new DataView(png.buffer).setUint32(16, 12_000);
+    new DataView(png.buffer).setUint32(20, 9_000);
+    const created: Array<{ width: number; height: number }> = [];
+    vi.stubGlobal('createImageBitmap', vi.fn(async (source: Blob | { width: number; height: number }, options?: ImageBitmapOptions) => {
+      const width = source instanceof Blob ? options?.resizeWidth ?? 12_000 : source.width;
+      const height = source instanceof Blob ? Math.floor(width * 0.75) : source.height;
+      const bitmap = { width, height, close() {} } as unknown as ImageBitmap;
+      created.push({ width, height });
+      return bitmap;
+    }));
+    const fetchImage = vi.fn(async () => new Blob([png as BlobPart], { type: 'image/png' }));
+    const factory = ((width: number, height: number) => ({
+      width,
+      height,
+      getContext: () => ({
+        drawImage() {},
+        getImageData: () => ({ data: new Uint8ClampedArray([255, 255, 255, 255]), width: 1, height: 1 }),
+        putImageData() {},
+      }),
+    })) as unknown as OffscreenFactory;
+    const release = acquireBitmapCacheLease(fetchImage);
+    try {
+      await expect(getCachedDuotoneBitmapByPath(
+        'ppt/media/poster.png',
+        'image/png',
+        { clr1: '000000', clr2: 'FFFFFF' },
+        fetchImage,
+        { targetWidthPx: 12_000, targetHeightPx: 9_000, offscreenFactory: factory },
+      )).resolves.toBeTruthy();
+      expect(created).toHaveLength(2);
+      expect(created[0].width * created[0].height).toBeLessThanOrEqual(8_388_608);
+      expect(created[1]).toEqual(created[0]);
+    } finally {
+      release();
+      dropDuotoneBitmapCache(fetchImage);
+      dropBitmapCacheByPath(fetchImage);
+    }
+  });
+
   it('duotoneCacheKey suffixes the path with both colours only when a duotone is set', () => {
     expect(duotoneCacheKey('word/media/image1.png')).toBe('word/media/image1.png');
     expect(duotoneCacheKey('word/media/image1.png', null)).toBe('word/media/image1.png');
