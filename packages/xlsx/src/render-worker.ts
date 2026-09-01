@@ -45,6 +45,7 @@ import {
 import type { ParsedWorkbook, Worksheet } from './types.js';
 import { WorksheetViewProjectionCache } from './worker-protocol.js';
 import { GridGeometry } from './internal/grid-geometry.js';
+import { readXlsxArchiveBootstrap } from './internal/archive-bootstrap.js';
 import type { RenderWorkerRequest, RenderWorkerResponse } from './worker-protocol.js';
 import { isWorksheetPullCommand, WorksheetPullWorker } from './worksheet-pull-worker.js';
 
@@ -208,16 +209,20 @@ self.onmessage = async (e: MessageEvent<
       // prior handle first — the re-parse dispose. `parse()` returns UTF-8 JSON
       // bytes (Result<Vec<u8>, JsValue>); decode + parse the workbook index here
       // (consumed in-worker, then a light copy is sent to the proxy as an object).
-      workbook = host.run(() => {
-        const archive = new XlsxArchive(
-          new Uint8Array(req.data),
-          maxEntry,
-          maxTotal,
-          maxEntries,
-        );
-        host.setArchive(archive);
-        return JSON.parse(new TextDecoder().decode(archive.parse())) as ParsedWorkbook;
-      });
+      const bootstrap = readXlsxArchiveBootstrap(
+        () => host.run(() => {
+          const archive = new XlsxArchive(
+            new Uint8Array(req.data),
+            maxEntry,
+            maxTotal,
+            maxEntries,
+          );
+          host.setArchive(archive);
+          return JSON.parse(new TextDecoder().decode(archive.parse())) as ParsedWorkbook;
+        }),
+        () => host.run(() => host.archive!.resource_usage()),
+      );
+      workbook = bootstrap.workbook;
       if (req.useGoogleFonts) {
         // Mirror XlsxWorkbook._load exactly: queue Google Fonts substitutes for
         // every styled font name, plus the generic Arabic fallbacks. Fonts must
@@ -225,10 +230,7 @@ self.onmessage = async (e: MessageEvent<
         // and await it in the renderViewport handler.
         fontsLoaded = preloadGoogleFonts(xlsxFontPreloadNames(workbook), XLSX_GOOGLE_FONTS);
       }
-      const usage = host.run(() => decodeOoxmlResourceUsage(
-        host.archive!.resource_usage(),
-      ));
-      post({ type: 'parsed', id, workbook, usage });
+      post({ type: 'parsed', id, workbook, usage: bootstrap.usage });
       return;
     }
     if (req.type === 'renderViewport') {
