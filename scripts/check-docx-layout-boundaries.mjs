@@ -132,7 +132,7 @@ const SHARED_PAINT_IMPORTS = new Map([
     // whether browser target-resize is available. Both predicates remain
     // paint-resource admission and cannot affect acquired layout geometry.
     ['inspectCachedRasterSource', 'value'],
-    ['isBrowserResizableRasterFormat', 'value'],
+    ['isDecodeTargetResizableRasterFormat', 'value'],
     ['isOoxmlDecodedImageLimitError', 'value'],
     ['isTiffDecodeError', 'value'],
     ['HyperlinkTarget', 'type'],
