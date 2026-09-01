@@ -1,14 +1,14 @@
 import {
-  applyDuotone,
+  captureDecodedBitmapCacheEpoch,
+  decodedBitmapTargetResizeOptions,
+  duotoneImageData,
   MAX_RASTER_PIXELS,
   dropCachedDerivedBitmapNamespace,
   getCachedBitmapByPath,
   getCachedDerivedBitmap,
   getCachedSvgImageByPath,
-  imageNaturalSize,
   metafileRasterSize,
   preferVectorBlip,
-  releaseOwnedBitmap,
   resolvedCachedBitmapVariantKey,
   sourceRasterTargetSize,
 } from '@silurus/ooxml-core';
@@ -51,27 +51,87 @@ export function dropBrowserImageCache(fetchImage: DocxFetchImage): void {
   dropCachedDerivedBitmapNamespace(fetchImage, DOCX_COLOR_EFFECT_CACHE_NAMESPACE);
 }
 
-async function applyColorReplacement(
-  bitmap: ImageBitmap,
-  colorHex: string,
-): Promise<ImageBitmap> {
+function applyExactColorReplacement(data: ImageData, colorHex: string): void {
   const red = parseInt(colorHex.slice(0, 2), 16);
   const green = parseInt(colorHex.slice(2, 4), 16);
   const blue = parseInt(colorHex.slice(4, 6), 16);
-  const offscreen = new OffscreenCanvas(bitmap.width, bitmap.height);
-  const context = offscreen.getContext('2d');
-  if (!context) throw new Error('2D canvas is unavailable for image color replacement');
+  for (let index = 0; index < data.data.length; index += 4) {
+    if (data.data[index] === red
+      && data.data[index + 1] === green
+      && data.data[index + 2] === blue) {
+      data.data[index + 3] = 0;
+    }
+  }
+}
+
+async function applyColorEffects(
+  bitmap: ImageBitmap,
+  colorReplaceFrom: string | undefined,
+  duotone: Duotone | undefined,
+  failClosedOnDuotoneFailure: boolean,
+  target?: Readonly<{ targetWidthPx: number; targetHeightPx: number }>,
+): Promise<ImageBitmap | null> {
+  const unavailable = async (error?: unknown): Promise<ImageBitmap | null> => {
+    // clrChange has no compatibility pass-through: silently dropping its exact
+    // alpha transform would change authored content. Duotone-only consumers
+    // retain their established compatibility behavior, but at the requested
+    // display resolution; strict chart consumers still fail closed.
+    if (colorReplaceFrom) {
+      throw error instanceof Error
+        ? error
+        : new Error('2D canvas is unavailable for image color effects');
+    }
+    if (failClosedOnDuotoneFailure) return null;
+    const resizeOptions = decodedBitmapTargetResizeOptions(
+      bitmap.width,
+      bitmap.height,
+      target?.targetWidthPx,
+      target?.targetHeightPx,
+    );
+    if (!resizeOptions) return bitmap;
+    if (typeof createImageBitmap === 'undefined') {
+      throw new Error('createImageBitmap is unavailable for duotone fallback resampling');
+    }
+    return createImageBitmap(bitmap, resizeOptions);
+  };
+  if (typeof OffscreenCanvas === 'undefined') return unavailable();
+  let offscreen: OffscreenCanvas;
+  let context: OffscreenCanvasRenderingContext2D | null;
+  try {
+    offscreen = new OffscreenCanvas(bitmap.width, bitmap.height);
+    context = offscreen.getContext('2d');
+  } catch (error) {
+    return unavailable(error);
+  }
+  if (!context) return unavailable();
   context.drawImage(bitmap, 0, 0);
-  const imageData = context.getImageData(0, 0, bitmap.width, bitmap.height);
-  for (let index = 0; index < imageData.data.length; index += 4) {
-    if (imageData.data[index] === red
-      && imageData.data[index + 1] === green
-      && imageData.data[index + 2] === blue) {
-      imageData.data[index + 3] = 0;
+  let imageData: ImageData;
+  try {
+    imageData = context.getImageData(0, 0, bitmap.width, bitmap.height);
+  } catch (error) {
+    return unavailable(error);
+  }
+  if (colorReplaceFrom) applyExactColorReplacement(imageData, colorReplaceFrom);
+  if (duotone) {
+    try {
+      duotoneImageData(imageData, duotone.clr1, duotone.clr2);
+    } catch {
+      // The exact clrChange mutation already lives in this one source-grid
+      // buffer. Compatibility mode preserves and resamples that current result;
+      // strict chart consumers must not draw it without the authored duotone.
+      if (failClosedOnDuotoneFailure) return null;
     }
   }
   context.putImageData(imageData, 0, 0);
-  return createImageBitmap(offscreen);
+  const resizeOptions = decodedBitmapTargetResizeOptions(
+    bitmap.width,
+    bitmap.height,
+    target?.targetWidthPx,
+    target?.targetHeightPx,
+  );
+  return resizeOptions
+    ? createImageBitmap(offscreen, resizeOptions)
+    : createImageBitmap(offscreen);
 }
 
 export async function decodeRaster(
@@ -87,21 +147,24 @@ export async function decodeRaster(
   target?: Readonly<{ targetWidthPx: number; targetHeightPx: number }>,
 ): Promise<ImageBitmap | null> {
   // Pixel effects temporarily retain more than their cached input/output:
-  // source + offscreen backing + ImageData + result = four surfaces. Chaining
-  // clrChange then duotone peaks at five (base + clr result + the latter three).
-  const effectSurfaceCount = colorReplaceFrom && duotone
-    ? 5
-    : colorReplaceFrom || duotone
-      ? 4
-      : 1;
+  // source + offscreen backing + ImageData + result = four surfaces. clrChange
+  // and duotone mutate the same ImageData before the one final bitmap bake, so
+  // chaining them does not add another full-size intermediate.
+  const effectSurfaceCount = colorReplaceFrom || duotone ? 4 : 1;
   const maxRetainedPixels = Math.floor(MAX_RASTER_PIXELS / effectSurfaceCount);
-  const base = await getCachedBitmapByPath(imagePath, mimeType, fetchImage, {
+  const epoch = colorReplaceFrom || duotone
+    ? captureDecodedBitmapCacheEpoch(fetchImage, DOCX_COLOR_EFFECT_CACHE_NAMESPACE)
+    : undefined;
+  const sourceBitmapOptions = {
     widthPt,
     heightPt,
     suppressBoundaryFrame: true,
     tiff,
-    ...(target ?? {}),
     maxRetainedPixels,
+  };
+  const base = await getCachedBitmapByPath(imagePath, mimeType, fetchImage, {
+    ...sourceBitmapOptions,
+    ...(!colorReplaceFrom && !duotone ? target ?? {} : {}),
   });
   if (!base) return null;
   if (!colorReplaceFrom && !duotone) return base;
@@ -109,38 +172,32 @@ export async function decodeRaster(
     imagePath,
     mimeType,
     fetchImage,
-    { widthPt, heightPt, suppressBoundaryFrame: true, tiff, ...(target ?? {}), maxRetainedPixels },
+    sourceBitmapOptions,
+    epoch,
+    base,
   );
-  const key = `${imageKey(resolvedBaseKey, colorReplaceFrom, duotone)}${failClosedOnDuotoneFailure ? '|strict' : ''}`;
+  const resizeOptions = decodedBitmapTargetResizeOptions(
+    base.width,
+    base.height,
+    target?.targetWidthPx,
+    target?.targetHeightPx,
+  );
+  const key = `${imageKey(resolvedBaseKey, colorReplaceFrom, duotone)}${resizeOptions ? `|resize-width:${resizeOptions.resizeWidth}` : ''}${failClosedOnDuotoneFailure ? '|strict' : ''}`;
   return getCachedDerivedBitmap(
     DOCX_COLOR_EFFECT_CACHE_NAMESPACE,
     key,
     fetchImage,
     async () => {
-      let bitmap: ImageBitmap = base;
-      try {
-        if (colorReplaceFrom) bitmap = await applyColorReplacement(bitmap, colorReplaceFrom);
-        if (duotone) {
-          const { w, h } = imageNaturalSize(bitmap);
-          if (w > 0 && h > 0) {
-            const source = bitmap;
-            const recoloured = await applyDuotone(bitmap, duotone, { width: w, height: h });
-            if (failClosedOnDuotoneFailure && recoloured === source) {
-              if (source !== base) releaseOwnedBitmap(source);
-              return { bitmap: null, owned: false };
-            }
-            bitmap = recoloured as ImageBitmap;
-            // A clrChange surface is only an intermediate when duotone creates a
-            // second surface. It is never cached or drawn, so release it now.
-            if (source !== base && bitmap !== source) releaseOwnedBitmap(source);
-          }
-        }
-        return { bitmap, owned: bitmap !== base };
-      } catch (error) {
-        if (bitmap !== base) releaseOwnedBitmap(bitmap);
-        throw error;
-      }
+      const bitmap = await applyColorEffects(
+        base,
+        colorReplaceFrom,
+        duotone,
+        failClosedOnDuotoneFailure,
+        target,
+      );
+      return { bitmap, owned: bitmap !== null && bitmap !== base };
     },
+    epoch,
   );
 }
 

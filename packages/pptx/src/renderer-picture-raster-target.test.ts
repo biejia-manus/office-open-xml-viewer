@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TiffDecodeError } from '@silurus/ooxml-core';
 import type { Slide } from './types.js';
 
 const coreMocks = vi.hoisted(() => ({
@@ -39,7 +40,38 @@ function canvas(drawImage?: ReturnType<typeof vi.fn>): HTMLCanvasElement {
 }
 
 describe('PPTX display-sized picture decode', () => {
-  beforeEach(() => coreMocks.decode.mockClear());
+  beforeEach(() => {
+    coreMocks.decode.mockReset();
+    coreMocks.decode.mockResolvedValue(coreMocks.bitmap);
+  });
+
+  it('propagates a recognized TIFF codec failure instead of silently omitting the picture', async () => {
+    const error = new TiffDecodeError('Unsupported TIFF compression');
+    coreMocks.decode.mockRejectedValue(error);
+    const slide = {
+      index: 0,
+      slideNumber: 1,
+      background: null,
+      elements: [{
+        type: 'picture',
+        x: 0,
+        y: 0,
+        width: 4_572_000,
+        height: 3_429_000,
+        rotation: 0,
+        flipH: false,
+        flipV: false,
+        imagePath: 'ppt/media/unsupported.tiff',
+        mimeType: 'image/tiff',
+      }],
+    } as Slide;
+
+    await expect(renderSlide(canvas(), slide, 9_144_000, 6_858_000, {
+      width: 960,
+      dpr: 1,
+      fetchImage: vi.fn(async () => new Blob(['tiff'], { type: 'image/tiff' })),
+    })).rejects.toBe(error);
+  });
 
   it('derives full-source device pixels from the frame, effective DPR, and srcRect crop', async () => {
     const slide = {

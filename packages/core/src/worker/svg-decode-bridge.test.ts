@@ -50,8 +50,10 @@ describe('decodeSvgBlobOnMainThread', () => {
     vi.stubGlobal('Image', class {
       width = 0;
       height = 0;
-      naturalWidth = 0;
-      naturalHeight = 0;
+      // Chromium assigns a viewBox-only SVG a 150px-tall natural box whose
+      // width preserves the viewBox ratio (10:6 => 250:150).
+      naturalWidth = 250;
+      naturalHeight = 150;
       onload: (() => void) | null = null;
       onerror: (() => void) | null = null;
       decode = vi.fn(async () => undefined);
@@ -70,6 +72,72 @@ describe('decodeSvgBlobOnMainThread', () => {
       )).resolves.toBe(bitmap);
       expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 400, 240);
       expect(revokeObjectURL).toHaveBeenCalledWith('blob:test-svg');
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('covers a one-axis target while preserving the SVG intrinsic aspect ratio', async () => {
+    const drawImage = vi.fn();
+    const bitmap = { width: 80, height: 40, close: vi.fn() } as unknown as ImageBitmap;
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:one-axis-svg');
+    vi.stubGlobal('Image', class {
+      width = 0;
+      height = 0;
+      naturalWidth = 300;
+      naturalHeight = 150;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      decode = vi.fn(async () => undefined);
+      set src(_value: string) { queueMicrotask(() => this.onload?.()); }
+    });
+    vi.stubGlobal('OffscreenCanvas', class {
+      constructor(readonly width: number, readonly height: number) {}
+      getContext() { return { drawImage }; }
+      transferToImageBitmap() { return bitmap; }
+    });
+
+    try {
+      await expect(decodeSvgBlobOnMainThread(
+        new Blob(['<svg viewBox="0 0 16 8"/>'], { type: 'image/svg+xml' }),
+        { targetHeightPx: 40 },
+      )).resolves.toBe(bitmap);
+      expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 80, 40);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('covers mismatched target axes without distorting the SVG source grid', async () => {
+    const drawImage = vi.fn();
+    const bitmap = { width: 480, height: 240, close: vi.fn() } as unknown as ImageBitmap;
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:coverage-svg');
+    vi.stubGlobal('Image', class {
+      width = 0;
+      height = 0;
+      naturalWidth = 300;
+      naturalHeight = 150;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      decode = vi.fn(async () => undefined);
+      set src(_value: string) { queueMicrotask(() => this.onload?.()); }
+    });
+    vi.stubGlobal('OffscreenCanvas', class {
+      constructor(readonly width: number, readonly height: number) {}
+      getContext() { return { drawImage }; }
+      transferToImageBitmap() { return bitmap; }
+    });
+
+    try {
+      await expect(decodeSvgBlobOnMainThread(
+        new Blob(['<svg viewBox="0 0 16 8"/>'], { type: 'image/svg+xml' }),
+        { targetWidthPx: 400, targetHeightPx: 240 },
+      )).resolves.toBe(bitmap);
+      expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 480, 240);
     } finally {
       vi.restoreAllMocks();
       vi.unstubAllGlobals();

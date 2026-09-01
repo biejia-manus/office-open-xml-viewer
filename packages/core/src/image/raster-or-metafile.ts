@@ -10,13 +10,20 @@ import {
   MAX_RASTER_SOURCE_DIMENSION,
   MAX_RASTER_SOURCE_PIXELS,
   OoxmlDecodedImageLimitError,
+  isOoxmlDecodedImageLimitError,
 } from './pixel-budget.js';
 import { inspectRasterBlob, type RasterBlobInspection } from './raster-blob-inspection.js';
 import {
   sourceRasterExceedsBudget,
   type RasterDimensions,
 } from './raster-dimensions.js';
-import { isTiff, type TiffRenderer } from './tiff-contract.js';
+import { aspectPreservingRasterTarget } from './raster-target.js';
+import {
+  isTiff,
+  isTiffDecodeError,
+  TiffDecodeError,
+  type TiffRenderer,
+} from './tiff-contract.js';
 import { isEmf, isWmf, renderWmfToBitmap, wmfRasterTarget } from './wmf.js';
 
 export interface DecodeRasterOptions {
@@ -37,30 +44,49 @@ function exceedsRetainedBudget(source: RasterDimensions, pixelLimit: number): bo
     || source.width * source.height > pixelLimit;
 }
 
-function decodeResizeOptions(
+function hasTiffMimeType(value: string): boolean {
+  const mime = value.split(';', 1)[0]?.trim().toLowerCase();
+  return mime === 'image/tiff' || mime === 'image/x-tiff';
+}
+
+interface RasterDecodePlan {
+  readonly retainedDimensions: RasterDimensions;
+  readonly resizeOptions: ImageBitmapOptions | null;
+}
+
+function decodePlan(
   source: RasterDimensions,
   targetWidthPx: number | undefined,
   targetHeightPx: number | undefined,
-  pixelLimit = MAX_RASTER_PIXELS,
-): ImageBitmapOptions | null {
-  // Keep native decoding for already-safe inputs. Display-sized decoding is an
-  // admission mechanism for sources/effect pipelines that exceed their retained
-  // budget, avoiding a fidelity change for ordinary documents.
-  if (!exceedsRetainedBudget(source, pixelLimit)) return null;
-  if (typeof targetWidthPx !== 'number' || typeof targetHeightPx !== 'number') return null;
-  if (!Number.isFinite(targetWidthPx) || !Number.isFinite(targetHeightPx)) return null;
-  if (!(targetWidthPx > 0) || !(targetHeightPx > 0)) return null;
-  const scale = Math.min(
-    1,
-    Math.max(targetWidthPx / source.width, targetHeightPx / source.height),
-    MAX_RASTER_DIMENSION / source.width,
-    MAX_RASTER_DIMENSION / source.height,
-    Math.sqrt(pixelLimit / (source.width * source.height)),
+  allowSingleAxis = false,
+): RasterDecodePlan {
+  const native = { retainedDimensions: source, resizeOptions: null };
+  const targetWidth = typeof targetWidthPx === 'number'
+    && Number.isFinite(targetWidthPx) && targetWidthPx > 0 ? targetWidthPx : undefined;
+  const targetHeight = typeof targetHeightPx === 'number'
+    && Number.isFinite(targetHeightPx) && targetHeightPx > 0 ? targetHeightPx : undefined;
+  // A target is a sufficient downsample request only when neither source axis
+  // needs native resolution. If one target axis reaches/exceeds the source,
+  // retaining the source grid is genuinely required; quota checks below reject
+  // it rather than silently substituting a smaller, insufficient surface.
+  const target = aspectPreservingRasterTarget(
+    source,
+    targetWidth,
+    targetHeight,
+    allowSingleAxis,
   );
-  if (!(scale < 1)) return null;
+  if (!target) return native;
+  const resizeWidth = target.width;
+  const retainedHeight = Math.min(
+    source.height,
+    Math.max(1, Math.ceil(source.height * resizeWidth / source.width)),
+  );
   // One axis lets the HTML algorithm preserve the oriented source aspect ratio
   // (including EXIF rotation) instead of imposing the coded header's W×H.
-  return { resizeWidth: Math.max(1, Math.floor(source.width * scale)), resizeQuality: 'high' };
+  return {
+    retainedDimensions: { width: resizeWidth, height: retainedHeight },
+    resizeOptions: { resizeWidth, resizeQuality: 'high' },
+  };
 }
 
 function rasterLimitError(
@@ -133,23 +159,37 @@ export async function decodeRasterOrMetafileWithInspection(
   if (rasterDimensions && sourceRasterExceedsBudget(rasterDimensions)) {
     throw rasterLimitError(rasterDimensions, MAX_RASTER_SOURCE_DIMENSION, MAX_RASTER_SOURCE_PIXELS);
   }
-  const resizeOptions = rasterDimensions
-    ? decodeResizeOptions(rasterDimensions, targetWidthPx, targetHeightPx, retainedPixelLimit)
+  // Prefer content sniffing because OOXML producers sometimes label TIFF parts
+  // as application/octet-stream. MIME remains a second recognition signal so
+  // valid-but-unsupported TIFF container versions and damaged TIFF parts fail
+  // through the diagnostic codec path instead of the browser's generic decoder.
+  const tiffInput = isTiff(head) || hasTiffMimeType(data.type);
+  const plan = rasterDimensions
+    ? decodePlan(rasterDimensions, targetWidthPx, targetHeightPx, tiffInput)
     : null;
-  const tiffInput = isTiff(head);
-  if (rasterDimensions && exceedsRetainedBudget(rasterDimensions, retainedPixelLimit)
-    && (!resizeOptions || tiffInput)) {
-    throw rasterLimitError(rasterDimensions, MAX_RASTER_DIMENSION, retainedPixelLimit);
+  if (plan && exceedsRetainedBudget(plan.retainedDimensions, retainedPixelLimit)) {
+    throw rasterLimitError(plan.retainedDimensions, MAX_RASTER_DIMENSION, retainedPixelLimit);
   }
   if (tiffInput) {
-    if (!tiff) return null;
-    return enforceDecodedBitmapBudget(
-      await tiff.render(new Uint8Array(await data.arrayBuffer())),
-      retainedPixelLimit,
-    );
+    if (!tiff) throw new TiffDecodeError('TIFF image requires an opt-in TIFF codec');
+    let bitmap: ImageBitmap | null;
+    try {
+      bitmap = await tiff.render(new Uint8Array(await data.arrayBuffer()), {
+        targetWidthPx,
+        targetHeightPx,
+        maxRetainedPixels: retainedPixelLimit,
+      });
+    } catch (error) {
+      if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
+      throw new TiffDecodeError('TIFF codec failed to decode the image', { cause: error });
+    }
+    if (!bitmap) throw new TiffDecodeError('TIFF codec failed to decode the image');
+    return enforceDecodedBitmapBudget(bitmap, retainedPixelLimit);
   }
   return enforceDecodedBitmapBudget(
-    resizeOptions ? await createImageBitmap(data, resizeOptions) : await createImageBitmap(data),
+    plan?.resizeOptions
+      ? await createImageBitmap(data, plan.resizeOptions)
+      : await createImageBitmap(data),
     retainedPixelLimit,
   );
 }

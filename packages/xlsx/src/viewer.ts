@@ -1212,6 +1212,7 @@ class XlsxViewerEngine implements ZoomableViewer {
           threeD: this.opts.threeD,
           regionMap: this.opts.regionMap,
           chartEx: this.opts.chartEx,
+          tiff: this.opts.tiff,
           mode: this._mode,
         }), () => {
           // Claim every async-operation generation before closing the old

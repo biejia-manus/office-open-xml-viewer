@@ -18,6 +18,7 @@ import type {
   Glow,
   RenderOptions,
   DimOptions,
+  BlipBullet,
 } from './types';
 import { asBullet } from './types';
 import {
@@ -79,7 +80,9 @@ import {
   getCachedBitmapByPath,
   getCachedDuotoneBitmapByPath,
   chartImageFillKey,
-  collectChartMarkerImageFills,
+  chartImageFillUsageSize,
+  collectChartImageFillUsages,
+  collectChartImageFillUsagesForCharts,
   acquireBitmapCacheLease,
   peekCachedBitmapByPath,
   dropDecodedBitmapCache,
@@ -88,6 +91,7 @@ import {
   metafileRasterSize,
   sourceRasterTargetSize,
   isOoxmlDecodedImageLimitError,
+  isTiffDecodeError,
   highlightBox,
   symbolFontToUnicode,
   isSymbolFontFamily,
@@ -109,6 +113,7 @@ import type {
   ChartExRenderer,
   TiffRenderer,
   SvgBlobDecoder,
+  SvgImageSource,
 } from '@silurus/ooxml-core';
 import type { HyperlinkTarget } from '@silurus/ooxml-core';
 import { paintDistanceAwareReflectionBlur } from './reflection-blur';
@@ -156,6 +161,14 @@ export interface RenderContext {
    * {@link isSmartArtFallbackShape}; every other shape ignores it.
    */
   smartArtFallbackTextColor?: string | null;
+  /**
+   * Picture-bullet image sources prepared for this render pass. Display-sized
+   * bitmap decodes use a resolution-specific core cache key, so synchronous
+   * text paint consumes the exact prefetch result rather than peeking only the
+   * native-resolution key. The render-pass lease owns bitmap lifetime; Window
+   * SVG bullets remain count-bounded HTMLImageElements in the SVG cache.
+   */
+  pictureBulletImages?: ReadonlyMap<string, SvgImageSource | null>;
 }
 
 /** Information about a rendered text segment for building a transparent selection overlay. */
@@ -767,6 +780,28 @@ function paragraphHasBullet(para: Paragraph): boolean {
     para.bullet.type === 'autoNum' ||
     asBullet(para.bullet).type === 'blip'
   );
+}
+
+/** Authored picture-bullet height before Canvas scale and normAutofit shrink.
+ * Shared by preload and text layout so their cache target cannot drift from the
+ * marker geometry. ECMA-376 §21.1.2.4.10 absolute size wins over §21.1.2.4.9
+ * percentage; with neither, §21.1.2.4.13 inherits the first run/default size. */
+function pictureBulletSizePt(
+  body: TextBody,
+  para: Paragraph,
+  bullet: BlipBullet,
+): number {
+  let firstRunSizePt: number | null = null;
+  for (const run of para.runs) {
+    if (run.type === 'text' && run.fontSize != null) {
+      firstRunSizePt = run.fontSize;
+      break;
+    }
+  }
+  const baseSizePt = firstRunSizePt ?? para.defFontSize ?? body.defaultFontSize ?? 18;
+  return bullet.sizePts != null
+    ? bullet.sizePts
+    : baseSizePt * ((bullet.sizePct ?? 100) / 100);
 }
 
 /** First-line indent (ECMA-376 §21.1.2.2.7 `a:pPr@indent`) resolved to the px
@@ -1753,7 +1788,7 @@ async function renderBackground(
       }
       ctx.restore();
     } catch (error) {
-      if (isOoxmlDecodedImageLimitError(error)) throw error;
+      if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
       // Decode failed — the white base painted above remains as the fallback.
     }
     return;
@@ -3819,8 +3854,9 @@ export function renderTextBody(
     bulletColor: string;
     bulletX: number;      // canvas X for bullet
     // Picture bullet (`<a:buBlip>`, §21.1.2.4.2): the resolved image + its
-    // drawn size in px (square, scaled by buSzPct). null when this paragraph
-    // has no picture bullet. Only set on the paragraph's first line.
+    // authored height in px (scaled by buSzPct); painting preserves the source
+    // aspect ratio. null when this paragraph has no picture bullet. Only set on
+    // the paragraph's first line.
     bulletImage: { imagePath: string; mimeType: string; sizePx: number } | null;
     textX: number;        // canvas X for text
     textMaxW: number;     // max wrap width
@@ -3862,15 +3898,13 @@ export function renderTextBody(
     // lvl1pPr defRPr fallback, typically 18pt) oversizes the bullet so a
     // hanging indent calibrated against the run (12pt) can't contain it —
     // that's why the em-dash was overlapping the text.
-    const firstRunSizePt = (() => {
+    const bulletBaseSizePt = (() => {
       for (const r of para.runs) {
         if (r.type === 'text' && r.fontSize != null) return r.fontSize;
       }
-      return null;
+      return para.defFontSize ?? body.defaultFontSize ?? 18;
     })();
-    const bulletBaseSizePx = firstRunSizePt != null
-      ? firstRunSizePt * PT_TO_EMU * scale * fontScale
-      : paraDefaultFontSizePx;
+    const bulletBaseSizePx = bulletBaseSizePt * PT_TO_EMU * scale * fontScale;
 
     // ECMA-376 §21.1.2.4.4 (CT_TextCharBullet) / §21.1.2.4.10 (buClrTx): when
     // no explicit `<a:buClr>` is present, the bullet inherits the *first run*'s
@@ -3948,19 +3982,15 @@ export function renderTextBody(
       // (§21.1.2.4.5 — the inherited first-run colour).
       bulletColor = bullet.color ? hexToRgba(bullet.color) : bulletInheritedColor;
     } else if (bullet.type === 'blip') {
-      // ECMA-376 §21.1.2.4.2 picture bullet. The bitmap is drawn as a square
-      // sized to the text (the bullet's em box), scaled by `<a:buSzPct>`
+      // ECMA-376 §21.1.2.4.2 picture bullet. Its height follows the text's em
+      // box, scaled by `<a:buSzPct>`, while paint preserves the source aspect
       // (§21.1.2.4.9; default 100%). It's not a glyph, so there is no label —
       // an empty paragraph still draws no marker (bulletLabel stays '' and the
       // draw site gates the image on the first line having content).
       // §21.1.2.4.10 (buSzPts): an absolute point size overrides the §21.1.2.4.9
       // percentage, matching the char-bullet branch above.
       const b = bullet;
-      const sizePx = b.sizePts != null
-        ? b.sizePts * PT_TO_EMU * scale * fontScale
-        : b.sizePct != null
-          ? bulletBaseSizePx * (b.sizePct / 100)
-          : bulletBaseSizePx;
+      const sizePx = pictureBulletSizePt(body, para, b) * PT_TO_EMU * scale * fontScale;
       bulletImage = { imagePath: b.imagePath, mimeType: b.mimeType, sizePx };
     }
 
@@ -4351,20 +4381,21 @@ export function renderTextBody(
     // `leadingEdgeX − reserve`; 0 for LTR / marker-less lines keeps them
     // byte-identical.
     const leadingEdgeX = textX + textMaxW;
+    const bulletBmp = bulletImage && fetchImage
+      ? rc.pictureBulletImages?.has(bulletImage.imagePath)
+        ? rc.pictureBulletImages.get(bulletImage.imagePath)
+        : peekCachedBitmapByPath(bulletImage.imagePath, fetchImage)
+      : undefined;
     let rtlMarkerReservePx = 0;
-    let rtlBulletBmp: ReturnType<typeof peekCachedBitmapByPath> | null = null;
     if (paraNeedsBidi && baseRtl) {
       if (bulletLabel) {
         ctx.font = bulletFont;
         rtlMarkerReservePx = ctx.measureText(bulletLabel).width;
-      } else if (bulletImage && fetchImage) {
-        rtlBulletBmp = peekCachedBitmapByPath(bulletImage.imagePath, fetchImage);
-        if (rtlBulletBmp) {
-          const h = bulletImage.sizePx;
-          rtlMarkerReservePx = rtlBulletBmp.height > 0
-            ? h * (rtlBulletBmp.width / rtlBulletBmp.height)
-            : h;
-        }
+      } else if (bulletImage && bulletBmp) {
+        const h = bulletImage.sizePx;
+        rtlMarkerReservePx = bulletBmp.height > 0
+          ? h * (bulletBmp.width / bulletBmp.height)
+          : h;
       }
     }
 
@@ -4388,24 +4419,23 @@ export function renderTextBody(
     // the text baseline at the same gutter x a char bullet uses. The image was
     // warmed by renderSlide's prefetch pass; if its decode hasn't resolved yet
     // (or fetchImage is absent), draw nothing — the marker simply appears once
-    // the bitmap is ready, never blocking the frame.
+    // the image source is ready, never blocking the frame.
     if (bulletImage && fetchImage) {
-      const bmp = peekCachedBitmapByPath(bulletImage.imagePath, fetchImage);
-      if (bmp) {
+      if (bulletBmp) {
         // The bullet HEIGHT is the text-derived size (× buSzPct); the WIDTH is
         // derived from the decoded bitmap's intrinsic aspect ratio so a
         // non-square marker isn't squished. §21.1.2.4.2 is silent on the exact
         // dimensions; this mirrors the PowerPoint runtime, which scales the
         // picture to the line text height while preserving its aspect ratio.
         const h = bulletImage.sizePx;
-        const w = bmp.height > 0 ? h * (bmp.width / bmp.height) : h;
+        const w = bulletBmp.height > 0 ? h * (bulletBmp.width / bulletBmp.height) : h;
         const imgY = baseline - h; // bottom-aligned to the baseline
         if (paraNeedsBidi && baseRtl) {
           // Marker RIGHT edge at the leading edge (matching the char-bullet
           // reading-frame placement above); the text pen reserves this width.
-          ctx.drawImage(bmp, leadingEdgeX - w, imgY, w, h);
+          ctx.drawImage(bulletBmp, leadingEdgeX - w, imgY, w, h);
         } else {
-          ctx.drawImage(bmp, bulletX, imgY, w, h);
+          ctx.drawImage(bulletBmp, bulletX, imgY, w, h);
         }
       }
     }
@@ -5696,7 +5726,7 @@ async function renderPicture(
     ctx.restore();
     // bitmap is owned by getCachedBitmapByPath's cache — do not close it here.
   } catch (error) {
-    if (isOoxmlDecodedImageLimitError(error)) throw error;
+    if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
     // silently skip broken images
   }
 }
@@ -5726,7 +5756,7 @@ async function renderMedia(
       const target = rasterTargetOptions(w, h, dpr);
       poster = await getPosterBitmap(el, fetchMedia, bitmapOwner, tiff, target, svgDecoder);
     } catch (error) {
-      if (isOoxmlDecodedImageLimitError(error)) throw error;
+      if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
       // fall through to plain fill
     }
   }
@@ -6571,6 +6601,7 @@ async function renderSlideLeased(
     ? `#${opts.defaultTextColor}`
     : '#000000';
 
+  const pictureBulletImages = new Map<string, SvgImageSource | null>();
   const rc: RenderContext = {
     themeMajorFont: opts.majorFont ?? null,
     themeMinorFont: opts.minorFont ?? null,
@@ -6583,6 +6614,7 @@ async function renderSlideLeased(
     // Issue #805 — legible default for the synthetic SmartArt fallback shape's
     // null-colour runs, derived once per slide from the background luminance.
     smartArtFallbackTextColor: smartArtFallbackTextColor(slide.background, themeDefaultColor),
+    pictureBulletImages,
   };
 
   await renderBackground(
@@ -6685,39 +6717,101 @@ async function renderSlideLeased(
 
   const chartMarkerImages = new Map<string, CanvasImageSource | null>();
   // Picture bullets (`<a:buBlip>`, §21.1.2.4.2) and chart picture markers are
-  // drawn inside synchronous layout/paint paths. Decode both before drawing.
-  // text-body layout, which can't await a decode. Resolve every bullet image up
-  // front (deduped by path via getCachedBitmapByPath) and await them so the draw
-  // loop's peekCachedBitmapByPath finds a settled bitmap. Missing/failed decodes resolve to
-  // undefined and the marker is simply skipped — never blocking the frame.
+  // drawn inside synchronous layout/paint paths, so decode both before drawing.
+  // Resolve every bullet image up front (deduped by path) and preserve each
+  // exact prefetch result: a display-sized decode lives under a resolution-
+  // specific cache key that the synchronous native-key peek cannot see.
+  // Missing/failed decodes resolve to null and the marker is simply skipped.
   if (opts.fetchImage) {
     const fetchImage = opts.fetchImage;
-    const bulletPaths = new Set<string>();
+    const bulletPaths = new Map<string, { mimeType: string; targetHeightPx?: number }>();
+    // A chart whose frame or derived decode size is non-positive or non-finite
+    // cannot paint an image safely. Exclude it before aggregate source gating
+    // so it cannot suppress visible preloads or force a native-size decode.
+    const chartDescriptors: Array<{
+      element: ChartElement;
+      frame: Parameters<typeof chartImageFillUsageSize>[1];
+      usages: Array<{
+        usage: ReturnType<typeof collectChartImageFillUsages>[number];
+        size: NonNullable<ReturnType<typeof chartImageFillUsageSize>>;
+      }>;
+    }> = [];
+    for (const element of slide.elements) {
+      if (element.type !== 'chart'
+        || !Number.isFinite(element.width) || element.width <= 0
+        || !Number.isFinite(element.height) || element.height <= 0) continue;
+      const frame = {
+        widthPt: element.width / PT_TO_EMU,
+        heightPt: element.height / PT_TO_EMU,
+        targetWidthPx: emuToPx(element.width, scale) * effectiveDpr,
+        targetHeightPx: emuToPx(element.height, scale) * effectiveDpr,
+      };
+      const usages = [] as typeof chartDescriptors[number]['usages'];
+      let valid = true;
+      for (const usage of collectChartImageFillUsages(element.chart)) {
+        const size = chartImageFillUsageSize(usage, frame);
+        if (!size) {
+          valid = false;
+          break;
+        }
+        usages.push({ usage, size });
+      }
+      if (valid) chartDescriptors.push({ element, frame, usages });
+    }
     const chartFillMap = new Map<string, {
-      fill: ReturnType<typeof collectChartMarkerImageFills>[number];
+      fill: ReturnType<typeof collectChartImageFillUsages>[number]['fill'];
       widthPt: number;
       heightPt: number;
-      targetWidthPx: number;
-      targetHeightPx: number;
+      targetWidthPx?: number;
+      targetHeightPx?: number;
+      preserveNaturalSize: boolean;
+      hasSourceCrop: boolean;
     }>();
-    for (const element of slide.elements) {
-      if (element.type !== 'chart') continue;
-      const widthPx = emuToPx(element.width, scale);
-      const heightPx = emuToPx(element.height, scale);
-      for (const fill of collectChartMarkerImageFills(element.chart)) {
-        const target = rasterTargetOptions(widthPx, heightPx, effectiveDpr, fill.srcRect);
-        if (!target) continue;
+    for (const usage of collectChartImageFillUsagesForCharts(
+      chartDescriptors.map(({ element }) => element.chart),
+      (usage, chartIndex) => chartImageFillUsageSize(
+        usage,
+        chartDescriptors[chartIndex]!.frame,
+      ) != null,
+    )) {
+      const { fill } = usage;
+      const key = chartImageFillKey(fill);
+      if (!chartFillMap.has(key)) chartFillMap.set(key, {
+        fill,
+        widthPt: 0,
+        heightPt: 0,
+        preserveNaturalSize: usage.preserveNaturalSize,
+        hasSourceCrop: usage.hasSourceCrop,
+      });
+    }
+    for (const { usages } of chartDescriptors) {
+      for (const { usage, size } of usages) {
+        const { fill } = usage;
         const key = chartImageFillKey(fill);
         const prior = chartFillMap.get(key);
+        if (!prior) continue;
+        // ECMA-376 §20.1.8.58: tile geometry is based on the source's natural
+        // pixel dimensions and authored DPI. A display-sized decode would alter
+        // the tile size/alignment/repetition count. Because one decoded source
+        // is shared by key, any tiled consumer makes the whole shared entry
+        // native-sized, even when another chart stretches the same blip.
+        const preserveNaturalSize = prior.preserveNaturalSize || usage.preserveNaturalSize;
+        // A picture fill may cover a marker, chart/plot area, wall, or floor.
+        // The owning chart frame is the smallest format-derived upper bound
+        // common to all consumers. Core has already aggregated each same-chart
+        // occurrence's source crop and stretch fillRect into these factors.
         chartFillMap.set(key, {
-          fill,
-          // A chart picture can paint a marker, plot area, wall, or floor. Its
-          // authored chart frame is the smallest format-derived upper bound
-          // common to all consumers, without assuming a marker size.
-          widthPt: Math.max(prior?.widthPt ?? 0, element.width / PT_TO_EMU),
-          heightPt: Math.max(prior?.heightPt ?? 0, element.height / PT_TO_EMU),
-          targetWidthPx: Math.max(prior?.targetWidthPx ?? 0, target.targetWidthPx),
-          targetHeightPx: Math.max(prior?.targetHeightPx ?? 0, target.targetHeightPx),
+          ...prior,
+          widthPt: Math.max(prior.widthPt, size.widthPt),
+          heightPt: Math.max(prior.heightPt, size.heightPt),
+          targetWidthPx: preserveNaturalSize
+            ? undefined
+            : Math.max(prior.targetWidthPx ?? 0, size.targetWidthPx ?? 0) || undefined,
+          targetHeightPx: preserveNaturalSize
+            ? undefined
+            : Math.max(prior.targetHeightPx ?? 0, size.targetHeightPx ?? 0) || undefined,
+          preserveNaturalSize,
+          hasSourceCrop: prior.hasSourceCrop || usage.hasSourceCrop,
         });
       }
     }
@@ -6725,49 +6819,81 @@ async function renderSlideLeased(
       if (el.type !== 'shape' || !el.textBody) continue;
       for (const para of el.textBody.paragraphs) {
         const b = asBullet(para.bullet);
-        if (b.type === 'blip') bulletPaths.add(`${b.imagePath} ${b.mimeType}`);
+        if (b.type === 'blip') {
+          // normAutofit never enlarges text, so the unshrunk authored marker
+          // height is a sufficient preload target even when layout later picks
+          // a smaller fontScale. Aggregate the largest use of a shared part.
+          const targetHeightPx = pictureBulletSizePt(el.textBody, para, b)
+            * PT_TO_EMU * scale * effectiveDpr;
+          const existing = bulletPaths.get(b.imagePath);
+          if (!existing) {
+            bulletPaths.set(b.imagePath, {
+              mimeType: b.mimeType,
+              ...(Number.isFinite(targetHeightPx) && targetHeightPx > 0
+                ? { targetHeightPx }
+                : {}),
+            });
+          } else if (Number.isFinite(targetHeightPx) && targetHeightPx > 0) {
+            existing.targetHeightPx = Math.max(existing.targetHeightPx ?? 0, targetHeightPx);
+          }
+        }
       }
     }
     if (bulletPaths.size > 0 || chartFillMap.size > 0) {
-      const bulletPromises: Promise<unknown>[] = [...bulletPaths].map((key) => {
-        const [path, mime] = key.split(' ');
-        return getCachedBitmapByPath(path, mime, fetchImage, {
-          tiff: opts.tiff,
-          ...(rasterTargetOptions(canvasW, canvasH, effectiveDpr) ?? {}),
-        }).catch((error) => {
-          if (isOoxmlDecodedImageLimitError(error)) throw error;
-          return undefined;
-        });
+      const bulletPromises: Promise<void>[] = [...bulletPaths].map(async (
+        [path, { mimeType, targetHeightPx }],
+      ) => {
+        try {
+          const target = targetHeightPx === undefined
+            ? {}
+            : { targetWidthPx: 1, targetHeightPx };
+          const image = mimeType === 'image/svg+xml'
+            ? await getCachedSvgImageByPath(path, fetchImage, {
+                ...target,
+                workerDecoder: opts.svgDecoder,
+              })
+            : await getCachedBitmapByPath(path, mimeType, fetchImage, {
+                tiff: opts.tiff,
+                ...target,
+              });
+          pictureBulletImages.set(path, image);
+        } catch (error) {
+          if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
+          pictureBulletImages.set(path, null);
+        }
       });
       const chartPromises: Promise<unknown>[] = [...chartFillMap].map(async ([key, entry]) => {
-        const { fill, widthPt, heightPt, targetWidthPx, targetHeightPx } = entry;
-        const target = { targetWidthPx, targetHeightPx };
+        const {
+          fill, widthPt, heightPt, targetWidthPx, targetHeightPx, hasSourceCrop,
+        } = entry;
+        const target = targetWidthPx && targetHeightPx
+          ? { targetWidthPx, targetHeightPx }
+          : undefined;
         try {
-          const raster = metafileRasterSize(fill.mimeType, fill.srcRect, widthPt, heightPt);
-          if (!raster) {
-            chartMarkerImages.set(key, null);
-            return;
-          }
           const decodeFallback = () => fill.mimeType === 'image/svg+xml'
             ? fill.duotone ? Promise.resolve(null) : getCachedSvgImageByPath(fill.imagePath, fetchImage, {
-                ...target,
+                ...(target ?? {}),
                 workerDecoder: opts.svgDecoder,
               })
             : getCachedDuotoneBitmapByPath(
                 fill.imagePath, fill.mimeType, fill.duotone, fetchImage,
                 {
-                  widthPt: raster.widthPt,
-                  heightPt: raster.heightPt,
-                  ...target,
+                  widthPt,
+                  heightPt,
+                  ...(target ?? {}),
                   failClosedOnDuotoneFailure: true,
                   tiff: opts.tiff,
                 },
               );
           let bitmap: CanvasImageSource | null;
-          if (!fill.duotone && preferVectorBlip(fill)) {
+          const blip = {
+            svgImagePath: fill.svgImagePath,
+            srcRect: hasSourceCrop ? true : null,
+          };
+          if (!fill.duotone && preferVectorBlip(blip)) {
             try {
-              bitmap = await getCachedSvgImageByPath(fill.svgImagePath, fetchImage, {
-                ...target,
+              bitmap = await getCachedSvgImageByPath(blip.svgImagePath, fetchImage, {
+                ...(target ?? {}),
                 workerDecoder: opts.svgDecoder,
               });
             } catch {
@@ -6778,7 +6904,7 @@ async function renderSlideLeased(
           }
           chartMarkerImages.set(key, bitmap);
         } catch (error) {
-          if (isOoxmlDecodedImageLimitError(error)) throw error;
+          if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
           chartMarkerImages.set(key, null);
         }
       });

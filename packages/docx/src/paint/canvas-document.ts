@@ -4,17 +4,20 @@ import {
   defaultDpr,
   isHTMLCanvas,
   isOoxmlDecodedImageLimitError,
-  metafileRasterSize,
+  isTiffDecodeError,
   PT_TO_PX,
   chartImageFillKey,
-  collectChartMarkerImageFills,
-  collectChartMarkerImageFillsForCharts,
+  chartImageFillUsageSize,
+  collectChartImageFillUsages,
+  collectChartImageFillUsagesForCharts,
   getCachedSvgImageByPath,
   preferVectorBlip,
 } from '@silurus/ooxml-core';
 import type { Duotone } from '@silurus/ooxml-core';
 import type { ChartThreeDRenderer, ChartRegionMapRenderer, ChartExRenderer, TiffRenderer } from '@silurus/ooxml-core';
 import type {
+  ChartPaintResourceDescriptor,
+  DeepReadonly,
   DocumentLayout,
   LayoutPage,
   PaintResourceRegistry,
@@ -197,40 +200,125 @@ export async function renderSelectedDocumentPage<TTextRun>(
     const chartImages = new Map<string, CanvasImageSource | null>();
     if (options.fetchImage) {
       const fetchImage = options.fetchImage;
-      const uniqueFills = new Map<string, ReturnType<typeof collectChartMarkerImageFills>[number]>();
-      for (const fill of collectChartMarkerImageFillsForCharts(
-        options.registry.descriptors
-          .filter(descriptor => descriptor.kind === 'chart')
-          .map(descriptor => descriptor.model as import('@silurus/ooxml-core').ChartModel),
-      )) {
-        const key = chartImageFillKey(fill);
-        if (!uniqueFills.has(key)) uniqueFills.set(key, fill);
-      }
-      await Promise.all([...uniqueFills].map(async ([key, fill]) => {
-        const raster = metafileRasterSize(fill.mimeType, fill.srcRect, 72, 72);
-        if (!raster) {
-          chartImages.set(key, null);
-          return;
+      // A chart whose intrinsic frame or derived decode size is non-positive
+      // or non-finite cannot paint an image safely. Use one validated list for
+      // aggregate source gating and per-frame sizing so an invalid descriptor
+      // cannot suppress visible preloads or force a native-size decode.
+      const chartDescriptors: Array<{
+        descriptor: DeepReadonly<ChartPaintResourceDescriptor>;
+        frame: Parameters<typeof chartImageFillUsageSize>[1];
+        usages: Array<{
+          usage: ReturnType<typeof collectChartImageFillUsages>[number];
+          size: NonNullable<ReturnType<typeof chartImageFillUsageSize>>;
+        }>;
+      }> = [];
+      for (const descriptor of options.registry.descriptors) {
+        if (descriptor.kind !== 'chart'
+          || !Number.isFinite(descriptor.intrinsicSize.widthPt)
+          || descriptor.intrinsicSize.widthPt <= 0
+          || !Number.isFinite(descriptor.intrinsicSize.heightPt)
+          || descriptor.intrinsicSize.heightPt <= 0) continue;
+        const frame = {
+          widthPt: descriptor.intrinsicSize.widthPt,
+          heightPt: descriptor.intrinsicSize.heightPt,
+          targetWidthPx: descriptor.intrinsicSize.widthPt * scale * effectiveDpr,
+          targetHeightPx: descriptor.intrinsicSize.heightPt * scale * effectiveDpr,
+        };
+        const usages = [] as typeof chartDescriptors[number]['usages'];
+        let valid = true;
+        for (const usage of collectChartImageFillUsages(
+          descriptor.model as import('@silurus/ooxml-core').ChartModel,
+        )) {
+          const size = chartImageFillUsageSize(usage, frame);
+          if (!size) {
+            valid = false;
+            break;
+          }
+          usages.push({ usage, size });
         }
+        if (valid) chartDescriptors.push({ descriptor, frame, usages });
+      }
+      const chartEntries = new Map<string, {
+        fill: ReturnType<typeof collectChartImageFillUsages>[number]['fill'];
+        widthPt: number;
+        heightPt: number;
+        targetWidthPx?: number;
+        targetHeightPx?: number;
+        preserveNaturalSize: boolean;
+        hasSourceCrop: boolean;
+      }>();
+      for (const usage of collectChartImageFillUsagesForCharts(
+        chartDescriptors.map(
+          ({ descriptor }) => descriptor.model as import('@silurus/ooxml-core').ChartModel,
+        ),
+        (usage, chartIndex) => chartImageFillUsageSize(
+          usage,
+          chartDescriptors[chartIndex]!.frame,
+        ) != null,
+      )) {
+        const { fill } = usage;
+        const key = chartImageFillKey(fill);
+        if (!chartEntries.has(key)) chartEntries.set(key, {
+          fill,
+          widthPt: 0,
+          heightPt: 0,
+          preserveNaturalSize: usage.preserveNaturalSize,
+          hasSourceCrop: usage.hasSourceCrop,
+        });
+      }
+      for (const { usages } of chartDescriptors) {
+        for (const { usage, size } of usages) {
+          const { fill } = usage;
+          const key = chartImageFillKey(fill);
+          const prior = chartEntries.get(key);
+          if (!prior) continue;
+          const preserveNaturalSize = prior.preserveNaturalSize || usage.preserveNaturalSize;
+          // A picture fill may cover a marker, plot area, wall, or floor. The
+          // chart frame bounds every consumer; core usage factors retain every
+          // same-chart crop and stretch fillRect before source deduplication.
+          chartEntries.set(key, {
+            ...prior,
+            widthPt: Math.max(prior.widthPt, size.widthPt),
+            heightPt: Math.max(prior.heightPt, size.heightPt),
+            targetWidthPx: preserveNaturalSize
+              ? undefined
+              : Math.max(prior.targetWidthPx ?? 0, size.targetWidthPx ?? 0) || undefined,
+            targetHeightPx: preserveNaturalSize
+              ? undefined
+              : Math.max(prior.targetHeightPx ?? 0, size.targetHeightPx ?? 0) || undefined,
+            preserveNaturalSize,
+            hasSourceCrop: prior.hasSourceCrop || usage.hasSourceCrop,
+          });
+        }
+      }
+      await Promise.all([...chartEntries].map(async ([key, entry]) => {
+        const {
+          fill, widthPt, heightPt, targetWidthPx, targetHeightPx, hasSourceCrop,
+        } = entry;
+        const target = targetWidthPx && targetHeightPx
+          ? { targetWidthPx, targetHeightPx }
+          : undefined;
         try {
+          const decodeSvg = (path: string) => options.svgDecoder
+            ? getCachedSvgImageByPath(path, fetchImage, {
+                ...(target ?? {}),
+                workerDecoder: options.svgDecoder,
+              })
+            : getCachedSvgImageByPath(path, fetchImage);
           const decodeFallback = () => fill.mimeType === 'image/svg+xml'
-            ? fill.duotone ? Promise.resolve(null) : options.svgDecoder
-              ? getCachedSvgImageByPath(fill.imagePath, fetchImage, {
-                  workerDecoder: options.svgDecoder,
-                })
-              : getCachedSvgImageByPath(fill.imagePath, fetchImage)
+            ? fill.duotone ? Promise.resolve(null) : decodeSvg(fill.imagePath)
             : decodeRaster(
                 fill.imagePath, fill.mimeType, undefined, fetchImage as DocxFetchImage,
-                raster.widthPt, raster.heightPt, fill.duotone, true, options.tiff,
+                widthPt, heightPt, fill.duotone, true, options.tiff, target,
               );
           let image: CanvasImageSource | null;
-          if (!fill.duotone && preferVectorBlip(fill)) {
+          const blip = {
+            svgImagePath: fill.svgImagePath,
+            srcRect: hasSourceCrop ? true : null,
+          };
+          if (!fill.duotone && preferVectorBlip(blip)) {
             try {
-              image = await (options.svgDecoder
-                ? getCachedSvgImageByPath(fill.svgImagePath, fetchImage, {
-                    workerDecoder: options.svgDecoder,
-                  })
-                : getCachedSvgImageByPath(fill.svgImagePath, fetchImage));
+              image = await decodeSvg(blip.svgImagePath);
             } catch {
               image = await decodeFallback();
             }
@@ -239,7 +327,7 @@ export async function renderSelectedDocumentPage<TTextRun>(
           }
           chartImages.set(key, image);
         } catch (error) {
-          if (isOoxmlDecodedImageLimitError(error)) throw error;
+          if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
           chartImages.set(key, null);
         }
       }));

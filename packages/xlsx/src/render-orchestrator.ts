@@ -9,6 +9,7 @@ import {
   metafileRasterSize,
   sourceRasterTargetSize,
   isOoxmlDecodedImageLimitError,
+  isTiffDecodeError,
   EMU_PER_PT,
   EMU_PER_PX,
   type MathRenderer,
@@ -21,8 +22,11 @@ import {
   type OffscreenFactory,
   type SvgBlobDecoder,
   chartImageFillKey,
-  collectChartMarkerImageFills,
-  collectChartMarkerImageFillsForCharts,
+  chartImageFillUsageSize,
+  collectChartImageFillUsages,
+  collectChartImageFillUsagesForCharts,
+  type ChartImageFillUsage,
+  type ChartImageFillUsageSize,
 } from '@silurus/ooxml-core';
 import type { ParsedWorkbook, Worksheet, ViewportRange, RenderViewportOptions } from './types.js';
 import {
@@ -82,6 +86,66 @@ interface ImageRef {
   failClosedOnDuotoneFailure?: boolean;
   targetWidthPx?: number;
   targetHeightPx?: number;
+}
+
+function maxDefined(left: number | undefined, right: number | undefined): number | undefined {
+  if (left === undefined) return right;
+  if (right === undefined) return left;
+  return Math.max(left, right);
+}
+
+/** Merge crop constraints for one shared decoded source. The horizontal and
+ * vertical inset pairs can come from different placements: choosing the
+ * smallest visible fraction on each axis yields a full-source raster at least
+ * as large as every individual placement requires. A zero-inset object remains
+ * non-null when any placement is cropped, so vector preference stays disabled. */
+function conservativeSrcRect(
+  left: SrcRect | null | undefined,
+  right: SrcRect | null | undefined,
+): SrcRect | null {
+  if (!left && !right) return null;
+  const leftWidth = left ? 1 - left.l - left.r : 1;
+  const rightWidth = right ? 1 - right.l - right.r : 1;
+  const horizontal = rightWidth < leftWidth ? right : left;
+  const leftHeight = left ? 1 - left.t - left.b : 1;
+  const rightHeight = right ? 1 - right.t - right.b : 1;
+  const vertical = rightHeight < leftHeight ? right : left;
+  return {
+    l: horizontal?.l ?? 0,
+    r: horizontal?.r ?? 0,
+    t: vertical?.t ?? 0,
+    b: vertical?.b ?? 0,
+  };
+}
+
+function mergedSvgImagePath(
+  left: string | undefined,
+  right: string | undefined,
+): string | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  // Conflicting vector twins cannot safely share either path; use the common
+  // raster source instead.
+  return left === right ? left : undefined;
+}
+
+function mergeImageRef(left: ImageRef, right: ImageRef): ImageRef {
+  return {
+    ...left,
+    svgImagePath: mergedSvgImagePath(left.svgImagePath, right.svgImagePath),
+    widthPt: maxDefined(left.widthPt, right.widthPt),
+    heightPt: maxDefined(left.heightPt, right.heightPt),
+    srcRect: conservativeSrcRect(left.srcRect, right.srcRect),
+    failClosedOnDuotoneFailure:
+      left.failClosedOnDuotoneFailure || right.failClosedOnDuotoneFailure || undefined,
+    targetWidthPx: maxDefined(left.targetWidthPx, right.targetWidthPx),
+    targetHeightPx: maxDefined(left.targetHeightPx, right.targetHeightPx),
+  };
+}
+
+function setImageRef(refs: Map<string, ImageRef>, key: string, ref: ImageRef): void {
+  const prior = refs.get(key);
+  refs.set(key, prior ? mergeImageRef(prior, ref) : ref);
 }
 
 interface CellAnchorRange {
@@ -299,8 +363,9 @@ export async function decodeImageSource(
  *  `null` for an unsupported metafile (true EMF / geometry-less WMF) lets the
  *  renderer skip a falsy source without a re-fetch.
  *
- *  A no-op when `fetchImage` is absent (no byte source). Per-image failures are
- *  swallowed so one broken picture doesn't sink the grid. */
+ *  A no-op when `fetchImage` is absent (no byte source). Ordinary per-image
+ *  failures are swallowed so one broken picture doesn't sink the grid; decoded
+ *  image quota and recognized-TIFF codec diagnostics remain actionable. */
 export async function prefetchImages(
   ws: Worksheet,
   imageCache: Map<string, CanvasImageSource | null>,
@@ -349,7 +414,7 @@ export async function prefetchImages(
       )) continue;
       // Key by (path + duotone colours) so a recoloured picture is looked up
       // separately from the raw blip (§20.1.8.23).
-      refs.set(imageCacheKey(img.imagePath, img.duotone), {
+      setImageRef(refs, imageCacheKey(img.imagePath, img.duotone), {
         imagePath: img.imagePath,
         mimeType: img.mimeType,
         svgImagePath: img.svgImagePath,
@@ -385,7 +450,7 @@ export async function prefetchImages(
       )) continue;
       for (const shape of grp.shapes) {
         if (shape.geom.type === 'image') {
-          refs.set(imageCacheKey(shape.geom.imagePath, shape.geom.duotone), {
+          setImageRef(refs, imageCacheKey(shape.geom.imagePath, shape.geom.duotone), {
             imagePath: shape.geom.imagePath,
             mimeType: shape.geom.mimeType,
             svgImagePath: shape.geom.svgImagePath,
@@ -412,63 +477,133 @@ export async function prefetchImages(
       }
     }
   }
-  const visibleCharts = (ws.charts ?? [])
-    .filter(chart => anchorMayIntersectViewport(chart, ws, opts?.viewport, geometry, frame));
-  const allowedChartFills = collectChartMarkerImageFillsForCharts(
-    visibleCharts.map(chart => chart.chart),
-  );
-  const allowedChartFillKeys = new Set(allowedChartFills.map(chartImageFillKey));
-  const chartTargets = new Map<string, {
-    widthPx: number;
-    heightPx: number;
-    sourceWidthPx: number;
-    sourceHeightPx: number;
-  }>();
-  if (opts?.effectiveDpr) {
-    for (const chart of visibleCharts) {
-      const display = anchorDisplaySize(chart, ws, geometry, opts.cellScale ?? 1);
-      if (!display) continue;
-      for (const fill of collectChartMarkerImageFills(chart.chart)) {
-        const key = chartImageFillKey(fill);
-        if (!allowedChartFillKeys.has(key)) continue;
-        // A chart picture can paint a marker, plot area, wall, or floor. The
-        // chart anchor is the smallest format-derived upper bound common to all
-        // of those consumers; it avoids an empirical marker-size constant while
-        // keeping decoder admission proportional to the actual viewport paint.
-        const source = sourceRasterTargetSize(
-          display.width * opts.effectiveDpr,
-          display.height * opts.effectiveDpr,
-          fill.srcRect,
-        );
-        if (!source) continue;
-        const prior = chartTargets.get(key);
-        chartTargets.set(key, {
-          widthPx: Math.max(prior?.widthPx ?? 0, display.width),
-          heightPx: Math.max(prior?.heightPx ?? 0, display.height),
-          sourceWidthPx: Math.max(prior?.sourceWidthPx ?? 0, source.width),
-          sourceHeightPx: Math.max(prior?.sourceHeightPx ?? 0, source.height),
-        });
+  const charts = ws.charts ?? [];
+  const chartGeometry = charts.length > 0
+    ? geometry ?? getGridGeometryForWorksheet(ws)
+    : geometry;
+  const chartDescriptors: Array<{
+    chart: Worksheet['charts'][number];
+    frame: Parameters<typeof chartImageFillUsageSize>[1];
+    usages: Array<{
+      usage: ChartImageFillUsage;
+      size: ChartImageFillUsageSize;
+    }>;
+  }> = [];
+  for (const chart of charts) {
+    if (!anchorMayIntersectViewport(
+      chart,
+      ws,
+      opts?.viewport,
+      chartGeometry,
+      frame,
+    )) continue;
+    const display = anchorDisplaySize(chart, ws, chartGeometry, opts?.cellScale ?? 1);
+    if (!display
+      || !Number.isFinite(display.width)
+      || !Number.isFinite(display.height)
+      || display.width <= 0
+      || display.height <= 0) continue;
+    const usages = collectChartImageFillUsages(chart.chart);
+    const frameWidthPt = display.width * (EMU_PER_PX / EMU_PER_PT);
+    const frameHeightPt = display.height * (EMU_PER_PX / EMU_PER_PT);
+    const targetWidthPx = opts?.effectiveDpr !== undefined
+      ? display.width * opts.effectiveDpr
+      : undefined;
+    const targetHeightPx = opts?.effectiveDpr !== undefined
+      ? display.height * opts.effectiveDpr
+      : undefined;
+    const chartFrame = {
+      widthPt: frameWidthPt,
+      heightPt: frameHeightPt,
+      targetWidthPx,
+      targetHeightPx,
+    };
+    const sizedUsages: Array<{
+      usage: ChartImageFillUsage;
+      size: ChartImageFillUsageSize;
+    }> = [];
+    let sizesAreValid = true;
+    for (const usage of usages) {
+      const size = chartImageFillUsageSize(usage, chartFrame);
+      if (!size) {
+        sizesAreValid = false;
+        break;
       }
+      sizedUsages.push({ usage, size });
+    }
+    if (!sizesAreValid) continue;
+    chartDescriptors.push({ chart, frame: chartFrame, usages: sizedUsages });
+  }
+  const allowedChartUsages = collectChartImageFillUsagesForCharts(
+    chartDescriptors.map(({ chart }) => chart.chart),
+    (usage, chartIndex) => chartImageFillUsageSize(
+      usage,
+      chartDescriptors[chartIndex]!.frame,
+    ) != null,
+  );
+  const chartEntries = new Map<string, {
+    fill: ReturnType<typeof collectChartImageFillUsages>[number]['fill'];
+    widthPt: number;
+    heightPt: number;
+    targetWidthPx?: number;
+    targetHeightPx?: number;
+    preserveNaturalSize: boolean;
+    hasSourceCrop: boolean;
+  }>();
+  for (const usage of allowedChartUsages) {
+    const { fill } = usage;
+    const key = chartImageFillKey(fill);
+    chartEntries.set(key, {
+      fill,
+      widthPt: 0,
+      heightPt: 0,
+      preserveNaturalSize: usage.preserveNaturalSize,
+      hasSourceCrop: usage.hasSourceCrop,
+    });
+  }
+  for (const descriptor of chartDescriptors) {
+    for (const { usage, size } of descriptor.usages) {
+      const { fill } = usage;
+      const key = chartImageFillKey(fill);
+      const prior = chartEntries.get(key);
+      if (!prior) continue;
+      const preserveNaturalSize = prior.preserveNaturalSize || usage.preserveNaturalSize;
+      // A chart picture can paint a marker, plot area, wall, or floor. The
+      // chart anchor is the smallest format-derived upper bound common to all
+      // consumers. Core usage factors retain every same-chart crop and
+      // stretch fillRect before identical sources are deduplicated.
+      chartEntries.set(key, {
+        ...prior,
+        widthPt: Math.max(prior.widthPt, size.widthPt),
+        heightPt: Math.max(prior.heightPt, size.heightPt),
+        targetWidthPx: preserveNaturalSize
+          ? undefined
+          : Math.max(prior.targetWidthPx ?? 0, size.targetWidthPx ?? 0) || undefined,
+        targetHeightPx: preserveNaturalSize
+          ? undefined
+          : Math.max(prior.targetHeightPx ?? 0, size.targetHeightPx ?? 0) || undefined,
+        preserveNaturalSize,
+        hasSourceCrop: prior.hasSourceCrop || usage.hasSourceCrop,
+      });
     }
   }
-  for (const fill of allowedChartFills) {
-      const target = chartTargets.get(chartImageFillKey(fill));
-      refs.set(chartImageFillKey(fill), {
-        imagePath: fill.imagePath,
-        mimeType: fill.mimeType,
-        svgImagePath: fill.svgImagePath,
-        // CSS px use the OOXML 96 dpi convention (12700 EMU/pt, 9525 EMU/px).
-        // The chart frame is a conservative bound because this source may paint
-        // an entire wall/floor rather than only a data-point marker.
-        widthPt: target ? target.widthPx * EMU_PER_PX / EMU_PER_PT : 0,
-        heightPt: target ? target.heightPx * EMU_PER_PX / EMU_PER_PT : 0,
-        srcRect: fill.srcRect ?? null,
-        duotone: fill.duotone ?? null,
-        failClosedOnDuotoneFailure: true,
-        ...(target
-          ? { targetWidthPx: target.sourceWidthPx, targetHeightPx: target.sourceHeightPx }
-          : {}),
-      });
+  for (const [key, entry] of chartEntries) {
+    const { fill, widthPt, heightPt, targetWidthPx, targetHeightPx, hasSourceCrop } = entry;
+    setImageRef(refs, key, {
+      imagePath: fill.imagePath,
+      mimeType: fill.mimeType,
+      svgImagePath: fill.svgImagePath,
+      widthPt,
+      heightPt,
+      // A zero-inset sentinel forces the raster SVG twin without applying crop
+      // twice: widthPt/heightPt already contain the post-crop metafile maxima.
+      srcRect: hasSourceCrop ? { l: 0, t: 0, r: 0, b: 0 } : null,
+      duotone: fill.duotone ?? null,
+      failClosedOnDuotoneFailure: true,
+      ...(targetWidthPx && targetHeightPx
+        ? { targetWidthPx, targetHeightPx }
+        : {}),
+    });
   }
   if (refs.size === 0) return;
   await Promise.all(
@@ -499,7 +634,7 @@ export async function prefetchImages(
         // metafile, so the renderer skips a falsy source without a re-fetch).
         imageCache.set(key, src);
       } catch (error) {
-        if (isOoxmlDecodedImageLimitError(error)) throw error;
+        if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
         // Transient failure: DELETE any prior lookup entry rather than leaving
         // it. A prior entry is re-resolved precisely because its shared-cache
         // backing may be gone (LRU-evicted and GPU-closed); when the re-resolve

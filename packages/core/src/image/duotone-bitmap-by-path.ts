@@ -4,6 +4,7 @@
 // accounting system.
 
 import {
+  captureDecodedBitmapCacheEpoch,
   dropCachedDerivedBitmapNamespace,
   getCachedBitmapByPath,
   getCachedDerivedBitmap,
@@ -13,6 +14,7 @@ import {
 import { applyDuotone, type Duotone, type OffscreenFactory } from './duotone';
 import { imageNaturalSize } from './crop';
 import { MAX_RASTER_PIXELS } from './pixel-budget.js';
+import { decodedBitmapTargetResizeOptions } from './raster-target.js';
 
 type FetchImage = (path: string, mime: string) => Promise<Blob>;
 
@@ -76,8 +78,17 @@ export async function getCachedDuotoneBitmapByPath(
         ),
       }
     : requestedBitmapOpts;
+  // DrawingML effects consume the authored source pixels. Keep display targets
+  // off the base decode and resample only while baking the transformed output;
+  // an over-budget native effect grid is rejected rather than approximated.
+  const sourceBitmapOpts = duotone
+    ? { ...bitmapOpts, targetWidthPx: undefined, targetHeightPx: undefined }
+    : bitmapOpts;
+  const epoch = duotone
+    ? captureDecodedBitmapCacheEpoch(fetchImage, DUOTONE_CACHE_NAMESPACE)
+    : undefined;
   // Base, colour-free bitmap from the shared path-keyed cache.
-  const base = await getCachedBitmapByPath(imagePath, mimeType, fetchImage, bitmapOpts);
+  const base = await getCachedBitmapByPath(imagePath, mimeType, fetchImage, sourceBitmapOpts);
   // No duotone → return the base directly (no second-layer entry). A `null`
   // (unsupported metafile) propagates unchanged.
   if (!duotone || !base) return base;
@@ -87,12 +98,20 @@ export async function getCachedDuotoneBitmapByPath(
     imagePath,
     mimeType,
     fetchImage,
-    bitmapOpts,
+    sourceBitmapOpts,
+    epoch,
+    base,
+  );
+  const resizeOptions = decodedBitmapTargetResizeOptions(
+    Number(base.width),
+    Number(base.height),
+    requestedBitmapOpts.targetWidthPx,
+    requestedBitmapOpts.targetHeightPx,
   );
   const key = `${duotoneCacheKey(
     resolvedBaseKey,
     duotone,
-  )}${failClosedOnDuotoneFailure ? '|strict' : ''}`;
+  )}${resizeOptions ? `|resize-width:${resizeOptions.resizeWidth}` : ''}${failClosedOnDuotoneFailure ? '|strict' : ''}`;
   return getCachedDerivedBitmap(
     DUOTONE_CACHE_NAMESPACE,
     key,
@@ -102,14 +121,31 @@ export async function getCachedDuotoneBitmapByPath(
       if (w <= 0 || h <= 0) {
         return { bitmap: failClosedOnDuotoneFailure ? null : base, owned: false };
       }
-      const recoloured = await applyDuotone(base, duotone, { width: w, height: h, offscreenFactory });
+      const recoloured = await applyDuotone(base, duotone, {
+        width: w,
+        height: h,
+        offscreenFactory,
+        targetWidthPx: requestedBitmapOpts.targetWidthPx,
+        targetHeightPx: requestedBitmapOpts.targetHeightPx,
+      });
       // `applyDuotone` returns a CanvasImageSource; when the pixel pipeline ran
-      // it is a fresh ImageBitmap, otherwise it is the (unchanged) base bitmap.
-      const bitmap = failClosedOnDuotoneFailure && recoloured === base
-        ? null
-        : recoloured as ImageBitmap;
+      // it is a fresh ImageBitmap, otherwise it is the unchanged current
+      // source. Strict callers fail closed. Compatibility callers still bake a
+      // display-sized copy so an unavailable effect surface cannot silently
+      // defeat the caller's bounded-resolution request.
+      if (recoloured === base) {
+        if (failClosedOnDuotoneFailure) return { bitmap: null, owned: false };
+        if (!resizeOptions) return { bitmap: base, owned: false };
+        if (typeof createImageBitmap === 'undefined') {
+          throw new Error('createImageBitmap is unavailable for duotone fallback resampling');
+        }
+        const resized = await createImageBitmap(base, resizeOptions);
+        return { bitmap: resized, owned: resized !== base };
+      }
+      const bitmap = recoloured as ImageBitmap;
       return { bitmap, owned: bitmap !== base };
     },
+    epoch,
   );
 }
 

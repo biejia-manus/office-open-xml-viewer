@@ -323,7 +323,7 @@ export class XlsxWorkbook {
     }
     if (opts.tiff && this._mode === 'worker' && !rendererDescriptors?.tiff) {
       console.warn(
-        "[ooxml] a custom TIFF codec cannot cross the worker boundary; TIFF images will be skipped in mode: 'worker'. Use the codec from @silurus/ooxml/tiff.",
+        "[ooxml] a custom TIFF codec cannot cross the worker boundary; recognized TIFF images will report a render error in mode: 'worker'. Use the codec from @silurus/ooxml/tiff.",
       );
     }
     // In worker mode the worker preloads fonts before its first render

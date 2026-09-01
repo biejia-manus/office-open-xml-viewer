@@ -221,6 +221,7 @@ export type { SvgBlobDecoder, SvgDecodeTarget } from './worker/svg-decode-bridge
 // LRU evictions / drops defer their GPU close to the last release, so a pass
 // resolving more images than the cap never draws a closed bitmap.
 export {
+  captureDecodedBitmapCacheEpoch,
   dropCachedDerivedBitmapNamespace,
   getCachedBitmapByPath,
   getCachedDecodedBitmap,
@@ -232,13 +233,19 @@ export {
   dropBitmapCacheByPath,
   acquireBitmapCacheLease,
   deferBitmapCloseWhileLeased,
+  type DecodedBitmapCacheEpoch,
   type DecodedBitmapCacheOwner,
   type CachedBitmapOptions,
 } from './image/bitmap-image-by-path';
 export {
   chartImageFillKey,
+  chartImageFillUsageSize,
+  collectChartImageFillUsages,
+  collectChartImageFillUsagesForCharts,
   collectChartMarkerImageFills,
   collectChartMarkerImageFillsForCharts,
+  type ChartImageFillUsage,
+  type ChartImageFillUsageSize,
   type ChartImageLookup,
 } from './chart/image-fill';
 // Shared WMF (Windows Metafile) player.
@@ -257,7 +264,12 @@ export {
   decodeRasterOrMetafile,
   type DecodeRasterOptions,
 } from './image/raster-or-metafile';
-export type { TiffRenderer } from './image/tiff-contract';
+export {
+  TiffDecodeError,
+  isTiffDecodeError,
+  type TiffRenderer,
+  type TiffRenderOptions,
+} from './image/tiff-contract';
 // Raster pixel-dimension budget + header sniff (decode-bomb guard, RB1). Shared
 // caps live in `./image/pixel-budget`; `decodeRasterOrMetafile` uses the sniff to
 // refuse an over-budget PNG/JPEG/GIF/BMP/WEBP before `createImageBitmap`.
@@ -314,6 +326,7 @@ export {
   duotoneCacheKey,
   dropDuotoneBitmapCache,
 } from './image/duotone-bitmap-by-path';
+export { decodedBitmapTargetResizeOptions } from './image/raster-target';
 // Shared vector-vs-raster blip gate: prefer the Microsoft asvg:svgBlip vector
 // original except when an <a:srcRect> crop is present (then the raster's native
 // pixel grid is required for the fractional crop math). Used by all three

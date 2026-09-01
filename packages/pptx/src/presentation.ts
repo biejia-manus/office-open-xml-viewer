@@ -390,7 +390,7 @@ export class PptxPresentation {
       pres._chartEx = mode === 'worker' ? undefined : opts.chartEx;
       if (opts.tiff && mode === 'worker' && !rendererDescriptors?.tiff) {
         console.warn(
-          "[ooxml] a custom TIFF codec cannot cross the worker boundary; TIFF images will be skipped in mode: 'worker'. Use the codec from @silurus/ooxml/tiff.",
+          "[ooxml] a custom TIFF codec cannot cross the worker boundary; recognized TIFF images will report a render error in mode: 'worker'. Use the codec from @silurus/ooxml/tiff.",
         );
       }
       pres._tiff = mode === 'worker' ? undefined : opts.tiff;

@@ -7,7 +7,9 @@ import {
   dropSvgImageCache,
   getCachedBitmapByPath,
   chartImageFillKey,
+  TiffDecodeError,
   type OffscreenFactory,
+  type TiffRenderOptions,
 } from '@silurus/ooxml-core';
 
 /**
@@ -199,6 +201,52 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     expect(options?.resizeWidth).toBeLessThan(12_090);
   });
 
+  it('merges duplicate same-path placements to the larger required raster target in either order', async () => {
+    const tiffBytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]);
+    const placement = (toCol: number, toRow: number): ImageAnchor => ({
+      fromCol: 0, fromColOff: 0, fromRow: 0, fromRowOff: 0,
+      toCol, toColOff: 0, toRow, toRowOff: 0,
+      nativeExtCx: 0, nativeExtCy: 0,
+      imagePath: 'xl/media/shared-target.tiff',
+      mimeType: 'image/tiff',
+    } as ImageAnchor);
+    const small = placement(1, 1);
+    const large = placement(4, 6);
+
+    const run = async (images: ImageAnchor[]) => {
+      const render = vi.fn(async (
+        _bytes: Uint8Array,
+        options?: Readonly<TiffRenderOptions>,
+      ) => new FakeBitmap('shared-target') as unknown as ImageBitmap);
+      const fetchImage = vi.fn(async () =>
+        new Blob([tiffBytes as BlobPart], { type: 'image/tiff' }));
+      const cache = new Map<string, CanvasImageSource | null>();
+      const ws = worksheetWithImages();
+      ws.images = images;
+      ws.shapeGroups = [];
+
+      await prefetchImages(ws, cache, fetchImage, {
+        effectiveDpr: 2,
+        tiff: { render },
+      });
+
+      expect(fetchImage).toHaveBeenCalledOnce();
+      expect(render).toHaveBeenCalledOnce();
+      expect(cache.size).toBe(1);
+      expect(cache.has('xl/media/shared-target.tiff')).toBe(true);
+      const target = render.mock.calls[0]?.[1];
+      dropBitmapCacheByPath(fetchImage);
+      return target;
+    };
+
+    const smallOnly = await run([small]);
+    const largeOnly = await run([large]);
+    expect(largeOnly?.targetWidthPx).toBeGreaterThan(smallOnly?.targetWidthPx ?? 0);
+    expect(largeOnly?.targetHeightPx).toBeGreaterThan(smallOnly?.targetHeightPx ?? 0);
+    await expect(run([large, small])).resolves.toEqual(largeOnly);
+    await expect(run([small, large])).resolves.toEqual(largeOnly);
+  });
+
   it('prefetchImages sizes oversized chart picture fills from the chart anchor', async () => {
     const png = new Uint8Array(24);
     png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -248,6 +296,203 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
       fillType: 'image', stretch: true, imagePath: 'xl/media/chart-marker.png', mimeType: 'image/png',
     }))).toBe(true);
   });
+
+  it.each([
+    ['zero-width', 0, 0, 8, 0],
+    ['zero-height', 4, 0, 0, 0],
+    ['negative-width', 0, -1, 8, 0],
+    ['negative-height', 4, 0, 0, -1],
+    ['non-finite-width', 0, Number.POSITIVE_INFINITY, 8, 0],
+    ['non-finite-height', 4, 0, 0, Number.NaN],
+  ] as const)(
+    'excludes %s chart anchors before aggregate source gating without a viewport',
+    async (_case, toCol, toColOff, toRow, toRowOff) => {
+      vi.stubGlobal('createImageBitmap', vi.fn(async (blob: Blob) => new FakeBitmap(blob.type)));
+      const visibleFill = {
+        fillType: 'image' as const,
+        stretch: true,
+        imagePath: 'xl/media/visible-chart-fill.png',
+        mimeType: 'image/png',
+      };
+      const visibleChart = {
+        chartType: 'line', categories: ['A'],
+        series: [{ name: 'Visible', values: [1], markerFillPaint: visibleFill }],
+      };
+      const sourceCount = 256;
+      const hiddenChart = {
+        chartType: 'line',
+        categories: Array.from({ length: sourceCount }, (_, index) => String(index)),
+        series: [{
+          name: 'Invalid anchor',
+          values: Array.from({ length: sourceCount }, () => 1),
+          showMarker: false,
+          dataPointOverrides: Array.from({ length: sourceCount }, (_, idx) => ({
+            idx,
+            markerSymbol: 'picture' as const,
+            markerFillPaint: {
+              fillType: 'image' as const,
+              tile: { algn: 'tl', tx: 0, ty: 0, sx: 1, sy: 1, flip: 'none' },
+              dpi: 96,
+              imagePath: `xl/media/invalid-chart-${idx}.png`,
+              mimeType: 'image/png',
+            },
+          })),
+        }],
+      };
+      const ws = worksheetWithImages();
+      ws.images = [];
+      ws.shapeGroups = [];
+      ws.charts = [
+        {
+          fromCol: 0, fromColOff: 0, fromRow: 0, fromRowOff: 0,
+          toCol: 4, toColOff: 0, toRow: 8, toRowOff: 0,
+          chart: visibleChart,
+        },
+        {
+          fromCol: 0, fromColOff: 0, fromRow: 0, fromRowOff: 0,
+          toCol, toColOff, toRow, toRowOff,
+          chart: hiddenChart,
+        },
+      ] as Worksheet['charts'];
+      const fetchImage = vi.fn(async (path: string, mime: string) =>
+        new Blob([new TextEncoder().encode(path)], { type: mime }));
+      const cache = new Map<string, CanvasImageSource | null>();
+
+      await prefetchImages(ws, cache, fetchImage, { effectiveDpr: 1 });
+
+      expect(fetchImage).toHaveBeenCalledOnce();
+      expect(fetchImage).toHaveBeenCalledWith('xl/media/visible-chart-fill.png', 'image/png');
+      expect(cache.size).toBe(1);
+      expect(cache.has(chartImageFillKey(visibleFill))).toBe(true);
+    },
+  );
+
+  it('excludes a chart whose finite frame overflows one usage before no-viewport aggregate gating', async () => {
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    png.set([0x49, 0x48, 0x44, 0x52], 12);
+    new DataView(png.buffer).setUint32(16, 12_090);
+    new DataView(png.buffer).setUint32(20, 9_063);
+    const decode = vi.fn(async (_source: unknown, _options?: ImageBitmapOptions) =>
+      new FakeBitmap('visible-chart'));
+    vi.stubGlobal('createImageBitmap', decode);
+    const visibleFill = {
+      fillType: 'image' as const,
+      stretch: true,
+      imagePath: 'xl/media/visible-overflow-gate.png',
+      mimeType: 'image/png',
+    };
+    const sourceCount = 257;
+    const overflowChart = {
+      chartType: 'line',
+      categories: Array.from({ length: sourceCount }, (_, index) => String(index)),
+      series: [{
+        name: 'Overflow',
+        values: Array.from({ length: sourceCount }, () => 1),
+        showMarker: false,
+        dataPointOverrides: Array.from({ length: sourceCount }, (_, idx) => ({
+          idx,
+          markerSymbol: 'picture' as const,
+          markerFillPaint: {
+            fillType: 'image' as const,
+            stretch: true,
+            ...(idx === sourceCount - 1
+              ? { fillRect: { l: -Number.MAX_VALUE / 2, t: 0, r: 0, b: 0 } }
+              : {}),
+            imagePath: `xl/media/overflow-chart-${idx}.png`,
+            mimeType: 'image/png',
+          },
+        })),
+      }],
+    };
+    const ws = worksheetWithImages();
+    ws.images = [];
+    ws.shapeGroups = [];
+    ws.charts = [
+      {
+        fromCol: 0, fromColOff: 0, fromRow: 0, fromRowOff: 0,
+        toCol: 4, toColOff: 0, toRow: 8, toRowOff: 0,
+        chart: {
+          chartType: 'line', categories: ['A'],
+          series: [{ name: 'Visible', values: [1], markerFillPaint: visibleFill }],
+        },
+      },
+      {
+        fromCol: 0, fromColOff: 0, fromRow: 0, fromRowOff: 0,
+        toCol: 4, toColOff: 0, toRow: 8, toRowOff: 0,
+        chart: overflowChart,
+      },
+    ] as Worksheet['charts'];
+    const fetchImage = vi.fn(async (_path: string, mime: string) =>
+      new Blob([png as BlobPart], { type: mime }));
+    const cache = new Map<string, CanvasImageSource | null>();
+
+    await prefetchImages(ws, cache, fetchImage, { effectiveDpr: 1 });
+
+    expect(fetchImage).toHaveBeenCalledOnce();
+    expect(fetchImage).toHaveBeenCalledWith('xl/media/visible-overflow-gate.png', 'image/png');
+    expect(decode).toHaveBeenCalledOnce();
+    expect(decode.mock.calls[0]?.[1]).toMatchObject({
+      resizeWidth: 2_048,
+      resizeQuality: 'high',
+    });
+    expect(cache.size).toBe(1);
+    expect(cache.has(chartImageFillKey(visibleFill))).toBe(true);
+  });
+
+  it.each([false, true])(
+    'keeps a same-chart shared source native-sized when one fill is tiled (reversed=%s)',
+    async reversed => {
+    const tiffBytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]);
+    const render = vi.fn(async (
+      _bytes: Uint8Array,
+      _options?: Readonly<TiffRenderOptions>,
+    ) => new FakeBitmap('chart-tile') as unknown as ImageBitmap);
+    const fetchImage = vi.fn(async () =>
+      new Blob([tiffBytes as BlobPart], { type: 'image/tiff' }));
+    const shared = {
+      fillType: 'image' as const,
+      imagePath: 'xl/media/shared-chart-fill.tiff',
+      mimeType: 'image/tiff',
+    };
+    const stretchFill = { ...shared, stretch: true };
+    const tileFill = {
+      ...shared,
+      tile: { algn: 'tl', tx: 0, ty: 0, sx: 1, sy: 1, flip: 'none' },
+      dpi: 96,
+    };
+    const [chartFill, plotAreaFill] = reversed
+      ? [tileFill, stretchFill]
+      : [stretchFill, tileFill];
+    const chart = {
+      fromCol: 0, fromColOff: 0, fromRow: 0, fromRowOff: 0,
+      toCol: 4, toColOff: 0, toRow: 8, toRowOff: 0,
+      chart: {
+        chartType: 'line', categories: ['A'],
+        series: [{ name: 'Series', values: [1] }],
+        chartFill,
+        plotAreaFill,
+      },
+    } as Worksheet['charts'][number];
+    const ws = worksheetWithImages();
+    ws.images = [];
+    ws.shapeGroups = [];
+    ws.charts = [chart];
+    const cache = new Map<string, CanvasImageSource | null>();
+
+    await prefetchImages(ws, cache, fetchImage, {
+      effectiveDpr: 2,
+      tiff: { render },
+    });
+
+    expect(fetchImage).toHaveBeenCalledTimes(1);
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(render.mock.calls[0]?.[1]?.targetWidthPx).toBeUndefined();
+    expect(render.mock.calls[0]?.[1]?.targetHeightPx).toBeUndefined();
+    expect(cache.has(chartImageFillKey(stretchFill))).toBe(true);
+    dropBitmapCacheByPath(fetchImage);
+    },
+  );
 
   it('prefetchImages skips anchors wholly outside the current viewport', async () => {
     vi.stubGlobal('createImageBitmap', vi.fn(async (blob: Blob) => new FakeBitmap(blob.type)));
@@ -469,6 +714,31 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
 
     expect(render).toHaveBeenCalledTimes(1);
     expect(browserDecode).not.toHaveBeenCalled();
+  });
+
+  it('rethrows TIFF codec diagnostics instead of swallowing a broken picture', async () => {
+    const bytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]);
+    const failure = new TiffDecodeError('synthetic TIFF decode failure');
+    const render = vi.fn(async () => {
+      throw failure;
+    });
+    const fetchImage = vi.fn(async () =>
+      new Blob([bytes as BlobPart], { type: 'image/tiff' }));
+    const ws = worksheetWithImages();
+    ws.images = [{
+      fromCol: 0, fromColOff: 0, fromRow: 0, fromRowOff: 0,
+      toCol: 2, toColOff: 0, toRow: 2, toRowOff: 0,
+      nativeExtCx: 0, nativeExtCy: 0,
+      imagePath: 'xl/media/broken.tiff',
+      mimeType: 'image/tiff',
+    } as ImageAnchor];
+    ws.shapeGroups = [];
+    const cache = new Map<string, CanvasImageSource | null>();
+
+    await expect(prefetchImages(ws, cache, fetchImage, {
+      tiff: { render },
+    })).rejects.toBe(failure);
+    expect(cache.size).toBe(0);
   });
 
   it('decodeImageSource forces the raster (not the SVG vector) when the picture is cropped', async () => {
