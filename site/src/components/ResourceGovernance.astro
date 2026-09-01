@@ -28,11 +28,10 @@
       native decode while a complete paint fits the hard surface ceilings and the default
       <strong>128 MiB decoded budget</strong>. When native ownership would cross a boundary, they decode
       at the current canvas/DPR requirement; if those display targets still exceed the budget,
-      the default strict strategy rejects with a typed quota error. Applications may explicitly
-      opt into adaptive mode, which lowers every target by one quality ratio. Image-bearing paints for one
+      adaptive mode lowers them by one quality ratio instead of rejecting the document. Image-bearing paints for one
       document are serialized so overlapping paints cannot each consume the full budget, while the admitted paint still decodes up to
       two images concurrently. Applications can configure <code>imageResources.decodedByteBudget</code>
-      up to 512 MiB or select <code>strategy: 'adaptive'</code>. The encoded source grid, per-axis and
+      up to 512 MiB or select <code>strategy: 'strict'</code>. The encoded source grid, per-axis and
       per-surface ceilings remain non-disableable, and non-resizable sources remain subject to
       those hard ceilings, so a tiny display request cannot bypass decode-bomb
       protection. These are deterministic admission guards—not exact
@@ -51,7 +50,7 @@
   {'}'},
   imageResources: {'{'}
     decodedByteBudget: <span class="num">128</span> * <span class="num">1024</span> * <span class="num">1024</span>,
-    strategy: <span class="str">'strict'</span>,
+    strategy: <span class="str">'adaptive'</span>,
   {'}'},
   onResourceMetrics(metrics) {'{'}
     analytics.record(<span class="str">'ooxml-resource-usage'</span>, metrics);

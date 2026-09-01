@@ -510,7 +510,7 @@ describe('docx lazy image bytes', () => {
     );
   });
 
-  it('rejects a default display-target working set above 128 MiB before decode', async () => {
+  it('adapts a default working set above 128 MiB while strict mode rejects it', async () => {
     const png = new Uint8Array(24);
     png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     png.set([0x49, 0x48, 0x44, 0x52], 12);
@@ -534,13 +534,25 @@ describe('docx lazy image bytes', () => {
       footers: {},
     } as unknown as DocxDocumentModel;
 
-    await expect(preloadImages(doc, fetchImage, undefined, 1)).rejects.toMatchObject({
+    await expect(preloadImages(doc, fetchImage, undefined, 1, {
+      strategy: 'strict',
+    })).rejects.toMatchObject({
       code: 'ooxml-decoded-image-limit',
       metric: 'active-decoded-bytes',
       limit: 128 * 1024 * 1024,
       observed: 4096 * 4096 * 4 * 3,
     });
     expect(globalThis.createImageBitmap).not.toHaveBeenCalled();
+
+    await expect(preloadImages(doc, fetchImage, undefined, 1)).resolves.toHaveLength(3);
+    const resizeWidths = (globalThis.createImageBitmap as ReturnType<typeof vi.fn>).mock.calls
+      .map(([, options]) => (options as ImageBitmapOptions | undefined)?.resizeWidth);
+    expect(resizeWidths).toHaveLength(3);
+    expect(resizeWidths.every((width) => typeof width === 'number' && width < 4096)).toBe(true);
+    expect(resizeWidths.reduce(
+      (bytes, width) => bytes + (width as number) ** 2 * 4,
+      0,
+    )).toBeLessThanOrEqual(128 * 1024 * 1024);
   });
 
   it('threads the opt-in TIFF codec through the DOCX image path', async () => {
