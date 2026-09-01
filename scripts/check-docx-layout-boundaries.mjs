@@ -99,6 +99,7 @@ const SHARED_PAINT_IMPORTS = new Map([
     ['acquireBitmapCacheLease', 'value'],
     ['applyDuotone', 'value'],
     ['autoContrastColor', 'value'],
+    ['captureDecodedBitmapCacheEpoch', 'value'],
     ['canvasFontString', 'value'],
     ['clampCanvasSize', 'value'],
     // Chart picture-marker discovery and lookup warm the document-owned image
@@ -123,6 +124,7 @@ const SHARED_PAINT_IMPORTS = new Map([
     ['getCachedDerivedBitmap', 'value'],
     ['getCachedSvgImageByPath', 'value'],
     ['isOoxmlDecodedImageLimitError', 'value'],
+    ['isTiffDecodeError', 'value'],
     ['HyperlinkTarget', 'type'],
     ['imageNaturalSize', 'value'],
     ['isHTMLCanvas', 'value'],

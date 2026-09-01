@@ -9,6 +9,7 @@ import {
   metafileRasterSize,
   sourceRasterTargetSize,
   isOoxmlDecodedImageLimitError,
+  isTiffDecodeError,
   EMU_PER_PT,
   EMU_PER_PX,
   type MathRenderer,
@@ -81,6 +82,66 @@ interface ImageRef {
   failClosedOnDuotoneFailure?: boolean;
   targetWidthPx?: number;
   targetHeightPx?: number;
+}
+
+function maxDefined(left: number | undefined, right: number | undefined): number | undefined {
+  if (left === undefined) return right;
+  if (right === undefined) return left;
+  return Math.max(left, right);
+}
+
+/** Merge crop constraints for one shared decoded source. The horizontal and
+ * vertical inset pairs can come from different placements: choosing the
+ * smallest visible fraction on each axis yields a full-source raster at least
+ * as large as every individual placement requires. A zero-inset object remains
+ * non-null when any placement is cropped, so vector preference stays disabled. */
+function conservativeSrcRect(
+  left: SrcRect | null | undefined,
+  right: SrcRect | null | undefined,
+): SrcRect | null {
+  if (!left && !right) return null;
+  const leftWidth = left ? 1 - left.l - left.r : 1;
+  const rightWidth = right ? 1 - right.l - right.r : 1;
+  const horizontal = rightWidth < leftWidth ? right : left;
+  const leftHeight = left ? 1 - left.t - left.b : 1;
+  const rightHeight = right ? 1 - right.t - right.b : 1;
+  const vertical = rightHeight < leftHeight ? right : left;
+  return {
+    l: horizontal?.l ?? 0,
+    r: horizontal?.r ?? 0,
+    t: vertical?.t ?? 0,
+    b: vertical?.b ?? 0,
+  };
+}
+
+function mergedSvgImagePath(
+  left: string | undefined,
+  right: string | undefined,
+): string | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  // Conflicting vector twins cannot safely share either path; use the common
+  // raster source instead.
+  return left === right ? left : undefined;
+}
+
+function mergeImageRef(left: ImageRef, right: ImageRef): ImageRef {
+  return {
+    ...left,
+    svgImagePath: mergedSvgImagePath(left.svgImagePath, right.svgImagePath),
+    widthPt: maxDefined(left.widthPt, right.widthPt),
+    heightPt: maxDefined(left.heightPt, right.heightPt),
+    srcRect: conservativeSrcRect(left.srcRect, right.srcRect),
+    failClosedOnDuotoneFailure:
+      left.failClosedOnDuotoneFailure || right.failClosedOnDuotoneFailure || undefined,
+    targetWidthPx: maxDefined(left.targetWidthPx, right.targetWidthPx),
+    targetHeightPx: maxDefined(left.targetHeightPx, right.targetHeightPx),
+  };
+}
+
+function setImageRef(refs: Map<string, ImageRef>, key: string, ref: ImageRef): void {
+  const prior = refs.get(key);
+  refs.set(key, prior ? mergeImageRef(prior, ref) : ref);
 }
 
 interface CellAnchorRange {
@@ -292,8 +353,9 @@ export async function decodeImageSource(
  *  `null` for an unsupported metafile (true EMF / geometry-less WMF) lets the
  *  renderer skip a falsy source without a re-fetch.
  *
- *  A no-op when `fetchImage` is absent (no byte source). Per-image failures are
- *  swallowed so one broken picture doesn't sink the grid. */
+ *  A no-op when `fetchImage` is absent (no byte source). Ordinary per-image
+ *  failures are swallowed so one broken picture doesn't sink the grid; decoded
+ *  image quota and recognized-TIFF codec diagnostics remain actionable. */
 export async function prefetchImages(
   ws: Worksheet,
   imageCache: Map<string, CanvasImageSource | null>,
@@ -341,7 +403,7 @@ export async function prefetchImages(
       )) continue;
       // Key by (path + duotone colours) so a recoloured picture is looked up
       // separately from the raw blip (§20.1.8.23).
-      refs.set(imageCacheKey(img.imagePath, img.duotone), {
+      setImageRef(refs, imageCacheKey(img.imagePath, img.duotone), {
         imagePath: img.imagePath,
         mimeType: img.mimeType,
         svgImagePath: img.svgImagePath,
@@ -377,7 +439,7 @@ export async function prefetchImages(
       )) continue;
       for (const shape of grp.shapes) {
         if (shape.geom.type === 'image') {
-          refs.set(imageCacheKey(shape.geom.imagePath, shape.geom.duotone), {
+          setImageRef(refs, imageCacheKey(shape.geom.imagePath, shape.geom.duotone), {
             imagePath: shape.geom.imagePath,
             mimeType: shape.geom.mimeType,
             svgImagePath: shape.geom.svgImagePath,
@@ -445,7 +507,7 @@ export async function prefetchImages(
   }
   for (const fill of allowedChartFills) {
       const target = chartTargets.get(chartImageFillKey(fill));
-      refs.set(chartImageFillKey(fill), {
+      setImageRef(refs, chartImageFillKey(fill), {
         imagePath: fill.imagePath,
         mimeType: fill.mimeType,
         svgImagePath: fill.svgImagePath,
@@ -490,7 +552,7 @@ export async function prefetchImages(
         // metafile, so the renderer skips a falsy source without a re-fetch).
         imageCache.set(key, src);
       } catch (error) {
-        if (isOoxmlDecodedImageLimitError(error)) throw error;
+        if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
         // Transient failure: DELETE any prior lookup entry rather than leaving
         // it. A prior entry is re-resolved precisely because its shared-cache
         // backing may be gone (LRU-evicted and GPU-closed); when the re-resolve

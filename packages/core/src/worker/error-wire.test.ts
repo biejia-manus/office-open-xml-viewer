@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { OoxmlError, OoxmlResourceLimitError } from '../errors/ooxml-error.js';
-import { OoxmlDecodedImageLimitError } from '../image/pixel-budget.js';
+import {
+  OoxmlDecodedImageLimitError,
+  type OoxmlDecodedImageLimitMetric,
+} from '../image/pixel-budget.js';
+import { isTiffDecodeError, TiffDecodeError } from '../image/tiff-contract.js';
 import {
   deserializeWorkerError,
   parseResourceLimitError,
@@ -46,20 +50,49 @@ describe('worker error wire', () => {
     });
   });
 
-  it('preserves a decoded-image quota error across the worker boundary', () => {
-    const original = new OoxmlDecodedImageLimitError(
-      'active-decoded-bytes',
-      128 * 1024 * 1024,
-      192 * 1024 * 1024,
-    );
+  it.each([
+    'image-dimension',
+    'image-pixels',
+    'active-decoded-bytes',
+  ] satisfies OoxmlDecodedImageLimitMetric[])(
+    'preserves the %s decoded-image quota error across the worker boundary',
+    (metric) => {
+      const original = new OoxmlDecodedImageLimitError(
+        metric,
+        128 * 1024 * 1024,
+        192 * 1024 * 1024,
+      );
+      const restored = deserializeWorkerError(structuredClone(serializeWorkerError(original)));
+
+      expect(restored).toBeInstanceOf(OoxmlDecodedImageLimitError);
+      expect(restored).toMatchObject({
+        code: 'ooxml-decoded-image-limit',
+        metric,
+        limit: 128 * 1024 * 1024,
+        observed: 192 * 1024 * 1024,
+      });
+    },
+  );
+
+  it('rejects an unknown decoded-image metric as an ordinary error', () => {
+    const wire = structuredClone(serializeWorkerError(
+      new OoxmlDecodedImageLimitError('image-pixels', 10, 11),
+    ));
+    if (wire.decodedImage) Object.assign(wire.decodedImage, { metric: 'future-metric' });
+
+    expect(deserializeWorkerError(wire)).not.toBeInstanceOf(OoxmlDecodedImageLimitError);
+  });
+
+  it('preserves a diagnostic TIFF failure across the worker boundary', () => {
+    const original = new TiffDecodeError('Unsupported TIFF compression: 5');
     const restored = deserializeWorkerError(structuredClone(serializeWorkerError(original)));
 
-    expect(restored).toBeInstanceOf(OoxmlDecodedImageLimitError);
+    expect(restored).toBeInstanceOf(TiffDecodeError);
+    expect(isTiffDecodeError(restored)).toBe(true);
     expect(restored).toMatchObject({
-      code: 'ooxml-decoded-image-limit',
-      metric: 'active-decoded-bytes',
-      limit: 128 * 1024 * 1024,
-      observed: 192 * 1024 * 1024,
+      name: 'TiffDecodeError',
+      code: 'ooxml-tiff-decode',
+      message: 'Unsupported TIFF compression: 5',
     });
   });
 

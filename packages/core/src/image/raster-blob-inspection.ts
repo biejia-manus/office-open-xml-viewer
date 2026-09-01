@@ -1,4 +1,10 @@
-import { sniffRasterDimensions, type RasterDimensions } from './raster-dimensions.js';
+import {
+  isJpegExifPayload,
+  orientJpegDimensions,
+  sniffJpegExifOrientation,
+  sniffRasterDimensions,
+  type RasterDimensions,
+} from './raster-dimensions.js';
 import { isTiff } from './tiff-contract.js';
 
 export type RasterFormat = 'png' | 'jpeg' | 'gif' | 'bmp' | 'webp' | 'tiff';
@@ -34,7 +40,8 @@ function isJpegSof(marker: number): boolean {
  * Find JPEG SOF dimensions without retaining the compressed image in a JS
  * ArrayBuffer. JPEG permits arbitrarily many APP/ICC segments before SOF, so a
  * fixed prefix is not a security boundary. The state machine consumes the Blob
- * stream once, skips segment payloads, and stops at SOF or SOS/EOI.
+ * stream once, skips segment payloads, and retains SOF dimensions while it
+ * continues through metadata to SOS/EOI for a later EXIF orientation.
  */
 async function streamJpegDimensions(blob: Blob): Promise<RasterDimensions | null> {
   const reader = blob.slice(2).stream().getReader();
@@ -42,19 +49,49 @@ async function streamJpegDimensions(blob: Blob): Promise<RasterDimensions | null
   let marker = -1;
   let lengthHi = -1;
   let skip = 0;
-  let sofPayload: number[] | null = null;
+  let sofPayload: Uint8Array | null = null;
+  let sofOffset = 0;
+  let sofTrailingBytes = 0;
+  let dimensions: RasterDimensions | null = null;
+  let app1Payload: Uint8Array | null = null;
+  let app1Offset = 0;
+  let orientation: number | null = null;
+  let sawExif = false;
   try {
     while (true) {
       const { value, done } = await reader.read();
-      if (done) return null;
+      if (done) return dimensions ? orientJpegDimensions(dimensions, orientation) : null;
       for (const byte of value) {
         if (sofPayload) {
-          sofPayload.push(byte);
-          if (sofPayload.length === 5) {
+          sofPayload[sofOffset++] = byte;
+          if (sofOffset === sofPayload.length) {
             const height = (sofPayload[1] << 8) | sofPayload[2];
             const width = (sofPayload[3] << 8) | sofPayload[4];
-            await reader.cancel();
-            return { width, height };
+            dimensions ??= { width, height };
+            sofPayload = null;
+            sofOffset = 0;
+            if (sawExif) {
+              await reader.cancel();
+              return orientJpegDimensions(dimensions, orientation);
+            }
+            skip = sofTrailingBytes;
+            sofTrailingBytes = 0;
+          }
+          continue;
+        }
+        if (app1Payload) {
+          app1Payload[app1Offset++] = byte;
+          if (app1Offset === app1Payload.length) {
+            if (isJpegExifPayload(app1Payload)) {
+              sawExif = true;
+              orientation = sniffJpegExifOrientation(app1Payload);
+            }
+            app1Payload = null;
+            app1Offset = 0;
+            if (sawExif && dimensions) {
+              await reader.cancel();
+              return orientJpegDimensions(dimensions, orientation);
+            }
           }
           continue;
         }
@@ -71,7 +108,16 @@ async function streamJpegDimensions(blob: Blob): Promise<RasterDimensions | null
           if (segmentLength < 2) return null;
           if (isJpegSof(marker)) {
             if (segmentLength < 7) return null;
-            sofPayload = [];
+            if (dimensions) {
+              skip = segmentLength - 2;
+            } else {
+              sofPayload = new Uint8Array(5);
+              sofOffset = 0;
+              sofTrailingBytes = segmentLength - 7;
+            }
+          } else if (marker === 0xe1 && !sawExif && segmentLength > 2) {
+            app1Payload = new Uint8Array(segmentLength - 2);
+            app1Offset = 0;
           } else {
             skip = segmentLength - 2;
           }
@@ -86,7 +132,10 @@ async function streamJpegDimensions(blob: Blob): Promise<RasterDimensions | null
         if (byte === 0xff) continue;
         sawMarkerPrefix = false;
         if (byte === 0x00) continue;
-        if (byte === 0xd9 || byte === 0xda) return null;
+        if (byte === 0xd9 || byte === 0xda) {
+          await reader.cancel();
+          return dimensions ? orientJpegDimensions(dimensions, orientation) : null;
+        }
         if (byte === 0xd8 || byte === 0x01 || (byte >= 0xd0 && byte <= 0xd7)) continue;
         marker = byte;
       }
@@ -131,7 +180,7 @@ async function deepTiffDimensions(blob: Blob, head: Uint8Array): Promise<RasterD
   return width === undefined || height === undefined ? null : { width, height };
 }
 
-/** Inspect the declared raster grid before handing bytes to any decoder. */
+/** Inspect the decoder-natural raster grid before handing bytes to a decoder. */
 export async function inspectRasterBlob(
   blob: Blob,
   initialHead?: Uint8Array,
@@ -142,8 +191,13 @@ export async function inspectRasterBlob(
   const format = rasterFormat(head);
   if (!format) return { format: null, dimensions: null };
   const dimensions = sniffRasterDimensions(head);
+  // A prefix SOF is insufficient: Chrome also honors EXIF APP1 metadata that
+  // follows SOF. Scan every JPEG to the first scan boundary so retained-surface
+  // planning uses the decoder-natural orientation.
+  if (format === 'jpeg') {
+    return { format, dimensions: await streamJpegDimensions(blob) ?? dimensions };
+  }
   if (dimensions) return { format, dimensions };
-  if (format === 'jpeg') return { format, dimensions: await streamJpegDimensions(blob) };
   if (format === 'tiff') return { format, dimensions: await deepTiffDimensions(blob, head) };
   return { format, dimensions: null };
 }

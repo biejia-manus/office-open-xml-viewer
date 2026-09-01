@@ -46,12 +46,17 @@ import { closeImageBitmapIfSupported } from './image-bitmap-lifecycle.js';
 import { withDecodedImageSlot } from './decode-gate.js';
 import {
   MAX_DECODED_IMAGE_BYTES,
+  MAX_RASTER_DIMENSION,
   OoxmlDecodedImageLimitError,
 } from './pixel-budget.js';
 import type { TiffRenderer } from './tiff-contract.js';
 
 type FetchImage = (path: string, mime: string) => Promise<Blob>;
 export type DecodedBitmapCacheOwner = object;
+
+function isDecodedBitmapCacheOwner(value: unknown): value is DecodedBitmapCacheOwner {
+  return (typeof value === 'object' && value !== null) || typeof value === 'function';
+}
 
 const IMAGE_BITMAP_CACHE_MAX = 256;
 
@@ -86,6 +91,95 @@ interface RasterSourceProfile {
 }
 
 const rasterProfilesByOwner = new WeakMap<DecodedBitmapCacheOwner, Map<string, Promise<RasterSourceProfile>>>();
+const cacheGenerationByOwner = new WeakMap<DecodedBitmapCacheOwner, number>();
+const derivedNamespaceGenerationByOwner = new WeakMap<
+  DecodedBitmapCacheOwner,
+  Map<string, number>
+>();
+
+declare const decodedBitmapCacheEpochBrand: unique symbol;
+
+/**
+ * Internal operation token spanning the awaits between resolving a base blip
+ * and inserting its derived surface. A full owner drop or a targeted namespace
+ * drop invalidates the token, so a pre-drop continuation cannot recreate cache
+ * state after teardown.
+ *
+ * @internal
+ */
+export interface DecodedBitmapCacheEpoch {
+  readonly owner: DecodedBitmapCacheOwner;
+  readonly ownerGeneration: number;
+  readonly namespace: string;
+  readonly namespaceGeneration: number;
+  readonly [decodedBitmapCacheEpochBrand]: true;
+}
+
+function cacheGeneration(owner: DecodedBitmapCacheOwner): number {
+  return cacheGenerationByOwner.get(owner) ?? 0;
+}
+
+function derivedNamespaceGeneration(
+  owner: DecodedBitmapCacheOwner,
+  namespace: string,
+): number {
+  return derivedNamespaceGenerationByOwner.get(owner)?.get(namespace) ?? 0;
+}
+
+function advanceDerivedNamespaceGeneration(
+  owner: DecodedBitmapCacheOwner,
+  namespace: string,
+): void {
+  let generations = derivedNamespaceGenerationByOwner.get(owner);
+  if (!generations) {
+    generations = new Map();
+    derivedNamespaceGenerationByOwner.set(owner, generations);
+  }
+  generations.set(namespace, derivedNamespaceGeneration(owner, namespace) + 1);
+}
+
+function assertCurrentCacheGeneration(
+  owner: DecodedBitmapCacheOwner,
+  expected: number,
+): void {
+  if (cacheGeneration(owner) !== expected) {
+    throw new Error('Decoded bitmap cache was dropped during raster inspection');
+  }
+}
+
+/** @internal Capture before the first await of a base-to-derived operation. */
+export function captureDecodedBitmapCacheEpoch(
+  owner: DecodedBitmapCacheOwner,
+  namespace: string,
+): DecodedBitmapCacheEpoch {
+  return {
+    owner,
+    ownerGeneration: cacheGeneration(owner),
+    namespace,
+    namespaceGeneration: derivedNamespaceGeneration(owner, namespace),
+  } as DecodedBitmapCacheEpoch;
+}
+
+function assertCurrentOwnerEpoch(
+  owner: DecodedBitmapCacheOwner,
+  epoch: DecodedBitmapCacheEpoch,
+): void {
+  if (epoch.owner !== owner || cacheGeneration(owner) !== epoch.ownerGeneration) {
+    throw new Error('Decoded bitmap cache was dropped during a derived image operation');
+  }
+}
+
+function assertCurrentDerivedEpoch(
+  owner: DecodedBitmapCacheOwner,
+  namespace: string,
+  epoch: DecodedBitmapCacheEpoch,
+): void {
+  assertCurrentOwnerEpoch(owner, epoch);
+  if (epoch.namespace !== namespace
+    || derivedNamespaceGeneration(owner, namespace) !== epoch.namespaceGeneration) {
+    throw new Error('Decoded bitmap cache namespace was dropped during a derived image operation');
+  }
+}
 
 function rasterProfileFor(
   owner: DecodedBitmapCacheOwner,
@@ -305,10 +399,47 @@ function normalizedBitmapOptions(opts: CachedBitmapOptions): CachedBitmapOptions
   };
 }
 
+function retainedPixelLimit(opts: CachedBitmapOptions): number {
+  const requested = opts.maxRetainedPixels;
+  return typeof requested === 'number' && Number.isSafeInteger(requested) && requested > 0
+    ? Math.min(requested, MAX_DECODED_IMAGE_BYTES / 4)
+    : MAX_DECODED_IMAGE_BYTES / 4;
+}
+
 function hasRestrictedPixelLimit(opts: CachedBitmapOptions): boolean {
-  return Number.isSafeInteger(opts.maxRetainedPixels)
-    && (opts.maxRetainedPixels ?? 0) > 0
-    && (opts.maxRetainedPixels as number) < MAX_DECODED_IMAGE_BYTES / 4;
+  return retainedPixelLimit(opts) < MAX_DECODED_IMAGE_BYTES / 4;
+}
+
+/** Re-check a cache hit against the current caller's retained-surface budget.
+ * A native bitmap may have been admitted by an earlier, more permissive call;
+ * reject that borrowed hit without closing it because the cache still owns it. */
+function enforceCachedRetainedBudget(
+  bitmap: ImageBitmap | null,
+  opts: CachedBitmapOptions,
+): ImageBitmap | null {
+  if (!bitmap) return null;
+  const pixelLimit = retainedPixelLimit(opts);
+  const width = Number(bitmap.width);
+  const height = Number(bitmap.height);
+  const observedDimension = Math.max(width, height);
+  if (!Number.isFinite(observedDimension) || observedDimension > MAX_RASTER_DIMENSION) {
+    throw new OoxmlDecodedImageLimitError(
+      'image-dimension',
+      MAX_RASTER_DIMENSION,
+      Number.isFinite(observedDimension) ? observedDimension : Number.MAX_SAFE_INTEGER,
+    );
+  }
+  const observedPixels = width * height;
+  if (!(width > 0) || !(height > 0) || observedPixels > pixelLimit) {
+    throw new OoxmlDecodedImageLimitError(
+      'image-pixels',
+      pixelLimit,
+      Number.isSafeInteger(observedPixels) && observedPixels >= 0
+        ? observedPixels
+        : Number.MAX_SAFE_INTEGER,
+    );
+  }
+  return bitmap;
 }
 
 /** Stable base key shared by the base and derived decoded-surface caches. */
@@ -319,11 +450,9 @@ export function cachedBitmapVariantKey(
   const width = normalizedRasterTarget(opts.targetWidthPx);
   const height = normalizedRasterTarget(opts.targetHeightPx);
   const pathKey = `${imagePath.length}:${imagePath}`;
-  const pixelLimit = Number.isSafeInteger(opts.maxRetainedPixels) && (opts.maxRetainedPixels ?? 0) > 0
-    ? Math.min(opts.maxRetainedPixels as number, MAX_DECODED_IMAGE_BYTES / 4)
-    : MAX_DECODED_IMAGE_BYTES / 4;
-  return width && height
-    ? `raster:${pathKey}:${width}x${height}:p${pixelLimit}`
+  const pixelLimit = retainedPixelLimit(opts);
+  return width || height
+    ? `raster:${pathKey}:${width ?? 0}x${height ?? 0}:p${pixelLimit}`
     : `native:${pathKey}`;
 }
 
@@ -331,24 +460,40 @@ function reusableResolutionVariantKey(
   owner: DecodedBitmapCacheOwner,
   imagePath: string,
   opts: CachedBitmapOptions,
+  sourceDimensions?: Readonly<{ width: number; height: number }> | null,
 ): string | undefined {
   const requestedWidth = normalizedRasterTarget(opts.targetWidthPx);
   const requestedHeight = normalizedRasterTarget(opts.targetHeightPx);
-  if (!requestedWidth || !requestedHeight) return undefined;
-  const pixelLimit = Number.isSafeInteger(opts.maxRetainedPixels) && (opts.maxRetainedPixels ?? 0) > 0
-    ? Math.min(opts.maxRetainedPixels as number, MAX_DECODED_IMAGE_BYTES / 4)
-    : MAX_DECODED_IMAGE_BYTES / 4;
+  if (!requestedWidth && !requestedHeight) return undefined;
+  const pixelLimit = retainedPixelLimit(opts);
   const pathKey = `${imagePath.length}:${imagePath}`;
   const prefix = `${BASE_CACHE_PREFIX}raster:${pathKey}:`;
   let best: { key: string; pixels: number } | undefined;
-  for (const key of bitmapCacheByFetch.get(owner)?.entries.keys() ?? []) {
+  for (const [key, entry] of bitmapCacheByFetch.get(owner)?.entries ?? []) {
     if (!key.startsWith(prefix)) continue;
     const match = /^(\d+)x(\d+):p(\d+)$/.exec(key.slice(prefix.length));
     if (!match) continue;
     const width = Number(match[1]);
     const height = Number(match[2]);
-    if (Number(match[3]) !== pixelLimit || width < requestedWidth || height < requestedHeight) continue;
-    const pixels = width * height;
+    if (Number(match[3]) !== pixelLimit
+      || width < (requestedWidth ?? 0)
+      || height < (requestedHeight ?? 0)) continue;
+    const actualWidth = Number(entry.bitmap?.width);
+    const actualHeight = Number(entry.bitmap?.height);
+    const hasActualGrid = Number.isFinite(actualWidth) && actualWidth > 0
+      && Number.isFinite(actualHeight) && actualHeight > 0;
+    const scale = sourceDimensions
+      ? Math.min(1, Math.max(
+          width > 0 ? width / sourceDimensions.width : 0,
+          height > 0 ? height / sourceDimensions.height : 0,
+        ))
+      : 0;
+    const pixels = hasActualGrid
+      ? actualWidth * actualHeight
+      : sourceDimensions && scale > 0
+        ? Math.max(1, Math.ceil(sourceDimensions.width * scale))
+          * Math.max(1, Math.ceil(sourceDimensions.height * scale))
+        : width * height;
     if (!best || pixels < best.pixels) best = { key: key.slice(BASE_CACHE_PREFIX.length), pixels };
   }
   return best?.key;
@@ -358,26 +503,50 @@ function profileNeedsResolutionVariant(
   profile: RasterSourceProfile,
   opts: CachedBitmapOptions = {},
 ): boolean {
-  const pixelLimit = Number.isSafeInteger(opts.maxRetainedPixels) && (opts.maxRetainedPixels ?? 0) > 0
-    ? Math.min(opts.maxRetainedPixels as number, MAX_DECODED_IMAGE_BYTES / 4)
-    : MAX_DECODED_IMAGE_BYTES / 4;
-  return profile.inspection.format !== 'tiff'
-    && profile.inspection.dimensions !== null
-    && (rasterExceedsBudget(profile.inspection.dimensions)
-      || profile.inspection.dimensions.width * profile.inspection.dimensions.height > pixelLimit);
+  const pixelLimit = retainedPixelLimit(opts);
+  const dimensions = profile.inspection.dimensions;
+  if (!dimensions) return false;
+  const targetWidth = normalizedRasterTarget(opts.targetWidthPx);
+  const targetHeight = normalizedRasterTarget(opts.targetHeightPx);
+  const hasSmallerDisplayTarget = profile.inspection.format === 'tiff'
+    ? (targetWidth !== undefined || targetHeight !== undefined)
+      && (targetWidth === undefined || targetWidth < dimensions.width)
+      && (targetHeight === undefined || targetHeight < dimensions.height)
+    : targetWidth !== undefined
+      && targetHeight !== undefined
+      && targetWidth < dimensions.width
+      && targetHeight < dimensions.height;
+  return hasSmallerDisplayTarget
+    || rasterExceedsBudget(dimensions)
+    || dimensions.width * dimensions.height > pixelLimit;
 }
 
-/** Resolve the actual base-cache key after source inspection. In-budget rasters
- * and metafiles remain path-native even when callers supply a display target;
- * only a source that must be downsampled receives resolution variants. */
+/** Resolve the actual base-cache key after source inspection. A sufficient
+ * downsample target receives a display-resolution variant (TIFF also supports
+ * a single-axis request); targets that require the source grid share one
+ * path-native entry. When `resolvedBitmap` is supplied, key the exact retained
+ * surface so concurrent cache evolution cannot relabel a derived effect. */
 export async function resolvedCachedBitmapVariantKey(
   imagePath: string,
   mimeType: string,
   fetchImage: FetchImage,
   opts: CachedBitmapOptions = {},
+  epoch?: DecodedBitmapCacheEpoch,
+  resolvedBitmap?: ImageBitmap,
 ): Promise<string> {
+  if (epoch) assertCurrentOwnerEpoch(fetchImage, epoch);
   const normalized = normalizedBitmapOptions(opts);
-  if (!normalized.targetWidthPx || !normalized.targetHeightPx) {
+  if (resolvedBitmap) {
+    // Derived transforms must follow the surface actually returned, not a
+    // reusable-cache choice that can change while the caller awaits. The
+    // retained grid is a stable content identity for one source path.
+    return cachedBitmapVariantKey(imagePath, {
+      targetWidthPx: Number(resolvedBitmap.width),
+      targetHeightPx: Number(resolvedBitmap.height),
+      maxRetainedPixels: normalized.maxRetainedPixels,
+    });
+  }
+  if (!normalized.targetWidthPx && !normalized.targetHeightPx) {
     return cachedBitmapVariantKey(imagePath);
   }
   const nativeKey = `${BASE_CACHE_PREFIX}${cachedBitmapVariantKey(imagePath)}`;
@@ -385,9 +554,17 @@ export async function resolvedCachedBitmapVariantKey(
     && bitmapCacheByFetch.get(fetchImage)?.entries.has(nativeKey)) {
     return cachedBitmapVariantKey(imagePath);
   }
+  const generation = epoch?.ownerGeneration ?? cacheGeneration(fetchImage);
   const profile = await rasterProfileFor(fetchImage, imagePath, mimeType, fetchImage);
+  if (epoch) assertCurrentOwnerEpoch(fetchImage, epoch);
+  else assertCurrentCacheGeneration(fetchImage, generation);
   return profileNeedsResolutionVariant(profile, normalized)
-    ? reusableResolutionVariantKey(fetchImage, imagePath, normalized)
+    ? reusableResolutionVariantKey(
+        fetchImage,
+        imagePath,
+        normalized,
+        profile.inspection.dimensions,
+      )
       ?? cachedBitmapVariantKey(imagePath, normalized)
     : cachedBitmapVariantKey(imagePath);
 }
@@ -486,7 +663,9 @@ export function getCachedDerivedBitmap(
   cacheKey: string,
   owner: DecodedBitmapCacheOwner,
   create: () => Promise<{ bitmap: ImageBitmap | null; owned: boolean }>,
+  epoch?: DecodedBitmapCacheEpoch,
 ): Promise<ImageBitmap | null> {
+  if (epoch) assertCurrentDerivedEpoch(owner, namespace, epoch);
   return getCachedDecodedBitmap(
     `${DERIVED_CACHE_PREFIX}${namespace}`,
     cacheKey,
@@ -501,6 +680,13 @@ export function dropCachedDerivedBitmapNamespace(
   owner: DecodedBitmapCacheOwner,
   namespace: string,
 ): void {
+  // Compatibility teardown adapters can run before their image owner has been
+  // initialized. WeakMap.get historically made that a no-op; the generation
+  // advance uses WeakMap.set, so retain the old behavior explicitly.
+  if (!isDecodedBitmapCacheOwner(owner)) return;
+  // Advance even when no entry exists: an operation may have resolved its base
+  // but not inserted the derived entry yet, and this drop must still win.
+  advanceDerivedNamespaceGeneration(owner, namespace);
   const state = bitmapCacheByFetch.get(owner);
   if (!state) return;
   const prefix = `${DERIVED_CACHE_PREFIX}${namespace}:`;
@@ -570,9 +756,9 @@ export function getCachedBitmapByPath(
           : await decodeRasterOrMetafile(blob, decodeOpts);
         return { bitmap, owned: true };
       },
-    );
+    ).then((bitmap) => enforceCachedRetainedBudget(bitmap, normalized));
   };
-  if (!targetWidthPx || !targetHeightPx) {
+  if (!targetWidthPx && !targetHeightPx) {
     return decode(cachedBitmapVariantKey(imagePath));
   }
   const nativeKey = `${BASE_CACHE_PREFIX}${cachedBitmapVariantKey(imagePath)}`;
@@ -580,13 +766,22 @@ export function getCachedBitmapByPath(
     && bitmapCacheByFetch.get(fetchImage)?.entries.has(nativeKey)) {
     return decode(cachedBitmapVariantKey(imagePath));
   }
-  return rasterProfileFor(fetchImage, imagePath, mimeType, fetchImage).then((profile) => decode(
-    profileNeedsResolutionVariant(profile, normalized)
-      ? reusableResolutionVariantKey(fetchImage, imagePath, normalized)
-        ?? cachedBitmapVariantKey(imagePath, normalized)
-      : cachedBitmapVariantKey(imagePath),
-    profile,
-  ));
+  const generation = cacheGeneration(fetchImage);
+  return rasterProfileFor(fetchImage, imagePath, mimeType, fetchImage).then((profile) => {
+    assertCurrentCacheGeneration(fetchImage, generation);
+    return decode(
+      profileNeedsResolutionVariant(profile, normalized)
+        ? reusableResolutionVariantKey(
+            fetchImage,
+            imagePath,
+            normalized,
+            profile.inspection.dimensions,
+          )
+          ?? cachedBitmapVariantKey(imagePath, normalized)
+        : cachedBitmapVariantKey(imagePath),
+      profile,
+    );
+  });
 }
 
 /**
@@ -613,6 +808,12 @@ export function peekCachedBitmapByPath(
  * deferred to the last lease release, so the pass never draws a closed bitmap.
  */
 export function dropDecodedBitmapCache(owner: DecodedBitmapCacheOwner): void {
+  // A compatibility teardown adapter can reach this path without an initialized
+  // image owner. Preserve the historical no-op behavior of WeakMap.get/delete
+  // for that case before advancing the new epoch map (WeakMap.set would throw).
+  if (!isDecodedBitmapCacheOwner(owner)) return;
+  cacheGenerationByOwner.set(owner, cacheGeneration(owner) + 1);
+  derivedNamespaceGenerationByOwner.delete(owner);
   rasterProfilesByOwner.delete(owner);
   const state = bitmapCacheByFetch.get(owner);
   if (!state) return;

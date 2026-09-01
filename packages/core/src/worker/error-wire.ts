@@ -12,6 +12,7 @@ import {
   OoxmlDecodedImageLimitError,
   type OoxmlDecodedImageLimitMetric,
 } from '../image/pixel-budget.js';
+import { TiffDecodeError } from '../image/tiff-contract.js';
 import {
   PullSessionInsufficientCreditError,
   isPullSessionInsufficientCreditDetails,
@@ -324,13 +325,23 @@ const OOXML_ERROR_CODES = new Set<OoxmlErrorCode>([
   'not-ooxml',
 ]);
 
+const DECODED_IMAGE_LIMIT_METRICS = {
+  'image-dimension': true,
+  'image-pixels': true,
+  'active-decoded-bytes': true,
+} satisfies Record<OoxmlDecodedImageLimitMetric, true>;
+
+function isDecodedImageLimitMetric(value: unknown): value is OoxmlDecodedImageLimitMetric {
+  return typeof value === 'string'
+    && Object.prototype.hasOwnProperty.call(DECODED_IMAGE_LIMIT_METRICS, value);
+}
+
 /** Reconstruct a real Error subclass after a payload crosses a worker boundary. */
 export function deserializeWorkerError(payload: WorkerErrorPayload): Error {
   if (
     payload.code === 'ooxml-decoded-image-limit'
     && payload.decodedImage
-    && (payload.decodedImage.metric === 'image-pixels'
-      || payload.decodedImage.metric === 'active-decoded-bytes')
+    && isDecodedImageLimitMetric(payload.decodedImage.metric)
     && isNonNegativeSafeInteger(payload.decodedImage.limit)
     && isNonNegativeSafeInteger(payload.decodedImage.observed)
     && payload.decodedImage.observed > payload.decodedImage.limit
@@ -340,6 +351,9 @@ export function deserializeWorkerError(payload: WorkerErrorPayload): Error {
       payload.decodedImage.limit,
       payload.decodedImage.observed,
     );
+  }
+  if (payload.code === 'ooxml-tiff-decode') {
+    return new TiffDecodeError(payload.message);
   }
   if (
     payload.code === 'ooxml-insufficient-credit'

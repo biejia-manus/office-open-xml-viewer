@@ -89,6 +89,7 @@ import {
   metafileRasterSize,
   sourceRasterTargetSize,
   isOoxmlDecodedImageLimitError,
+  isTiffDecodeError,
   highlightBox,
   symbolFontToUnicode,
   isSymbolFontFamily,
@@ -156,6 +157,13 @@ export interface RenderContext {
    * {@link isSmartArtFallbackShape}; every other shape ignores it.
    */
   smartArtFallbackTextColor?: string | null;
+  /**
+   * Picture-bullet bitmaps prepared for this render pass. Display-sized image
+   * decodes use a resolution-specific core cache key, so synchronous text
+   * paint consumes the exact prefetch result rather than peeking only the
+   * native-resolution key. The render-pass bitmap lease owns their lifetime.
+   */
+  pictureBulletImages?: ReadonlyMap<string, ImageBitmap | null>;
 }
 
 /** Information about a rendered text segment for building a transparent selection overlay. */
@@ -1751,7 +1759,7 @@ async function renderBackground(
       }
       ctx.restore();
     } catch (error) {
-      if (isOoxmlDecodedImageLimitError(error)) throw error;
+      if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
       // Decode failed — the white base painted above remains as the fallback.
     }
     return;
@@ -4349,20 +4357,21 @@ export function renderTextBody(
     // `leadingEdgeX − reserve`; 0 for LTR / marker-less lines keeps them
     // byte-identical.
     const leadingEdgeX = textX + textMaxW;
+    const bulletBmp = bulletImage && fetchImage
+      ? rc.pictureBulletImages?.has(bulletImage.imagePath)
+        ? rc.pictureBulletImages.get(bulletImage.imagePath)
+        : peekCachedBitmapByPath(bulletImage.imagePath, fetchImage)
+      : undefined;
     let rtlMarkerReservePx = 0;
-    let rtlBulletBmp: ReturnType<typeof peekCachedBitmapByPath> | null = null;
     if (paraNeedsBidi && baseRtl) {
       if (bulletLabel) {
         ctx.font = bulletFont;
         rtlMarkerReservePx = ctx.measureText(bulletLabel).width;
-      } else if (bulletImage && fetchImage) {
-        rtlBulletBmp = peekCachedBitmapByPath(bulletImage.imagePath, fetchImage);
-        if (rtlBulletBmp) {
-          const h = bulletImage.sizePx;
-          rtlMarkerReservePx = rtlBulletBmp.height > 0
-            ? h * (rtlBulletBmp.width / rtlBulletBmp.height)
-            : h;
-        }
+      } else if (bulletImage && bulletBmp) {
+        const h = bulletImage.sizePx;
+        rtlMarkerReservePx = bulletBmp.height > 0
+          ? h * (bulletBmp.width / bulletBmp.height)
+          : h;
       }
     }
 
@@ -4388,22 +4397,21 @@ export function renderTextBody(
     // (or fetchImage is absent), draw nothing — the marker simply appears once
     // the bitmap is ready, never blocking the frame.
     if (bulletImage && fetchImage) {
-      const bmp = peekCachedBitmapByPath(bulletImage.imagePath, fetchImage);
-      if (bmp) {
+      if (bulletBmp) {
         // The bullet HEIGHT is the text-derived size (× buSzPct); the WIDTH is
         // derived from the decoded bitmap's intrinsic aspect ratio so a
         // non-square marker isn't squished. §21.1.2.4.2 is silent on the exact
         // dimensions; this mirrors the PowerPoint runtime, which scales the
         // picture to the line text height while preserving its aspect ratio.
         const h = bulletImage.sizePx;
-        const w = bmp.height > 0 ? h * (bmp.width / bmp.height) : h;
+        const w = bulletBmp.height > 0 ? h * (bulletBmp.width / bulletBmp.height) : h;
         const imgY = baseline - h; // bottom-aligned to the baseline
         if (paraNeedsBidi && baseRtl) {
           // Marker RIGHT edge at the leading edge (matching the char-bullet
           // reading-frame placement above); the text pen reserves this width.
-          ctx.drawImage(bmp, leadingEdgeX - w, imgY, w, h);
+          ctx.drawImage(bulletBmp, leadingEdgeX - w, imgY, w, h);
         } else {
-          ctx.drawImage(bmp, bulletX, imgY, w, h);
+          ctx.drawImage(bulletBmp, bulletX, imgY, w, h);
         }
       }
     }
@@ -5691,7 +5699,7 @@ async function renderPicture(
     ctx.restore();
     // bitmap is owned by getCachedBitmapByPath's cache — do not close it here.
   } catch (error) {
-    if (isOoxmlDecodedImageLimitError(error)) throw error;
+    if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
     // silently skip broken images
   }
 }
@@ -5720,7 +5728,7 @@ async function renderMedia(
       const target = rasterTargetOptions(w, h, dpr);
       poster = await getPosterBitmap(el, fetchMedia, bitmapOwner, tiff, target);
     } catch (error) {
-      if (isOoxmlDecodedImageLimitError(error)) throw error;
+      if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
       // fall through to plain fill
     }
   }
@@ -6564,6 +6572,7 @@ async function renderSlideLeased(
     ? `#${opts.defaultTextColor}`
     : '#000000';
 
+  const pictureBulletImages = new Map<string, ImageBitmap | null>();
   const rc: RenderContext = {
     themeMajorFont: opts.majorFont ?? null,
     themeMinorFont: opts.minorFont ?? null,
@@ -6576,6 +6585,7 @@ async function renderSlideLeased(
     // Issue #805 — legible default for the synthetic SmartArt fallback shape's
     // null-colour runs, derived once per slide from the background luminance.
     smartArtFallbackTextColor: smartArtFallbackTextColor(slide.background, themeDefaultColor),
+    pictureBulletImages,
   };
 
   await renderBackground(
@@ -6666,14 +6676,14 @@ async function renderSlideLeased(
 
   const chartMarkerImages = new Map<string, CanvasImageSource | null>();
   // Picture bullets (`<a:buBlip>`, §21.1.2.4.2) and chart picture markers are
-  // drawn inside synchronous layout/paint paths. Decode both before drawing.
-  // text-body layout, which can't await a decode. Resolve every bullet image up
-  // front (deduped by path via getCachedBitmapByPath) and await them so the draw
-  // loop's peekCachedBitmapByPath finds a settled bitmap. Missing/failed decodes resolve to
-  // undefined and the marker is simply skipped — never blocking the frame.
+  // drawn inside synchronous layout/paint paths, so decode both before drawing.
+  // Resolve every bullet image up front (deduped by path) and preserve each
+  // exact prefetch result: a display-sized decode lives under a resolution-
+  // specific cache key that the synchronous native-key peek cannot see.
+  // Missing/failed decodes resolve to null and the marker is simply skipped.
   if (opts.fetchImage) {
     const fetchImage = opts.fetchImage;
-    const bulletPaths = new Set<string>();
+    const bulletPaths = new Map<string, string>();
     const chartFillMap = new Map<string, ReturnType<typeof collectChartMarkerImageFills>[number]>();
     for (const fill of collectChartMarkerImageFillsForCharts(
       slide.elements
@@ -6687,20 +6697,24 @@ async function renderSlideLeased(
       if (el.type !== 'shape' || !el.textBody) continue;
       for (const para of el.textBody.paragraphs) {
         const b = asBullet(para.bullet);
-        if (b.type === 'blip') bulletPaths.add(`${b.imagePath} ${b.mimeType}`);
+        if (b.type === 'blip' && !bulletPaths.has(b.imagePath)) {
+          bulletPaths.set(b.imagePath, b.mimeType);
+        }
       }
     }
     if (bulletPaths.size > 0 || chartFillMap.size > 0) {
-      const bulletPromises: Promise<unknown>[] = [...bulletPaths].map((key) => {
-          const [path, mime] = key.split(' ');
-          return getCachedBitmapByPath(path, mime, fetchImage, {
+      const bulletPromises: Promise<void>[] = [...bulletPaths].map(async ([path, mime]) => {
+        try {
+          const bitmap = await getCachedBitmapByPath(path, mime, fetchImage, {
             tiff: opts.tiff,
             ...(rasterTargetOptions(canvasW, canvasH, effectiveDpr) ?? {}),
-          }).catch((error) => {
-            if (isOoxmlDecodedImageLimitError(error)) throw error;
-            return undefined;
           });
-        });
+          pictureBulletImages.set(path, bitmap);
+        } catch (error) {
+          if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
+          pictureBulletImages.set(path, null);
+        }
+      });
       const chartPromises: Promise<unknown>[] = [...chartFillMap].map(async ([key, fill]) => {
           try {
             const raster = metafileRasterSize(fill.mimeType, fill.srcRect, 72, 72);
@@ -6732,7 +6746,7 @@ async function renderSlideLeased(
             }
             chartMarkerImages.set(key, bitmap);
           } catch (error) {
-            if (isOoxmlDecodedImageLimitError(error)) throw error;
+            if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
             chartMarkerImages.set(key, null);
           }
         });

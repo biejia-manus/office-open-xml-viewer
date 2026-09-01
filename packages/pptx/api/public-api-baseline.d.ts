@@ -968,6 +968,7 @@ export interface ImageFill {
     duotone?: Duotone;
 }
 export function isOoxmlDecodedImageLimitError(error: unknown): error is OoxmlDecodedImageLimitError;
+export function isTiffDecodeError(error: unknown): error is TiffDecodeError;
 export interface LegendManualLayout {
     xMode?: string;
     yMode?: string;
@@ -1964,8 +1965,17 @@ export interface TextSelectionContextOptions {
     readonly maxTextCharacters?: number;
     readonly maxRunLocators?: number;
 }
+export class TiffDecodeError extends Error {
+    readonly code: 'ooxml-tiff-decode';
+    constructor(message: string, options?: ErrorOptions);
+}
 export interface TiffRenderer {
-    render(bytes: Uint8Array): Promise<ImageBitmap | null>;
+    render(bytes: Uint8Array, options?: Readonly<TiffRenderOptions>): Promise<ImageBitmap | null>;
+}
+export interface TiffRenderOptions {
+    targetWidthPx?: number;
+    targetHeightPx?: number;
+    maxRetainedPixels?: number;
 }
 export interface TileInfo {
     tx?: number;

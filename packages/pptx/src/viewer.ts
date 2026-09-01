@@ -354,6 +354,7 @@ export class PptxViewer implements ZoomableViewer {
         threeD: this.opts.threeD,
         regionMap: this.opts.regionMap,
         chartEx: this.opts.chartEx,
+        tiff: this.opts.tiff,
         mode: this._mode,
         progressiveLayout: this.opts.progressiveLayout,
         onLayoutProgress: this.opts.onLayoutProgress,

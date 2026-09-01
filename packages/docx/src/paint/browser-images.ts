@@ -1,5 +1,6 @@
 import {
   applyDuotone,
+  captureDecodedBitmapCacheEpoch,
   MAX_RASTER_PIXELS,
   dropCachedDerivedBitmapNamespace,
   getCachedBitmapByPath,
@@ -95,6 +96,9 @@ export async function decodeRaster(
       ? 4
       : 1;
   const maxRetainedPixels = Math.floor(MAX_RASTER_PIXELS / effectSurfaceCount);
+  const epoch = colorReplaceFrom || duotone
+    ? captureDecodedBitmapCacheEpoch(fetchImage, DOCX_COLOR_EFFECT_CACHE_NAMESPACE)
+    : undefined;
   const base = await getCachedBitmapByPath(imagePath, mimeType, fetchImage, {
     widthPt,
     heightPt,
@@ -110,6 +114,8 @@ export async function decodeRaster(
     mimeType,
     fetchImage,
     { widthPt, heightPt, suppressBoundaryFrame: true, tiff, ...(target ?? {}), maxRetainedPixels },
+    epoch,
+    base,
   );
   const key = `${imageKey(resolvedBaseKey, colorReplaceFrom, duotone)}${failClosedOnDuotoneFailure ? '|strict' : ''}`;
   return getCachedDerivedBitmap(
@@ -141,6 +147,7 @@ export async function decodeRaster(
         throw error;
       }
     },
+    epoch,
   );
 }
 

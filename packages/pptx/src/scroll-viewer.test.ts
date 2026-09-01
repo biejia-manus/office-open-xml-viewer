@@ -1419,7 +1419,12 @@ describe('PptxScrollViewer — self-load path (T7 story)', () => {
     // self-loaded (non-borrowed) viewer is not left blank (I-2).
     const engine = new FakePptxEngine(10, SLIDE_W_EMU, SLIDE_H_EMU);
     const loadSpy = vi.spyOn(PptxPresentation, 'load').mockResolvedValue(engine.asPres());
-    const v = new PptxScrollViewer(container as unknown as HTMLElement, { gap: 10, password: 'secret' });
+    const tiff = { render: vi.fn(async () => null) };
+    const v = new PptxScrollViewer(container as unknown as HTMLElement, {
+      gap: 10,
+      password: 'secret',
+      tiff,
+    });
     const scrollHost = (container.children[0] as FakeEl).children[0] as FakeEl;
     scrollHost.clientHeight = 400;
     scrollHost.clientWidth = 200;
@@ -1427,7 +1432,7 @@ describe('PptxScrollViewer — self-load path (T7 story)', () => {
     expect(loadSpy).toHaveBeenCalledTimes(1);
     expect(loadSpy).toHaveBeenCalledWith(
       'sample.pptx',
-      expect.objectContaining({ password: 'secret' }),
+      expect.objectContaining({ password: 'secret', tiff }),
     );
     // Layout happened: slots mounted and the spacer was sized.
     expect(v.mountedSlideIndicesForTest().length).toBeGreaterThan(0);

@@ -7,7 +7,9 @@ import {
   dropSvgImageCache,
   getCachedBitmapByPath,
   chartImageFillKey,
+  TiffDecodeError,
   type OffscreenFactory,
+  type TiffRenderOptions,
 } from '@silurus/ooxml-core';
 
 /**
@@ -197,6 +199,52 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     expect(options).toMatchObject({ resizeQuality: 'high' });
     expect(options?.resizeWidth).toBeGreaterThan(0);
     expect(options?.resizeWidth).toBeLessThan(12_090);
+  });
+
+  it('merges duplicate same-path placements to the larger required raster target in either order', async () => {
+    const tiffBytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]);
+    const placement = (toCol: number, toRow: number): ImageAnchor => ({
+      fromCol: 0, fromColOff: 0, fromRow: 0, fromRowOff: 0,
+      toCol, toColOff: 0, toRow, toRowOff: 0,
+      nativeExtCx: 0, nativeExtCy: 0,
+      imagePath: 'xl/media/shared-target.tiff',
+      mimeType: 'image/tiff',
+    } as ImageAnchor);
+    const small = placement(1, 1);
+    const large = placement(4, 6);
+
+    const run = async (images: ImageAnchor[]) => {
+      const render = vi.fn(async (
+        _bytes: Uint8Array,
+        options?: Readonly<TiffRenderOptions>,
+      ) => new FakeBitmap('shared-target') as unknown as ImageBitmap);
+      const fetchImage = vi.fn(async () =>
+        new Blob([tiffBytes as BlobPart], { type: 'image/tiff' }));
+      const cache = new Map<string, CanvasImageSource | null>();
+      const ws = worksheetWithImages();
+      ws.images = images;
+      ws.shapeGroups = [];
+
+      await prefetchImages(ws, cache, fetchImage, {
+        effectiveDpr: 2,
+        tiff: { render },
+      });
+
+      expect(fetchImage).toHaveBeenCalledOnce();
+      expect(render).toHaveBeenCalledOnce();
+      expect(cache.size).toBe(1);
+      expect(cache.has('xl/media/shared-target.tiff')).toBe(true);
+      const target = render.mock.calls[0]?.[1];
+      dropBitmapCacheByPath(fetchImage);
+      return target;
+    };
+
+    const smallOnly = await run([small]);
+    const largeOnly = await run([large]);
+    expect(largeOnly?.targetWidthPx).toBeGreaterThan(smallOnly?.targetWidthPx ?? 0);
+    expect(largeOnly?.targetHeightPx).toBeGreaterThan(smallOnly?.targetHeightPx ?? 0);
+    await expect(run([large, small])).resolves.toEqual(largeOnly);
+    await expect(run([small, large])).resolves.toEqual(largeOnly);
   });
 
   it('prefetchImages sizes oversized chart picture fills from the chart anchor', async () => {
@@ -469,6 +517,31 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
 
     expect(render).toHaveBeenCalledTimes(1);
     expect(browserDecode).not.toHaveBeenCalled();
+  });
+
+  it('rethrows TIFF codec diagnostics instead of swallowing a broken picture', async () => {
+    const bytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]);
+    const failure = new TiffDecodeError('synthetic TIFF decode failure');
+    const render = vi.fn(async () => {
+      throw failure;
+    });
+    const fetchImage = vi.fn(async () =>
+      new Blob([bytes as BlobPart], { type: 'image/tiff' }));
+    const ws = worksheetWithImages();
+    ws.images = [{
+      fromCol: 0, fromColOff: 0, fromRow: 0, fromRowOff: 0,
+      toCol: 2, toColOff: 0, toRow: 2, toRowOff: 0,
+      nativeExtCx: 0, nativeExtCy: 0,
+      imagePath: 'xl/media/broken.tiff',
+      mimeType: 'image/tiff',
+    } as ImageAnchor];
+    ws.shapeGroups = [];
+    const cache = new Map<string, CanvasImageSource | null>();
+
+    await expect(prefetchImages(ws, cache, fetchImage, {
+      tiff: { render },
+    })).rejects.toBe(failure);
+    expect(cache.size).toBe(0);
   });
 
   it('decodeImageSource forces the raster (not the SVG vector) when the picture is cropped', async () => {

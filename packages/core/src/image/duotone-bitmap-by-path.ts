@@ -4,6 +4,7 @@
 // accounting system.
 
 import {
+  captureDecodedBitmapCacheEpoch,
   dropCachedDerivedBitmapNamespace,
   getCachedBitmapByPath,
   getCachedDerivedBitmap,
@@ -76,6 +77,9 @@ export async function getCachedDuotoneBitmapByPath(
         ),
       }
     : requestedBitmapOpts;
+  const epoch = duotone
+    ? captureDecodedBitmapCacheEpoch(fetchImage, DUOTONE_CACHE_NAMESPACE)
+    : undefined;
   // Base, colour-free bitmap from the shared path-keyed cache.
   const base = await getCachedBitmapByPath(imagePath, mimeType, fetchImage, bitmapOpts);
   // No duotone → return the base directly (no second-layer entry). A `null`
@@ -88,6 +92,8 @@ export async function getCachedDuotoneBitmapByPath(
     mimeType,
     fetchImage,
     bitmapOpts,
+    epoch,
+    base,
   );
   const key = `${duotoneCacheKey(
     resolvedBaseKey,
@@ -110,6 +116,7 @@ export async function getCachedDuotoneBitmapByPath(
         : recoloured as ImageBitmap;
       return { bitmap, owned: bitmap !== base };
     },
+    epoch,
   );
 }
 

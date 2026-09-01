@@ -357,6 +357,75 @@ describe('docx lazy image bytes', () => {
     }
   });
 
+  it('does not recreate a colour-effect entry when a full drop wins after the base resolves', async () => {
+    stubOffscreen();
+    let finishBase!: (bitmap: ImageBitmap) => void;
+    const baseClose = vi.fn();
+    const recolouredClose = vi.fn();
+    const base = { width: 2, height: 2, close: baseClose } as unknown as ImageBitmap;
+    const recoloured = { width: 2, height: 2, close: recolouredClose } as unknown as ImageBitmap;
+    const decode = vi.fn()
+      .mockImplementationOnce(() => new Promise<ImageBitmap>((resolve) => { finishBase = resolve; }))
+      .mockResolvedValueOnce(recoloured);
+    vi.stubGlobal('createImageBitmap', decode);
+    const fetchImage = vi.fn(async (_path: string, mime: string) =>
+      new Blob([new Uint8Array([1])], { type: mime }));
+    const release = core.acquireBitmapCacheLease(fetchImage);
+    const pending = decodeRaster(
+      'word/media/colour-owner-drop-race.png',
+      'image/png',
+      'FFFFFF',
+      fetchImage,
+    );
+    await vi.waitFor(() => expect(decode).toHaveBeenCalledOnce());
+    const rejected = expect(pending).rejects.toThrow(/cache.*dropped/i);
+
+    finishBase(base);
+    core.dropBitmapCacheByPath(fetchImage);
+    await rejected;
+
+    expect(decode).toHaveBeenCalledOnce();
+    expect(recolouredClose).not.toHaveBeenCalled();
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(baseClose).toHaveBeenCalledOnce();
+  });
+
+  it('does not recreate a colour-effect entry when its namespace is dropped after the base resolves', async () => {
+    stubOffscreen();
+    let finishBase!: (bitmap: ImageBitmap) => void;
+    const baseClose = vi.fn();
+    const recolouredClose = vi.fn();
+    const base = { width: 2, height: 2, close: baseClose } as unknown as ImageBitmap;
+    const recoloured = { width: 2, height: 2, close: recolouredClose } as unknown as ImageBitmap;
+    const decode = vi.fn()
+      .mockImplementationOnce(() => new Promise<ImageBitmap>((resolve) => { finishBase = resolve; }))
+      .mockResolvedValueOnce(recoloured);
+    vi.stubGlobal('createImageBitmap', decode);
+    const fetchImage = vi.fn(async (_path: string, mime: string) =>
+      new Blob([new Uint8Array([1])], { type: mime }));
+    const release = core.acquireBitmapCacheLease(fetchImage);
+    const pending = decodeRaster(
+      'word/media/colour-namespace-drop-race.png',
+      'image/png',
+      'FFFFFF',
+      fetchImage,
+    );
+    await vi.waitFor(() => expect(decode).toHaveBeenCalledOnce());
+    const rejected = expect(pending).rejects.toThrow(/cache.*dropped/i);
+
+    finishBase(base);
+    dropColorReplacedCache(fetchImage);
+    await rejected;
+
+    expect(decode).toHaveBeenCalledOnce();
+    expect(recolouredClose).not.toHaveBeenCalled();
+    release();
+    core.dropBitmapCacheByPath(fetchImage);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(baseClose).toHaveBeenCalledOnce();
+  });
+
   it('decodeRaster applies a <a:duotone> recolour on the raster: base decode + one recolour, memoized', async () => {
     stubOffscreen();
     const fetchImage = vi.fn(

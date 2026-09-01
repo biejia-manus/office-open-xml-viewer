@@ -4,6 +4,7 @@ import {
   defaultDpr,
   isHTMLCanvas,
   isOoxmlDecodedImageLimitError,
+  isTiffDecodeError,
   metafileRasterSize,
   PT_TO_PX,
   chartImageFillKey,
@@ -11,6 +12,7 @@ import {
   collectChartMarkerImageFillsForCharts,
   getCachedSvgImageByPath,
   preferVectorBlip,
+  sourceRasterTargetSize,
 } from '@silurus/ooxml-core';
 import type { Duotone } from '@silurus/ooxml-core';
 import type { ChartThreeDRenderer, ChartRegionMapRenderer, ChartExRenderer, TiffRenderer } from '@silurus/ooxml-core';
@@ -204,6 +206,30 @@ export async function renderSelectedDocumentPage<TTextRun>(
         const key = chartImageFillKey(fill);
         if (!uniqueFills.has(key)) uniqueFills.set(key, fill);
       }
+      const chartTargets = new Map<string, { targetWidthPx: number; targetHeightPx: number }>();
+      for (const descriptor of options.registry.descriptors) {
+        if (descriptor.kind !== 'chart') continue;
+        for (const fill of collectChartMarkerImageFills(
+          descriptor.model as import('@silurus/ooxml-core').ChartModel,
+        )) {
+          const key = chartImageFillKey(fill);
+          if (!uniqueFills.has(key)) continue;
+          // A picture fill may cover a marker, plot area, wall, or floor. The
+          // authored chart frame is the smallest format-derived upper bound
+          // shared by all consumers, including source-crop magnification.
+          const target = sourceRasterTargetSize(
+            descriptor.intrinsicSize.widthPt * scale * effectiveDpr,
+            descriptor.intrinsicSize.heightPt * scale * effectiveDpr,
+            fill.srcRect,
+          );
+          if (!target) continue;
+          const prior = chartTargets.get(key);
+          chartTargets.set(key, {
+            targetWidthPx: Math.max(prior?.targetWidthPx ?? 0, target.width),
+            targetHeightPx: Math.max(prior?.targetHeightPx ?? 0, target.height),
+          });
+        }
+      }
       await Promise.all([...uniqueFills].map(async ([key, fill]) => {
         const raster = metafileRasterSize(fill.mimeType, fill.srcRect, 72, 72);
         if (!raster) {
@@ -216,6 +242,7 @@ export async function renderSelectedDocumentPage<TTextRun>(
             : decodeRaster(
                 fill.imagePath, fill.mimeType, undefined, fetchImage as DocxFetchImage,
                 raster.widthPt, raster.heightPt, fill.duotone, true, options.tiff,
+                chartTargets.get(key),
               );
           let image: CanvasImageSource | null;
           if (!fill.duotone && preferVectorBlip(fill)) {
@@ -229,7 +256,7 @@ export async function renderSelectedDocumentPage<TTextRun>(
           }
           chartImages.set(key, image);
         } catch (error) {
-          if (isOoxmlDecodedImageLimitError(error)) throw error;
+          if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
           chartImages.set(key, null);
         }
       }));

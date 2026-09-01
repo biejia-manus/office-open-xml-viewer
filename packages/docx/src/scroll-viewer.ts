@@ -660,6 +660,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         threeD: this._opts.threeD,
         regionMap: this._opts.regionMap,
         chartEx: this._opts.chartEx,
+        tiff: this._opts.tiff,
         mode: this._mode,
         // The variant the viewer will render. Without these, load builds the
         // final view while every render asks for the markup view, and the first

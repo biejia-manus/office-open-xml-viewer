@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildPageLayers } from '../layout/page-graph.js';
 import type { DocumentLayout, LayoutPage, PaintResourceRegistry } from '../layout/types.js';
 import { renderSelectedDocumentPage } from './canvas-document.js';
-import type { ChartModel } from '@silurus/ooxml-core';
+import { TiffDecodeError, type ChartModel } from '@silurus/ooxml-core';
 
 class RecordingContext {
   readonly operations: string[] = [];
@@ -135,6 +135,60 @@ describe('vertical OpenType paint target projection', () => {
       'word/media/chart-marker-prefetch.svg',
       expect.anything(),
     );
+  });
+
+  it('surfaces a TIFF diagnostic from a chart picture instead of omitting it', async () => {
+    const failure = new TiffDecodeError('Unsupported TIFF compression');
+    const renderTiff = vi.fn(async () => { throw failure; });
+    const fetchImage = vi.fn(async () => new Blob([
+      new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]) as BlobPart,
+    ], { type: 'image/tiff' }));
+    const model = {
+      chartType: 'line', categories: ['A'],
+      series: [{
+        name: 'TIFF picture', values: [1], markerFillPaint: {
+          fillType: 'image', stretch: true,
+          imagePath: 'word/media/chart-marker.tiff',
+          mimeType: 'image/tiff',
+        },
+      }],
+    } as ChartModel;
+    const chartDescriptor = {
+      kind: 'chart' as const,
+      resourceKey: 'chart:body:tiff',
+      intrinsicSize: { widthPt: 100, heightPt: 60 },
+      model,
+    };
+    const chartRegistry: PaintResourceRegistry = {
+      keys: [chartDescriptor.resourceKey],
+      descriptors: [chartDescriptor],
+      resolve() { return chartDescriptor as never; },
+    };
+    const directPage: LayoutPage = {
+      ...page,
+      layers: {
+        ...page.layers,
+        capabilities: { requiresElementBackedVerticalGlyphPaint: false },
+      },
+    };
+
+    await expect(renderSelectedDocumentPage(
+      { pages: [directPage], diagnostics: [] },
+      directPage,
+      new WorkerCanvas() as unknown as OffscreenCanvas,
+      {
+        dpr: 1,
+        parseError: false,
+        registry: chartRegistry,
+        textRuns: [],
+        fetchImage,
+        tiff: { render: renderTiff },
+      },
+    )).rejects.toBe(failure);
+    expect(renderTiff).toHaveBeenCalledWith(expect.any(Uint8Array), expect.objectContaining({
+      targetWidthPx: 134,
+      targetHeightPx: 80,
+    }));
   });
 
   it('paints into an element-backed surface before copying to an OffscreenCanvas target', async () => {

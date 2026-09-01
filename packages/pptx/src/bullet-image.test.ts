@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderTextBody, getCachedBitmap, dropImageBitmapCache } from './renderer.js';
-import type { TextBody, Paragraph, BlipBullet } from './types';
+import { renderSlide, renderTextBody, getCachedBitmap, dropImageBitmapCache } from './renderer.js';
+import type { Slide, TextBody, Paragraph, BlipBullet } from './types';
 import type { TextRunData } from '@silurus/ooxml-core';
 
 /**
@@ -145,6 +145,52 @@ function blipBullet(over: Partial<BlipBullet> = {}): Paragraph['bullet'] {
 
 type FetchImageFn = (path: string, mime: string) => Promise<Blob>;
 
+/** Minimal PNG signature + IHDR prefix for the core dimension sniffer. */
+function pngHeader(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(26);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  bytes.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+  new DataView(bytes.buffer).setUint32(16, width);
+  new DataView(bytes.buffer).setUint32(20, height);
+  return bytes;
+}
+
+function slideCanvas(draws: unknown[]): HTMLCanvasElement {
+  const canvas = {
+    width: 0,
+    height: 0,
+    style: {} as CSSStyleDeclaration,
+    offsetWidth: 960,
+  } as HTMLCanvasElement;
+  const state: Record<string, unknown> = {
+    canvas,
+    fillStyle: '',
+    strokeStyle: '',
+    globalAlpha: 1,
+    lineWidth: 1,
+    direction: 'ltr',
+    measureText: (text: string) => ({
+      width: text.length * 10,
+      actualBoundingBoxAscent: 8,
+      actualBoundingBoxDescent: 2,
+    }),
+    getTransform: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }),
+    drawImage: (image: unknown) => draws.push(image),
+  };
+  const context = new Proxy(state, {
+    get(target, property: string) {
+      if (property in target) return target[property];
+      return () => undefined;
+    },
+    set(target, property: string, value) {
+      target[property] = value;
+      return true;
+    },
+  }) as unknown as CanvasRenderingContext2D;
+  canvas.getContext = (() => context) as unknown as HTMLCanvasElement['getContext'];
+  return canvas;
+}
+
 describe('renderTextBody — picture bullet (buBlip) draws the bitmap', () => {
   let fetchImage: FetchImageFn;
 
@@ -189,6 +235,44 @@ describe('renderTextBody — picture bullet (buBlip) draws the bitmap', () => {
     // Width preserves the bitmap aspect ratio (16:8 = 2:1), not forced square.
     expect(d.w).toBeCloseTo(20 * SENTINEL_RATIO, 6);
     expect(d.w).toBeCloseTo(d.h * SENTINEL_RATIO, 6);
+  });
+
+  it('draws a display-sized cache variant prepared by renderSlide', async () => {
+    const path = 'ppt/media/large-picture-bullet.png';
+    const largePng = pngHeader(4096, 2048);
+    fetchImage = vi.fn(async (_path: string, mime: string) =>
+      new Blob([largePng as BlobPart], { type: mime })) as FetchImageFn;
+    const slide = {
+      index: 0,
+      slideNumber: 1,
+      background: null,
+      elements: [{
+        type: 'shape',
+        x: 0,
+        y: 0,
+        width: 4_572_000,
+        height: 2_286_000,
+        rotation: 0,
+        flipH: false,
+        flipV: false,
+        geometry: 'rect',
+        fill: null,
+        stroke: null,
+        textBody: bodyWithBullet(blipBullet({ imagePath: path })),
+      }],
+    } as Slide;
+    const draws: unknown[] = [];
+
+    await renderSlide(slideCanvas(draws), slide, 9_144_000, 6_858_000, {
+      width: 960,
+      dpr: 1,
+      fetchImage,
+    });
+
+    // The large source is decoded into a display-sized cache variant. The
+    // synchronous bullet paint must use that exact prepared result rather than
+    // peeking only the absent native-resolution cache key.
+    expect(draws).toContain(SENTINEL);
   });
 
   it('scales the bullet by buSzPct (§21.1.2.4.9)', async () => {

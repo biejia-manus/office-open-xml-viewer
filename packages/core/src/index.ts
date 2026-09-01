@@ -219,6 +219,7 @@ export {
 // LRU evictions / drops defer their GPU close to the last release, so a pass
 // resolving more images than the cap never draws a closed bitmap.
 export {
+  captureDecodedBitmapCacheEpoch,
   dropCachedDerivedBitmapNamespace,
   getCachedBitmapByPath,
   getCachedDecodedBitmap,
@@ -230,6 +231,7 @@ export {
   dropBitmapCacheByPath,
   acquireBitmapCacheLease,
   deferBitmapCloseWhileLeased,
+  type DecodedBitmapCacheEpoch,
   type DecodedBitmapCacheOwner,
   type CachedBitmapOptions,
 } from './image/bitmap-image-by-path';
@@ -255,7 +257,12 @@ export {
   decodeRasterOrMetafile,
   type DecodeRasterOptions,
 } from './image/raster-or-metafile';
-export type { TiffRenderer } from './image/tiff-contract';
+export {
+  TiffDecodeError,
+  isTiffDecodeError,
+  type TiffRenderer,
+  type TiffRenderOptions,
+} from './image/tiff-contract';
 // Raster pixel-dimension budget + header sniff (decode-bomb guard, RB1). Shared
 // caps live in `./image/pixel-budget`; `decodeRasterOrMetafile` uses the sniff to
 // refuse an over-budget PNG/JPEG/GIF/BMP/WEBP before `createImageBitmap`.
