@@ -1,5 +1,5 @@
 import {
-  acquireBitmapCacheLease,
+  withBitmapCacheLease,
   clampCanvasSize,
   defaultDpr,
   isHTMLCanvas,
@@ -13,7 +13,7 @@ import {
   getCachedSvgImageByPath,
   preferVectorBlip,
 } from '@silurus/ooxml-core';
-import type { Duotone } from '@silurus/ooxml-core';
+import type { Duotone, ImageResourceOptions } from '@silurus/ooxml-core';
 import type { ChartThreeDRenderer, ChartRegionMapRenderer, ChartExRenderer, TiffRenderer } from '@silurus/ooxml-core';
 import type {
   ChartPaintResourceDescriptor,
@@ -22,7 +22,12 @@ import type {
   LayoutPage,
   PaintResourceRegistry,
 } from '../layout/types.js';
-import { decodeRaster, preloadPaintImages, imageKey, type DocxFetchImage } from './browser-images.js';
+import {
+  decodeRaster,
+  preloadPaintImages,
+  imageKey,
+  type DocxFetchImage,
+} from './browser-images.js';
 import {
   createCanvasPaintResourcePainter,
   paintLayoutPageContent,
@@ -58,6 +63,7 @@ export interface CanvasDocumentPaintOptions<TTextRun> {
   readonly regionMap?: ChartRegionMapRenderer;
   readonly chartEx?: ChartExRenderer;
   readonly tiff?: TiffRenderer;
+  readonly imageResources?: ImageResourceOptions;
 }
 
 /** Per-canvas cancellation token: only the newest asynchronous image preload
@@ -136,14 +142,46 @@ export async function renderSelectedDocumentPage<TTextRun>(
   canvas: HTMLCanvasElement | OffscreenCanvas,
   options: CanvasDocumentPaintOptions<TTextRun>,
 ): Promise<void> {
-  const releaseLease = options.fetchImage
-    ? acquireBitmapCacheLease(options.fetchImage)
-    : undefined;
+  const token = (renderTokens.get(canvas) ?? 0) + 1;
+  renderTokens.set(canvas, token);
+  const superseded = (): boolean => renderTokens.get(canvas) !== token;
+  const pageResourceKeys = page.layers.capabilities.resourceKeys;
+  const descriptorByKey = new Map(
+    options.registry.descriptors.map((descriptor) => [descriptor.resourceKey, descriptor]),
+  );
+  const descriptors = pageResourceKeys
+    ? pageResourceKeys.map((key) => {
+        const descriptor = descriptorByKey.get(key);
+        if (!descriptor) throw new Error(`Missing retained paint resource descriptor: ${key}`);
+        return descriptor;
+      })
+    : options.registry.descriptors;
+  const hasDecodedImages = descriptors.some(
+    descriptor => descriptor.kind === 'image'
+      || descriptor.kind === 'picture-bullet'
+      || (descriptor.kind === 'chart'
+        && collectChartImageFillUsages(
+          descriptor.model as import('@silurus/ooxml-core').ChartModel,
+        ).length > 0),
+  );
+  const paint = () => superseded()
+    ? Promise.resolve()
+    : renderSelectedDocumentPageLeased(layout, page, canvas, options, descriptors, superseded);
+  return options.fetchImage && hasDecodedImages
+    ? withBitmapCacheLease(options.fetchImage, options.imageResources, paint)
+    : paint();
+}
+
+async function renderSelectedDocumentPageLeased<TTextRun>(
+  layout: DocumentLayout,
+  page: LayoutPage,
+  canvas: HTMLCanvasElement | OffscreenCanvas,
+  options: CanvasDocumentPaintOptions<TTextRun>,
+  descriptors: PaintResourceRegistry['descriptors'],
+  superseded: () => boolean,
+): Promise<void> {
   let releasePaintSurface: (() => void) | undefined;
   try {
-    const token = (renderTokens.get(canvas) ?? 0) + 1;
-    renderTokens.set(canvas, token);
-    const superseded = (): boolean => renderTokens.get(canvas) !== token;
     const dpr = options.dpr ?? defaultDpr();
     const paintSurface = acquireElementBackedVerticalPaintSurface(
       canvas,
@@ -185,11 +223,12 @@ export async function renderSelectedDocumentPage<TTextRun>(
     let images;
     try {
       images = await preloadPaintImages(
-        options.registry.descriptors,
+        descriptors,
         options.fetchImage,
         options.tiff,
         scale * effectiveDpr,
         options.svgDecoder,
+        options.imageResources,
       );
     } catch (error) {
       if (superseded()) return;
@@ -292,6 +331,10 @@ export async function renderSelectedDocumentPage<TTextRun>(
         }
       }
       await Promise.all([...chartEntries].map(async ([key, entry]) => {
+        if (images.has(key)) {
+          chartImages.set(key, images.get(key) ?? null);
+          return;
+        }
         const {
           fill, widthPt, heightPt, targetWidthPx, targetHeightPx, hasSourceCrop,
         } = entry;
@@ -389,6 +432,5 @@ export async function renderSelectedDocumentPage<TTextRun>(
     }
   } finally {
     releasePaintSurface?.();
-    releaseLease?.();
   }
 }

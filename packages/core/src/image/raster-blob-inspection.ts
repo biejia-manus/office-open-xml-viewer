@@ -15,6 +15,15 @@ export interface RasterBlobInspection {
   readonly dimensions: RasterDimensions | null;
 }
 
+/** Formats whose browser bitmap decoder accepts a target resize. TIFF is
+ * intentionally excluded: it is handled by the optional format-specific
+ * renderer, while unknown input may be a metafile rather than a raster. */
+export function isBrowserResizableRasterFormat(
+  format: RasterFormat | null,
+): format is Exclude<RasterFormat, 'tiff'> {
+  return format !== null && format !== 'tiff';
+}
+
 const INITIAL_SNIFF_BYTES = 64 * 1024;
 
 function rasterFormat(head: Uint8Array): RasterFormat | null {

@@ -4,7 +4,11 @@ import {
   clampCanvasSize,
   getCachedSvgImageByPath,
   getCachedDuotoneBitmapByPath,
-  acquireBitmapCacheLease,
+  inspectCachedRasterSource,
+  isBrowserResizableRasterFormat,
+  withBitmapCacheLease,
+  normalizeImageResourceOptions,
+  planDecodedImageTargets,
   preferVectorBlip,
   metafileRasterSize,
   sourceRasterTargetSize,
@@ -21,6 +25,7 @@ import {
   type Duotone,
   type OffscreenFactory,
   type SvgBlobDecoder,
+  type ImageResourceOptions,
   chartImageFillKey,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
@@ -86,6 +91,8 @@ interface ImageRef {
   failClosedOnDuotoneFailure?: boolean;
   targetWidthPx?: number;
   targetHeightPx?: number;
+  /** Set only for browser-resizable rasters admitted by the shared plan. */
+  plannedPixelLimit?: number;
 }
 
 function maxDefined(left: number | undefined, right: number | undefined): number | undefined {
@@ -295,6 +302,7 @@ export async function decodeImageSource(
   tiff?: TiffRenderer,
   target?: Readonly<{ targetWidthPx: number; targetHeightPx: number }>,
   svgDecoder?: SvgBlobDecoder,
+  plannedPixelLimit?: number,
 ): Promise<CanvasImageSource | null> {
   const dataIsSvg = mimeType === 'image/svg+xml';
   // SVG pixels are not exposed to the shared bitmap effect pipeline. Without
@@ -314,6 +322,7 @@ export async function decodeImageSource(
       failClosedOnDuotoneFailure,
       tiff,
       ...(target ?? {}),
+      ...(plannedPixelLimit ? { maxRetainedPixels: plannedPixelLimit } : {}),
     });
   // Shared vector-vs-raster gate (see core preferVectorBlip). When it returns
   // true, `blip.svgImagePath` is narrowed to string.
@@ -328,18 +337,27 @@ export async function decodeImageSource(
     try {
       return await getCachedSvgImageByPath(blip.svgImagePath, fetchImage, {
         ...target,
+        maxRetainedPixels: plannedPixelLimit,
         workerDecoder: svgDecoder,
       });
     } catch {
       return dataIsSvg
-        ? getCachedSvgImageByPath(imagePath, fetchImage, { ...target, workerDecoder: svgDecoder })
+        ? getCachedSvgImageByPath(imagePath, fetchImage, {
+            ...target,
+            maxRetainedPixels: plannedPixelLimit,
+            workerDecoder: svgDecoder,
+          })
         : decodeRaster();
     }
   }
   if (dataIsSvg) {
     // svg-only picture with no separate `svgImagePath` field (defensive): the
     // raster decoder (createImageBitmap) can't rasterize SVG.
-    return getCachedSvgImageByPath(imagePath, fetchImage, { ...target, workerDecoder: svgDecoder });
+    return getCachedSvgImageByPath(imagePath, fetchImage, {
+      ...target,
+      maxRetainedPixels: plannedPixelLimit,
+      workerDecoder: svgDecoder,
+    });
   }
   return decodeRaster();
 }
@@ -384,6 +402,7 @@ export async function prefetchImages(
     tiff?: TiffRenderer;
     effectiveDpr?: number;
     svgDecoder?: SvgBlobDecoder;
+    imageResources?: ImageResourceOptions;
   },
 ): Promise<void> {
   // This map is only the synchronous lookup for the current frame. Never keep
@@ -606,6 +625,38 @@ export async function prefetchImages(
     });
   }
   if (refs.size === 0) return;
+  const policy = normalizeImageResourceOptions(opts?.imageResources);
+  const demands = (await Promise.all([...refs].map(async ([key, ref]) => {
+    if (!ref.targetWidthPx || !ref.targetHeightPx
+      || ref.mimeType === 'image/svg+xml' || ref.duotone) return null;
+    const usesVector = !ref.duotone && preferVectorBlip({
+      svgImagePath: ref.svgImagePath,
+      srcRect: ref.srcRect,
+    });
+    if (usesVector) return null;
+    const inspection = await inspectCachedRasterSource(
+      ref.imagePath,
+      ref.mimeType,
+      fetch,
+    ).catch(() => null);
+    if (!inspection?.dimensions || !isBrowserResizableRasterFormat(inspection.format)) return null;
+    return {
+      key,
+      targetWidthPx: ref.targetWidthPx,
+      targetHeightPx: ref.targetHeightPx,
+      sourceWidthPx: inspection.dimensions.width,
+      sourceHeightPx: inspection.dimensions.height,
+      retainedSurfaceCount: 1,
+    };
+  }))).filter((demand): demand is NonNullable<typeof demand> => demand !== null);
+  const plan = planDecodedImageTargets(demands, policy);
+  for (const [key, target] of plan.targets) {
+    const ref = refs.get(key);
+    if (!ref) continue;
+    ref.targetWidthPx = target.width;
+    ref.targetHeightPx = target.height;
+    ref.plannedPixelLimit = target.retainedPixels;
+  }
   await Promise.all(
     [...refs.entries()].map(async ([key, ref]) => {
       try {
@@ -629,6 +680,7 @@ export async function prefetchImages(
             ? { targetWidthPx: ref.targetWidthPx, targetHeightPx: ref.targetHeightPx }
             : undefined,
           opts?.svgDecoder,
+          ref.plannedPixelLimit,
         );
         // Record the resolved drawable (INCLUDING a null for an unsupported
         // metafile, so the renderer skips a falsy source without a re-fetch).
@@ -689,14 +741,12 @@ export function worksheetWithAutoRowHeights(
  *  equations, size the target, draw. Shared verbatim by the main-thread
  *  XlsxWorkbook and the render worker.
  *
- *  The whole pass (prefetch → synchronous draw) runs under a core render-pass
- *  lease ({@link acquireBitmapCacheLease}): the shared bitmap cache is
- *  LRU-bounded, so a pass resolving more images than the cap — or a concurrent
- *  pass on the same workbook — would otherwise evict AND GPU-close bitmaps this
- *  pass's lookup map still references before the draw runs. Under the lease the
- *  eviction still removes the cache entry (size stays bounded; the next pass
- *  re-decodes), but the close is deferred until the lease is released after the
- *  draw, so drawImage never receives a closed bitmap. */
+ *  The whole pass (prefetch → synchronous draw) runs under the core document
+ *  admission queue and render-pass lease ({@link withBitmapCacheLease}). This
+ *  keeps concurrent image-bearing paints for one workbook from each consuming
+ *  the full budget. The shared cache remains LRU-bounded; evictions remove cache
+ *  entries immediately but defer GPU close until the active paint releases its
+ *  lease, so drawImage never receives a closed bitmap. */
 export async function renderWorksheetViewport(
   deps: RenderDeps,
   target: HTMLCanvasElement | OffscreenCanvas,
@@ -704,12 +754,17 @@ export async function renderWorksheetViewport(
   opts: RenderViewportOptions = {},
   svgDecoder?: SvgBlobDecoder,
 ): Promise<void> {
-  const releaseLease = opts.fetchImage ? acquireBitmapCacheLease(opts.fetchImage) : undefined;
-  try {
-    await renderWorksheetViewportLeased(deps, target, viewport, opts, svgDecoder);
-  } finally {
-    releaseLease?.();
-  }
+  const paint = () => renderWorksheetViewportLeased(deps, target, viewport, opts, svgDecoder);
+  const hasDecodedImages = (deps.ws.images?.length ?? 0) > 0
+    || (deps.ws.shapeGroups?.some(group => (
+      group.shapes.some(shape => shape.geom.type === 'image')
+    )) ?? false)
+    || collectChartImageFillUsagesForCharts(
+      (deps.ws.charts ?? []).map(chart => chart.chart),
+    ).length > 0;
+  return opts.fetchImage && hasDecodedImages
+    ? withBitmapCacheLease(opts.fetchImage, opts.imageResources, paint)
+    : paint();
 }
 
 /** {@link renderWorksheetViewport}'s body, verbatim; runs under the caller's
@@ -721,6 +776,7 @@ async function renderWorksheetViewportLeased(
   opts: RenderViewportOptions = {},
   svgDecoder?: SvgBlobDecoder,
 ): Promise<void> {
+  if ((opts as GuardedRenderViewportOptions)[XLSX_RENDER_COMMIT_GUARD]?.() === false) return;
   const styles = deps.styles;
   const measurementCtx = target.getContext('2d') as CanvasRenderingContext2D | null;
   if (!measurementCtx) throw new Error('XLSX render target does not provide a 2-D canvas context');
@@ -759,6 +815,7 @@ async function renderWorksheetViewportLeased(
     tiff: deps.tiff,
     effectiveDpr,
     svgDecoder,
+    imageResources: opts.imageResources,
   });
 
   // ── Step 1b: Pre-rasterize equations in shapes BEFORE the canvas resize,

@@ -19,6 +19,8 @@ export type SvgImageSource = HTMLImageElement | ImageBitmap;
 export interface SvgImageDecodeOptions {
   readonly targetWidthPx?: number;
   readonly targetHeightPx?: number;
+  /** Variant/accounting ceiling for worker-rasterized SVG surfaces. */
+  readonly maxRetainedPixels?: number;
   readonly workerDecoder?: SvgBlobDecoder;
 }
 
@@ -57,6 +59,7 @@ export function getCachedSvgImageByPath(
     return getCachedBitmapByPath(svgImagePath, 'image/svg+xml', fetchImage, {
       targetWidthPx: options.targetWidthPx,
       targetHeightPx: options.targetHeightPx,
+      maxRetainedPixels: options.maxRetainedPixels,
       svgDecoder: options.workerDecoder,
     }).then((bitmap) => {
       if (!bitmap) throw new Error(`svg decode failed: ${svgImagePath}`);

@@ -49,6 +49,10 @@ import {
   MAX_RASTER_DIMENSION,
   OoxmlDecodedImageLimitError,
 } from './pixel-budget.js';
+import {
+  normalizeImageResourceOptions,
+  type ImageResourceOptions,
+} from './adaptive-image-budget.js';
 import type { TiffRenderer } from './tiff-contract.js';
 import { wmfRasterTarget } from './wmf.js';
 import type { SvgBlobDecoder } from '../worker/svg-decode-bridge.js';
@@ -83,6 +87,7 @@ type BitmapCacheEntry = {
 interface BitmapCacheState {
   readonly entries: Map<string, BitmapCacheEntry>;
   retainedBytes: number;
+  retainedLimit: number;
 }
 
 const bitmapCacheByFetch = new WeakMap<DecodedBitmapCacheOwner, BitmapCacheState>();
@@ -183,6 +188,14 @@ function assertCurrentDerivedEpoch(
   }
 }
 
+function releaseInitialRasterBlobs(owner: DecodedBitmapCacheOwner): void {
+  const profiles = rasterProfilesByOwner.get(owner);
+  if (!profiles) return;
+  for (const promise of profiles.values()) {
+    void promise.then((profile) => { profile.initialBlob = undefined; }).catch(() => {});
+  }
+}
+
 function rasterProfileFor(
   owner: DecodedBitmapCacheOwner,
   imagePath: string,
@@ -212,10 +225,27 @@ function rasterProfileFor(
   return promise;
 }
 
+/** Inspect a path through the same per-document profile cache used by bitmap
+ * decoding. Renderers use this only when authored geometry depends on the
+ * source grid (notably DrawingML tile fills); the retained Blob is consumed by
+ * the subsequent decode, so inspection does not introduce a second fetch. */
+export async function inspectCachedRasterSource(
+  imagePath: string,
+  mimeType: string,
+  fetchImage: FetchImage,
+  owner: DecodedBitmapCacheOwner = fetchImage,
+): Promise<RasterBlobInspection> {
+  return (await rasterProfileFor(owner, imagePath, mimeType, fetchImage)).inspection;
+}
+
 function bitmapCacheFor(owner: DecodedBitmapCacheOwner): BitmapCacheState {
   let state = bitmapCacheByFetch.get(owner);
   if (!state) {
-    state = { entries: new Map(), retainedBytes: 0 };
+    state = {
+      entries: new Map(),
+      retainedBytes: 0,
+      retainedLimit: MAX_DECODED_IMAGE_BYTES,
+    };
     bitmapCacheByFetch.set(owner, state);
   }
   return state;
@@ -248,9 +278,68 @@ interface BitmapCacheLeaseState {
   deferred: Array<Promise<ImageBitmap | null>>;
   activeBytes: number;
   activeBitmaps: WeakSet<ImageBitmap>;
+  readonly limits: Map<symbol, number>;
+  activeLimit: number;
 }
 
 const leasesByFetch = new WeakMap<DecodedBitmapCacheOwner, BitmapCacheLeaseState>();
+
+interface BitmapRenderQueueState {
+  tail: Promise<void>;
+  pending: number;
+}
+
+const renderQueuesByOwner = new WeakMap<DecodedBitmapCacheOwner, BitmapRenderQueueState>();
+
+/**
+ * Run one image-bearing paint at a time for a document owner. A render pass can
+ * resolve many bitmaps concurrently internally, but overlapping page/slide/
+ * sheet passes cannot each consume the full document budget at once. This is
+ * the same serialized-admission pattern used by native viewers: memory pressure
+ * controls overlap while decode parallelism remains inside the admitted job.
+ */
+export async function withBitmapCacheLease<T>(
+  owner: DecodedBitmapCacheOwner,
+  options: ImageResourceOptions | undefined,
+  paint: () => Promise<T>,
+): Promise<T> {
+  let queue = renderQueuesByOwner.get(owner);
+  if (!queue) {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    queue = { tail: gate, pending: 1 };
+    renderQueuesByOwner.set(owner, queue);
+    let releaseLease: (() => void) | undefined;
+    try {
+      releaseLease = acquireBitmapCacheLease(owner, options);
+      return await paint();
+    } finally {
+      releaseInitialRasterBlobs(owner);
+      releaseLease?.();
+      open();
+      queue.pending--;
+      if (queue.pending === 0) renderQueuesByOwner.delete(owner);
+    }
+  }
+  const state = queue;
+  const previous = state.tail.catch(() => {});
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => { open = resolve; });
+  state.pending++;
+  state.tail = previous.then(() => gate);
+  await previous;
+  let releaseLease: (() => void) | undefined;
+  try {
+    releaseLease = acquireBitmapCacheLease(owner, options);
+    return await paint();
+  } finally {
+    releaseInitialRasterBlobs(owner);
+    releaseLease?.();
+    open();
+    state.pending--;
+    if (state.pending === 0) renderQueuesByOwner.delete(owner);
+  }
+}
 
 // Every GPU close this module (and the sibling per-document caches routing
 // through {@link deferBitmapCloseWhileLeased}) performs is funneled through
@@ -274,7 +363,7 @@ export function releaseOwnedBitmap(bitmap: ImageBitmap | null | undefined): void
 }
 
 /**
- * Hold every decoded bitmap of one document (keyed by `fetchImage`) alive for
+ * Hold every decoded bitmap of one document owner alive for
  * the duration of a render pass: while the returned release function has not
  * been called, LRU evictions and cache drops defer their GPU `.close()` until
  * the last outstanding lease is released. Acquire before resolving the pass's
@@ -282,20 +371,45 @@ export function releaseOwnedBitmap(bitmap: ImageBitmap | null | undefined): void
  * (concurrent passes over the same document each take one); the release
  * function is idempotent.
  */
-export function acquireBitmapCacheLease(owner: DecodedBitmapCacheOwner): () => void {
+export function acquireBitmapCacheLease(
+  owner: DecodedBitmapCacheOwner,
+  options?: ImageResourceOptions,
+): () => void {
+  const policy = normalizeImageResourceOptions(options);
   let state = leasesByFetch.get(owner);
   if (!state) {
-    state = { count: 0, deferred: [], activeBytes: 0, activeBitmaps: new WeakSet() };
+    state = {
+      count: 0,
+      deferred: [],
+      activeBytes: 0,
+      activeBitmaps: new WeakSet(),
+      limits: new Map(),
+      activeLimit: policy.decodedByteBudget,
+    };
     leasesByFetch.set(owner, state);
   }
   const s = state;
+  const token = Symbol('decoded-image-lease');
+  s.limits.set(token, policy.decodedByteBudget);
+  s.activeLimit = Math.min(...s.limits.values());
+  const cache = bitmapCacheFor(owner);
+  cache.retainedLimit = s.activeLimit;
+  while (cache.retainedBytes > cache.retainedLimit) {
+    if (!evictOldest(owner, cache)) break;
+  }
   s.count++;
   let released = false;
   return () => {
     if (released) return;
     released = true;
     s.count--;
-    if (s.count > 0) return;
+    s.limits.delete(token);
+    if (s.count > 0) {
+      s.activeLimit = Math.min(...s.limits.values());
+      const remainingCache = bitmapCacheByFetch.get(owner);
+      if (remainingCache) remainingCache.retainedLimit = s.activeLimit;
+      return;
+    }
     // Last lease out: run the deferred closes, through each promise (never a raw
     // bitmap reference) so a still-in-flight decode closes only once it resolves.
     for (const p of s.deferred) p.then((b) => closeBitmapOnce(b)).catch(() => {});
@@ -303,6 +417,8 @@ export function acquireBitmapCacheLease(owner: DecodedBitmapCacheOwner): () => v
     s.activeBytes = 0;
     s.activeBitmaps = new WeakSet();
     leasesByFetch.delete(owner);
+    const remainingCache = bitmapCacheByFetch.get(owner);
+    if (remainingCache) remainingCache.retainedLimit = MAX_DECODED_IMAGE_BYTES;
   };
 }
 
@@ -321,10 +437,10 @@ function registerActiveBitmap(owner: DecodedBitmapCacheOwner, bitmap: ImageBitma
   const lease = leasesByFetch.get(owner);
   if (!lease || lease.count === 0 || lease.activeBitmaps.has(bitmap)) return;
   const observed = lease.activeBytes + bitmapWeight(bitmap);
-  if (observed > MAX_DECODED_IMAGE_BYTES) {
+  if (observed > lease.activeLimit) {
     throw new OoxmlDecodedImageLimitError(
       'active-decoded-bytes',
-      MAX_DECODED_IMAGE_BYTES,
+      lease.activeLimit,
       observed,
     );
   }
@@ -699,7 +815,7 @@ function getCachedOwnedBitmap(
       }
       entry.weight = bitmapWeight(bitmap);
       state.retainedBytes += entry.weight;
-      while (state.retainedBytes > MAX_DECODED_IMAGE_BYTES) {
+      while (state.retainedBytes > state.retainedLimit) {
         if (!evictOldest(owner, state, key)) break;
       }
     })
@@ -781,7 +897,7 @@ export function dropCachedDerivedBitmapNamespace(
 
 /**
  * Decode a raster-or-metafile blip at `imagePath` to an `ImageBitmap`, cached per
- * document (keyed by `fetchImage`) then by path. The bytes are fetched lazily
+ * document (keyed by `owner`) then by path. The bytes are fetched lazily
  * through `fetchImage(imagePath, mimeType)` (twin of the audio/video `fetchMedia`
  * path) rather than `fetch`-ing an inlined data URL. The returned bitmap is
  * drawable with `ctx.drawImage`.
@@ -797,12 +913,16 @@ export function dropCachedDerivedBitmapNamespace(
  * concurrency-limited, and one render-pass lease cannot accumulate more than
  * the shared active decoded-byte ceiling. Quota crossings reject with
  * `OoxmlDecodedImageLimitError`; they are never converted to a silent omission.
+ * `owner` defaults to the loader identity. Supplying it explicitly lets a
+ * document unite resources obtained through different byte APIs (for example
+ * PPTX picture parts and media-poster parts) under one cache, queue and budget.
  */
 export function getCachedBitmapByPath(
   imagePath: string,
   mimeType: string,
   fetchImage: FetchImage,
   opts: CachedBitmapOptions = {},
+  owner: DecodedBitmapCacheOwner = fetchImage,
 ): Promise<ImageBitmap | null> {
   const normalized = normalizedBitmapOptions(opts);
   const {
@@ -819,7 +939,7 @@ export function getCachedBitmapByPath(
     return getCachedDecodedBitmap(
       BASE_CACHE_NAMESPACE,
       cachedBitmapVariantKey(imagePath, normalized),
-      fetchImage,
+      owner,
       async () => ({
         bitmap: await svgDecoder(await fetchImage(imagePath, mimeType), {
           targetWidthPx,
@@ -835,7 +955,7 @@ export function getCachedBitmapByPath(
     return getCachedDecodedBitmap(
       BASE_CACHE_NAMESPACE,
       cacheKey,
-      fetchImage,
+      owner,
       async () => {
         const blob = initialBlob ?? await fetchImage(imagePath, mimeType);
         const decodeOpts = {
@@ -854,12 +974,12 @@ export function getCachedBitmapByPath(
       },
     ).then((bitmap) => enforceCachedRetainedBudget(bitmap, normalized));
   };
-  const generation = cacheGeneration(fetchImage);
-  return rasterProfileFor(fetchImage, imagePath, mimeType, fetchImage).then((profile) => {
-    assertCurrentCacheGeneration(fetchImage, generation);
+  const generation = cacheGeneration(owner);
+  return rasterProfileFor(owner, imagePath, mimeType, fetchImage).then((profile) => {
+    assertCurrentCacheGeneration(owner, generation);
     if (profileIsMetafile(profile)) {
       return decode(
-        reusableMetafileVariantKey(fetchImage, imagePath, normalized)
+        reusableMetafileVariantKey(owner, imagePath, normalized)
           ?? metafileVariantKey(imagePath, normalized),
         profile,
       );
@@ -869,13 +989,13 @@ export function getCachedBitmapByPath(
     }
     const nativeKey = `${BASE_CACHE_PREFIX}${cachedBitmapVariantKey(imagePath)}`;
     if (!hasRestrictedPixelLimit(normalized)
-      && bitmapCacheByFetch.get(fetchImage)?.entries.has(nativeKey)) {
+      && bitmapCacheByFetch.get(owner)?.entries.has(nativeKey)) {
       return decode(cachedBitmapVariantKey(imagePath), profile);
     }
     return decode(
       profileNeedsResolutionVariant(profile, normalized)
         ? reusableResolutionVariantKey(
-            fetchImage,
+            owner,
             imagePath,
             normalized,
             profile.inspection.dimensions,

@@ -83,7 +83,12 @@ import {
   chartImageFillUsageSize,
   collectChartImageFillUsages,
   collectChartImageFillUsagesForCharts,
-  acquireBitmapCacheLease,
+  withBitmapCacheLease,
+  normalizeImageResourceOptions,
+  planDecodedImageTargets,
+  duotoneCacheKey,
+  inspectCachedRasterSource,
+  isBrowserResizableRasterFormat,
   peekCachedBitmapByPath,
   dropDecodedBitmapCache,
   preferVectorBlip,
@@ -102,7 +107,12 @@ import {
   warpGlyphTransform,
   followPathUScale,
 } from '@silurus/ooxml-core';
-import type { WarpEnvelope, WarpGlyphTransform } from '@silurus/ooxml-core';
+import type {
+  DecodedBitmapCacheOwner,
+  DecodedImageTargetDemand,
+  WarpEnvelope,
+  WarpGlyphTransform,
+} from '@silurus/ooxml-core';
 import type { CameraInput, Vec2, BevelInput, ExtrusionInput, BevelRegion } from '@silurus/ooxml-core';
 import type {
   MathNode,
@@ -114,6 +124,8 @@ import type {
   TiffRenderer,
   SvgBlobDecoder,
   SvgImageSource,
+  ImageResourceOptions,
+  DecodedImageTargetPlan,
 } from '@silurus/ooxml-core';
 import type { HyperlinkTarget } from '@silurus/ooxml-core';
 import { paintDistanceAwareReflectionBlur } from './reflection-blur';
@@ -254,6 +266,221 @@ function rasterTargetOptions(
   return target
     ? { targetWidthPx: target.width, targetHeightPx: target.height }
     : undefined;
+}
+
+type PlannedRasterOptions = {
+  targetWidthPx: number;
+  targetHeightPx: number;
+  maxRetainedPixels: number;
+};
+
+function imagePlanKey(
+  path: string,
+  duotone?: import('@silurus/ooxml-core').Duotone | null,
+): string {
+  return duotoneCacheKey(path, duotone);
+}
+
+function plannedRasterOptions(
+  plan: DecodedImageTargetPlan,
+  key: string,
+): PlannedRasterOptions | undefined {
+  const target = plan.targets.get(key);
+  return target ? {
+    targetWidthPx: target.width,
+    targetHeightPx: target.height,
+    // A restricted variant key prevents a larger cached zoom level from being
+    // substituted into a pass whose aggregate plan charged only this surface.
+    maxRetainedPixels: target.retainedPixels,
+  } : undefined;
+}
+
+function pictureResourcePath(picture: PictureElement): string {
+  return preferVectorBlip(picture)
+    ? picture.svgImagePath as string
+    : picture.imagePath;
+}
+
+function bulletTargetPx(
+  body: TextBody,
+  paragraph: Paragraph,
+  scale: number,
+  dpr: number,
+): number | undefined {
+  const bullet = asBullet(paragraph.bullet);
+  if (bullet.type !== 'blip') return undefined;
+  let firstRunSizePt: number | undefined;
+  for (const run of paragraph.runs) {
+    if (run.type === 'text' && run.fontSize != null) {
+      firstRunSizePt = run.fontSize;
+      break;
+    }
+  }
+  const basePt = firstRunSizePt
+    ?? paragraph.defFontSize
+    ?? body.defaultFontSize
+    ?? 18;
+  const sizePt = bullet.sizePts != null
+    ? bullet.sizePts
+    : basePt * ((bullet.sizePct ?? 100) / 100);
+  return Math.max(1, sizePt * PT_TO_EMU * scale * dpr);
+}
+
+/** Build the complete visible-slide browser-raster demand before decoding.
+ * Every display target comes from authored geometry, crop, and effective DPR.
+ * Source inspection preserves native output while it fits, then lets the
+ * shared planner make the aggregate native/display/quality decision. */
+async function planSlideImages(
+  slide: Slide,
+  canvasW: number,
+  canvasH: number,
+  scale: number,
+  dpr: number,
+  imageResources?: ImageResourceOptions,
+  fetchImage?: (path: string, mime: string) => Promise<Blob>,
+  fetchMedia?: (path: string) => Promise<Blob>,
+  bitmapOwner?: DecodedBitmapCacheOwner,
+): Promise<DecodedImageTargetPlan> {
+  const pending: Array<Promise<DecodedImageTargetDemand | null>> = [];
+  const push = (
+    key: string,
+    target: ReturnType<typeof rasterTargetOptions>,
+    imagePath: string,
+    mimeType: string,
+    loader: ((path: string, mime: string) => Promise<Blob>) | undefined,
+    retainedSurfaceCount = 1,
+    owner: DecodedBitmapCacheOwner | undefined = loader,
+  ) => {
+    if (!target || !loader) return;
+    pending.push(inspectCachedRasterSource(imagePath, mimeType, loader, owner)
+      .then((inspection) => inspection.dimensions
+        && isBrowserResizableRasterFormat(inspection.format)
+        ? {
+            key,
+            ...target,
+            sourceWidthPx: inspection.dimensions.width,
+            sourceHeightPx: inspection.dimensions.height,
+            retainedSurfaceCount,
+          }
+        : null)
+      .catch(() => null));
+  };
+
+  const background = slide.background;
+  if (background?.fillType === 'image' && background.imagePath
+    && !background.tile && !background.duotone) {
+    const fr = background.fillRect ?? {};
+    const width = canvasW * (1 - (fr.l ?? 0) - (fr.r ?? 0));
+    const height = canvasH * (1 - (fr.t ?? 0) - (fr.b ?? 0));
+    push(
+      imagePlanKey(background.imagePath, background.duotone),
+      rasterTargetOptions(width, height, dpr, background.srcRect),
+      background.imagePath,
+      background.mimeType,
+      fetchImage,
+      1,
+    );
+  }
+
+  for (const element of slide.elements) {
+    if (element.type === 'picture') {
+      const vector = preferVectorBlip(element) || element.mimeType === 'image/svg+xml';
+      if (!vector && !element.duotone) {
+        push(
+          imagePlanKey(element.imagePath, element.duotone),
+          rasterTargetOptions(
+            emuToPx(element.width, scale),
+            emuToPx(element.height, scale),
+            dpr,
+            element.srcRect,
+          ),
+          element.imagePath,
+          element.mimeType,
+          fetchImage,
+          1,
+        );
+      }
+    } else if (element.type === 'media' && element.posterPath) {
+      const loader = fetchMedia ? posterFetchImage(fetchMedia) : undefined;
+      push(
+        imagePlanKey(element.posterPath),
+        rasterTargetOptions(
+          emuToPx(element.width, scale),
+          emuToPx(element.height, scale),
+          dpr,
+        ),
+        element.posterPath,
+        element.posterMimeType || 'application/octet-stream',
+        loader,
+        1,
+        bitmapOwner ?? loader,
+      );
+    } else if (element.type === 'chart') {
+      const frame = {
+        widthPt: element.width / PT_TO_EMU,
+        heightPt: element.height / PT_TO_EMU,
+        targetWidthPx: emuToPx(element.width, scale) * dpr,
+        targetHeightPx: emuToPx(element.height, scale) * dpr,
+      };
+      for (const usage of collectChartImageFillUsages(element.chart)) {
+        const fill = usage.fill;
+        const size = chartImageFillUsageSize(usage, frame);
+        const vector = preferVectorBlip(fill) || fill.mimeType === 'image/svg+xml';
+        if (!vector && !fill.duotone && !usage.preserveNaturalSize
+          && size?.targetWidthPx && size.targetHeightPx) {
+          push(
+            imagePlanKey(fill.imagePath, fill.duotone),
+            {
+              targetWidthPx: size.targetWidthPx,
+              targetHeightPx: size.targetHeightPx,
+            },
+            fill.imagePath,
+            fill.mimeType,
+            fetchImage,
+            1,
+          );
+        }
+      }
+    } else if (element.type === 'shape' && element.textBody) {
+      for (const paragraph of element.textBody.paragraphs) {
+        const bullet = asBullet(paragraph.bullet);
+        if (bullet.type !== 'blip') continue;
+        const size = bulletTargetPx(element.textBody, paragraph, scale, dpr);
+        if (!size || !fetchImage) continue;
+        pending.push(inspectCachedRasterSource(
+          bullet.imagePath,
+          bullet.mimeType,
+          fetchImage,
+        ).then((inspection) => inspection.dimensions
+          && inspection.dimensions.width > 0
+          && inspection.dimensions.height > 0
+          && isBrowserResizableRasterFormat(inspection.format)
+          ? {
+              key: imagePlanKey(bullet.imagePath),
+              targetWidthPx: size * inspection.dimensions.width / inspection.dimensions.height,
+              targetHeightPx: size,
+              sourceWidthPx: inspection.dimensions.width,
+              sourceHeightPx: inspection.dimensions.height,
+            }
+          : null).catch(() => null));
+      }
+    }
+  }
+  const demands = (await Promise.all(pending))
+    .filter((demand): demand is DecodedImageTargetDemand => demand !== null);
+  return planDecodedImageTargets(demands, normalizeImageResourceOptions(imageResources));
+}
+
+function slideMayDecodeImages(slide: Slide): boolean {
+  if (slide.background?.fillType === 'image') return true;
+  return slide.elements.some((element) => {
+    if (element.type === 'picture') return true;
+    if (element.type === 'media') return !!element.posterPath;
+    if (element.type === 'chart') return collectChartImageFillUsages(element.chart).length > 0;
+    return element.type === 'shape' && !!element.textBody?.paragraphs.some(
+      paragraph => asBullet(paragraph.bullet).type === 'blip',
+    );
+  });
 }
 
 const hexToRgba = hexToRgbaCore;
@@ -1726,6 +1953,7 @@ async function renderBackground(
   tiff?: TiffRenderer,
   dpr = 1,
   svgDecoder?: SvgBlobDecoder,
+  imagePlan?: DecodedImageTargetPlan,
 ) {
   // ECMA-376 §20.1.8.14 — image (blipFill) background. Paint an opaque white
   // base first so a partially transparent image (alphaModFix) composites over
@@ -1751,6 +1979,12 @@ async function renderBackground(
       // §20.1.8.23 duotone recolour on the raster blip (issue #889): route
       // through the shared duotone cache (keyed by path + colours). No duotone ⇒
       // this is exactly the former `getCachedBitmapByPath` decode, byte-identical.
+      const planned = imagePlan
+        ? plannedRasterOptions(imagePlan, imagePlanKey(fill.imagePath, fill.duotone))
+        : undefined;
+      const sourceInspection = fill.tile
+        ? await inspectCachedRasterSource(fill.imagePath, fill.mimeType, fetchImage)
+        : undefined;
       const bitmap = await getCachedDuotoneBitmapByPath(
         fill.imagePath,
         fill.mimeType,
@@ -1759,7 +1993,7 @@ async function renderBackground(
         {
           widthPt: canvasW / scale / PT_TO_EMU,
           heightPt: canvasH / scale / PT_TO_EMU,
-          ...(!fill.tile ? (rasterTargetOptions(dw, dh, dpr, fill.srcRect) ?? {}) : {}),
+          ...(planned ?? (!fill.tile ? (rasterTargetOptions(dw, dh, dpr, fill.srcRect) ?? {}) : {})),
           tiff,
           svgDecoder,
         },
@@ -1778,7 +2012,16 @@ async function renderBackground(
       if (fill.alpha != null) ctx.globalAlpha = fill.alpha;
       if (fill.tile) {
         // §20.1.8.58 — tiled placement: repeat the blip at its native size.
-        paintTiledBackground(ctx, bitmap, fill.tile, canvasW, canvasH, scale, fill.srcRect);
+        paintTiledBackground(
+          ctx,
+          bitmap,
+          fill.tile,
+          canvasW,
+          canvasH,
+          scale,
+          fill.srcRect,
+          sourceInspection?.dimensions ?? undefined,
+        );
       } else {
         // §20.1.8.56 stretch into the destination rect from the §20.1.8.30
         // fillRect insets. l/t are left/top insets, r/b are right/bottom
@@ -1879,6 +2122,7 @@ function paintTiledBackground(
   canvasH: number,
   scale: number,
   srcRect?: PictureElement['srcRect'],
+  intrinsicSize?: Readonly<{ width: number; height: number }>,
 ): void {
   // Native tile size in slide px: image px → EMU @96dpi → × sx/sy → × scale.
   // §20.1.8.55 applies before the fill mode: for tile mode the cropped source
@@ -1887,7 +2131,11 @@ function paintTiledBackground(
   // transparent outset through drawImageCropped below.
   // Established shape compatibility defaults remain local to the PPTX shape
   // renderer; the shared model preserves absence for spec-first chart paint.
-  const source = tileSourceExtent(bitmap.width, bitmap.height, srcRect);
+  const source = tileSourceExtent(
+    intrinsicSize?.width ?? bitmap.width,
+    intrinsicSize?.height ?? bitmap.height,
+    srcRect,
+  );
   const tileW = source.width * EMU_PER_PX_96 * (tile.sx ?? 1) * scale;
   const tileH = source.height * EMU_PER_PX_96 * (tile.sy ?? 1) * scale;
   if (!(tileW > 0) || !(tileH > 0)) return;
@@ -5222,14 +5470,16 @@ export function getPosterBitmap(
   fetchMedia: FetchMedia,
   bitmapOwner: PosterFetchImage = posterFetchImage(fetchMedia),
   tiff?: TiffRenderer,
-  target?: { targetWidthPx: number; targetHeightPx: number },
+  target?: PlannedRasterOptions | { targetWidthPx: number; targetHeightPx: number },
   svgDecoder?: SvgBlobDecoder,
 ): Promise<ImageBitmap> {
+  const fetchPoster = posterFetchImage(fetchMedia);
   return getCachedBitmapByPath(
     el.posterPath,
     el.posterMimeType || 'application/octet-stream',
-    bitmapOwner,
+    fetchPoster,
     { tiff, svgDecoder, ...(target ?? {}) },
+    bitmapOwner,
   ).then((bitmap) => {
     if (!bitmap) throw new Error('Media poster could not be decoded');
     return bitmap;
@@ -5245,6 +5495,7 @@ async function renderPicture(
   tiff?: TiffRenderer,
   dpr = 1,
   svgDecoder?: SvgBlobDecoder,
+  imagePlan?: DecodedImageTargetPlan,
 ) {
   // No byte source → nothing to draw (the lazy pipeline always supplies one in
   // both render modes; this guards the rare misconfiguration).
@@ -5276,13 +5527,30 @@ async function renderPicture(
     );
     if (!rasterSize) return;
     const { widthPt, heightPt } = rasterSize;
-    const target = rasterTargetOptions(
+    const rawTarget = rasterTargetOptions(
       emuToPx(el.width, scale),
       emuToPx(el.height, scale),
       dpr,
       el.srcRect,
     );
-    const svgOptions = { ...(target ?? {}), workerDecoder: svgDecoder };
+    const vector = preferVectorBlip(el) || dataIsSvg;
+    const target = (imagePlan
+      ? plannedRasterOptions(
+          imagePlan,
+          imagePlanKey(pictureResourcePath(el), vector ? undefined : el.duotone),
+        )
+      : undefined) ?? rawTarget;
+    const svgPixelLimit = target && 'maxRetainedPixels' in target
+      ? target.maxRetainedPixels as number
+      : undefined;
+    const svgOptions = {
+      ...(target ? {
+        targetWidthPx: target.targetWidthPx,
+        targetHeightPx: target.targetHeightPx,
+        ...(svgPixelLimit === undefined ? {} : { maxRetainedPixels: svgPixelLimit }),
+      } : {}),
+      workerDecoder: svgDecoder,
+    };
     // `null` is reachable when the raster path resolves to an unsupported
     // metafile (a true EMF, or a WMF with no geometry); guarded below.
     let bitmap: ImageBitmap | HTMLImageElement | null;
@@ -5742,6 +6010,7 @@ async function renderMedia(
   tiff?: TiffRenderer,
   dpr = 1,
   svgDecoder?: SvgBlobDecoder,
+  imagePlan?: DecodedImageTargetPlan,
 ) {
   const x = emuToPx(el.x, scale);
   const y = emuToPx(el.y, scale);
@@ -5753,7 +6022,9 @@ async function renderMedia(
     try {
       // Poster is cached (and prefetched by renderSlide); do not close it here —
       // it is reused across renders of the same slide.
-      const target = rasterTargetOptions(w, h, dpr);
+      const target = (imagePlan
+        ? plannedRasterOptions(imagePlan, imagePlanKey(el.posterPath))
+        : undefined) ?? rasterTargetOptions(w, h, dpr);
       poster = await getPosterBitmap(el, fetchMedia, bitmapOwner, tiff, target, svgDecoder);
     } catch (error) {
       if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
@@ -6508,19 +6779,22 @@ export async function renderSlideWithEmbeddedFonts(
   opts: InternalSlideRenderOptions = {},
   onTextRun?: TextRunCallback,
 ): Promise<HTMLCanvasElement | OffscreenCanvas> {
-  // Render-pass lease (core acquireBitmapCacheLease): the warm pass below fires
-  // a decode for every picture on the slide and the draw loop then awaits each
-  // element's bitmap and draws it. The shared bitmap cache is LRU-bounded, so a
-  // slide referencing more images than the cap — or a concurrent render on the
-  // same deck — could evict AND GPU-close a bitmap between the draw loop's await
-  // and its drawImage. Under the lease the eviction still removes the cache
-  // entry (bounded size; a later resolve re-decodes), but the close is deferred
-  // until this pass ends, so no draw ever receives a closed bitmap.
+  // The core document admission queue serializes image-bearing paints for this
+  // deck, so concurrent slide renders cannot each consume the full budget. Its
+  // render-pass lease also pins decoded bitmaps: LRU eviction removes the cache
+  // entry immediately but defers GPU close until this pass ends, so drawImage
+  // never receives a closed bitmap between an await and the actual draw.
   const bitmapOwner = opts.fetchImage
     ?? (opts.fetchMedia ? posterFetchImage(opts.fetchMedia) : undefined);
-  const releaseLease = bitmapOwner ? acquireBitmapCacheLease(bitmapOwner) : undefined;
-  try {
-    return await renderSlideLeased(
+  // Claim the target before queue admission. A newer zoom/navigation request
+  // can supersede this one while it waits behind another image-bearing paint;
+  // the stale job must then exit before resizing or clearing the canvas.
+  const myToken = (renderTokens.get(canvas) ?? 0) + 1;
+  renderTokens.set(canvas, myToken);
+  const superseded = () => renderTokens.get(canvas) !== myToken;
+  const paint = () => superseded()
+    ? Promise.resolve(canvas)
+    : renderSlideLeased(
       canvas,
       slide,
       slideWidth,
@@ -6528,10 +6802,11 @@ export async function renderSlideWithEmbeddedFonts(
       opts,
       onTextRun,
       bitmapOwner,
+      superseded,
     );
-  } finally {
-    releaseLease?.();
-  }
+  return bitmapOwner && slideMayDecodeImages(slide)
+    ? withBitmapCacheLease(bitmapOwner, opts.imageResources, paint)
+    : paint();
 }
 
 /** {@link renderSlide}'s body, verbatim; runs under the caller's render-pass
@@ -6544,6 +6819,7 @@ async function renderSlideLeased(
   opts: InternalSlideRenderOptions = {},
   onTextRun?: TextRunCallback,
   bitmapOwner?: PosterFetchImage,
+  superseded: () => boolean = () => false,
 ): Promise<HTMLCanvasElement | OffscreenCanvas> {
   // Cancellation guard. renderSlide is async (it awaits image / equation decode),
   // so rapid navigation can start a newer render of the SAME canvas before this
@@ -6551,10 +6827,6 @@ async function renderSlideLeased(
   // draws interleave at the await points — ghosting multiple slides together.
   // Stamp a per-canvas token; once a newer render supersedes us, stop drawing at
   // the next await so only the latest render's output survives.
-  const myToken = (renderTokens.get(canvas) ?? 0) + 1;
-  renderTokens.set(canvas, myToken);
-  const superseded = () => renderTokens.get(canvas) !== myToken;
-
   const targetWidth = opts.width ?? ((isHTMLCanvas(canvas) ? canvas.offsetWidth : 0) || 960);
   const scale = targetWidth / slideWidth;
   const canvasW = Math.round(targetWidth);
@@ -6570,6 +6842,18 @@ async function renderSlideLeased(
   // lower-res) backing store to fill it — a visible slide beats a blank one.
   const clamped = clampCanvasSize(canvasW * dpr, canvasH * dpr);
   const effectiveDpr = clamped.clamped ? dpr * clamped.scale : dpr;
+  const plannedImages = planSlideImages(
+    slide,
+    canvasW,
+    canvasH,
+    scale,
+    effectiveDpr,
+    opts.imageResources,
+    opts.fetchImage,
+    opts.fetchMedia,
+    bitmapOwner,
+  );
+  const imagePlan = await plannedImages;
   canvas.width = clamped.width;
   canvas.height = clamped.height;
   // CSS size only applies to the visible HTMLCanvasElement (not OffscreenCanvas)
@@ -6628,6 +6912,7 @@ async function renderSlideLeased(
     opts.tiff,
     effectiveDpr,
     opts.svgDecoder,
+    imagePlan,
   );
   if (superseded()) return canvas;
 
@@ -6656,13 +6941,27 @@ async function renderSlideLeased(
       // failure, so the raster stays cold only in that rare case.)
       const p = el as PictureElement;
       const pDataIsSvg = p.mimeType === 'image/svg+xml';
+      const pVector = preferVectorBlip(p) || pDataIsSvg;
+      const planned = plannedRasterOptions(
+        imagePlan,
+        imagePlanKey(pictureResourcePath(p), pVector ? undefined : p.duotone),
+      );
+      const rawTarget = rasterTargetOptions(
+        emuToPx(p.width, scale),
+        emuToPx(p.height, scale),
+        effectiveDpr,
+        p.srcRect,
+      );
+      const target = planned ?? rawTarget;
+      const svgPixelLimit = target && 'maxRetainedPixels' in target
+        ? target.maxRetainedPixels as number
+        : undefined;
       const svgOptions = {
-        ...(rasterTargetOptions(
-          emuToPx(p.width, scale),
-          emuToPx(p.height, scale),
-          effectiveDpr,
-          p.srcRect,
-        ) ?? {}),
+        ...(target ? {
+          targetWidthPx: target.targetWidthPx,
+          targetHeightPx: target.targetHeightPx,
+          ...(svgPixelLimit === undefined ? {} : { maxRetainedPixels: svgPixelLimit }),
+        } : {}),
         workerDecoder: opts.svgDecoder,
       };
       if (preferVectorBlip(p)) {
@@ -6686,12 +6985,7 @@ async function renderSlideLeased(
         void getCachedDuotoneBitmapByPath(p.imagePath, p.mimeType, p.duotone, opts.fetchImage, {
           widthPt: warm.widthPt,
           heightPt: warm.heightPt,
-          ...(rasterTargetOptions(
-            emuToPx(p.width, scale),
-            emuToPx(p.height, scale),
-            effectiveDpr,
-            p.srcRect,
-          ) ?? {}),
+          ...(target ?? {}),
           tiff: opts.tiff,
           svgDecoder: opts.svgDecoder,
         }).catch(() => undefined);
@@ -6704,11 +6998,12 @@ async function renderSlideLeased(
           opts.fetchMedia,
           bitmapOwner,
           opts.tiff,
-          rasterTargetOptions(
-            emuToPx(m.width, scale),
-            emuToPx(m.height, scale),
-            effectiveDpr,
-          ),
+          plannedRasterOptions(imagePlan, imagePlanKey(m.posterPath))
+            ?? rasterTargetOptions(
+              emuToPx(m.width, scale),
+              emuToPx(m.height, scale),
+              effectiveDpr,
+            ),
           opts.svgDecoder,
         ).catch(() => undefined);
       }
@@ -6764,6 +7059,7 @@ async function renderSlideLeased(
       heightPt: number;
       targetWidthPx?: number;
       targetHeightPx?: number;
+      maxRetainedPixels?: number;
       preserveNaturalSize: boolean;
       hasSourceCrop: boolean;
     }>();
@@ -6796,6 +7092,9 @@ async function renderSlideLeased(
         // is shared by key, any tiled consumer makes the whole shared entry
         // native-sized, even when another chart stretches the same blip.
         const preserveNaturalSize = prior.preserveNaturalSize || usage.preserveNaturalSize;
+        const planned = preserveNaturalSize
+          ? undefined
+          : plannedRasterOptions(imagePlan, imagePlanKey(fill.imagePath, fill.duotone));
         // A picture fill may cover a marker, chart/plot area, wall, or floor.
         // The owning chart frame is the smallest format-derived upper bound
         // common to all consumers. Core has already aggregated each same-chart
@@ -6806,10 +7105,13 @@ async function renderSlideLeased(
           heightPt: Math.max(prior.heightPt, size.heightPt),
           targetWidthPx: preserveNaturalSize
             ? undefined
-            : Math.max(prior.targetWidthPx ?? 0, size.targetWidthPx ?? 0) || undefined,
+            : planned?.targetWidthPx
+              ?? (Math.max(prior.targetWidthPx ?? 0, size.targetWidthPx ?? 0) || undefined),
           targetHeightPx: preserveNaturalSize
             ? undefined
-            : Math.max(prior.targetHeightPx ?? 0, size.targetHeightPx ?? 0) || undefined,
+            : planned?.targetHeightPx
+              ?? (Math.max(prior.targetHeightPx ?? 0, size.targetHeightPx ?? 0) || undefined),
+          maxRetainedPixels: planned?.maxRetainedPixels ?? prior.maxRetainedPixels,
           preserveNaturalSize,
           hasSourceCrop: prior.hasSourceCrop || usage.hasSourceCrop,
         });
@@ -6844,9 +7146,10 @@ async function renderSlideLeased(
         [path, { mimeType, targetHeightPx }],
       ) => {
         try {
-          const target = targetHeightPx === undefined
-            ? {}
-            : { targetWidthPx: 1, targetHeightPx };
+          const target = plannedRasterOptions(imagePlan, imagePlanKey(path))
+            ?? (targetHeightPx === undefined
+              ? {}
+              : { targetWidthPx: 1, targetHeightPx });
           const image = mimeType === 'image/svg+xml'
             ? await getCachedSvgImageByPath(path, fetchImage, {
                 ...target,
@@ -6864,10 +7167,15 @@ async function renderSlideLeased(
       });
       const chartPromises: Promise<unknown>[] = [...chartFillMap].map(async ([key, entry]) => {
         const {
-          fill, widthPt, heightPt, targetWidthPx, targetHeightPx, hasSourceCrop,
+          fill, widthPt, heightPt, targetWidthPx, targetHeightPx,
+          maxRetainedPixels, hasSourceCrop,
         } = entry;
         const target = targetWidthPx && targetHeightPx
-          ? { targetWidthPx, targetHeightPx }
+          ? {
+              targetWidthPx,
+              targetHeightPx,
+              ...(maxRetainedPixels === undefined ? {} : { maxRetainedPixels }),
+            }
           : undefined;
         try {
           const decodeFallback = () => fill.mimeType === 'image/svg+xml'
@@ -6936,6 +7244,7 @@ async function renderSlideLeased(
         opts.tiff,
         effectiveDpr,
         opts.svgDecoder,
+        imagePlan,
       );
     } else if (el.type === 'table') {
       const elementTextRun: TextRunCallback | undefined = onTextRun
@@ -6958,6 +7267,7 @@ async function renderSlideLeased(
         opts.tiff,
         effectiveDpr,
         opts.svgDecoder,
+        imagePlan,
       );
     } else if (el.type === 'chart') {
       // OOXML: 1pt = 12700 EMU. The slide renderer's `scale` is px-per-EMU,

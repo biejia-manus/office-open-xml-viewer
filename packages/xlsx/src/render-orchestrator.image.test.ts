@@ -247,6 +247,79 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     await expect(run([small, large])).resolves.toEqual(largeOnly);
   });
 
+  it('preserves native decoding for an ordinary visible raster that fits', async () => {
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    png.set([0x49, 0x48, 0x44, 0x52], 12);
+    new DataView(png.buffer).setUint32(16, 800);
+    new DataView(png.buffer).setUint32(20, 600);
+    const blob = new Blob([png as BlobPart], { type: 'image/png' });
+    const decode = vi.fn(async () => new FakeBitmap('native'));
+    vi.stubGlobal('createImageBitmap', decode);
+    const fetchImage = vi.fn(async () => blob);
+    const ws = worksheetWithImages();
+    ws.shapeGroups = [];
+
+    await prefetchImages(ws, new Map(), fetchImage, { effectiveDpr: 1 });
+
+    expect(decode).toHaveBeenCalledWith(blob);
+  });
+
+  it('does not apply the anchor-sized pixel cap to a TIFF codec result', async () => {
+    const bytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]);
+    const bitmap = { width: 1000, height: 1000, close() {} } as unknown as ImageBitmap;
+    const render = vi.fn(async () => bitmap);
+    const fetchImage = vi.fn(async () => new Blob([bytes as BlobPart], { type: 'image/tiff' }));
+    const ws = worksheetWithImages();
+    ws.shapeGroups = [];
+    (ws.images as ImageAnchor[])[0] = {
+      ...(ws.images as ImageAnchor[])[0],
+      imagePath: 'xl/media/photo.tiff',
+      mimeType: 'image/tiff',
+    };
+
+    await expect(prefetchImages(ws, new Map(), fetchImage, {
+      effectiveDpr: 1,
+      tiff: { render },
+    })).resolves.toBeUndefined();
+    expect(render).toHaveBeenCalledOnce();
+  });
+
+  it('applies one adaptive quality scale to all visible worksheet images', async () => {
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    png.set([0x49, 0x48, 0x44, 0x52], 12);
+    const view = new DataView(png.buffer);
+    view.setUint32(16, 3200);
+    view.setUint32(20, 1000);
+    const decode = vi.fn(async (_source: unknown, options?: ImageBitmapOptions) => ({
+      width: options?.resizeWidth ?? 3200,
+      height: options?.resizeWidth
+        ? Math.ceil(1000 * options.resizeWidth / 3200)
+        : 1000,
+      close() {},
+    }) as unknown as ImageBitmap);
+    vi.stubGlobal('createImageBitmap', decode);
+    const fetchImage = vi.fn(async () => new Blob([png as BlobPart], { type: 'image/png' }));
+
+    await prefetchImages(worksheetWithImages(), new Map(), fetchImage, {
+      effectiveDpr: 10,
+      imageResources: { decodedByteBudget: 1_024_000, strategy: 'adaptive' },
+    });
+
+    expect(decode).toHaveBeenCalledTimes(2);
+    const targets = decode.mock.calls.map((call) => ({
+      width: call[1]?.resizeWidth as number,
+      height: call[1]?.resizeWidth
+        ? Math.ceil(1000 * call[1].resizeWidth / 3200)
+        : 1000,
+    }));
+    expect(targets[0]).toEqual(targets[1]);
+    expect(targets[0].width * targets[0].height * 4 * targets.length)
+      .toBeLessThanOrEqual(1_024_000);
+    expect(decode.mock.calls.every((call) => call[1]?.resizeQuality === 'high')).toBe(true);
+  });
+
   it('prefetchImages sizes oversized chart picture fills from the chart anchor', async () => {
     const png = new Uint8Array(24);
     png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

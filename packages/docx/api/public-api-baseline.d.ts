@@ -924,6 +924,7 @@ export interface CommentAnchorRange {
     readonly reference: CommentAnchorPoint;
     readonly geometryFallback?: CommentAnchorGeometryFallback;
 }
+export type DecodedImageBudgetStrategy = 'adaptive' | 'strict';
 export interface DocComment {
     id: string;
     author?: string;
@@ -1507,6 +1508,10 @@ export interface ImageFill {
     alpha?: number;
     duotone?: Duotone;
 }
+export interface ImageResourceOptions {
+    decodedByteBudget?: number;
+    strategy?: DecodedImageBudgetStrategy;
+}
 export interface ImageRun {
     imagePath: string;
     mimeType: string;
@@ -1909,6 +1914,7 @@ export interface RenderPageOptions {
     width?: number;
     dpr?: number;
     defaultTextColor?: string;
+    imageResources?: ImageResourceOptions;
     onTextRun?: (run: DocxTextRunInfo) => void;
     currentDate?: Date | number;
     showTrackedChanges?: boolean;

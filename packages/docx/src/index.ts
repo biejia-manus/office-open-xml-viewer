@@ -162,6 +162,8 @@ export {
   isOoxmlDecodedImageLimitError,
   isTiffDecodeError,
   type OoxmlDecodedImageLimitMetric,
+  type DecodedImageBudgetStrategy,
+  type ImageResourceOptions,
   type OoxmlErrorCode,
   type OoxmlErrorStage,
   type OoxmlFormat,

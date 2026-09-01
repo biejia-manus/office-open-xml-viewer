@@ -217,26 +217,35 @@ export type { SvgBlobDecoder, SvgDecodeTarget } from './worker/svg-decode-bridge
 // render-pass lease covers base blips, media posters, and derived effects across
 // all three renderers. `fetchImage` remains the compatibility owner by default,
 // while the general primitive accepts an explicit document owner object.
-// `acquireBitmapCacheLease` pins a render pass's decoded bitmaps: while held,
-// LRU evictions / drops defer their GPU close to the last release, so a pass
-// resolving more images than the cap never draws a closed bitmap.
+// `withBitmapCacheLease` serializes image-bearing paints for one document owner
+// and pins that paint's decoded bitmaps. While the lease is held, LRU evictions
+// and drops defer their GPU close to the last release, so a pass resolving more
+// images than the cap never draws a closed bitmap. The lower-level acquire API
+// remains available for callers that already own admission sequencing.
 export {
   captureDecodedBitmapCacheEpoch,
   dropCachedDerivedBitmapNamespace,
   getCachedBitmapByPath,
   getCachedDecodedBitmap,
   getCachedDerivedBitmap,
+  inspectCachedRasterSource,
   resolvedCachedBitmapVariantKey,
   peekCachedBitmapByPath,
   dropDecodedBitmapCache,
   releaseOwnedBitmap,
   dropBitmapCacheByPath,
   acquireBitmapCacheLease,
+  withBitmapCacheLease,
   deferBitmapCloseWhileLeased,
   type DecodedBitmapCacheEpoch,
   type DecodedBitmapCacheOwner,
   type CachedBitmapOptions,
 } from './image/bitmap-image-by-path';
+export {
+  isBrowserResizableRasterFormat,
+  type RasterBlobInspection,
+  type RasterFormat,
+} from './image/raster-blob-inspection';
 export {
   chartImageFillKey,
   chartImageFillUsageSize,
@@ -274,6 +283,7 @@ export {
 // caps live in `./image/pixel-budget`; `decodeRasterOrMetafile` uses the sniff to
 // refuse an over-budget PNG/JPEG/GIF/BMP/WEBP before `createImageBitmap`.
 export {
+  HARD_MAX_DECODED_IMAGE_BYTES,
   MAX_CONCURRENT_IMAGE_DECODES,
   MAX_DECODED_IMAGE_BYTES,
   MAX_RASTER_DIMENSION,
@@ -284,6 +294,15 @@ export {
   isOoxmlDecodedImageLimitError,
   type OoxmlDecodedImageLimitMetric,
 } from './image/pixel-budget';
+export {
+  normalizeImageResourceOptions,
+  planDecodedImageTargets,
+  type DecodedImageBudgetStrategy,
+  type DecodedImageTargetDemand,
+  type DecodedImageTargetPlan,
+  type ImageResourceOptions,
+  type NormalizedImageResourceOptions,
+} from './image/adaptive-image-budget';
 export {
   sniffRasterDimensions,
   rasterExceedsBudget,

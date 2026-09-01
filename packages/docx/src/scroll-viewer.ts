@@ -1481,6 +1481,7 @@ export class DocxScrollViewer implements ZoomableViewer {
       render = renderDocxFocusedPage(this._doc, slot.canvas, i, 'main', {
         width: widthPx, // this page's own px width → uniform px-per-pt scale (§7)
         dpr,
+        imageResources: this._opts.imageResources,
         defaultTextColor: this._opts.defaultTextColor,
         currentDate: this._currentDate,
         ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
@@ -1669,6 +1670,7 @@ export class DocxScrollViewer implements ZoomableViewer {
       const bmp = await renderDocxFocusedPage(this._doc!, slot.canvas, i, 'worker', {
         width: widthPx,
         dpr,
+        imageResources: this._opts.imageResources,
         defaultTextColor: this._opts.defaultTextColor,
         currentDate: this._currentDate,
         ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
@@ -2142,6 +2144,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     renderDocxFocusedPage(this._doc, spare, i, 'main', {
       width: widthPx,
       dpr,
+      imageResources: this._opts.imageResources,
       defaultTextColor: this._opts.defaultTextColor,
       currentDate: this._currentDate,
       ...(this._showTrackedChanges ? { showTrackedChanges: true } : {}),
