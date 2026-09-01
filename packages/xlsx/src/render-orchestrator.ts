@@ -5,7 +5,7 @@ import {
   getCachedSvgImageByPath,
   getCachedDuotoneBitmapByPath,
   inspectCachedRasterSource,
-  isBrowserResizableRasterFormat,
+  isDecodeTargetResizableRasterFormat,
   withBitmapCacheLease,
   normalizeImageResourceOptions,
   planDecodedImageTargets,
@@ -639,7 +639,8 @@ export async function prefetchImages(
       ref.mimeType,
       fetch,
     ).catch(() => null);
-    if (!inspection?.dimensions || !isBrowserResizableRasterFormat(inspection.format)) return null;
+    if (!inspection?.dimensions
+      || !isDecodeTargetResizableRasterFormat(inspection.format, opts?.tiff !== undefined)) return null;
     return {
       key,
       targetWidthPx: ref.targetWidthPx,

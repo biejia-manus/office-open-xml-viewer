@@ -242,7 +242,7 @@ export {
   type CachedBitmapOptions,
 } from './image/bitmap-image-by-path';
 export {
-  isBrowserResizableRasterFormat,
+  isDecodeTargetResizableRasterFormat,
   type RasterBlobInspection,
   type RasterFormat,
 } from './image/raster-blob-inspection';

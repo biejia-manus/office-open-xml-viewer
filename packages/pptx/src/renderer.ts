@@ -88,7 +88,7 @@ import {
   planDecodedImageTargets,
   duotoneCacheKey,
   inspectCachedRasterSource,
-  isBrowserResizableRasterFormat,
+  isDecodeTargetResizableRasterFormat,
   peekCachedBitmapByPath,
   dropDecodedBitmapCache,
   preferVectorBlip,
@@ -340,6 +340,7 @@ async function planSlideImages(
   fetchImage?: (path: string, mime: string) => Promise<Blob>,
   fetchMedia?: (path: string) => Promise<Blob>,
   bitmapOwner?: DecodedBitmapCacheOwner,
+  tiff?: TiffRenderer,
 ): Promise<DecodedImageTargetPlan> {
   const pending: Array<Promise<DecodedImageTargetDemand | null>> = [];
   const push = (
@@ -354,7 +355,7 @@ async function planSlideImages(
     if (!target || !loader) return;
     pending.push(inspectCachedRasterSource(imagePath, mimeType, loader, owner)
       .then((inspection) => inspection.dimensions
-        && isBrowserResizableRasterFormat(inspection.format)
+        && isDecodeTargetResizableRasterFormat(inspection.format, tiff !== undefined)
         ? {
             key,
             ...target,
@@ -454,7 +455,7 @@ async function planSlideImages(
         ).then((inspection) => inspection.dimensions
           && inspection.dimensions.width > 0
           && inspection.dimensions.height > 0
-          && isBrowserResizableRasterFormat(inspection.format)
+          && isDecodeTargetResizableRasterFormat(inspection.format, tiff !== undefined)
           ? {
               key: imagePlanKey(bullet.imagePath),
               targetWidthPx: size * inspection.dimensions.width / inspection.dimensions.height,
@@ -6852,6 +6853,7 @@ async function renderSlideLeased(
     opts.fetchImage,
     opts.fetchMedia,
     bitmapOwner,
+    opts.tiff,
   );
   const imagePlan = await plannedImages;
   canvas.width = clamped.width;

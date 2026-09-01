@@ -8,7 +8,7 @@ import {
   getCachedDerivedBitmap,
   getCachedSvgImageByPath,
   inspectCachedRasterSource,
-  isBrowserResizableRasterFormat,
+  isDecodeTargetResizableRasterFormat,
   metafileRasterSize,
   preferVectorBlip,
   normalizeImageResourceOptions,
@@ -384,7 +384,8 @@ export async function preloadPaintImages(
       request.mimeType,
       fetchImage,
     ).catch(() => null);
-    if (!inspection?.dimensions || !isBrowserResizableRasterFormat(inspection.format)) return null;
+    if (!inspection?.dimensions
+      || !isDecodeTargetResizableRasterFormat(inspection.format, tiff !== undefined)) return null;
     return {
       key: requestKey(request),
       targetWidthPx: request.targetWidthPx,
