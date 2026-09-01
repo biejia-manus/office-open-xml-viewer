@@ -84,10 +84,28 @@ const registry: PaintResourceRegistry = {
   resolve() { throw new Error('empty registry'); },
 };
 
+function tiffDimensions(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(38);
+  const view = new DataView(bytes.buffer);
+  bytes.set([0x49, 0x49], 0);
+  view.setUint16(2, 42, true);
+  view.setUint32(4, 8, true);
+  view.setUint16(8, 2, true);
+  view.setUint16(10, 256, true);
+  view.setUint16(12, 4, true);
+  view.setUint32(14, 1, true);
+  view.setUint32(18, width, true);
+  view.setUint16(22, 257, true);
+  view.setUint16(24, 4, true);
+  view.setUint32(26, 1, true);
+  view.setUint32(30, height, true);
+  return bytes;
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe('vertical OpenType paint target projection', () => {
-  it('sizes a grouped image decode from its final retained paint frame', async () => {
+  it('sizes a grouped image decode from its final retained paint frame under an adaptive budget', async () => {
     const resourceKey = 'image:body:grouped';
     const finalFrame = { xPt: 20, yPt: 10, widthPt: 8, heightPt: 9 };
     const drawing = {
@@ -128,9 +146,8 @@ describe('vertical OpenType paint target projection', () => {
     const renderTiff = vi.fn(async () => ({
       width: 11, height: 12, close() {},
     }) as unknown as ImageBitmap);
-    const fetchImage = vi.fn(async () => new Blob([
-      new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]) as BlobPart,
-    ], { type: 'image/tiff' }));
+    const bytes = tiffDimensions(4_249, 6_137);
+    const fetchImage = vi.fn(async () => new Blob([bytes as BlobPart], { type: 'image/tiff' }));
 
     await renderSelectedDocumentPage(
       directLayout,
@@ -144,6 +161,7 @@ describe('vertical OpenType paint target projection', () => {
         textRuns: [],
         fetchImage,
         tiff: { render: renderTiff },
+        imageResources: { decodedByteBudget: 1_024 },
       },
     );
 
@@ -180,16 +198,35 @@ describe('vertical OpenType paint target projection', () => {
       intrinsicSize: { widthPt: 100, heightPt: 60 },
       model,
     };
+    const hiddenChartDescriptor = {
+      ...chartDescriptor,
+      resourceKey: 'chart:other-page:picture',
+      model: {
+        ...model,
+        series: [{
+          ...model.series[0],
+          markerFillPaint: {
+            ...model.series[0]!.markerFillPaint,
+            imagePath: 'word/media/other-page.png',
+          },
+        }],
+      } as ChartModel,
+    };
     const chartRegistry: PaintResourceRegistry = {
-      keys: [chartDescriptor.resourceKey],
-      descriptors: [chartDescriptor],
-      resolve() { return chartDescriptor as never; },
+      keys: [chartDescriptor.resourceKey, hiddenChartDescriptor.resourceKey],
+      descriptors: [chartDescriptor, hiddenChartDescriptor],
+      resolve(key) {
+        return (key === chartDescriptor.resourceKey ? chartDescriptor : hiddenChartDescriptor) as never;
+      },
     };
     const directPage: LayoutPage = {
       ...page,
       layers: {
         ...page.layers,
-        capabilities: { requiresElementBackedVerticalGlyphPaint: false },
+        capabilities: {
+          requiresElementBackedVerticalGlyphPaint: false,
+          resourceKeys: [chartDescriptor.resourceKey],
+        },
       },
     };
 
@@ -221,6 +258,7 @@ describe('vertical OpenType paint target projection', () => {
       'word/media/chart-marker-prefetch.svg',
       expect.anything(),
     );
+    expect(fetchImage).not.toHaveBeenCalledWith('word/media/other-page.png', expect.anything());
   });
 
   it('keeps a valid chart occurrence when another retained use has an invalid frame', async () => {
@@ -393,12 +431,11 @@ describe('vertical OpenType paint target projection', () => {
     },
   );
 
-  it('surfaces a TIFF diagnostic from a chart picture instead of omitting it', async () => {
+  it('surfaces a TIFF diagnostic after sizing the chart picture from its retained occurrence', async () => {
     const failure = new TiffDecodeError('Unsupported TIFF compression');
     const renderTiff = vi.fn(async () => { throw failure; });
-    const fetchImage = vi.fn(async () => new Blob([
-      new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]) as BlobPart,
-    ], { type: 'image/tiff' }));
+    const bytes = tiffDimensions(4_249, 6_137);
+    const fetchImage = vi.fn(async () => new Blob([bytes as BlobPart], { type: 'image/tiff' }));
     const model = {
       chartType: 'line', categories: ['A'],
       series: [{
@@ -412,7 +449,7 @@ describe('vertical OpenType paint target projection', () => {
     const chartDescriptor = {
       kind: 'chart' as const,
       resourceKey: 'chart:body:tiff',
-      intrinsicSize: { widthPt: 100, heightPt: 60 },
+      intrinsicSize: { widthPt: 1, heightPt: 1 },
       model,
     };
     const chartRegistry: PaintResourceRegistry = {
@@ -445,6 +482,7 @@ describe('vertical OpenType paint target projection', () => {
         textRuns: [],
         fetchImage,
         tiff: { render: renderTiff },
+        imageResources: { decodedByteBudget: 200_000 },
       },
     )).rejects.toBe(failure);
     expect(renderTiff).toHaveBeenCalledWith(expect.any(Uint8Array), expect.objectContaining({

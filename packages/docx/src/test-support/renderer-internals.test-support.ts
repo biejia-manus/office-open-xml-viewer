@@ -47,6 +47,8 @@ export async function preloadImages(
   fetchImage: DocxFetchImage | undefined,
   services?: LayoutServices,
   devicePixelsPerPoint?: number,
+  imageResources?: import('@silurus/ooxml-core').ImageResourceOptions,
+  tiff?: import('@silurus/ooxml-core').TiffRenderer,
 ): Promise<Map<string, DecodedImage>> {
   const registry = services
     ? paintResourceRegistryOf(services)
@@ -55,7 +57,9 @@ export async function preloadImages(
   // Production render paths always supply occurrences from retained geometry.
   const rasterPaintOccurrences: RasterPaintOccurrence[] = registry.descriptors.flatMap(
     (descriptor) => (
-      descriptor.kind === 'image' || descriptor.kind === 'picture-bullet'
+      descriptor.kind === 'image'
+        || descriptor.kind === 'picture-bullet'
+        || descriptor.kind === 'chart'
         ? [{
             resourceKey: descriptor.resourceKey,
             resourceKind: descriptor.kind,
@@ -69,7 +73,9 @@ export async function preloadImages(
     registry.descriptors,
     rasterPaintOccurrences,
     fetchImage,
-    undefined,
+    tiff,
     devicePixelsPerPoint,
+    undefined,
+    imageResources,
   );
 }

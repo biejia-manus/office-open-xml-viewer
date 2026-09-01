@@ -146,11 +146,36 @@ describe('getPosterBitmap — RB1 poster decode-bomb guard', () => {
         code: 'ooxml-decoded-image-limit',
         metric: 'active-decoded-bytes',
       });
+    expect(fetchImage).toHaveBeenCalledTimes(1);
+    expect(fetchMedia).toHaveBeenCalledTimes(1);
     expect(closePoster).toHaveBeenCalledTimes(1);
 
     release();
     dropBitmapCacheByPath(fetchImage);
     await Promise.resolve();
     expect(closeBase).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads poster bytes through media extraction but retains them under the deck owner', async () => {
+    const closePoster = vi.fn();
+    createImageBitmapSpy.mockResolvedValueOnce({
+      width: 640,
+      height: 360,
+      close: closePoster,
+    } as unknown as ImageBitmap);
+    const deckOwner = vi.fn(async () => {
+      throw new Error('the deck owner is an identity, not the poster byte loader');
+    });
+    const fetchMedia = vi.fn(async () => new Blob([pngHeader(640, 360) as BlobPart], {
+      type: 'image/png',
+    }));
+
+    await getPosterBitmap(mediaEl(), fetchMedia, deckOwner);
+    expect(fetchMedia).toHaveBeenCalledOnce();
+    expect(deckOwner).not.toHaveBeenCalled();
+
+    dropBitmapCacheByPath(deckOwner);
+    await Promise.resolve();
+    expect(closePoster).toHaveBeenCalledOnce();
   });
 });

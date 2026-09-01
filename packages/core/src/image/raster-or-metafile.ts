@@ -17,7 +17,7 @@ import {
   sourceRasterExceedsBudget,
   type RasterDimensions,
 } from './raster-dimensions.js';
-import { aspectPreservingRasterTarget } from './raster-target.js';
+import { decodedBitmapRetainedTarget } from './raster-target.js';
 import {
   isTiff,
   isTiffDecodeError,
@@ -69,7 +69,7 @@ function decodePlan(
   // needs native resolution. If one target axis reaches/exceeds the source,
   // retaining the source grid is genuinely required; quota checks below reject
   // it rather than silently substituting a smaller, insufficient surface.
-  const target = aspectPreservingRasterTarget(
+  const target = decodedBitmapRetainedTarget(
     source,
     targetWidth,
     targetHeight,
@@ -77,14 +77,10 @@ function decodePlan(
   );
   if (!target) return native;
   const resizeWidth = target.width;
-  const retainedHeight = Math.min(
-    source.height,
-    Math.max(1, Math.ceil(source.height * resizeWidth / source.width)),
-  );
   // One axis lets the HTML algorithm preserve the oriented source aspect ratio
   // (including EXIF rotation) instead of imposing the coded header's W×H.
   return {
-    retainedDimensions: { width: resizeWidth, height: retainedHeight },
+    retainedDimensions: target,
     resizeOptions: { resizeWidth, resizeQuality: 'high' },
   };
 }

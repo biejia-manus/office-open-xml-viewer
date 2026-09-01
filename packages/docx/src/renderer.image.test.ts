@@ -345,6 +345,171 @@ describe('docx lazy image bytes', () => {
     expect(createBitmap).toHaveBeenCalledTimes(2);
   });
 
+  it('preserves native decoding for an ordinary raster that fits the document budget', async () => {
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    png.set([0x49, 0x48, 0x44, 0x52], 12);
+    new DataView(png.buffer).setUint32(16, 800);
+    new DataView(png.buffer).setUint32(20, 600);
+    const blob = new Blob([png as BlobPart], { type: 'image/png' });
+    const fetchImage = vi.fn(async () => blob);
+    const doc = {
+      body: [{
+        type: 'paragraph',
+        runs: [{
+          type: 'image', imagePath: 'word/media/photo.png', mimeType: 'image/png',
+          widthPt: 100, heightPt: 75,
+        }],
+      }],
+      headers: {},
+      footers: {},
+    } as unknown as DocxDocumentModel;
+
+    await preloadImages(doc, fetchImage, undefined, 1);
+
+    expect(globalThis.createImageBitmap).toHaveBeenCalledWith(blob);
+  });
+
+  it('keeps DrawingML pixel effects on the authored source grid during preload', async () => {
+    stubOffscreen();
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    png.set([0x49, 0x48, 0x44, 0x52], 12);
+    new DataView(png.buffer).setUint32(16, 800);
+    new DataView(png.buffer).setUint32(20, 600);
+    const fetchImage = vi.fn(async () =>
+      new Blob([png as BlobPart], { type: 'image/png' }));
+    const doc = {
+      body: [{
+        type: 'paragraph',
+        runs: [{
+          type: 'image',
+          imagePath: 'word/media/duotone.png',
+          mimeType: 'image/png',
+          widthPt: 100,
+          heightPt: 75,
+          duotone: { clr1: '000000', clr2: 'FFFFFF' },
+        }],
+      }],
+      headers: {},
+      footers: {},
+    } as unknown as DocxDocumentModel;
+
+    await preloadImages(doc, fetchImage, undefined, 2);
+
+    const decode = globalThis.createImageBitmap as ReturnType<typeof vi.fn>;
+    expect(decode).toHaveBeenCalledTimes(2);
+    expect(decode.mock.calls[0]).toHaveLength(1);
+    expect(decode.mock.calls[1]).toHaveLength(1);
+  });
+
+  it('does not apply a display-sized pixel cap to a TIFF codec result', async () => {
+    const bytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]);
+    const bitmap = { width: 1000, height: 1000, close() {} } as unknown as ImageBitmap;
+    const render = vi.fn(async () => bitmap);
+    const fetchImage = vi.fn(async () => new Blob([bytes as BlobPart], { type: 'image/tiff' }));
+    const doc = {
+      body: [{
+        type: 'paragraph',
+        runs: [{
+          type: 'image', imagePath: 'word/media/photo.tiff', mimeType: 'image/tiff',
+          widthPt: 10, heightPt: 10,
+        }],
+      }],
+      headers: {},
+      footers: {},
+    } as unknown as DocxDocumentModel;
+
+    await expect(preloadImages(
+      doc,
+      fetchImage,
+      undefined,
+      1,
+      undefined,
+      { render },
+    )).resolves.toBeDefined();
+    expect(render).toHaveBeenCalledOnce();
+  });
+
+  it('display-decodes the redacted issue #1426 image class even though each source is below 32 MP', async () => {
+    const png = (width: number, height: number) => {
+      const bytes = new Uint8Array(24);
+      bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      bytes.set([0x49, 0x48, 0x44, 0x52], 12);
+      const view = new DataView(bytes.buffer);
+      view.setUint32(16, width);
+      view.setUint32(20, height);
+      return bytes;
+    };
+    const blobs = new Map([
+      ['word/media/photo.png', new Blob([png(4518, 6777) as BlobPart], { type: 'image/png' })],
+      ['word/media/header.png', new Blob([png(8000, 2311) as BlobPart], { type: 'image/png' })],
+    ]);
+    const fetchImage = vi.fn(async (path: string) => blobs.get(path) as Blob);
+    const image = (imagePath: string, widthPt: number, heightPt: number) => ({
+      type: 'image', imagePath, mimeType: 'image/png', widthPt, heightPt,
+    });
+    const doc = {
+      body: [{
+        type: 'paragraph',
+        runs: [
+          image('word/media/photo.png', 300, 450),
+          image('word/media/header.png', 100, 28.8875),
+        ],
+      }],
+      headers: {},
+      footers: {},
+    } as unknown as DocxDocumentModel;
+
+    await preloadImages(doc, fetchImage, undefined, 2);
+
+    expect(globalThis.createImageBitmap).toHaveBeenCalledWith(
+      blobs.get('word/media/photo.png'),
+      expect.objectContaining({ resizeWidth: 600, resizeQuality: 'high' }),
+    );
+    expect(globalThis.createImageBitmap).toHaveBeenCalledWith(
+      blobs.get('word/media/header.png'),
+      expect.objectContaining({ resizeWidth: 201, resizeQuality: 'high' }),
+    );
+  });
+
+  it('shares one adaptive quality scale across a page whose display targets exceed its budget', async () => {
+    const bytes = new Uint8Array(24);
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    bytes.set([0x49, 0x48, 0x44, 0x52], 12);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(16, 2000);
+    view.setUint32(20, 2000);
+    const fetchImage = vi.fn(async () => new Blob([bytes as BlobPart], { type: 'image/png' }));
+    const image = (imagePath: string) => ({
+      type: 'image', imagePath, mimeType: 'image/png', widthPt: 100, heightPt: 100,
+    });
+    const doc = {
+      body: [{
+        type: 'paragraph',
+        runs: [image('word/media/a.png'), image('word/media/b.png')],
+      }],
+      headers: {},
+      footers: {},
+    } as unknown as DocxDocumentModel;
+
+    await preloadImages(doc, fetchImage, undefined, 10, {
+      decodedByteBudget: 2_000_000,
+      strategy: 'adaptive',
+    });
+
+    expect(globalThis.createImageBitmap).toHaveBeenNthCalledWith(
+      1,
+      expect.any(Blob),
+      expect.objectContaining({ resizeWidth: 500, resizeQuality: 'high' }),
+    );
+    expect(globalThis.createImageBitmap).toHaveBeenNthCalledWith(
+      2,
+      expect.any(Blob),
+      expect.objectContaining({ resizeWidth: 500, resizeQuality: 'high' }),
+    );
+  });
+
   it('threads the opt-in TIFF codec through the DOCX image path', async () => {
     const bytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]);
     const bitmap = { width: 8, height: 4, close() {} } as unknown as ImageBitmap;

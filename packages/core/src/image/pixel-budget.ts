@@ -45,6 +45,14 @@ export const MAX_RASTER_SOURCE_DIMENSION = MAX_RASTER_SOURCE_PIXELS;
 /** Maximum decoded RGBA ownership retained or leased per document. */
 export const MAX_DECODED_IMAGE_BYTES = MAX_RASTER_PIXELS * 4;
 
+/**
+ * Non-disableable aggregate ceiling for caller-configured decoded-image
+ * budgets. The ordinary 128 MiB value above is the adaptive default; trusted
+ * desktop integrations may raise it, but never beyond the same 512 MiB RGBA
+ * envelope used to bound an encoded source grid before browser decoding.
+ */
+export const HARD_MAX_DECODED_IMAGE_BYTES = MAX_RASTER_SOURCE_PIXELS * 4;
+
 /** Keep simultaneous browser decoders bounded even before exact pixels exist. */
 export const MAX_CONCURRENT_IMAGE_DECODES = 2;
 

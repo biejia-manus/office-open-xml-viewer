@@ -999,6 +999,7 @@ export interface DataValidation {
     errorTitle?: string;
     errorMessage?: string;
 }
+export type DecodedImageBudgetStrategy = 'adaptive' | 'strict';
 export interface DefinedName {
     name: string;
     formula: string;
@@ -1123,6 +1124,10 @@ export interface ImageFill {
     tile?: TileInfo;
     alpha?: number;
     duotone?: Duotone__emitterCollision1;
+}
+export interface ImageResourceOptions {
+    decodedByteBudget?: number;
+    strategy?: DecodedImageBudgetStrategy;
 }
 export function isOoxmlDecodedImageLimitError(error: unknown): error is OoxmlDecodedImageLimitError;
 export function isTiffDecodeError(error: unknown): error is TiffDecodeError;
@@ -2045,6 +2050,7 @@ export interface XlsxRenderViewportOptions {
     width?: number;
     height?: number;
     dpr?: number;
+    imageResources?: ImageResourceOptions;
     defaultFontFamily?: string;
     defaultFontSize?: number;
     scrollOffsetX?: number;
@@ -2146,6 +2152,7 @@ export class XlsxSheetViewer implements ZoomableViewer {
     private __privatePresence;
 }
 export interface XlsxSheetViewerOptions extends LoadOptions {
+    imageResources?: ImageResourceOptions;
     cellScale?: number;
     resizable?: boolean;
     showScrollbars?: boolean;

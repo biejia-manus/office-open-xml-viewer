@@ -7,8 +7,11 @@ import {
   dropBitmapCacheByPath,
   dropCachedDerivedBitmapNamespace,
   acquireBitmapCacheLease,
+  inspectCachedRasterSource,
+  withBitmapCacheLease,
 } from './bitmap-image-by-path';
 import {
+  HARD_MAX_DECODED_IMAGE_BYTES,
   MAX_CONCURRENT_IMAGE_DECODES,
   MAX_DECODED_IMAGE_BYTES,
 } from './pixel-budget';
@@ -709,7 +712,6 @@ describe('getCachedBitmapByPath', () => {
     await getCachedBitmapByPath('word/media/lru-256.png', 'image/png', fetchImage);
     // Let the eviction close-through-promise microtask run.
     await Promise.resolve();
-    await Promise.resolve();
     expect(closed.length).toBe(1); // the oldest (lru-0) was closed
   });
 
@@ -843,6 +845,30 @@ describe('getCachedBitmapByPath', () => {
     await Promise.all(decodes);
     expect(maximumActive).toBe(MAX_CONCURRENT_IMAGE_DECODES);
     dropBitmapCacheByPath(fetchImage);
+  });
+
+  it('admits source inspection through the shared per-document gate', async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const releases: Array<() => void> = [];
+    const fetchImage = vi.fn((_path: string, mime: string) => new Promise<Blob>((resolve) => {
+      active++;
+      maximumActive = Math.max(maximumActive, active);
+      releases.push(() => {
+        active--;
+        resolve(new Blob([new Uint8Array([1])], { type: mime }));
+      });
+    }));
+
+    const inspections = Array.from({ length: MAX_CONCURRENT_IMAGE_DECODES + 2 }, (_, index) =>
+      inspectCachedRasterSource(`word/media/inspect-${index}.png`, 'image/png', fetchImage));
+    await vi.waitFor(() => expect(active).toBe(MAX_CONCURRENT_IMAGE_DECODES));
+
+    for (const release of releases.splice(0)) release();
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    for (const release of releases.splice(0)) release();
+    await Promise.all(inspections);
+    expect(maximumActive).toBe(MAX_CONCURRENT_IMAGE_DECODES);
   });
 });
 
@@ -1034,5 +1060,103 @@ describe('acquireBitmapCacheLease (render-pass liveness)', () => {
     await flush();
     expect(closeBase).toHaveBeenCalledTimes(1);
     expect(closeDerived).toHaveBeenCalledTimes(2);
+  });
+
+  it('honours a caller-configured aggregate budget above the adaptive default', async () => {
+    const width = 4096;
+    const height = 4096; // 64 MiB per RGBA surface; three need 192 MiB.
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn(async () => ({ width, height, close() {} }) as unknown as ImageBitmap),
+    );
+    const fetchImage = vi.fn(async (_path: string, mime: string) =>
+      new Blob([new Uint8Array([1])], { type: mime }));
+    const budget = Math.min(HARD_MAX_DECODED_IMAGE_BYTES, MAX_DECODED_IMAGE_BYTES * 2);
+    const release = acquireBitmapCacheLease(fetchImage, {
+      decodedByteBudget: budget,
+      strategy: 'adaptive',
+    });
+
+    await expect(Promise.all([
+      getCachedBitmapByPath('word/media/configured-a.bin', 'application/octet-stream', fetchImage),
+      getCachedBitmapByPath('word/media/configured-b.bin', 'application/octet-stream', fetchImage),
+      getCachedBitmapByPath('word/media/configured-c.bin', 'application/octet-stream', fetchImage),
+    ])).resolves.toHaveLength(3);
+
+    release();
+    dropBitmapCacheByPath(fetchImage);
+  });
+
+  it('does not leak one paint\'s configured retained limit into unleased cache work', async () => {
+    const fetchImage = vi.fn(async (_path: string, mime: string) =>
+      new Blob([new Uint8Array([1])], { type: mime }));
+    const release = acquireBitmapCacheLease(fetchImage, {
+      decodedByteBudget: 4,
+      strategy: 'adaptive',
+    });
+    await getCachedBitmapByPath('word/media/transient-limit-a.png', 'image/png', fetchImage);
+    release();
+
+    await getCachedBitmapByPath('word/media/transient-limit-b.png', 'image/png', fetchImage);
+    await getCachedBitmapByPath('word/media/transient-limit-a.png', 'image/png', fetchImage);
+    expect(fetchImage).toHaveBeenCalledTimes(2);
+    dropBitmapCacheByPath(fetchImage);
+  });
+
+  it('serializes overlapping image-bearing paints for the same document owner', async () => {
+    const owner = vi.fn(async () => new Blob());
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const order: string[] = [];
+
+    const first = withBitmapCacheLease(owner, undefined, async () => {
+      order.push('first:start');
+      await firstGate;
+      order.push('first:end');
+    });
+    const second = withBitmapCacheLease(owner, undefined, async () => {
+      order.push('second:start');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(order).toEqual(['first:start']);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(order).toEqual(['first:start', 'first:end', 'second:start']);
+  });
+
+  it('releases queue admission after a paint or option-validation failure', async () => {
+    const owner = vi.fn(async () => new Blob());
+    await expect(withBitmapCacheLease(owner, undefined, async () => {
+      throw new Error('paint failed');
+    })).rejects.toThrow('paint failed');
+    await expect(withBitmapCacheLease(owner, {
+      decodedByteBudget: 0,
+    }, async () => 'unreachable')).rejects.toThrow(RangeError);
+
+    await expect(withBitmapCacheLease(owner, undefined, async () => 'recovered'))
+      .resolves.toBe('recovered');
+  });
+
+  it('does not retain an inspected compressed blob after a failed paint', async () => {
+    const png = new Uint8Array(26);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    png.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+    const view = new DataView(png.buffer);
+    view.setUint32(16, 100);
+    view.setUint32(20, 100);
+    const fetchImage = vi.fn(async () => new Blob([png as BlobPart], { type: 'image/png' }));
+    const path = 'word/media/failed-paint-profile.png';
+
+    await expect(withBitmapCacheLease(fetchImage, undefined, async () => {
+      await inspectCachedRasterSource(path, 'image/png', fetchImage);
+      throw new Error('paint failed after inspection');
+    })).rejects.toThrow('paint failed after inspection');
+
+    await getCachedBitmapByPath(path, 'image/png', fetchImage, {
+      targetWidthPx: 10,
+      targetHeightPx: 10,
+    });
+    expect(fetchImage).toHaveBeenCalledTimes(2);
   });
 });

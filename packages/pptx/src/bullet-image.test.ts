@@ -244,7 +244,7 @@ describe('renderTextBody — picture bullet (buBlip) draws the bitmap', () => {
     expect(d.w).toBeCloseTo(d.h * SENTINEL_RATIO, 6);
   });
 
-  it('draws a display-sized cache variant prepared by renderSlide', async () => {
+  it('preserves a safe native cache variant prepared by renderSlide', async () => {
     const path = 'ppt/media/large-picture-bullet.png';
     const largePng = pngHeader(4096, 2048);
     fetchImage = vi.fn(async (_path: string, mime: string) =>
@@ -276,14 +276,11 @@ describe('renderTextBody — picture bullet (buBlip) draws the bitmap', () => {
       fetchImage,
     });
 
-    // The large source is decoded into a display-sized cache variant. The
-    // synchronous bullet paint must use that exact prepared result rather than
-    // peeking only the absent native-resolution cache key.
+    // This 8 MP source fits both the per-surface and aggregate budgets, so the
+    // renderer preserves the established native decode. The synchronous bullet
+    // paint must use that exact prepared result.
     expect(draws).toContain(SENTINEL);
-    expect(globalThis.createImageBitmap).toHaveBeenCalledWith(expect.any(Blob), {
-      resizeWidth: 54,
-      resizeQuality: 'high',
-    });
+    expect(globalThis.createImageBitmap).toHaveBeenCalledWith(expect.any(Blob));
   });
 
   it('routes SVG picture bullets through the worker bridge at their marker height', async () => {

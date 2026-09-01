@@ -40,6 +40,31 @@ export function aspectPreservingRasterTarget(
   return width < source.width && height < source.height ? { width, height } : null;
 }
 
+/** Pixel grid retained by the browser when the HTML decode request supplies
+ * only `resizeWidth`. The one-axis request is intentional: it preserves the
+ * decoder's natural (including EXIF-oriented) aspect ratio. This helper is the
+ * single accounting counterpart for that browser behavior. */
+export function decodedBitmapRetainedTarget(
+  source: Readonly<RasterDimensions>,
+  targetWidthPx: number | undefined,
+  targetHeightPx: number | undefined,
+  allowSingleAxis = false,
+): RasterDimensions | null {
+  const target = aspectPreservingRasterTarget(
+    source,
+    targetWidthPx,
+    targetHeightPx,
+    allowSingleAxis,
+  );
+  if (!target) return null;
+  const width = target.width;
+  const height = Math.min(
+    source.height,
+    Math.max(1, Math.ceil(source.height * width / source.width)),
+  );
+  return { width, height };
+}
+
 /** Browser one-axis resize request for an already-decoded pixel surface. */
 export function decodedBitmapTargetResizeOptions(
   sourceWidth: number,
@@ -47,7 +72,7 @@ export function decodedBitmapTargetResizeOptions(
   targetWidthPx?: number,
   targetHeightPx?: number,
 ): ImageBitmapOptions | undefined {
-  const target = aspectPreservingRasterTarget(
+  const target = decodedBitmapRetainedTarget(
     { width: sourceWidth, height: sourceHeight },
     targetWidthPx,
     targetHeightPx,

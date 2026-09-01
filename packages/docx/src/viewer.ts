@@ -781,6 +781,7 @@ export class DocxViewer implements ZoomableViewer {
     const renderOptions = {
       width: renderWidth,
       dpr: this._opts.dpr,
+      imageResources: this._opts.imageResources,
       defaultTextColor: this._opts.defaultTextColor,
       currentDate: this._opts.currentDate,
       showTrackedChanges: this._opts.showTrackedChanges,

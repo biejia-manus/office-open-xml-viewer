@@ -333,6 +333,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest | WorkerSvgDecod
         await renderSlideWithEmbeddedFonts(canvas, slide, compact.slideWidth, compact.slideHeight, {
           width: request.width,
           dpr: request.dpr,
+          imageResources: request.imageResources,
           defaultTextColor: compact.defaultTextColor,
           majorFont: compact.majorFont,
           minorFont: compact.minorFont,

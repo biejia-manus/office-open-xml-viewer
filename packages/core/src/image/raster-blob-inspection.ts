@@ -15,6 +15,20 @@ export interface RasterBlobInspection {
   readonly dimensions: RasterDimensions | null;
 }
 
+/** Raster formats whose active decoder can honor a retained-grid target.
+ * Browser formats use `createImageBitmap` resize; TIFF participates only when
+ * the caller has installed the optional codec. WMF/EMF are deliberately
+ * excluded because their authored coordinate space is not a source pixel grid. */
+export function isDecodeTargetResizableRasterFormat(
+  format: RasterFormat | null,
+  hasTiffRenderer = false,
+): boolean {
+  return format !== null
+    && format !== 'wmf'
+    && format !== 'emf'
+    && (format !== 'tiff' || hasTiffRenderer);
+}
+
 const INITIAL_SNIFF_BYTES = 64 * 1024;
 
 function rasterFormat(head: Uint8Array): RasterFormat | null {

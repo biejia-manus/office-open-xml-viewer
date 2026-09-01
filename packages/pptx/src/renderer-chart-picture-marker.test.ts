@@ -30,6 +30,16 @@ vi.mock('@silurus/ooxml-core', async (importOriginal) => ({
 
 import { renderSlide } from './renderer.js';
 
+function pngBlob(width = 12_090, height = 9_063): Blob {
+  const bytes = new Uint8Array(26);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  bytes.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(16, width);
+  view.setUint32(20, height);
+  return new Blob([bytes as BlobPart], { type: 'image/png' });
+}
+
 function canvas(): HTMLCanvasElement {
   const state: Record<string, unknown> = { fillStyle: '', globalAlpha: 1 };
   const context = new Proxy(state, {
@@ -65,7 +75,7 @@ describe('PPTX chart picture-marker preload', () => {
         rotation: 0, flipH: false, flipV: false, chart,
       }],
     } as Slide;
-    const fetchImage = vi.fn(async () => new Blob(['png'], { type: 'image/png' }));
+    const fetchImage = vi.fn(async () => pngBlob());
     const tiff = { render: vi.fn() };
 
     await renderSlide(canvas(), slide, 9_144_000, 6_858_000, {
@@ -153,7 +163,7 @@ describe('PPTX chart picture-marker preload', () => {
           },
         ],
       } as Slide;
-      const fetchImage = vi.fn(async () => new Blob(['png'], { type: 'image/png' }));
+      const fetchImage = vi.fn(async () => pngBlob());
 
       await renderSlide(canvas(), slide, 9_144_000, 6_858_000, {
         width: 960, dpr: 1, fetchImage,
@@ -198,7 +208,7 @@ describe('PPTX chart picture-marker preload', () => {
         },
       ],
     } as Slide;
-    const fetchImage = vi.fn(async () => new Blob(['png'], { type: 'image/png' }));
+    const fetchImage = vi.fn(async () => pngBlob(16_000, 10_000));
 
     await renderSlide(canvas(), slide, 9_144_000, 6_858_000, {
       width: 960, dpr: 2, fetchImage,
@@ -249,7 +259,7 @@ describe('PPTX chart picture-marker preload', () => {
           rotation: 0, flipH: false, flipV: false, chart,
         }],
       } as Slide;
-      const fetchImage = vi.fn(async () => new Blob(['png'], { type: 'image/png' }));
+      const fetchImage = vi.fn(async () => pngBlob());
 
       await renderSlide(canvas(), slide, 9_144_000, 6_858_000, {
         width: 960, dpr: 2, fetchImage,
@@ -299,7 +309,7 @@ describe('PPTX chart picture-marker preload', () => {
         rotation: 0, flipH: false, flipV: false, chart,
       }],
     } as Slide;
-    const fetchImage = vi.fn(async () => new Blob(['png'], { type: 'image/png' }));
+    const fetchImage = vi.fn(async () => pngBlob());
 
     await renderSlide(canvas(), slide, 9_144_000, 6_858_000, {
       width: 960, dpr: 2, fetchImage,
@@ -338,7 +348,7 @@ describe('PPTX chart picture-marker preload', () => {
         rotation: 0, flipH: false, flipV: false, chart,
       }],
     } as Slide;
-    const fetchImage = vi.fn(async () => new Blob(['image'], { type: 'image/png' }));
+    const fetchImage = vi.fn(async () => pngBlob());
 
     await renderSlide(canvas(), slide, 9_144_000, 6_858_000, {
       width: 960, dpr: 1, fetchImage,
