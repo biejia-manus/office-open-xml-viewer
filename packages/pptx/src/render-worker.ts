@@ -1,5 +1,5 @@
 import init, { PptxArchive, reinit } from './wasm/pptx_parser.js';
-import { renderSlideWithEmbeddedFonts, type PptxTextRunInfo } from './renderer';
+import type { PptxTextRunInfo } from './renderer';
 import { PPTX_GOOGLE_FONTS } from './google-fonts';
 import {
   findPreflightMimeType,
@@ -74,6 +74,12 @@ const rawParts = new BoundedRawPartCache({
   maxEntries: HARD_MAX_RAW_PART_CACHE_ENTRIES,
   maxBytes: HARD_MAX_RAW_PART_CACHE_BYTES,
 });
+// Keep the renderer behind an explicit module boundary. The production worker
+// is flattened into one self-contained asset, and a static function import can
+// otherwise be hoisted past the initializers of shared DrawingML dependencies
+// that are also reached by optional renderers. Awaiting the module preserves ESM
+// initialization order before any text metrics use those shared unit constants.
+const rendererModule = import('./renderer');
 
 function reservePresentationParse(): void {
   if (presentationState !== 'empty') {
@@ -311,6 +317,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
       const { bitmap, runs } = await requireSlides().withSlide(request.slideIndex, async (slide) => {
         await slidePull.run(() => executeArchive((archive) => archive.assert_healthy()));
         await fontsLoaded;
+        const { renderSlideWithEmbeddedFonts } = await rendererModule;
         const canvas = new OffscreenCanvas(1, 1);
         const runs: PptxTextRunInfo[] = [];
         await renderSlideWithEmbeddedFonts(canvas, slide, compact.slideWidth, compact.slideHeight, {
@@ -342,6 +349,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
       const runs = await requireSlides().withSlide(request.slideIndex, async (slide) => {
         await slidePull.run(() => executeArchive((archive) => archive.assert_healthy()));
         await fontsLoaded;
+        const { renderSlideWithEmbeddedFonts } = await rendererModule;
         const canvas = new OffscreenCanvas(1, 1);
         const runs: PptxTextRunInfo[] = [];
         await renderSlideWithEmbeddedFonts(canvas, slide, compact.slideWidth, compact.slideHeight, {
