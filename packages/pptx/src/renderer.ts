@@ -106,6 +106,7 @@ import {
   buildWarpEnvelope,
   warpGlyphTransform,
   followPathUScale,
+  fillDoubleBorder,
 } from '@silurus/ooxml-core';
 import type {
   DecodedBitmapCacheOwner,
@@ -6496,6 +6497,30 @@ export function renderTable(
       w: Math.max(1, Math.abs(x2 - x1)),
       h: Math.max(1, Math.abs(y2 - y1)),
     }, el.rotation);
+    // ECMA-376 §20.1.8.42 `cmpd="dbl"`: table borders use the same
+    // device-pixel-safe rail/gap/rail painter as the other OOXML renderers.
+    // A fill-based painter is important for thin rules because two independently
+    // snapped canvas strokes can collapse onto one device row. Preserve dashed
+    // compound lines on the existing stroke path until their rail-wise dash
+    // phase can be represented without changing authored semantics.
+    if (
+      stroke.cmpd === 'dbl'
+      && !stroke.dashStyle
+      && !(stroke.customDash?.length)
+      && (x1 === x2 || y1 === y2)
+    ) {
+      ctx.fillStyle = ctx.strokeStyle;
+      fillDoubleBorder(
+        ctx,
+        x1,
+        y1,
+        x2,
+        y2,
+        Math.max(0.5, emuToPx(stroke.width, scale)),
+        dpr,
+      );
+      return;
+    }
     // Vertical edge (x1===x2) nudges X; horizontal edge (y1===y2) nudges Y.
     const dx = x1 === x2 ? crispOffset(x1, ctx.lineWidth, dpr) : 0;
     const dy = y1 === y2 ? crispOffset(y1, ctx.lineWidth, dpr) : 0;

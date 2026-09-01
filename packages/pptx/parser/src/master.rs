@@ -16,7 +16,8 @@ use crate::text::{
     empty_level_bullets, extract_level_bullets, extract_level_font_sizes, extract_level_indents,
     extract_lvl1_font_size, has_any_level_bullet, has_any_level_indent, has_any_level_size,
     merge_level_bullets, merge_level_indents, merge_level_sizes, read_level_bullets,
-    read_level_font_sizes, read_level_indents, LevelBullets, LevelFontSizes, LevelIndents,
+    read_level_font_sizes, read_level_indents, text_property_solid_fill, LevelBullets,
+    LevelFontSizes, LevelIndents,
 };
 use crate::theme::{
     bake_clr_map, parse_theme_part, resolve_theme_typeface, PptxSchemeResolver, PptxTheme,
@@ -874,6 +875,18 @@ pub(crate) fn parse_master_font_sizes(root: roxmltree::Node<'_, '_>) -> HashMap<
                 }
             }
         }
+    } else {
+        // CT_SlideMaster permits txStyles to be omitted. In that case current
+        // PowerPoint supplies its application-level placeholder defaults:
+        // titles at 44 pt and body/object placeholders at 28 pt. Scope these
+        // compatibility defaults to presentation placeholders only; ordinary
+        // text boxes continue through their own authored/theme cascade.
+        for ph_type in ["title", "ctrTitle"] {
+            map.entry(ph_type.to_owned()).or_insert(44.0);
+        }
+        for ph_type in ["body", "subTitle", "obj", ""] {
+            map.entry(ph_type.to_owned()).or_insert(28.0);
+        }
     }
 
     map
@@ -1201,7 +1214,7 @@ pub(crate) fn parse_master_txstyle_color(
                     .and_then(|tb| child(tb, "lstStyle"))
                     .and_then(|ls| child(ls, "lvl1pPr"))
                     .and_then(|lp| child(lp, "defRPr"))
-                    .and_then(|rp| child(rp, "solidFill"))
+                    .and_then(text_property_solid_fill)
                     .and_then(|sf| parse_color_node(sf, theme))
                 {
                     map.entry(ph_type).or_insert(color);
@@ -1217,7 +1230,7 @@ pub(crate) fn parse_master_txstyle_color(
             if let Some(color) = child(tx_styles, style_name)
                 .and_then(|sn| child(sn, "lvl1pPr"))
                 .and_then(|lp| child(lp, "defRPr"))
-                .and_then(|rp| child(rp, "solidFill"))
+                .and_then(text_property_solid_fill)
                 .and_then(|sf| parse_color_node(sf, theme))
             {
                 for ph_type in *ph_types {
@@ -1407,7 +1420,7 @@ pub(crate) fn parse_layout_placeholders(
             .and_then(|rp| child(rp, "effectLst"))
             .and_then(parse_reflection);
         let layout_color: Option<String> = layout_def_rpr
-            .and_then(|rp| child(rp, "solidFill"))
+            .and_then(text_property_solid_fill)
             .and_then(|sf| parse_color_node(sf, theme));
         let layout_alignment: Option<String> = layout_lvl1_ppr
             .and_then(|lp| attr(&lp, "algn"))
@@ -2133,6 +2146,52 @@ mod placeholder_geometry_tests {
             &mut zip,
         )
         .unwrap()
+    }
+
+    /// ECMA-376 makes p:txStyles optional on a slide master. PowerPoint still
+    /// applies its presentation placeholder defaults when that authored tier is
+    /// absent: 44 pt for title placeholders and 28 pt for body/object
+    /// placeholders. These are application defaults, not fabricated defaults
+    /// for ordinary text boxes.
+    #[test]
+    fn master_without_tx_styles_uses_powerpoint_placeholder_font_defaults() {
+        let xml = r#"<p:sldMaster
+          xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+          <p:cSld><p:spTree/></p:cSld>
+        </p:sldMaster>"#;
+        let doc = roxmltree::Document::parse(xml).unwrap();
+
+        let sizes = parse_master_font_sizes(doc.root_element());
+
+        assert_eq!(sizes.get("title"), Some(&44.0));
+        assert_eq!(sizes.get("ctrTitle"), Some(&44.0));
+        assert_eq!(sizes.get("body"), Some(&28.0));
+        assert_eq!(sizes.get("obj"), Some(&28.0));
+        assert_eq!(sizes.get("subTitle"), Some(&28.0));
+        assert_eq!(sizes.get(""), Some(&28.0));
+        assert_eq!(sizes.get("dt"), None);
+    }
+
+    #[test]
+    fn authored_master_tx_styles_override_powerpoint_placeholder_defaults() {
+        let xml = r#"<p:sldMaster
+          xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+          <p:cSld><p:spTree/></p:cSld>
+          <p:txStyles>
+            <p:titleStyle><a:lvl1pPr><a:defRPr sz="3600"/></a:lvl1pPr></p:titleStyle>
+            <p:bodyStyle><a:lvl1pPr><a:defRPr sz="2400"/></a:lvl1pPr></p:bodyStyle>
+            <p:otherStyle><a:lvl1pPr><a:defRPr sz="1200"/></a:lvl1pPr></p:otherStyle>
+          </p:txStyles>
+        </p:sldMaster>"#;
+        let doc = roxmltree::Document::parse(xml).unwrap();
+
+        let sizes = parse_master_font_sizes(doc.root_element());
+
+        assert_eq!(sizes.get("title"), Some(&36.0));
+        assert_eq!(sizes.get("body"), Some(&24.0));
+        assert_eq!(sizes.get("dt"), Some(&12.0));
     }
 
     #[test]
