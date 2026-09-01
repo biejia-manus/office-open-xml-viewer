@@ -49,6 +49,7 @@ import {
   OoxmlDecodedImageLimitError,
 } from './pixel-budget.js';
 import type { TiffRenderer } from './tiff-contract.js';
+import type { SvgBlobDecoder } from '../worker/svg-decode-bridge.js';
 
 type FetchImage = (path: string, mime: string) => Promise<Blob>;
 export type DecodedBitmapCacheOwner = object;
@@ -290,6 +291,8 @@ export interface CachedBitmapOptions {
   targetHeightPx?: number;
   /** Retained base-surface pixel ceiling for multi-surface effect pipelines. */
   maxRetainedPixels?: number;
+  /** Worker-only SVG decoder. Window renderers use HTMLImageElement instead. */
+  svgDecoder?: SvgBlobDecoder;
 }
 
 function normalizedRasterTarget(value: number | undefined): number | undefined {
@@ -546,7 +549,22 @@ export function getCachedBitmapByPath(
     targetWidthPx,
     targetHeightPx,
     maxRetainedPixels,
+    svgDecoder,
   } = normalized;
+  if (mimeType === 'image/svg+xml' && svgDecoder) {
+    return getCachedDecodedBitmap(
+      BASE_CACHE_NAMESPACE,
+      cachedBitmapVariantKey(imagePath, normalized),
+      fetchImage,
+      async () => ({
+        bitmap: await svgDecoder(await fetchImage(imagePath, mimeType), {
+          targetWidthPx,
+          targetHeightPx,
+        }),
+        owned: true,
+      }),
+    );
+  }
   const decode = (cacheKey: string, initial?: RasterSourceProfile) => {
     const initialBlob = initial?.initialBlob;
     if (initial) initial.initialBlob = undefined;

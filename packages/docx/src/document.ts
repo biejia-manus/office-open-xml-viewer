@@ -31,6 +31,7 @@ import {
   OoxmlResourceMetricsSession,
   readLatestOoxmlResourceMetrics,
   PULL_SESSION_PROTOCOL,
+  respondToWorkerSvgDecodeRequest,
   type NormalizedOoxmlResourcePolicy,
   type WorkerRendererDescriptors,
 } from '@silurus/ooxml-core/worker';
@@ -849,6 +850,12 @@ export class DocxDocument {
    * load this document has already moved past.
    */
   private _onWorkerLayoutPush(res: WorkerResponse | RenderWorkerResponse): void {
+    if (respondToWorkerSvgDecodeRequest(
+      (message, transfer) => (
+        this._worker.postMessage as (value: unknown, transfer?: Transferable[]) => void
+      )(message, transfer),
+      res,
+    )) return;
     if (!('forId' in res) || res.forId !== this._parseRequestId) return;
     // Any push proves the worker is alive and working, which is the only thing
     // the watchdog is asking about.

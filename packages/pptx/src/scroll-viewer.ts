@@ -1163,8 +1163,7 @@ export class PptxScrollViewer implements ZoomableViewer {
       slot.textLayer.innerHTML = '';
       // Drop any preview transform so a pooled slot re-used for another slide does
       // not inherit a stale scale() before its overlay is rebuilt.
-      slot.textLayer.style.transform = '';
-      slot.textLayer.style.transformOrigin = '';
+      this._clearTextLayerPreview(slot.textLayer);
     }
     slot.highlightLayer.innerHTML = '';
     slot.highlightLayer.style.transform = '';
@@ -1711,8 +1710,7 @@ export class PptxScrollViewer implements ZoomableViewer {
       // overlay is sized to the slot's CSS box (Math.round of the uniform slide
       // width/height at the current scale), NOT the dpr-scaled backing store.
       if (slot.textLayer) {
-        slot.textLayer.style.transform = '';
-        slot.textLayer.style.transformOrigin = '';
+        this._clearTextLayerPreview(slot.textLayer);
         if (wantOverlay) {
           buildPptxTextLayer(
             slot.textLayer,
@@ -2044,6 +2042,13 @@ export class PptxScrollViewer implements ZoomableViewer {
     if (slot.textLayer && slot.renderedScale > 0) {
       const ratio = this._scale / slot.renderedScale;
       slot.textLayer.style.transformOrigin = '0 0';
+      // `_positionSlot` has already grown the wrapper to the new scale. Keep the
+      // overlay's layout box at the dimensions of the bitmap it was built for,
+      // then transform that committed box to the preview size. Leaving it at
+      // 100% here would scale the new wrapper-sized box a second time, briefly
+      // inflating the scroll extent until the crisp render settles.
+      slot.textLayer.style.width = `${this._slideWidthPx() / ratio}px`;
+      slot.textLayer.style.height = `${this._slideHeightPx() / ratio}px`;
       slot.textLayer.style.transform = `scale(${ratio})`;
     }
     if (slot.renderedScale > 0) {
@@ -2064,6 +2069,13 @@ export class PptxScrollViewer implements ZoomableViewer {
     if (slot.commentMarkerLayer) slot.commentMarkerLayer.style.visibility = 'hidden';
     if (slot.commentMargin) slot.commentMargin.style.visibility = 'hidden';
     if (slot.commentDecorationLayer) slot.commentDecorationLayer.style.visibility = 'hidden';
+  }
+
+  private _clearTextLayerPreview(layer: HTMLDivElement): void {
+    layer.style.transform = '';
+    layer.style.transformOrigin = '';
+    layer.style.width = '100%';
+    layer.style.height = '100%';
   }
 
   /** (Re)schedule the debounced settle re-render (design §7 mechanism 2). Resets
@@ -2179,8 +2191,7 @@ export class PptxScrollViewer implements ZoomableViewer {
         // Rebuild the overlay at the full resolution and CLEAR the preview
         // transform (the crisp render no longer needs the scale()).
         if (slot.textLayer) {
-          slot.textLayer.style.transform = '';
-          slot.textLayer.style.transformOrigin = '';
+          this._clearTextLayerPreview(slot.textLayer);
           if (wantOverlay) {
             // buildPptxTextLayer takes NUMBERS: pass the CSS box (uniform slide
             // width/height at the current scale), NOT the retina backing store.
@@ -2259,8 +2270,7 @@ export class PptxScrollViewer implements ZoomableViewer {
         oldHandle?.destroy();
 
         if (slot.textLayer) {
-          slot.textLayer.style.transform = '';
-          slot.textLayer.style.transformOrigin = '';
+          this._clearTextLayerPreview(slot.textLayer);
           if (wantOverlay) {
             buildPptxTextLayer(
               slot.textLayer,

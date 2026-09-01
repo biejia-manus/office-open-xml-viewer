@@ -1,6 +1,6 @@
 import type { DocxDocumentModel, BodyElement, DocxTextRunInfo } from './types';
 import type { LayoutServices, MathRenderer } from './layout/types.js';
-import type { ChartThreeDRenderer, ChartRegionMapRenderer, ChartExRenderer, TiffRenderer } from '@silurus/ooxml-core';
+import type { ChartThreeDRenderer, ChartRegionMapRenderer, ChartExRenderer, TiffRenderer, SvgBlobDecoder } from '@silurus/ooxml-core';
 export type { DocxTextRunInfo } from './types';
 import { bodyMathOccurrences } from './layout/resources.js';
 import { paintResourceRegistryOf, privateResourceLookupOf } from './layout/runtime-state.js';
@@ -49,6 +49,8 @@ export interface RenderDocumentOptions {
    * omitted, images are skipped (no byte source).
    */
   fetchImage?: (path: string, mimeType: string) => Promise<Blob>;
+  /** Internal worker-to-Window SVG decoder. */
+  svgDecoder?: SvgBlobDecoder;
   /** Called for each rendered text segment. Used to build a transparent text selection overlay. */
   onTextRun?: (run: DocxTextRunInfo) => void;
   /** ECMA-376 §17.16.5.16 DATE / §17.16.5.72 TIME — the "current" instant that a
@@ -119,6 +121,7 @@ function normalizeRenderOptions(
       dpr: options.dpr,
       defaultTextColor: options.defaultTextColor,
       fetchImage: options.fetchImage,
+      svgDecoder: options.svgDecoder,
       parseError: source.fatalParse !== null,
       registry: paintResourceRegistryOf(services),
       privateResources: privateResourceLookupOf<CanvasImageSource>(services),

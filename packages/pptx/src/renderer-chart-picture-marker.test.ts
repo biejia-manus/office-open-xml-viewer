@@ -76,7 +76,11 @@ describe('PPTX chart picture-marker preload', () => {
     expect(coreMocks.decode.mock.calls[0]?.slice(0, 4)).toEqual([
       'ppt/media/chart-marker.png', 'image/png', undefined, fetchImage,
     ]);
-    expect(coreMocks.decode.mock.calls[0]?.[4]).toMatchObject({ tiff });
+    expect(coreMocks.decode.mock.calls[0]?.[4]).toMatchObject({
+      tiff,
+      targetWidthPx: 420,
+      targetHeightPx: 315,
+    });
     expect(coreMocks.renderChart).toHaveBeenCalledTimes(1);
     expect(coreMocks.resolved()).toBe(coreMocks.bitmap);
   });
@@ -111,7 +115,15 @@ describe('PPTX chart picture-marker preload', () => {
     await renderSlide(canvas(), slide, 9_144_000, 6_858_000, {
       width: 960, dpr: 1, fetchImage,
     });
-    expect(coreMocks.decodeSvg).toHaveBeenCalledWith('ppt/media/chart-marker.svg', fetchImage);
+    expect(coreMocks.decodeSvg).toHaveBeenCalledWith(
+      'ppt/media/chart-marker.svg',
+      fetchImage,
+      {
+        targetWidthPx: 420,
+        targetHeightPx: 315,
+        workerDecoder: undefined,
+      },
+    );
     expect(coreMocks.decode).toHaveBeenCalled();
     expect(coreMocks.decode.mock.calls.at(-1)?.[4]).toMatchObject({
       failClosedOnDuotoneFailure: true,
