@@ -77,8 +77,6 @@ import {
   graphemeClusterOffsets,
   getCachedSvgImageByPath,
   getCachedBitmapByPath,
-  getCachedDecodedBitmap,
-  getCachedDerivedBitmap,
   getCachedDuotoneBitmapByPath,
   chartImageFillKey,
   collectChartMarkerImageFills,
@@ -86,10 +84,10 @@ import {
   acquireBitmapCacheLease,
   peekCachedBitmapByPath,
   dropDecodedBitmapCache,
-  decodeRasterOrMetafile,
   preferVectorBlip,
   drawImageCropped,
   metafileRasterSize,
+  sourceRasterTargetSize,
   isOoxmlDecodedImageLimitError,
   highlightBox,
   symbolFontToUnicode,
@@ -227,6 +225,22 @@ export type TextRunCallback = (run: PptxTextRunInfo) => void;
  */
 function emuToPx(emu: number, scale: number): number {
   return emu * scale;
+}
+
+function rasterTargetOptions(
+  widthCssPx: number,
+  heightCssPx: number,
+  dpr: number,
+  srcRect?: PictureElement['srcRect'],
+): { targetWidthPx: number; targetHeightPx: number } | undefined {
+  const target = sourceRasterTargetSize(
+    Math.abs(widthCssPx * dpr),
+    Math.abs(heightCssPx * dpr),
+    srcRect,
+  );
+  return target
+    ? { targetWidthPx: target.width, targetHeightPx: target.height }
+    : undefined;
 }
 
 const hexToRgba = hexToRgbaCore;
@@ -1675,6 +1689,7 @@ async function renderBackground(
   superseded: () => boolean,
   fetchImage?: (path: string, mime: string) => Promise<Blob>,
   tiff?: TiffRenderer,
+  dpr = 1,
 ) {
   // ECMA-376 §20.1.8.14 — image (blipFill) background. Paint an opaque white
   // base first so a partially transparent image (alphaModFix) composites over
@@ -1699,6 +1714,7 @@ async function renderBackground(
         {
           widthPt: canvasW / scale / PT_TO_EMU,
           heightPt: canvasH / scale / PT_TO_EMU,
+          ...(!fill.tile ? (rasterTargetOptions(canvasW, canvasH, dpr, fill.srcRect) ?? {}) : {}),
           tiff,
         },
       );
@@ -5154,17 +5170,13 @@ export function getPosterBitmap(
   fetchMedia: FetchMedia,
   bitmapOwner: PosterFetchImage = posterFetchImage(fetchMedia),
   tiff?: TiffRenderer,
+  target?: { targetWidthPx: number; targetHeightPx: number },
 ): Promise<ImageBitmap> {
-  return getCachedDecodedBitmap(
-    'base',
+  return getCachedBitmapByPath(
     el.posterPath,
+    el.posterMimeType || 'application/octet-stream',
     bitmapOwner,
-    async () => {
-      const blob = await fetchMedia(el.posterPath);
-      const mimeType = el.posterMimeType || blob.type || 'application/octet-stream';
-      const typed = blob.type === mimeType ? blob : new Blob([blob], { type: mimeType });
-      return { bitmap: await decodeRasterOrMetafile(typed, { tiff }), owned: true };
-    },
+    { tiff, ...(target ?? {}) },
   ).then((bitmap) => {
     if (!bitmap) throw new Error('Media poster could not be decoded');
     return bitmap;
@@ -5178,6 +5190,7 @@ async function renderPicture(
   superseded: () => boolean,
   fetchImage?: (path: string, mime: string) => Promise<Blob>,
   tiff?: TiffRenderer,
+  dpr = 1,
 ) {
   // No byte source → nothing to draw (the lazy pipeline always supplies one in
   // both render modes; this guards the rare misconfiguration).
@@ -5210,6 +5223,12 @@ async function renderPicture(
     );
     if (!rasterSize) return;
     const { widthPt, heightPt } = rasterSize;
+    const target = rasterTargetOptions(
+      emuToPx(el.width, scale),
+      emuToPx(el.height, scale),
+      dpr,
+      el.srcRect,
+    );
     // `null` is reachable when the raster path resolves to an unsupported
     // metafile (a true EMF, or a WMF with no geometry); guarded below.
     let bitmap: ImageBitmap | HTMLImageElement | null;
@@ -5231,7 +5250,12 @@ async function renderPicture(
         // SVG vector original has no readable pixel grid (matches xlsx).
         bitmap = dataIsSvg
           ? await getCachedSvgImageByPath(el.imagePath, fetchImage)
-          : await getCachedDuotoneBitmapByPath(el.imagePath, el.mimeType, el.duotone, fetchImage, { widthPt, heightPt, tiff });
+          : await getCachedDuotoneBitmapByPath(el.imagePath, el.mimeType, el.duotone, fetchImage, {
+              widthPt,
+              heightPt,
+              ...(target ?? {}),
+              tiff,
+            });
       }
     } else if (dataIsSvg) {
       // SVG-only picture (here either because it has a crop, or — defensively —
@@ -5243,7 +5267,13 @@ async function renderPicture(
       // §20.1.8.23 duotone recolour on the raster blip (once, at decode time,
       // cached under a colour-suffixed key). No duotone ⇒ this is exactly the
       // former `getCachedBitmapByPath` decode.
-      bitmap = await getCachedDuotoneBitmapByPath(el.imagePath, el.mimeType, el.duotone, fetchImage, { widthPt, heightPt, tiff });
+      bitmap = await getCachedDuotoneBitmapByPath(
+        el.imagePath,
+        el.mimeType,
+        el.duotone,
+        fetchImage,
+        { widthPt, heightPt, ...(target ?? {}), tiff },
+      );
     }
     // Skip a picture whose blip is an unsupported metafile (null bitmap), the
     // same way an SVG-decode failure that also fails its raster fallback would
@@ -5656,6 +5686,7 @@ async function renderMedia(
   skipControls?: boolean,
   bitmapOwner?: PosterFetchImage,
   tiff?: TiffRenderer,
+  dpr = 1,
 ) {
   const x = emuToPx(el.x, scale);
   const y = emuToPx(el.y, scale);
@@ -5667,7 +5698,8 @@ async function renderMedia(
     try {
       // Poster is cached (and prefetched by renderSlide); do not close it here —
       // it is reused across renders of the same slide.
-      poster = await getPosterBitmap(el, fetchMedia, bitmapOwner, tiff);
+      const target = rasterTargetOptions(w, h, dpr);
+      poster = await getPosterBitmap(el, fetchMedia, bitmapOwner, tiff, target);
     } catch (error) {
       if (isOoxmlDecodedImageLimitError(error)) throw error;
       // fall through to plain fill
@@ -6536,6 +6568,7 @@ async function renderSlideLeased(
     superseded,
     opts.fetchImage,
     opts.tiff,
+    effectiveDpr,
   );
   if (superseded()) return canvas;
 
@@ -6586,13 +6619,29 @@ async function renderSlideLeased(
         void getCachedDuotoneBitmapByPath(p.imagePath, p.mimeType, p.duotone, opts.fetchImage, {
           widthPt: warm.widthPt,
           heightPt: warm.heightPt,
+          ...(rasterTargetOptions(
+            emuToPx(p.width, scale),
+            emuToPx(p.height, scale),
+            effectiveDpr,
+            p.srcRect,
+          ) ?? {}),
           tiff: opts.tiff,
         }).catch(() => undefined);
       }
     } else if (el.type === 'media') {
       const m = el as MediaElement;
       if (m.posterPath && opts.fetchMedia) {
-        void getPosterBitmap(m, opts.fetchMedia, bitmapOwner, opts.tiff).catch(() => undefined);
+        void getPosterBitmap(
+          m,
+          opts.fetchMedia,
+          bitmapOwner,
+          opts.tiff,
+          rasterTargetOptions(
+            emuToPx(m.width, scale),
+            emuToPx(m.height, scale),
+            effectiveDpr,
+          ),
+        ).catch(() => undefined);
       }
     }
   }
@@ -6684,7 +6733,7 @@ async function renderSlideLeased(
         : undefined;
       renderShape(ctx, el, scale, themeDefaultColor, slideNumber, rc, elementTextRun, opts.fetchImage);
     } else if (el.type === 'picture') {
-      await renderPicture(ctx, el, scale, superseded, opts.fetchImage, opts.tiff);
+      await renderPicture(ctx, el, scale, superseded, opts.fetchImage, opts.tiff, effectiveDpr);
     } else if (el.type === 'table') {
       const elementTextRun: TextRunCallback | undefined = onTextRun
         ? (run) => onTextRun({
@@ -6704,6 +6753,7 @@ async function renderSlideLeased(
         opts.skipMediaControls,
         opts.fetchImage,
         opts.tiff,
+        effectiveDpr,
       );
     } else if (el.type === 'chart') {
       // OOXML: 1pt = 12700 EMU. The slide renderer's `scale` is px-per-EMU,

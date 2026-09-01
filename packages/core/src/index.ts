@@ -261,7 +261,9 @@ export {
   MAX_CONCURRENT_IMAGE_DECODES,
   MAX_DECODED_IMAGE_BYTES,
   MAX_RASTER_DIMENSION,
+  MAX_RASTER_SOURCE_DIMENSION,
   MAX_RASTER_PIXELS,
+  MAX_RASTER_SOURCE_PIXELS,
   OoxmlDecodedImageLimitError,
   isOoxmlDecodedImageLimitError,
   type OoxmlDecodedImageLimitMetric,
@@ -269,6 +271,7 @@ export {
 export {
   sniffRasterDimensions,
   rasterExceedsBudget,
+  sourceRasterExceedsBudget,
   rasterHeaderExceedsBudget,
   type RasterDimensions,
 } from './image/raster-dimensions';
@@ -279,6 +282,7 @@ export {
   drawImageCropped,
   imageNaturalSize,
   metafileRasterSize,
+  sourceRasterTargetSize,
   type SrcRect,
 } from './image/crop';
 // Shared DrawingML duotone image effect (§20.1.8.23): recolour a decoded image
