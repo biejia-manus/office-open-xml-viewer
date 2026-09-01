@@ -426,7 +426,10 @@ async function planSlideImages(
       for (const usage of collectChartImageFillUsages(element.chart)) {
         const fill = usage.fill;
         const size = chartImageFillUsageSize(usage, frame);
-        const vector = preferVectorBlip(fill) || fill.mimeType === 'image/svg+xml';
+        const vector = fill.mimeType === 'image/svg+xml' || preferVectorBlip({
+          svgImagePath: fill.svgImagePath,
+          srcRect: usage.hasSourceCrop ? true : null,
+        });
         if (!vector && !fill.duotone && !usage.preserveNaturalSize
           && size?.targetWidthPx && size.targetHeightPx) {
           push(

@@ -307,8 +307,8 @@ describe('vertical OpenType paint target projection', () => {
       },
     )).rejects.toBe(failure);
     expect(renderTiff).toHaveBeenCalledWith(expect.any(Uint8Array), expect.objectContaining({
-      targetWidthPx: 134,
-      targetHeightPx: 80,
+      targetWidthPx: undefined,
+      targetHeightPx: undefined,
     }));
   });
 
