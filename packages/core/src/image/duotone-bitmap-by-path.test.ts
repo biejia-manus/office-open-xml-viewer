@@ -78,7 +78,67 @@ describe('getCachedDuotoneBitmapByPath', () => {
     dropBitmapCacheByPath(fetchImage);
   });
 
-  it('keys a derived effect by the bitmap it borrowed while base variants evolve', async () => {
+  it('applies duotone on the authored grid before display-target resampling', async () => {
+    const png = new Uint8Array(26);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    png.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+    const pngView = new DataView(png.buffer);
+    pngView.setUint32(16, 2);
+    pngView.setUint32(20, 2);
+    const fetchImage = vi.fn(async () => new Blob([png as BlobPart], { type: 'image/png' }));
+    const surfaces: Array<{ width: number; height: number }> = [];
+    const factory = ((width: number, height: number) => {
+      surfaces.push({ width, height });
+      return {
+        width,
+        height,
+        getContext: () => ({
+          drawImage() {},
+          getImageData: () => ({
+            data: new Uint8ClampedArray(width * height * 4).fill(255),
+            width,
+            height,
+          }),
+          putImageData() {},
+        }),
+      };
+    }) as unknown as OffscreenFactory;
+    const createBitmap = vi.fn(async (
+      source: Blob | { width: number; height: number },
+      options?: ImageBitmapOptions,
+    ) => ({
+      width: options?.resizeWidth ?? (source instanceof Blob ? 2 : source.width),
+      height: options?.resizeWidth ?? (source instanceof Blob ? 2 : source.height),
+      close() {},
+    }) as unknown as ImageBitmap);
+    vi.stubGlobal('createImageBitmap', createBitmap);
+    const path = 'ppt/media/duotone-effect-order.png';
+
+    const result = await getCachedDuotoneBitmapByPath(
+      path,
+      'image/png',
+      { clr1: '000000', clr2: 'FFFFFF' },
+      fetchImage,
+      {
+        targetWidthPx: 1,
+        targetHeightPx: 1,
+        offscreenFactory: factory,
+      },
+    );
+
+    expect(surfaces).toEqual([{ width: 2, height: 2 }]);
+    expect(result).toMatchObject({ width: 1, height: 1 });
+    expect(createBitmap).toHaveBeenNthCalledWith(1, expect.any(Blob));
+    expect(createBitmap).toHaveBeenNthCalledWith(2, expect.anything(), {
+      resizeWidth: 1,
+      resizeQuality: 'high',
+    });
+
+    dropDuotoneBitmapCache(fetchImage);
+    dropBitmapCacheByPath(fetchImage);
+  });
+
+  it('keys post-effect display variants independently while base variants evolve', async () => {
     const png = new Uint8Array(26);
     png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
     png.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
@@ -97,8 +157,8 @@ describe('getCachedDuotoneBitmapByPath', () => {
           close() {},
         } as unknown as ImageBitmap)
       : ({
-          width: source.width,
-          height: source.height,
+          width: options?.resizeWidth ?? source.width,
+          height: options?.resizeWidth ?? source.height,
           derivedIndex: derivedIndex++,
           close() {},
         } as unknown as ImageBitmap)));
@@ -155,7 +215,7 @@ describe('getCachedDuotoneBitmapByPath', () => {
       },
     );
 
-    expect(smallDerived).toMatchObject({ width: 100, height: 100 });
+    expect(smallDerived).toMatchObject({ width: 80, height: 80 });
     expect(largeBase).toMatchObject({ width: 200, height: 200 });
     expect(largeDerived).toMatchObject({ width: 200, height: 200 });
     expect(largeDerived).not.toBe(smallDerived);
@@ -238,7 +298,7 @@ describe('getCachedDuotoneBitmapByPath', () => {
       'image/png',
       { clr1: '000000', clr2: 'FFFFFF' },
       fetchImage,
-      { targetWidthPx: 12_000, targetHeightPx: 9_000, offscreenFactory: factory },
+      { targetWidthPx: 1_200, targetHeightPx: 900, offscreenFactory: factory },
     )).rejects.toMatchObject({
       code: 'ooxml-decoded-image-limit',
       metric: 'image-pixels',
@@ -278,6 +338,66 @@ describe('getCachedDuotoneBitmapByPath', () => {
 
     dropDuotoneBitmapCache(fetchImage);
     dropBitmapCacheByPath(fetchImage);
+  });
+
+  it.each([
+    [
+      'an unavailable effect surface',
+      (() => null) as unknown as OffscreenFactory,
+    ],
+    [
+      'unavailable pixel readback',
+      ((width: number, height: number) => ({
+        width,
+        height,
+        getContext: () => ({
+          drawImage() {},
+          getImageData() { throw new Error('readback unavailable'); },
+          putImageData() {},
+        }),
+      })) as unknown as OffscreenFactory,
+    ],
+  ])('resamples the current source after %s while strict callers fail closed', async (_name, factory) => {
+    const baseClose = vi.fn();
+    const resizedClose = vi.fn();
+    const base = { width: 4, height: 2, close: baseClose } as unknown as ImageBitmap;
+    const resized = { width: 2, height: 1, close: resizedClose } as unknown as ImageBitmap;
+    const createBitmap = vi.fn(async (source: Blob | ImageBitmap) => (
+      source instanceof Blob ? base : resized
+    ));
+    vi.stubGlobal('createImageBitmap', createBitmap);
+    const fetchImage = vi.fn(async (_path: string, mime: string) =>
+      new Blob([new Uint8Array([1])], { type: mime }));
+    const path = `ppt/media/duotone-fallback-${_name}.png`;
+    const duotone = { clr1: '000000', clr2: 'FFFFFF' };
+    const options = {
+      targetWidthPx: 2,
+      targetHeightPx: 1,
+      offscreenFactory: factory,
+    };
+
+    await expect(getCachedDuotoneBitmapByPath(
+      path, 'image/png', duotone, fetchImage, options,
+    )).resolves.toBe(resized);
+    await expect(getCachedDuotoneBitmapByPath(
+      path, 'image/png', duotone, fetchImage,
+      { ...options, failClosedOnDuotoneFailure: true },
+    )).resolves.toBeNull();
+
+    expect(createBitmap).toHaveBeenCalledTimes(2);
+    expect(createBitmap).toHaveBeenNthCalledWith(1, expect.any(Blob));
+    expect(createBitmap).toHaveBeenNthCalledWith(2, base, {
+      resizeWidth: 2,
+      resizeQuality: 'high',
+    });
+
+    dropDuotoneBitmapCache(fetchImage);
+    await Promise.resolve();
+    expect(resizedClose).toHaveBeenCalledOnce();
+    expect(baseClose).not.toHaveBeenCalled();
+    dropBitmapCacheByPath(fetchImage);
+    await Promise.resolve();
+    expect(baseClose).toHaveBeenCalledOnce();
   });
 
   // ── Second-layer × base-eviction interaction ────────────────────────────────

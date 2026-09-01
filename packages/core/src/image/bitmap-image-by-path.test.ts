@@ -3,6 +3,7 @@ import {
   getCachedBitmapByPath,
   getCachedDerivedBitmap,
   peekCachedBitmapByPath,
+  resolvedCachedBitmapVariantKey,
   dropBitmapCacheByPath,
   dropCachedDerivedBitmapNamespace,
   acquireBitmapCacheLease,
@@ -30,6 +31,38 @@ function buildMinimalWmf(): Uint8Array {
   rec(0x0325, [2, 0, 0, 50, 50]);            // POLYLINE 2 pts (0,0)-(50,50)
   u32(3); u16(0x0000);                       // EOF
   return new Uint8Array(b);
+}
+
+function stubMetafileSurfaceCreation(): {
+  create: ReturnType<typeof vi.fn>;
+  closes: Array<ReturnType<typeof vi.fn>>;
+} {
+  vi.stubGlobal(
+    'OffscreenCanvas',
+    class {
+      constructor(readonly width: number, readonly height: number) {}
+      getContext() {
+        return {
+          fillStyle: '#000', strokeStyle: '#000', lineWidth: 1,
+          lineJoin: 'miter', lineCap: 'butt',
+          save() {}, restore() {}, beginPath() {}, closePath() {},
+          moveTo() {}, lineTo() {}, rect() {}, stroke() {}, fill() {},
+        };
+      }
+    },
+  );
+  const closes: Array<ReturnType<typeof vi.fn>> = [];
+  const create = vi.fn(async (source: { width: number; height: number }) => {
+    const close = vi.fn();
+    closes.push(close);
+    return {
+      width: source.width,
+      height: source.height,
+      close,
+    } as unknown as ImageBitmap;
+  });
+  vi.stubGlobal('createImageBitmap', create);
+  return { create, closes };
 }
 
 /** Coded 400×100 JPEG whose EXIF orientation 6 gives a 100×400 natural grid. */
@@ -478,6 +511,150 @@ describe('getCachedBitmapByPath', () => {
     const bmp = await getCachedBitmapByPath('word/media/wmf.wmf', 'image/wmf', fetchImage, { widthPt: 100, heightPt: 100 });
     expect(bmp).not.toBeNull();
     expect(bmp?.width).toBe(200); // wmfRasterTarget(100,100) → 200×200
+  });
+
+  it('content-sniffs a generically labeled WMF and keeps small and large frame variants', async () => {
+    const { create, closes } = stubMetafileSurfaceCreation();
+    const wmf = buildMinimalWmf();
+    const fetchImage = vi.fn(async () =>
+      new Blob([wmf as BlobPart], { type: 'application/octet-stream' }));
+    const path = 'word/media/wmf-small-then-large.wmf';
+
+    const small = await getCachedBitmapByPath(path, 'application/octet-stream', fetchImage, {
+      widthPt: 50,
+      heightPt: 25,
+    });
+    const large = await getCachedBitmapByPath(path, 'application/octet-stream', fetchImage, {
+      widthPt: 100,
+      heightPt: 50,
+    });
+    const smallAgain = await getCachedBitmapByPath(path, 'application/octet-stream', fetchImage, {
+      widthPt: 50,
+      heightPt: 25,
+    });
+
+    expect(small).toMatchObject({ width: 100, height: 50 });
+    expect(large).toMatchObject({ width: 200, height: 100 });
+    expect(large).not.toBe(small);
+    expect(smallAgain).toBe(small);
+    expect(fetchImage).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenCalledTimes(2);
+
+    // Different point values that normalize to the same player grid share the
+    // collision-safe raster variant instead of retaining a duplicate surface.
+    await expect(getCachedBitmapByPath(path, 'application/octet-stream', fetchImage, {
+      widthPt: 50.24,
+      heightPt: 25.24,
+    })).resolves.toBe(small);
+    expect(fetchImage).toHaveBeenCalledTimes(2);
+
+    dropBitmapCacheByPath(fetchImage);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closes).toHaveLength(2);
+    expect(closes.every((close) => close.mock.calls.length === 1)).toBe(true);
+  });
+
+  it('uses ordinary raster variants when PNG bytes are mislabeled as WMF', async () => {
+    const png = new Uint8Array(26);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    png.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+    const view = new DataView(png.buffer);
+    view.setUint32(16, 400);
+    view.setUint32(20, 200);
+    const fetchImage = vi.fn(async () =>
+      new Blob([png as BlobPart], { type: 'image/wmf' }));
+    const create = vi.fn(async (_blob: Blob, options?: ImageBitmapOptions) => ({
+      width: options?.resizeWidth ?? 400,
+      height: options?.resizeWidth ? options.resizeWidth / 2 : 200,
+      close() {},
+    }) as unknown as ImageBitmap);
+    vi.stubGlobal('createImageBitmap', create);
+    const path = 'word/media/png-labeled-wmf.wmf';
+
+    const reduced = await getCachedBitmapByPath(path, 'image/wmf', fetchImage, {
+      widthPt: 50,
+      heightPt: 25,
+      targetWidthPx: 100,
+      targetHeightPx: 50,
+    });
+    const sameRasterTarget = await getCachedBitmapByPath(path, 'image/wmf', fetchImage, {
+      widthPt: 500,
+      heightPt: 500,
+      targetWidthPx: 100,
+      targetHeightPx: 50,
+      suppressBoundaryFrame: true,
+    });
+    const native = await getCachedBitmapByPath(path, 'image/wmf', fetchImage, {
+      widthPt: 10,
+      heightPt: 10,
+    });
+
+    expect(reduced).toMatchObject({ width: 100, height: 50 });
+    expect(sameRasterTarget).toBe(reduced);
+    expect(native).toMatchObject({ width: 400, height: 200 });
+    expect(native).not.toBe(reduced);
+    expect(fetchImage).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenNthCalledWith(1, expect.any(Blob), {
+      resizeWidth: 100,
+      resizeQuality: 'high',
+    });
+    expect(create).toHaveBeenNthCalledWith(2, expect.any(Blob));
+  });
+
+  it('reuses a larger WMF raster for a smaller frame but isolates suppression variants', async () => {
+    const { create, closes } = stubMetafileSurfaceCreation();
+    const wmf = buildMinimalWmf();
+    const fetchImage = vi.fn(async () =>
+      new Blob([wmf as BlobPart], { type: 'image/wmf' }));
+    const path = 'word/media/wmf-large-then-small.wmf';
+
+    const large = await getCachedBitmapByPath(path, 'image/wmf', fetchImage, {
+      widthPt: 150,
+      heightPt: 100,
+    });
+    const coveredSmall = await getCachedBitmapByPath(path, 'image/wmf', fetchImage, {
+      widthPt: 50,
+      heightPt: 40,
+    });
+    const suppressedSmall = await getCachedBitmapByPath(path, 'image/wmf', fetchImage, {
+      widthPt: 50,
+      heightPt: 40,
+      suppressBoundaryFrame: true,
+    });
+
+    expect(large).toMatchObject({ width: 300, height: 200 });
+    expect(coveredSmall).toBe(large);
+    expect(suppressedSmall).toMatchObject({ width: 100, height: 80 });
+    expect(suppressedSmall).not.toBe(large);
+    expect(fetchImage).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenCalledTimes(2);
+    const [regularKey, suppressedKey] = await Promise.all([
+      resolvedCachedBitmapVariantKey(
+        path,
+        'image/wmf',
+        fetchImage,
+        { widthPt: 150, heightPt: 100 },
+        undefined,
+        large as ImageBitmap,
+      ),
+      resolvedCachedBitmapVariantKey(
+        path,
+        'image/wmf',
+        fetchImage,
+        { widthPt: 50, heightPt: 40, suppressBoundaryFrame: true },
+        undefined,
+        suppressedSmall as ImageBitmap,
+      ),
+    ]);
+    expect(suppressedKey).not.toBe(regularKey);
+
+    dropBitmapCacheByPath(fetchImage);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closes).toHaveLength(2);
+    expect(closes.every((close) => close.mock.calls.length === 1)).toBe(true);
   });
 
   it('a true EMF blip is cached as null (skipped, not crashed)', async () => {

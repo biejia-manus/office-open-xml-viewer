@@ -85,6 +85,266 @@ describe('docx lazy image bytes', () => {
     );
   });
 
+  it('applies exact clrChange matching before display-target resampling', async () => {
+    const png = new Uint8Array(26);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    png.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+    const view = new DataView(png.buffer);
+    view.setUint32(16, 2);
+    view.setUint32(20, 2);
+    const fetchImage = vi.fn(async () => new Blob([png as BlobPart], { type: 'image/png' }));
+    let written: Uint8ClampedArray | undefined;
+    class ExactColorSurface {
+      constructor(readonly width: number, readonly height: number) {}
+      getContext() {
+        return {
+          drawImage() {},
+          getImageData: () => ({
+            // A decoder-side 2→1 resize would interpolate away the authored
+            // exact white pixel. The effect must instead see both source pixels.
+            data: this.width === 2 && this.height === 2
+              ? new Uint8ClampedArray([
+                  255, 255, 255, 255,
+                  254, 255, 255, 255,
+                  253, 255, 255, 255,
+                  252, 255, 255, 255,
+                ])
+              : new Uint8ClampedArray([254, 255, 255, 255]),
+            width: this.width,
+            height: this.height,
+          }),
+          putImageData: (data: ImageData) => { written = new Uint8ClampedArray(data.data); },
+        };
+      }
+    }
+    vi.stubGlobal('OffscreenCanvas', ExactColorSurface);
+    const createBitmap = vi.fn(async (
+      source: Blob | ExactColorSurface,
+      options?: ImageBitmapOptions,
+    ) => ({
+      width: options?.resizeWidth ?? (source instanceof Blob ? 2 : source.width),
+      height: options?.resizeWidth ? 1 : source instanceof Blob ? 2 : source.height,
+      close() {},
+    }) as unknown as ImageBitmap);
+    vi.stubGlobal('createImageBitmap', createBitmap);
+
+    const result = await decodeRaster(
+      'word/media/exact-clr-change.png',
+      'image/png',
+      'FFFFFF',
+      fetchImage,
+      0,
+      0,
+      undefined,
+      false,
+      undefined,
+      { targetWidthPx: 1, targetHeightPx: 1 },
+    );
+
+    expect(written).toEqual(new Uint8ClampedArray([
+      255, 255, 255, 0,
+      254, 255, 255, 255,
+      253, 255, 255, 255,
+      252, 255, 255, 255,
+    ]));
+    expect(result).toMatchObject({ width: 1, height: 1 });
+    expect(createBitmap).toHaveBeenNthCalledWith(1, expect.any(Blob));
+    expect(createBitmap).toHaveBeenNthCalledWith(2, expect.any(ExactColorSurface), {
+      resizeWidth: 1,
+      resizeQuality: 'high',
+    });
+  });
+
+  it('applies chained clrChange and duotone in one source-grid pass and keys non-square targets', async () => {
+    const png = new Uint8Array(26);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    png.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+    const view = new DataView(png.buffer);
+    view.setUint32(16, 8);
+    view.setUint32(20, 4);
+    const fetchImage = vi.fn(async () => new Blob([png as BlobPart], { type: 'image/png' }));
+    const writes: Uint8ClampedArray[] = [];
+    const surfaces: ChainSurface[] = [];
+    class ChainSurface {
+      constructor(readonly width: number, readonly height: number) { surfaces.push(this); }
+      getContext() {
+        return {
+          drawImage() {},
+          getImageData: () => {
+            const data = new Uint8ClampedArray(this.width * this.height * 4);
+            data.set([
+              255, 255, 255, 255,
+              128, 128, 128, 255,
+            ]);
+            return { data, width: this.width, height: this.height };
+          },
+          putImageData: (data: ImageData) => writes.push(new Uint8ClampedArray(data.data)),
+        };
+      }
+    }
+    vi.stubGlobal('OffscreenCanvas', ChainSurface);
+    let finalIndex = 0;
+    const createBitmap = vi.fn(async (
+      source: Blob | ChainSurface,
+      options?: ImageBitmapOptions,
+    ) => {
+      if (source instanceof Blob) {
+        return { width: 8, height: 4, close: vi.fn() } as unknown as ImageBitmap;
+      }
+      const width = options?.resizeWidth ?? source.width;
+      return {
+        width,
+        height: Math.ceil(source.height * width / source.width),
+        finalIndex: finalIndex++,
+        close: vi.fn(),
+      } as unknown as ImageBitmap;
+    });
+    vi.stubGlobal('createImageBitmap', createBitmap);
+    const args = [
+      'word/media/chained-effects.png', 'image/png', 'FFFFFF', fetchImage,
+      0, 0, { clr1: '000000', clr2: 'FF0000' }, false, undefined,
+    ] as const;
+
+    const wide = await decodeRaster(...args, { targetWidthPx: 4, targetHeightPx: 1 });
+    const tall = await decodeRaster(...args, { targetWidthPx: 2, targetHeightPx: 3 });
+    const wideAgain = await decodeRaster(...args, { targetWidthPx: 4, targetHeightPx: 1 });
+
+    expect(wide).toMatchObject({ width: 4, height: 2 });
+    expect(tall).toMatchObject({ width: 6, height: 3 });
+    expect(wideAgain).toBe(wide);
+    expect(fetchImage).toHaveBeenCalledOnce();
+    expect(surfaces).toHaveLength(2);
+    expect(surfaces.every(surface => surface.width === 8 && surface.height === 4)).toBe(true);
+    expect(createBitmap).toHaveBeenCalledTimes(3);
+    expect(createBitmap).toHaveBeenNthCalledWith(1, expect.any(Blob));
+    expect(createBitmap).toHaveBeenNthCalledWith(2, surfaces[0], {
+      resizeWidth: 4,
+      resizeQuality: 'high',
+    });
+    expect(createBitmap).toHaveBeenNthCalledWith(3, surfaces[1], {
+      resizeWidth: 6,
+      resizeQuality: 'high',
+    });
+    // Exact white becomes transparent first; the still-opaque gray neighbour is
+    // then mapped once through the black→red duotone ramp in the same buffer.
+    expect([...writes[0].slice(0, 8)]).toEqual([
+      255, 255, 255, 0,
+      128, 0, 0, 255,
+    ]);
+  });
+
+  it('resamples the clrChange result when chained duotone fails, while strict mode returns null', async () => {
+    const written: Uint8ClampedArray[] = [];
+    class FallbackSurface {
+      constructor(readonly width: number, readonly height: number) {}
+      getContext() {
+        return {
+          drawImage() {},
+          getImageData: () => ({
+            data: new Uint8ClampedArray([
+              255, 255, 255, 255,
+              128, 128, 128, 255,
+              0, 0, 0, 0,
+              0, 0, 0, 0,
+            ]),
+            width: this.width,
+            height: this.height,
+          }),
+          putImageData: (data: ImageData) => written.push(new Uint8ClampedArray(data.data)),
+        };
+      }
+    }
+    vi.stubGlobal('OffscreenCanvas', FallbackSurface);
+    const base = { width: 2, height: 2, close: vi.fn() } as unknown as ImageBitmap;
+    const fallback = { width: 1, height: 1, close: vi.fn() } as unknown as ImageBitmap;
+    const createBitmap = vi.fn(async (source: Blob | FallbackSurface) => (
+      source instanceof Blob ? base : fallback
+    ));
+    vi.stubGlobal('createImageBitmap', createBitmap);
+    const duotoneTransform = vi.spyOn(core, 'duotoneImageData')
+      .mockImplementation(() => { throw new Error('duotone transform unavailable'); });
+    const fetchImage = vi.fn(async (_path: string, mime: string) =>
+      new Blob([new Uint8Array([1])], { type: mime }));
+    const args = [
+      'word/media/chained-effect-fallback.png', 'image/png', 'FFFFFF', fetchImage,
+      0, 0, { clr1: '000000', clr2: 'FFFFFF' },
+    ] as const;
+
+    try {
+      await expect(decodeRaster(
+        ...args,
+        false,
+        undefined,
+        { targetWidthPx: 1, targetHeightPx: 1 },
+      )).resolves.toBe(fallback);
+      await expect(decodeRaster(
+        ...args,
+        true,
+        undefined,
+        { targetWidthPx: 1, targetHeightPx: 1 },
+      )).resolves.toBeNull();
+
+      expect([...written[0].slice(0, 8)]).toEqual([
+        255, 255, 255, 0,
+        128, 128, 128, 255,
+      ]);
+      expect(createBitmap).toHaveBeenCalledTimes(2);
+      expect(createBitmap).toHaveBeenNthCalledWith(2, expect.any(FallbackSurface), {
+        resizeWidth: 1,
+        resizeQuality: 'high',
+      });
+    } finally {
+      duotoneTransform.mockRestore();
+      dropColorReplacedCache(fetchImage);
+      core.dropBitmapCacheByPath(fetchImage);
+    }
+  });
+
+  it('admits a chained effect source within the four-surface working-set budget', async () => {
+    const png = new Uint8Array(26);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    png.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+    const view = new DataView(png.buffer);
+    view.setUint32(16, 3_000);
+    view.setUint32(20, 2_500); // 7.5 MP: above 32 MP / 5, below 32 MP / 4.
+    const fetchImage = vi.fn(async () => new Blob([png as BlobPart], { type: 'image/png' }));
+    class BudgetSurface {
+      constructor(readonly width: number, readonly height: number) {}
+      getContext() {
+        return {
+          drawImage() {},
+          getImageData: () => ({
+            data: new Uint8ClampedArray([255, 255, 255, 255]),
+            width: this.width,
+            height: this.height,
+          }),
+          putImageData() {},
+        };
+      }
+    }
+    vi.stubGlobal('OffscreenCanvas', BudgetSurface);
+    const createBitmap = vi.fn(async (source: Blob | BudgetSurface, options?: ImageBitmapOptions) => ({
+      width: options?.resizeWidth ?? (source instanceof Blob ? 3_000 : source.width),
+      height: options?.resizeWidth ? 250 : source instanceof Blob ? 2_500 : source.height,
+      close() {},
+    }) as unknown as ImageBitmap);
+    vi.stubGlobal('createImageBitmap', createBitmap);
+
+    await expect(decodeRaster(
+      'word/media/four-surface-budget.png',
+      'image/png',
+      'FFFFFF',
+      fetchImage,
+      0,
+      0,
+      { clr1: '000000', clr2: 'FFFFFF' },
+      false,
+      undefined,
+      { targetWidthPx: 300, targetHeightPx: 250 },
+    )).resolves.toMatchObject({ width: 300, height: 250 });
+    expect(createBitmap).toHaveBeenCalledTimes(2);
+  });
+
   it('threads the opt-in TIFF codec through the DOCX image path', async () => {
     const bytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]);
     const bitmap = { width: 8, height: 4, close() {} } as unknown as ImageBitmap;
@@ -320,6 +580,44 @@ describe('docx lazy image bytes', () => {
       dropColorReplacedCache(fetchImage);
       core.dropBitmapCacheByPath(fetchImage);
     }
+  });
+
+  it('retries a failed chained final bake without leaking or closing the cached base', async () => {
+    stubOffscreen();
+    const baseClose = vi.fn();
+    const finalClose = vi.fn();
+    const base = { width: 2, height: 2, close: baseClose } as unknown as ImageBitmap;
+    const final = { width: 2, height: 2, close: finalClose } as unknown as ImageBitmap;
+    const createBitmap = vi.fn()
+      .mockResolvedValueOnce(base)
+      .mockRejectedValueOnce(new Error('final effect bake failed'))
+      .mockResolvedValueOnce(final);
+    vi.stubGlobal('createImageBitmap', createBitmap);
+    const fetchImage = vi.fn(async (_path: string, mime: string) =>
+      new Blob([new Uint8Array([1])], { type: mime }));
+    const decode = () => decodeRaster(
+      'word/media/chained-effect-retry.png',
+      'image/png',
+      'FFFFFF',
+      fetchImage,
+      0,
+      0,
+      { clr1: '000000', clr2: 'FFFFFF' },
+    );
+
+    await expect(decode()).rejects.toThrow('final effect bake failed');
+    await expect(decode()).resolves.toBe(final);
+
+    expect(fetchImage).toHaveBeenCalledOnce();
+    expect(createBitmap).toHaveBeenCalledTimes(3);
+    expect(baseClose).not.toHaveBeenCalled();
+    dropColorReplacedCache(fetchImage);
+    await Promise.resolve();
+    expect(finalClose).toHaveBeenCalledOnce();
+    expect(baseClose).not.toHaveBeenCalled();
+    core.dropBitmapCacheByPath(fetchImage);
+    await Promise.resolve();
+    expect(baseClose).toHaveBeenCalledOnce();
   });
 
   it('defers closing a cached recolour until the active render lease is released', async () => {

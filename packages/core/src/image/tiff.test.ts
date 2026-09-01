@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  __test_decodeTiffRgbaWithGroup4Diagnostics,
   decodeTiffRgba,
   renderTiffToBitmap,
   TiffDecodeError,
@@ -445,6 +446,80 @@ describe('TIFF 6.0 decoder', () => {
     ]);
   });
 
+  it('bounds maximally compressed Group 4 downsample work by rows and retained width', () => {
+    const width = 32_767;
+    const height = 4_096;
+    // Against the imaginary/all-white reference line, vertical-0 is one bit
+    // per row. This source is just below the 128 MP source cap while its TIFF
+    // payload remains tiny enough to expose source-grid decode amplification.
+    const tiff = classicTiff({
+      width,
+      height,
+      bitsPerSample: [1],
+      compression: 4,
+      photometric: 0,
+      strips: [bits('1'.repeat(height))],
+    });
+    expect(tiff.byteLength).toBeLessThan(1_024);
+
+    const diagnostics = __test_decodeTiffRgbaWithGroup4Diagnostics(tiff, {
+      targetWidthPx: 1,
+      targetHeightPx: 1,
+    });
+    expect(diagnostics.decoded && {
+      width: diagnostics.decoded.width,
+      height: diagnostics.decoded.height,
+    }).toEqual({ width: 8, height: 1 });
+    expect(rgbaRows(diagnostics.decoded)).toEqual([
+      new Array<number>(8).fill(255),
+    ]);
+
+    // One mode and one reference probe per encoded row, plus one run overlap
+    // per retained pixel column. None of these terms scale with source width.
+    expect({
+      modeCount: diagnostics.modeCount,
+      referenceProbeCount: diagnostics.referenceProbeCount,
+      areaSegmentCount: diagnostics.areaSegmentCount,
+    }).toEqual({
+      modeCount: height,
+      referenceProbeCount: height,
+      areaSegmentCount: height * 8,
+    });
+    expect(
+      diagnostics.modeCount
+      + diagnostics.referenceProbeCount
+      + diagnostics.areaSegmentCount,
+    ).toBeLessThanOrEqual(height * ((diagnostics.decoded?.width ?? 0) + 2));
+  });
+
+  it('bounds dense Group 4 changing-element storage for a downsampled source row', () => {
+    const width = 32_768;
+    // Begin with a zero-length white run, then alternate one black/white pixel.
+    // The resulting row has width + 1 changing elements (including x=0 and the
+    // width sentinel), one beyond the retained-axis-derived sparse-row ceiling.
+    const firstBlackPixel = '001' + '00110101' + '010';
+    const whiteBlackPair = '001' + '000111' + '010';
+    const finalWhitePixel = '001' + '000111' + '0000110111';
+    const encoded = bits(
+      firstBlackPixel
+      + whiteBlackPair.repeat((width - 2) / 2)
+      + finalWhitePixel,
+    );
+    const tiff = classicTiff({
+      width,
+      height: 2,
+      rowsPerStrip: 1,
+      bitsPerSample: [1],
+      compression: 4,
+      photometric: 0,
+      strips: [encoded, bits('1')],
+    });
+
+    expect(encoded.byteLength).toBeLessThan(32 * 1024);
+    expect(() => decodeTiffRgba(tiff, { targetWidthPx: 1 }))
+      .toThrowError(/CCITT Group 4 changing-element limit exceeded/i);
+  });
+
   it('area-filters into one direct aspect-preserving target allocation', () => {
     const source = classicTiff({
       width: 4,
@@ -468,6 +543,26 @@ describe('TIFF 6.0 decoder', () => {
     expect(decoded && { width: decoded.width, height: decoded.height }).toEqual({ width: 2, height: 1 });
     expect(allocations).toEqual([2 * 1 * 4]);
     expect(rgbaRows(decoded)).toEqual([[4, 6]]);
+  });
+
+  it('does not overshoot an exact integer target through floating-point roundoff', () => {
+    const source = classicTiff({
+      width: 25,
+      height: 25,
+      bitsPerSample: [8],
+      photometric: 1,
+      strips: [new Uint8Array(25 * 25)],
+    });
+
+    const decoded = decodeTiffRgba(source, {
+      targetWidthPx: 7,
+      targetHeightPx: 7,
+      maxRetainedPixels: 49,
+    });
+    expect(decoded && { width: decoded.width, height: decoded.height }).toEqual({
+      width: 7,
+      height: 7,
+    });
   });
 
   it('preserves the decoded-image error contract when the required target exceeds its budget', () => {

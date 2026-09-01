@@ -964,6 +964,29 @@ describe('decodeRasterOrMetafile', () => {
     });
   });
 
+  it('does not overshoot an exact integer browser target through floating-point roundoff', async () => {
+    const png = new Uint8Array(26);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    png.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+    const view = new DataView(png.buffer);
+    view.setUint32(16, 25);
+    view.setUint32(20, 25);
+    const bitmap = { width: 7, height: 7, close() {} } as unknown as ImageBitmap;
+    const cib = vi.fn(async () => bitmap);
+    vi.stubGlobal('createImageBitmap', cib);
+    const blob = new Blob([png as BlobPart], { type: 'image/png' });
+
+    await expect(decodeRasterOrMetafile(blob, {
+      targetWidthPx: 7,
+      targetHeightPx: 7,
+      maxRetainedPixels: 49,
+    })).resolves.toBe(bitmap);
+    expect(cib).toHaveBeenCalledWith(blob, {
+      resizeWidth: 7,
+      resizeQuality: 'high',
+    });
+  });
+
   it('closes and rejects a decoder result that ignores a restricted retained-surface limit', async () => {
     const sourceWidth = 10_000;
     const sourceHeight = 1_000;
@@ -1309,6 +1332,24 @@ describe('decodeRasterOrMetafile', () => {
       code: 'ooxml-tiff-decode',
       cause,
     });
+  });
+
+  it('preserves a decoded-image quota error from another TIFF codec realm', async () => {
+    const bytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 1, 2, 3, 4]);
+    const foreignQuota = {
+      name: 'OoxmlDecodedImageLimitError',
+      message: 'OOXML decoded image limit exceeded: image-pixels 50 > 49',
+      code: 'ooxml-decoded-image-limit',
+      metric: 'image-pixels',
+      limit: 49,
+      observed: 50,
+    };
+    const render = vi.fn(async () => { throw foreignQuota; });
+
+    await expect(decodeRasterOrMetafile(
+      new Blob([bytes as BlobPart], { type: 'application/octet-stream' }),
+      { tiff: { render } },
+    )).rejects.toBe(foreignQuota);
   });
 
   it('routes a MIME-identified unsupported TIFF container through the codec path', async () => {

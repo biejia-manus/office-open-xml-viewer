@@ -11,6 +11,7 @@ import {
   MAX_RASTER_SOURCE_PIXELS,
   OoxmlDecodedImageLimitError,
 } from './pixel-budget.js';
+import { aspectPreservingRasterTarget } from './raster-target.js';
 import {
   isTiff,
   TiffDecodeError,
@@ -490,15 +491,14 @@ function outputPlan(
 ): OutputPlan {
   const targetWidth = positiveTarget(options.targetWidthPx, 'targetWidthPx');
   const targetHeight = positiveTarget(options.targetHeightPx, 'targetHeightPx');
-  const requestedScale = targetWidth === undefined && targetHeight === undefined
-    ? 1
-    : Math.max(
-      targetWidth === undefined ? 0 : targetWidth / sourceWidth,
-      targetHeight === undefined ? 0 : targetHeight / sourceHeight,
-    );
-  const scale = Math.min(1, requestedScale);
-  const width = Math.max(1, Math.ceil(sourceWidth * scale));
-  const height = Math.max(1, Math.ceil(sourceHeight * scale));
+  const target = aspectPreservingRasterTarget(
+    { width: sourceWidth, height: sourceHeight },
+    targetWidth,
+    targetHeight,
+    true,
+  );
+  const width = target?.width ?? sourceWidth;
+  const height = target?.height ?? sourceHeight;
   const largestDimension = Math.max(width, height);
   if (largestDimension > MAX_RASTER_DIMENSION) {
     throw new OoxmlDecodedImageLimitError(
@@ -618,11 +618,10 @@ function accumulateAreaRow(
   parsed: ParsedTiff,
   plan: OutputPlan,
   rowOffset: number,
-  group4Row: Uint8Array | null,
   yWeight: number,
   accumulator: Float64Array,
 ): void {
-  const layout = parsed.layout;
+  const layout = parsed.layout as Exclude<PixelLayout, { kind: 'group4' }>;
   const sourceBytes = parsed.directory.reader.bytes;
 
   for (let outputX = 0; outputX < plan.width; outputX++) {
@@ -680,20 +679,12 @@ function accumulateAreaRow(
         red = sourceBytes[source] * sampleAlpha;
         green = sourceBytes[source + 1] * sampleAlpha;
         blue = sourceBytes[source + 2] * sampleAlpha;
-      } else if (layout.kind === 'cmyk') {
+      } else {
         const source = rowOffset + sourceX * 4;
         const black = sourceBytes[source + 3];
         red = cmykChannel(sourceBytes[source], black);
         green = cmykChannel(sourceBytes[source + 1], black);
         blue = cmykChannel(sourceBytes[source + 2], black);
-      } else {
-        if (!group4Row) fail('Internal TIFF Group 4 scanline state is missing');
-        const sample = bitAt(group4Row, sourceX);
-        red = layout.photometric === 0
-          ? (sample === 0 ? 255 : 0)
-          : (sample === 0 ? 0 : 255);
-        green = red;
-        blue = red;
       }
 
       if (layout.kind !== 'rgba-associated' && layout.kind !== 'rgba-unassociated') {
@@ -769,7 +760,7 @@ function decodeUncompressedArea(
       const destinationBottom = (outputY + 1) * parsed.height;
       const yWeight = Math.min(sourceBottom, destinationBottom)
         - Math.max(sourceTop, destinationTop);
-      accumulateAreaRow(parsed, plan, rowOffset, null, yWeight, accumulator);
+      accumulateAreaRow(parsed, plan, rowOffset, yWeight, accumulator);
     }
   }
   if (activeOutputY !== plan.height - 1) fail('Internal TIFF area-row coverage failure');
@@ -929,74 +920,93 @@ function decodeRun(reader: StripBitReader, black: boolean, maximum: number): num
   fail('CCITT Group 4 run-length code limit exceeded');
 }
 
-function bitAt(row: Uint8Array, x: number): number {
-  return (row[x >> 3] >> (7 - (x & 7))) & 1;
+/**
+ * Ordered changing-element positions for one T.6 coding line. Runs always begin
+ * white, alternate color at every entry, and end with the width sentinel. A
+ * zero first entry therefore represents the legal zero-length leading white
+ * run used by an all-black line.
+ */
+type Group4Row = number[];
+
+/**
+ * A retained scanline cannot independently represent more than one transition
+ * per pixel plus its terminal sentinel. Bound the sparse run form to that same
+ * maximum-axis complexity so a much wider downsampled source cannot amplify a
+ * compact strip into an unbounded JavaScript number array.
+ */
+const MAX_GROUP4_CHANGING_ELEMENTS = MAX_RASTER_DIMENSION + 1;
+
+interface Group4WorkDiagnostics {
+  modeCount: number;
+  referenceProbeCount: number;
+  areaSegmentCount: number;
 }
 
-function setBlackRange(row: Uint8Array, start: number, end: number): void {
-  while (start < end && (start & 7) !== 0) {
-    row[start >> 3] |= 1 << (7 - (start & 7));
-    start++;
-  }
-  while (start + 8 <= end) {
-    row[start >> 3] = 0xff;
-    start += 8;
-  }
-  while (start < end) {
-    row[start >> 3] |= 1 << (7 - (start & 7));
-    start++;
-  }
+interface Group4ReferenceCursor {
+  index: number;
 }
 
-function isChangingBoundary(reference: Uint8Array, width: number, position: number): boolean {
-  if (position === 0) return bitAt(reference, 0) !== 0;
-  if (position === width) return true;
-  return bitAt(reference, position - 1) !== bitAt(reference, position);
-}
-
-function colorAfterBoundary(reference: Uint8Array, width: number, position: number): number {
-  if (position < width) return bitAt(reference, position);
-  return bitAt(reference, width - 1) ^ 1;
+function toggleGroup4Boundary(row: Group4Row, position: number): void {
+  const last = row[row.length - 1];
+  if (last !== undefined && last > position) {
+    fail('Internal TIFF Group 4 changing-element order failure');
+  }
+  // Consecutive zero-length runs create two transitions at the same position.
+  // They cancel in the visible reference line and must not survive as phantom
+  // changing elements for the next row.
+  if (last === position) row.pop();
+  else {
+    if (row.length >= MAX_GROUP4_CHANGING_ELEMENTS) {
+      fail('CCITT Group 4 changing-element limit exceeded');
+    }
+    row.push(position);
+  }
 }
 
 function referenceChanges(
-  reference: Uint8Array,
+  reference: readonly number[],
   width: number,
   a0: number,
   color: number,
   initial: boolean,
+  cursor: Group4ReferenceCursor,
+  diagnostics?: Group4WorkDiagnostics,
 ): readonly [b1: number, b2: number] {
   const firstPosition = initial ? a0 : a0 + 1;
-  let b1 = width;
-  for (let position = firstPosition; position <= width; position++) {
-    if (
-      isChangingBoundary(reference, width, position)
-      && colorAfterBoundary(reference, width, position) === (color ^ 1)
-    ) {
-      b1 = position;
-      break;
-    }
+  // a0 never moves left, so the lower-bound cursor visits each reference run
+  // at most once during this coding line. Keep this cursor at the lower bound
+  // rather than b1: a negative vertical mode can leave a skipped, wrong-color
+  // boundary relevant to the next operation.
+  while (cursor.index < reference.length) {
+    if (diagnostics) diagnostics.referenceProbeCount++;
+    if (reference[cursor.index] >= firstPosition) break;
+    cursor.index++;
   }
-  for (let position = b1 + 1; position <= width; position++) {
-    if (isChangingBoundary(reference, width, position)) return [b1, position];
-  }
-  return [b1, width];
+  let index = cursor.index;
+  // The color after changing element i is black for even i and white for odd
+  // i because every row starts white. At most one alternating boundary needs
+  // to be skipped to find b1's required opposite color.
+  if (index < reference.length && ((index + 1) & 1) !== (color ^ 1)) index++;
+  return [reference[index] ?? width, reference[index + 1] ?? width];
 }
 
 function decodeGroup4Row(
   reader: StripBitReader,
-  reference: Uint8Array,
-  coding: Uint8Array,
+  reference: readonly number[],
+  coding: Group4Row,
   width: number,
+  diagnostics?: Group4WorkDiagnostics,
 ): void {
-  coding.fill(0);
+  coding.length = 0;
   let a0 = 0;
   let color = 0; // Every T.6 coding line begins with a (possibly zero) white run.
   let initial = true;
+  const referenceCursor: Group4ReferenceCursor = { index: 0 };
   const operationLimit = width * 4 + 32;
 
   for (let operation = 0; a0 < width; operation++) {
     if (operation >= operationLimit) fail('CCITT Group 4 scanline operation limit exceeded');
+    if (diagnostics) diagnostics.modeCount++;
     const mode = decodeMode(reader);
 
     if (mode === 'horizontal') {
@@ -1004,18 +1014,25 @@ function decodeGroup4Row(
       const a1 = a0 + firstRun;
       const secondRun = decodeRun(reader, color === 0, width - a1);
       const a2 = a1 + secondRun;
-      if (color === 1) setBlackRange(coding, a0, a1);
-      else setBlackRange(coding, a1, a2);
       if (a2 <= a0) fail('Invalid CCITT Group 4 horizontal mode with no progress');
+      toggleGroup4Boundary(coding, a1);
+      toggleGroup4Boundary(coding, a2);
       a0 = a2;
       initial = false;
       continue;
     }
 
-    const [b1, b2] = referenceChanges(reference, width, a0, color, initial);
+    const [b1, b2] = referenceChanges(
+      reference,
+      width,
+      a0,
+      color,
+      initial,
+      referenceCursor,
+      diagnostics,
+    );
     if (mode === 'pass') {
       if (b2 <= a0) fail('Invalid CCITT Group 4 pass mode with no progress');
-      if (color === 1) setBlackRange(coding, a0, b2);
       a0 = b2;
       initial = false;
       continue;
@@ -1023,30 +1040,85 @@ function decodeGroup4Row(
 
     const a1 = b1 + mode;
     if (a1 < a0 || a1 > width) fail('Invalid CCITT Group 4 vertical mode position');
-    if (color === 1) setBlackRange(coding, a0, a1);
+    toggleGroup4Boundary(coding, a1);
     a0 = a1;
     color ^= 1;
     initial = false;
   }
+  if (coding[coding.length - 1] !== width) {
+    if (coding.length >= MAX_GROUP4_CHANGING_ELEMENTS) {
+      fail('CCITT Group 4 changing-element limit exceeded');
+    }
+    coding.push(width);
+  }
 }
 
 function writeGroup4ExactRow(
-  row: Uint8Array,
+  row: readonly number[],
   output: Uint8ClampedArray,
   width: number,
   outputY: number,
   photometric: 0 | 1,
 ): void {
-  for (let x = 0; x < width; x++) {
-    const sample = bitAt(row, x);
+  let start = 0;
+  for (let run = 0; run < row.length; run++) {
+    const end = row[run];
+    const sample = run & 1;
     const gray = photometric === 0
       ? (sample === 0 ? 255 : 0)
       : (sample === 0 ? 0 : 255);
-    const destination = (outputY * width + x) * 4;
-    output[destination] = gray;
-    output[destination + 1] = gray;
-    output[destination + 2] = gray;
-    output[destination + 3] = 255;
+    for (let x = start; x < end; x++) {
+      const destination = (outputY * width + x) * 4;
+      output[destination] = gray;
+      output[destination + 1] = gray;
+      output[destination + 2] = gray;
+      output[destination + 3] = 255;
+    }
+    start = end;
+  }
+}
+
+/** Accumulate one Group 4 run row without expanding it to source-width pixels. */
+function accumulateGroup4AreaRow(
+  parsed: ParsedTiff,
+  plan: OutputPlan,
+  row: readonly number[],
+  photometric: 0 | 1,
+  yWeight: number,
+  accumulator: Float64Array,
+  diagnostics?: Group4WorkDiagnostics,
+): void {
+  let run = 0;
+  let runEnd = row[0] * plan.width;
+
+  for (let outputX = 0; outputX < plan.width; outputX++) {
+    const destinationLeft = outputX * parsed.width;
+    const destinationRight = (outputX + 1) * parsed.width;
+    let position = destinationLeft;
+
+    while (position < destinationRight) {
+      if (diagnostics) diagnostics.areaSegmentCount++;
+      while (runEnd <= position && run + 1 < row.length) {
+        run++;
+        runEnd = row[run] * plan.width;
+      }
+      const overlapEnd = Math.min(destinationRight, runEnd);
+      if (overlapEnd <= position) {
+        fail('Internal TIFF Group 4 area-run coverage failure');
+      }
+      const sample = run & 1;
+      const gray = photometric === 0
+        ? (sample === 0 ? 255 : 0)
+        : (sample === 0 ? 0 : 255);
+      const weight = (overlapEnd - position) * yWeight;
+      const destination = outputX * 4;
+      const grayAlpha = gray * 255 * weight;
+      accumulator[destination] += grayAlpha;
+      accumulator[destination + 1] += grayAlpha;
+      accumulator[destination + 2] += grayAlpha;
+      accumulator[destination + 3] += 255 * weight;
+      position = overlapEnd;
+    }
   }
 }
 
@@ -1054,18 +1126,20 @@ function decodeGroup4(
   parsed: ParsedTiff,
   plan: OutputPlan,
   output: Uint8ClampedArray,
+  diagnostics?: Group4WorkDiagnostics,
 ): void {
   const layout = parsed.layout as Extract<PixelLayout, { kind: 'group4' }>;
-  const rowStorageBytes = Math.ceil(parsed.width / 8);
-  let reference = new Uint8Array(rowStorageBytes);
-  let coding = new Uint8Array(rowStorageBytes);
+  let reference: Group4Row = [parsed.width];
+  let coding: Group4Row = [];
   const areaFilter = plan.width !== parsed.width || plan.height !== parsed.height;
   const accumulator = areaFilter ? new Float64Array(plan.width * 4) : null;
   const normalization = parsed.width * parsed.height;
   let activeOutputY = -1;
 
   for (let strip = 0; strip < parsed.stripCount; strip++) {
-    reference.fill(0); // TIFF 6.0: every strip starts with an imaginary white reference line.
+    // TIFF 6.0: every strip starts with an imaginary white reference line.
+    reference.length = 1;
+    reference[0] = parsed.width;
     const firstRow = strip * parsed.rowsPerStrip;
     const rowCount = Math.min(parsed.rowsPerStrip, parsed.height - firstRow);
     const reader = new StripBitReader(
@@ -1075,7 +1149,7 @@ function decodeGroup4(
     );
     for (let row = 0; row < rowCount; row++) {
       const sourceY = firstRow + row;
-      decodeGroup4Row(reader, reference, coding, parsed.width);
+      decodeGroup4Row(reader, reference, coding, parsed.width, diagnostics);
       if (!accumulator) {
         writeGroup4ExactRow(coding, output, parsed.width, sourceY, layout.photometric);
       } else {
@@ -1098,7 +1172,15 @@ function decodeGroup4(
           const destinationBottom = (outputY + 1) * parsed.height;
           const yWeight = Math.min(sourceBottom, destinationBottom)
             - Math.max(sourceTop, destinationTop);
-          accumulateAreaRow(parsed, plan, 0, coding, yWeight, accumulator);
+          accumulateGroup4AreaRow(
+            parsed,
+            plan,
+            coding,
+            layout.photometric,
+            yWeight,
+            accumulator,
+            diagnostics,
+          );
         }
       }
       [reference, coding] = [coding, reference];
@@ -1110,18 +1192,45 @@ function decodeGroup4(
   }
 }
 
-/** Decode a supported classic TIFF directly into its retained-size Canvas RGBA surface. */
-export function decodeTiffRgba(
+function decodeTiffRgbaInternal(
   bytes: Uint8Array,
-  options: Readonly<TiffRenderOptions> = {},
+  options: Readonly<TiffRenderOptions>,
+  diagnostics?: Group4WorkDiagnostics,
 ): DecodedTiff | null {
   const parsed = parseTiff(bytes);
   if (!parsed) return null;
   const plan = outputPlan(parsed.width, parsed.height, options);
   const output = new Uint8ClampedArray(plan.pixels * 4);
-  if (parsed.layout.kind === 'group4') decodeGroup4(parsed, plan, output);
+  if (parsed.layout.kind === 'group4') decodeGroup4(parsed, plan, output, diagnostics);
   else decodeUncompressed(parsed, plan, output);
   return { width: plan.width, height: plan.height, data: output };
+}
+
+/** Decode a supported classic TIFF directly into its retained-size Canvas RGBA surface. */
+export function decodeTiffRgba(
+  bytes: Uint8Array,
+  options: Readonly<TiffRenderOptions> = {},
+): DecodedTiff | null {
+  return decodeTiffRgbaInternal(bytes, options);
+}
+
+/** Internal module test seam; intentionally not re-exported by the package root. */
+export function __test_decodeTiffRgbaWithGroup4Diagnostics(
+  bytes: Uint8Array,
+  options: Readonly<TiffRenderOptions> = {},
+): Readonly<{
+  decoded: DecodedTiff | null;
+  modeCount: number;
+  referenceProbeCount: number;
+  areaSegmentCount: number;
+}> {
+  const diagnostics: Group4WorkDiagnostics = {
+    modeCount: 0,
+    referenceProbeCount: 0,
+    areaSegmentCount: 0,
+  };
+  const decoded = decodeTiffRgbaInternal(bytes, options, diagnostics);
+  return Object.freeze({ decoded, ...diagnostics });
 }
 
 /** Rasterize a supported TIFF without asking the browser to decode TIFF bytes. */

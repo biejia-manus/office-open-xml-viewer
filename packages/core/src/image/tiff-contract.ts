@@ -19,12 +19,31 @@ export class TiffDecodeError extends Error {
   }
 }
 
+/** Snapshot the only caller-controlled TIFF diagnostic field used on the wire. */
+export function getTiffDecodeErrorDetails(
+  error: unknown,
+): Readonly<{ message: string }> | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  try {
+    const candidate = error as { readonly code?: unknown; readonly message?: unknown };
+    const code = candidate.code;
+    const message = candidate.message;
+    return code === 'ooxml-tiff-decode' && typeof message === 'string'
+      ? { message }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Narrow TIFF failures on either side of a worker boundary. */
 export function isTiffDecodeError(error: unknown): error is TiffDecodeError {
-  return error instanceof TiffDecodeError
-    || (typeof error === 'object'
-      && error !== null
-      && (error as { code?: unknown }).code === 'ooxml-tiff-decode');
+  if (!getTiffDecodeErrorDetails(error)) return false;
+  try {
+    return typeof (error as { readonly name?: unknown }).name === 'string';
+  } catch {
+    return false;
+  }
 }
 
 /** Optional TIFF codec contract shared by DOCX, XLSX and PPTX. */

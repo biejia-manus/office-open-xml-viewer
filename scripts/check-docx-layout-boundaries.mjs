@@ -105,6 +105,9 @@ const SHARED_PAINT_IMPORTS = new Map([
     // Chart picture-marker discovery and lookup warm the document-owned image
     // cache before measurement-free chart paint. They expose no layout API.
     ['chartImageFillKey', 'value'],
+    ['chartImageFillUsageSize', 'value'],
+    ['collectChartImageFillUsages', 'value'],
+    ['collectChartImageFillUsagesForCharts', 'value'],
     ['collectChartMarkerImageFills', 'value'],
     ['collectChartMarkerImageFillsForCharts', 'value'],
     // DrawingML silhouette clipping is shared paint behavior used by
@@ -120,6 +123,8 @@ const SHARED_PAINT_IMPORTS = new Map([
     // Shared decoded-surface ownership is a paint resource concern. DOCX may
     // create/drop derived clrChange/duotone surfaces without importing layout.
     ['dropCachedDerivedBitmapNamespace', 'value'],
+    ['decodedBitmapTargetResizeOptions', 'value'],
+    ['duotoneImageData', 'value'],
     ['getCachedBitmapByPath', 'value'],
     ['getCachedDerivedBitmap', 'value'],
     ['getCachedSvgImageByPath', 'value'],

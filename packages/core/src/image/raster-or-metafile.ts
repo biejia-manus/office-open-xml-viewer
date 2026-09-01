@@ -10,12 +10,14 @@ import {
   MAX_RASTER_SOURCE_DIMENSION,
   MAX_RASTER_SOURCE_PIXELS,
   OoxmlDecodedImageLimitError,
+  isOoxmlDecodedImageLimitError,
 } from './pixel-budget.js';
 import { inspectRasterBlob, type RasterBlobInspection } from './raster-blob-inspection.js';
 import {
   sourceRasterExceedsBudget,
   type RasterDimensions,
 } from './raster-dimensions.js';
+import { aspectPreservingRasterTarget } from './raster-target.js';
 import {
   isTiff,
   isTiffDecodeError,
@@ -63,23 +65,18 @@ function decodePlan(
     && Number.isFinite(targetWidthPx) && targetWidthPx > 0 ? targetWidthPx : undefined;
   const targetHeight = typeof targetHeightPx === 'number'
     && Number.isFinite(targetHeightPx) && targetHeightPx > 0 ? targetHeightPx : undefined;
-  if (allowSingleAxis ? targetWidth === undefined && targetHeight === undefined
-    : targetWidth === undefined || targetHeight === undefined) return native;
   // A target is a sufficient downsample request only when neither source axis
   // needs native resolution. If one target axis reaches/exceeds the source,
   // retaining the source grid is genuinely required; quota checks below reject
   // it rather than silently substituting a smaller, insufficient surface.
-  if ((targetWidth !== undefined && !(targetWidth < source.width))
-    || (targetHeight !== undefined && !(targetHeight < source.height))) return native;
-  const scale = Math.max(
-    targetWidth === undefined ? 0 : targetWidth / source.width,
-    targetHeight === undefined ? 0 : targetHeight / source.height,
+  const target = aspectPreservingRasterTarget(
+    source,
+    targetWidth,
+    targetHeight,
+    allowSingleAxis,
   );
-  const resizeWidth = Math.min(
-    source.width,
-    Math.max(1, Math.ceil(source.width * scale)),
-  );
-  if (!(resizeWidth < source.width)) return native;
+  if (!target) return native;
+  const resizeWidth = target.width;
   const retainedHeight = Math.min(
     source.height,
     Math.max(1, Math.ceil(source.height * resizeWidth / source.width)),
@@ -183,7 +180,7 @@ export async function decodeRasterOrMetafileWithInspection(
         maxRetainedPixels: retainedPixelLimit,
       });
     } catch (error) {
-      if (error instanceof OoxmlDecodedImageLimitError || isTiffDecodeError(error)) throw error;
+      if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
       throw new TiffDecodeError('TIFF codec failed to decode the image', { cause: error });
     }
     if (!bitmap) throw new TiffDecodeError('TIFF codec failed to decode the image');

@@ -237,8 +237,13 @@ export {
 } from './image/bitmap-image-by-path';
 export {
   chartImageFillKey,
+  chartImageFillUsageSize,
+  collectChartImageFillUsages,
+  collectChartImageFillUsagesForCharts,
   collectChartMarkerImageFills,
   collectChartMarkerImageFillsForCharts,
+  type ChartImageFillUsage,
+  type ChartImageFillUsageSize,
   type ChartImageLookup,
 } from './chart/image-fill';
 // Shared WMF (Windows Metafile) player.
@@ -319,6 +324,7 @@ export {
   duotoneCacheKey,
   dropDuotoneBitmapCache,
 } from './image/duotone-bitmap-by-path';
+export { decodedBitmapTargetResizeOptions } from './image/raster-target';
 // Shared vector-vs-raster blip gate: prefer the Microsoft asvg:svgBlip vector
 // original except when an <a:srcRect> crop is present (then the raster's native
 // pixel grid is required for the fractional crop math). Used by all three

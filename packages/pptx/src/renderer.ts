@@ -79,8 +79,9 @@ import {
   getCachedBitmapByPath,
   getCachedDuotoneBitmapByPath,
   chartImageFillKey,
-  collectChartMarkerImageFills,
-  collectChartMarkerImageFillsForCharts,
+  chartImageFillUsageSize,
+  collectChartImageFillUsages,
+  collectChartImageFillUsagesForCharts,
   acquireBitmapCacheLease,
   peekCachedBitmapByPath,
   dropDecodedBitmapCache,
@@ -6684,14 +6685,95 @@ async function renderSlideLeased(
   if (opts.fetchImage) {
     const fetchImage = opts.fetchImage;
     const bulletPaths = new Map<string, string>();
-    const chartFillMap = new Map<string, ReturnType<typeof collectChartMarkerImageFills>[number]>();
-    for (const fill of collectChartMarkerImageFillsForCharts(
-      slide.elements
-        .filter((element): element is ChartElement => element.type === 'chart')
-        .map(element => element.chart),
+    // A chart whose frame or derived decode size is non-positive or non-finite
+    // cannot paint an image safely. Exclude it before aggregate source gating
+    // so it cannot suppress visible preloads or force a native-size decode.
+    const chartDescriptors: Array<{
+      element: ChartElement;
+      frame: Parameters<typeof chartImageFillUsageSize>[1];
+      usages: Array<{
+        usage: ReturnType<typeof collectChartImageFillUsages>[number];
+        size: NonNullable<ReturnType<typeof chartImageFillUsageSize>>;
+      }>;
+    }> = [];
+    for (const element of slide.elements) {
+      if (element.type !== 'chart'
+        || !Number.isFinite(element.width) || element.width <= 0
+        || !Number.isFinite(element.height) || element.height <= 0) continue;
+      const frame = {
+        widthPt: element.width / PT_TO_EMU,
+        heightPt: element.height / PT_TO_EMU,
+        targetWidthPx: emuToPx(element.width, scale) * effectiveDpr,
+        targetHeightPx: emuToPx(element.height, scale) * effectiveDpr,
+      };
+      const usages = [] as typeof chartDescriptors[number]['usages'];
+      let valid = true;
+      for (const usage of collectChartImageFillUsages(element.chart)) {
+        const size = chartImageFillUsageSize(usage, frame);
+        if (!size) {
+          valid = false;
+          break;
+        }
+        usages.push({ usage, size });
+      }
+      if (valid) chartDescriptors.push({ element, frame, usages });
+    }
+    const chartFillMap = new Map<string, {
+      fill: ReturnType<typeof collectChartImageFillUsages>[number]['fill'];
+      widthPt: number;
+      heightPt: number;
+      targetWidthPx?: number;
+      targetHeightPx?: number;
+      preserveNaturalSize: boolean;
+      hasSourceCrop: boolean;
+    }>();
+    for (const usage of collectChartImageFillUsagesForCharts(
+      chartDescriptors.map(({ element }) => element.chart),
+      (usage, chartIndex) => chartImageFillUsageSize(
+        usage,
+        chartDescriptors[chartIndex]!.frame,
+      ) != null,
     )) {
+      const { fill } = usage;
       const key = chartImageFillKey(fill);
-      if (!chartFillMap.has(key)) chartFillMap.set(key, fill);
+      if (!chartFillMap.has(key)) chartFillMap.set(key, {
+        fill,
+        widthPt: 0,
+        heightPt: 0,
+        preserveNaturalSize: usage.preserveNaturalSize,
+        hasSourceCrop: usage.hasSourceCrop,
+      });
+    }
+    for (const { usages } of chartDescriptors) {
+      for (const { usage, size } of usages) {
+        const { fill } = usage;
+        const key = chartImageFillKey(fill);
+        const prior = chartFillMap.get(key);
+        if (!prior) continue;
+        // ECMA-376 §20.1.8.58: tile geometry is based on the source's natural
+        // pixel dimensions and authored DPI. A display-sized decode would alter
+        // the tile size/alignment/repetition count. Because one decoded source
+        // is shared by key, any tiled consumer makes the whole shared entry
+        // native-sized, even when another chart stretches the same blip.
+        const preserveNaturalSize = prior.preserveNaturalSize || usage.preserveNaturalSize;
+        // A picture fill may cover a marker, chart/plot area, wall, or floor.
+        // The owning chart frame is the smallest format-derived upper bound
+        // common to all consumers. Core has already aggregated each same-chart
+        // occurrence's source crop and stretch fillRect into these factors.
+        chartFillMap.set(key, {
+          ...prior,
+          widthPt: Math.max(prior.widthPt, size.widthPt),
+          heightPt: Math.max(prior.heightPt, size.heightPt),
+          targetWidthPx: preserveNaturalSize
+            ? undefined
+            : Math.max(prior.targetWidthPx ?? 0, size.targetWidthPx ?? 0) || undefined,
+          targetHeightPx: preserveNaturalSize
+            ? undefined
+            : Math.max(prior.targetHeightPx ?? 0, size.targetHeightPx ?? 0) || undefined,
+          preserveNaturalSize,
+          hasSourceCrop: prior.hasSourceCrop || usage.hasSourceCrop,
+        });
+      }
     }
     for (const el of slide.elements) {
       if (el.type !== 'shape' || !el.textBody) continue;
@@ -6715,41 +6797,46 @@ async function renderSlideLeased(
           pictureBulletImages.set(path, null);
         }
       });
-      const chartPromises: Promise<unknown>[] = [...chartFillMap].map(async ([key, fill]) => {
-          try {
-            const raster = metafileRasterSize(fill.mimeType, fill.srcRect, 72, 72);
-            if (!raster) {
-              chartMarkerImages.set(key, null);
-              return;
-            }
-            const decodeFallback = () => fill.mimeType === 'image/svg+xml'
-              ? fill.duotone ? Promise.resolve(null) : getCachedSvgImageByPath(fill.imagePath, fetchImage)
-              : getCachedDuotoneBitmapByPath(
-                  fill.imagePath, fill.mimeType, fill.duotone, fetchImage,
-                  {
-                    widthPt: raster.widthPt,
-                    heightPt: raster.heightPt,
-                    ...(rasterTargetOptions(96, 96, effectiveDpr, fill.srcRect) ?? {}),
-                    failClosedOnDuotoneFailure: true,
-                    tiff: opts.tiff,
-                  },
-                );
-            let bitmap: CanvasImageSource | null;
-            if (!fill.duotone && preferVectorBlip(fill)) {
-              try {
-                bitmap = await getCachedSvgImageByPath(fill.svgImagePath, fetchImage);
-              } catch {
-                bitmap = await decodeFallback();
-              }
-            } else {
+      const chartPromises: Promise<unknown>[] = [...chartFillMap].map(async ([key, entry]) => {
+        const {
+          fill, widthPt, heightPt, targetWidthPx, targetHeightPx, hasSourceCrop,
+        } = entry;
+        const target = targetWidthPx && targetHeightPx
+          ? { targetWidthPx, targetHeightPx }
+          : undefined;
+        try {
+          const decodeFallback = () => fill.mimeType === 'image/svg+xml'
+            ? fill.duotone ? Promise.resolve(null) : getCachedSvgImageByPath(fill.imagePath, fetchImage)
+            : getCachedDuotoneBitmapByPath(
+                fill.imagePath, fill.mimeType, fill.duotone, fetchImage,
+                {
+                  widthPt,
+                  heightPt,
+                  ...(target ?? {}),
+                  failClosedOnDuotoneFailure: true,
+                  tiff: opts.tiff,
+                },
+              );
+          let bitmap: CanvasImageSource | null;
+          const blip = {
+            svgImagePath: fill.svgImagePath,
+            srcRect: hasSourceCrop ? true : null,
+          };
+          if (!fill.duotone && preferVectorBlip(blip)) {
+            try {
+              bitmap = await getCachedSvgImageByPath(blip.svgImagePath, fetchImage);
+            } catch {
               bitmap = await decodeFallback();
             }
-            chartMarkerImages.set(key, bitmap);
-          } catch (error) {
-            if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
-            chartMarkerImages.set(key, null);
+          } else {
+            bitmap = await decodeFallback();
           }
-        });
+          chartMarkerImages.set(key, bitmap);
+        } catch (error) {
+          if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
+          chartMarkerImages.set(key, null);
+        }
+      });
       await Promise.all([...bulletPromises, ...chartPromises]);
       if (superseded()) return canvas;
     }

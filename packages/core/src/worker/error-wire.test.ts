@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { OoxmlError, OoxmlResourceLimitError } from '../errors/ooxml-error.js';
 import {
   OoxmlDecodedImageLimitError,
+  isOoxmlDecodedImageLimitError,
   type OoxmlDecodedImageLimitMetric,
 } from '../image/pixel-budget.js';
 import { isTiffDecodeError, TiffDecodeError } from '../image/tiff-contract.js';
@@ -9,6 +10,7 @@ import {
   deserializeWorkerError,
   parseResourceLimitError,
   serializeWorkerError,
+  type WorkerErrorPayload,
 } from './error-wire.js';
 
 const USAGE = {
@@ -74,6 +76,143 @@ describe('worker error wire', () => {
     },
   );
 
+  it('preserves a decoded-image quota error from another bundled core realm', () => {
+    const foreignQuota = {
+      name: 'OoxmlDecodedImageLimitError',
+      message: 'OOXML decoded image limit exceeded: image-pixels 11 > 10',
+      code: 'ooxml-decoded-image-limit',
+      metric: 'image-pixels',
+      limit: 10,
+      observed: 11,
+    };
+    expect(isOoxmlDecodedImageLimitError(foreignQuota)).toBe(true);
+    const restored = deserializeWorkerError(structuredClone(serializeWorkerError(foreignQuota)));
+
+    expect(restored).toBeInstanceOf(OoxmlDecodedImageLimitError);
+    expect(restored).toMatchObject(foreignQuota);
+  });
+
+  it('uses canonical decoded-image text instead of caller-controlled fields', () => {
+    const foreignQuota = {
+      name: () => 'uncloneable name',
+      message: () => 'uncloneable message',
+      code: 'ooxml-decoded-image-limit',
+      metric: 'image-pixels',
+      limit: 10,
+      observed: 11,
+    };
+
+    const wire = serializeWorkerError(foreignQuota);
+    expect(wire).toEqual({
+      message: 'OOXML decoded image limit exceeded: image-pixels 11 > 10',
+      errorName: 'OoxmlDecodedImageLimitError',
+      code: 'ooxml-decoded-image-limit',
+      decodedImage: { metric: 'image-pixels', limit: 10, observed: 11 },
+    });
+    expect(isOoxmlDecodedImageLimitError(foreignQuota)).toBe(false);
+    expect(() => structuredClone(wire)).not.toThrow();
+  });
+
+  it.each([
+    ['function-valued metric', { metric: () => 'image-pixels' }],
+    ['unknown metric', { metric: 'future-metric' }],
+    ['fractional limit', { limit: 10.5 }],
+    ['negative limit', { limit: -1 }],
+    ['unsafe observed value', { observed: Number.MAX_SAFE_INTEGER + 1 }],
+    ['non-crossing values', { limit: 11, observed: 11 }],
+  ])('rejects decoded-image quota shapes with %s', (_name, overrides) => {
+    const candidate = {
+      code: 'ooxml-decoded-image-limit',
+      metric: 'image-pixels',
+      limit: 10,
+      observed: 11,
+      ...overrides,
+    };
+
+    expect(isOoxmlDecodedImageLimitError(candidate)).toBe(false);
+    const wire = serializeWorkerError(candidate);
+    expect(wire).not.toHaveProperty('decodedImage');
+    expect(() => structuredClone(wire)).not.toThrow();
+    expect(deserializeWorkerError(wire)).not.toBeInstanceOf(OoxmlDecodedImageLimitError);
+  });
+
+  it('contains throwing decoded-image accessors and proxies', () => {
+    const throwingAccessor = {
+      code: 'ooxml-decoded-image-limit',
+      get metric(): never {
+        throw new Error('must not escape validation');
+      },
+      limit: 10,
+      observed: 11,
+    };
+    const throwingProxy = new Proxy({}, {
+      get(): never {
+        throw new Error('must not escape validation');
+      },
+    });
+
+    for (const candidate of [throwingAccessor, throwingProxy]) {
+      expect(() => isOoxmlDecodedImageLimitError(candidate)).not.toThrow();
+      expect(isOoxmlDecodedImageLimitError(candidate)).toBe(false);
+      const wire = serializeWorkerError(candidate);
+      expect(() => structuredClone(wire)).not.toThrow();
+      expect(deserializeWorkerError(wire)).not.toBeInstanceOf(OoxmlDecodedImageLimitError);
+    }
+  });
+
+  it('snapshots mutable decoded-image worker fields exactly once', () => {
+    const reads = { decodedImage: 0, metric: 0, limit: 0, observed: 0 };
+    const decodedImage = {
+      get metric(): string {
+        reads.metric++;
+        return reads.metric === 1 ? 'image-pixels' : 'future-metric';
+      },
+      get limit(): number {
+        reads.limit++;
+        return reads.limit === 1 ? 10 : -1;
+      },
+      get observed(): number {
+        reads.observed++;
+        return reads.observed === 1 ? 11 : Number.NaN;
+      },
+    };
+    const payload = {
+      message: 'caller-controlled text',
+      code: 'ooxml-decoded-image-limit',
+      get decodedImage(): typeof decodedImage {
+        reads.decodedImage++;
+        return decodedImage;
+      },
+    } as WorkerErrorPayload;
+
+    const restored = deserializeWorkerError(payload);
+    expect(restored).toBeInstanceOf(OoxmlDecodedImageLimitError);
+    expect(restored).toMatchObject({ metric: 'image-pixels', limit: 10, observed: 11 });
+    expect(reads).toEqual({ decodedImage: 1, metric: 1, limit: 1, observed: 1 });
+  });
+
+  it('contains throwing decoded-image worker payload getters', () => {
+    const payload = new Proxy({} as WorkerErrorPayload, {
+      get(): never {
+        throw new Error('must not escape deserialization');
+      },
+    });
+    const nested = {
+      message: 'quota',
+      code: 'ooxml-decoded-image-limit',
+      decodedImage: new Proxy({}, {
+        get(): never {
+          throw new Error('must not escape nested deserialization');
+        },
+      }),
+    } as WorkerErrorPayload;
+
+    for (const candidate of [payload, nested]) {
+      expect(() => deserializeWorkerError(candidate)).not.toThrow();
+      expect(deserializeWorkerError(candidate)).not.toBeInstanceOf(OoxmlDecodedImageLimitError);
+    }
+  });
+
   it('rejects an unknown decoded-image metric as an ordinary error', () => {
     const wire = structuredClone(serializeWorkerError(
       new OoxmlDecodedImageLimitError('image-pixels', 10, 11),
@@ -94,6 +233,51 @@ describe('worker error wire', () => {
       code: 'ooxml-tiff-decode',
       message: 'Unsupported TIFF compression: 5',
     });
+  });
+
+  it('preserves a foreign-realm TIFF failure across the worker boundary', () => {
+    const foreignTiff = {
+      name: 'TiffDecodeError',
+      message: 'Unsupported TIFF compression: 5',
+      code: 'ooxml-tiff-decode',
+    };
+    expect(isTiffDecodeError(foreignTiff)).toBe(true);
+
+    const wire = structuredClone(serializeWorkerError(foreignTiff));
+    expect(wire).toEqual({
+      message: foreignTiff.message,
+      errorName: 'TiffDecodeError',
+      code: 'ooxml-tiff-decode',
+    });
+    expect(deserializeWorkerError(wire)).toBeInstanceOf(TiffDecodeError);
+  });
+
+  it('contains throwing TIFF error accessors and proxies', () => {
+    const throwingAccessor = Object.defineProperty({}, 'code', {
+      get(): never {
+        throw new Error('must not escape TIFF validation');
+      },
+    });
+    const throwingProxy = new Proxy({}, {
+      getPrototypeOf(): never {
+        throw new Error('must not escape TIFF validation');
+      },
+    });
+    const throwingMessage = {
+      name: 'TiffDecodeError',
+      code: 'ooxml-tiff-decode',
+      get message(): never {
+        throw new Error('must not escape TIFF message validation');
+      },
+    };
+
+    for (const candidate of [throwingAccessor, throwingProxy, throwingMessage]) {
+      expect(() => isTiffDecodeError(candidate)).not.toThrow();
+      expect(isTiffDecodeError(candidate)).toBe(false);
+      const wire = serializeWorkerError(candidate);
+      expect(() => structuredClone(wire)).not.toThrow();
+      expect(deserializeWorkerError(wire)).not.toBeInstanceOf(TiffDecodeError);
+    }
   });
 
   it('encodes public errors field-by-field before structured clone', () => {

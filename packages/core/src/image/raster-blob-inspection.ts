@@ -6,8 +6,9 @@ import {
   type RasterDimensions,
 } from './raster-dimensions.js';
 import { isTiff } from './tiff-contract.js';
+import { isEmf, isWmf } from './wmf.js';
 
-export type RasterFormat = 'png' | 'jpeg' | 'gif' | 'bmp' | 'webp' | 'tiff';
+export type RasterFormat = 'png' | 'jpeg' | 'gif' | 'bmp' | 'webp' | 'tiff' | 'wmf' | 'emf';
 
 export interface RasterBlobInspection {
   readonly format: RasterFormat | null;
@@ -17,6 +18,8 @@ export interface RasterBlobInspection {
 const INITIAL_SNIFF_BYTES = 64 * 1024;
 
 function rasterFormat(head: Uint8Array): RasterFormat | null {
+  if (isWmf(head)) return 'wmf';
+  if (isEmf(head)) return 'emf';
   if (head.length >= 8
     && head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47
     && head[4] === 0x0d && head[5] === 0x0a && head[6] === 0x1a && head[7] === 0x0a) return 'png';

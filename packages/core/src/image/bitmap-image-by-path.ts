@@ -50,6 +50,7 @@ import {
   OoxmlDecodedImageLimitError,
 } from './pixel-budget.js';
 import type { TiffRenderer } from './tiff-contract.js';
+import { wmfRasterTarget } from './wmf.js';
 
 type FetchImage = (path: string, mime: string) => Promise<Blob>;
 export type DecodedBitmapCacheOwner = object;
@@ -456,6 +457,66 @@ export function cachedBitmapVariantKey(
     : `native:${pathKey}`;
 }
 
+interface MetafileVariant {
+  readonly width: number;
+  readonly height: number;
+  readonly suppressBoundaryFrame: boolean;
+  readonly pixelLimit: number;
+}
+
+function profileIsMetafile(profile: RasterSourceProfile): boolean {
+  return profile.inspection.format === 'wmf' || profile.inspection.format === 'emf';
+}
+
+function metafileVariant(opts: CachedBitmapOptions): MetafileVariant {
+  const target = wmfRasterTarget(opts.widthPt ?? 0, opts.heightPt ?? 0);
+  return {
+    width: target.w,
+    height: target.h,
+    suppressBoundaryFrame: opts.suppressBoundaryFrame === true,
+    pixelLimit: retainedPixelLimit(opts),
+  };
+}
+
+function metafileVariantPrefix(imagePath: string, variant: MetafileVariant): string {
+  const pathKey = `${imagePath.length}:${imagePath}`;
+  return `metafile:${pathKey}:s${variant.suppressBoundaryFrame ? 1 : 0}:p${variant.pixelLimit}:`;
+}
+
+function metafileVariantKey(
+  imagePath: string,
+  opts: CachedBitmapOptions,
+  dimensions?: Readonly<{ width: number; height: number }>,
+): string {
+  const variant = metafileVariant(opts);
+  const width = normalizedRasterTarget(dimensions?.width) ?? variant.width;
+  const height = normalizedRasterTarget(dimensions?.height) ?? variant.height;
+  return `${metafileVariantPrefix(imagePath, variant)}${width}x${height}`;
+}
+
+function reusableMetafileVariantKey(
+  owner: DecodedBitmapCacheOwner,
+  imagePath: string,
+  opts: CachedBitmapOptions,
+): string | undefined {
+  const requested = metafileVariant(opts);
+  const prefix = `${BASE_CACHE_PREFIX}${metafileVariantPrefix(imagePath, requested)}`;
+  let best: { key: string; pixels: number } | undefined;
+  for (const key of bitmapCacheByFetch.get(owner)?.entries.keys() ?? []) {
+    if (!key.startsWith(prefix)) continue;
+    const match = /^(\d+)x(\d+)$/.exec(key.slice(prefix.length));
+    if (!match) continue;
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    if (width < requested.width || height < requested.height) continue;
+    const pixels = width * height;
+    if (!best || pixels < best.pixels) {
+      best = { key: key.slice(BASE_CACHE_PREFIX.length), pixels };
+    }
+  }
+  return best?.key;
+}
+
 function reusableResolutionVariantKey(
   owner: DecodedBitmapCacheOwner,
   imagePath: string,
@@ -536,15 +597,30 @@ export async function resolvedCachedBitmapVariantKey(
 ): Promise<string> {
   if (epoch) assertCurrentOwnerEpoch(fetchImage, epoch);
   const normalized = normalizedBitmapOptions(opts);
+  const generation = epoch?.ownerGeneration ?? cacheGeneration(fetchImage);
+  const profile = await rasterProfileFor(fetchImage, imagePath, mimeType, fetchImage);
+  if (epoch) assertCurrentOwnerEpoch(fetchImage, epoch);
+  else assertCurrentCacheGeneration(fetchImage, generation);
+  const metafile = profileIsMetafile(profile);
   if (resolvedBitmap) {
     // Derived transforms must follow the surface actually returned, not a
     // reusable-cache choice that can change while the caller awaits. The
     // retained grid is a stable content identity for one source path.
+    if (metafile) {
+      return metafileVariantKey(imagePath, normalized, {
+        width: Number(resolvedBitmap.width),
+        height: Number(resolvedBitmap.height),
+      });
+    }
     return cachedBitmapVariantKey(imagePath, {
       targetWidthPx: Number(resolvedBitmap.width),
       targetHeightPx: Number(resolvedBitmap.height),
       maxRetainedPixels: normalized.maxRetainedPixels,
     });
+  }
+  if (metafile) {
+    return reusableMetafileVariantKey(fetchImage, imagePath, normalized)
+      ?? metafileVariantKey(imagePath, normalized);
   }
   if (!normalized.targetWidthPx && !normalized.targetHeightPx) {
     return cachedBitmapVariantKey(imagePath);
@@ -554,10 +630,6 @@ export async function resolvedCachedBitmapVariantKey(
     && bitmapCacheByFetch.get(fetchImage)?.entries.has(nativeKey)) {
     return cachedBitmapVariantKey(imagePath);
   }
-  const generation = epoch?.ownerGeneration ?? cacheGeneration(fetchImage);
-  const profile = await rasterProfileFor(fetchImage, imagePath, mimeType, fetchImage);
-  if (epoch) assertCurrentOwnerEpoch(fetchImage, epoch);
-  else assertCurrentCacheGeneration(fetchImage, generation);
   return profileNeedsResolutionVariant(profile, normalized)
     ? reusableResolutionVariantKey(
         fetchImage,
@@ -758,17 +830,24 @@ export function getCachedBitmapByPath(
       },
     ).then((bitmap) => enforceCachedRetainedBudget(bitmap, normalized));
   };
-  if (!targetWidthPx && !targetHeightPx) {
-    return decode(cachedBitmapVariantKey(imagePath));
-  }
-  const nativeKey = `${BASE_CACHE_PREFIX}${cachedBitmapVariantKey(imagePath)}`;
-  if (!hasRestrictedPixelLimit(normalized)
-    && bitmapCacheByFetch.get(fetchImage)?.entries.has(nativeKey)) {
-    return decode(cachedBitmapVariantKey(imagePath));
-  }
   const generation = cacheGeneration(fetchImage);
   return rasterProfileFor(fetchImage, imagePath, mimeType, fetchImage).then((profile) => {
     assertCurrentCacheGeneration(fetchImage, generation);
+    if (profileIsMetafile(profile)) {
+      return decode(
+        reusableMetafileVariantKey(fetchImage, imagePath, normalized)
+          ?? metafileVariantKey(imagePath, normalized),
+        profile,
+      );
+    }
+    if (!targetWidthPx && !targetHeightPx) {
+      return decode(cachedBitmapVariantKey(imagePath), profile);
+    }
+    const nativeKey = `${BASE_CACHE_PREFIX}${cachedBitmapVariantKey(imagePath)}`;
+    if (!hasRestrictedPixelLimit(normalized)
+      && bitmapCacheByFetch.get(fetchImage)?.entries.has(nativeKey)) {
+      return decode(cachedBitmapVariantKey(imagePath), profile);
+    }
     return decode(
       profileNeedsResolutionVariant(profile, normalized)
         ? reusableResolutionVariantKey(

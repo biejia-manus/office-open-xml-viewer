@@ -21,8 +21,11 @@ import {
   type Duotone,
   type OffscreenFactory,
   chartImageFillKey,
-  collectChartMarkerImageFills,
-  collectChartMarkerImageFillsForCharts,
+  chartImageFillUsageSize,
+  collectChartImageFillUsages,
+  collectChartImageFillUsagesForCharts,
+  type ChartImageFillUsage,
+  type ChartImageFillUsageSize,
 } from '@silurus/ooxml-core';
 import type { ParsedWorkbook, Worksheet, ViewportRange, RenderViewportOptions } from './types.js';
 import {
@@ -466,63 +469,133 @@ export async function prefetchImages(
       }
     }
   }
-  const visibleCharts = (ws.charts ?? [])
-    .filter(chart => anchorMayIntersectViewport(chart, ws, opts?.viewport, geometry, frame));
-  const allowedChartFills = collectChartMarkerImageFillsForCharts(
-    visibleCharts.map(chart => chart.chart),
-  );
-  const allowedChartFillKeys = new Set(allowedChartFills.map(chartImageFillKey));
-  const chartTargets = new Map<string, {
-    widthPx: number;
-    heightPx: number;
-    sourceWidthPx: number;
-    sourceHeightPx: number;
-  }>();
-  if (opts?.effectiveDpr) {
-    for (const chart of visibleCharts) {
-      const display = anchorDisplaySize(chart, ws, geometry, opts.cellScale ?? 1);
-      if (!display) continue;
-      for (const fill of collectChartMarkerImageFills(chart.chart)) {
-        const key = chartImageFillKey(fill);
-        if (!allowedChartFillKeys.has(key)) continue;
-        // A chart picture can paint a marker, plot area, wall, or floor. The
-        // chart anchor is the smallest format-derived upper bound common to all
-        // of those consumers; it avoids an empirical marker-size constant while
-        // keeping decoder admission proportional to the actual viewport paint.
-        const source = sourceRasterTargetSize(
-          display.width * opts.effectiveDpr,
-          display.height * opts.effectiveDpr,
-          fill.srcRect,
-        );
-        if (!source) continue;
-        const prior = chartTargets.get(key);
-        chartTargets.set(key, {
-          widthPx: Math.max(prior?.widthPx ?? 0, display.width),
-          heightPx: Math.max(prior?.heightPx ?? 0, display.height),
-          sourceWidthPx: Math.max(prior?.sourceWidthPx ?? 0, source.width),
-          sourceHeightPx: Math.max(prior?.sourceHeightPx ?? 0, source.height),
-        });
+  const charts = ws.charts ?? [];
+  const chartGeometry = charts.length > 0
+    ? geometry ?? getGridGeometryForWorksheet(ws)
+    : geometry;
+  const chartDescriptors: Array<{
+    chart: Worksheet['charts'][number];
+    frame: Parameters<typeof chartImageFillUsageSize>[1];
+    usages: Array<{
+      usage: ChartImageFillUsage;
+      size: ChartImageFillUsageSize;
+    }>;
+  }> = [];
+  for (const chart of charts) {
+    if (!anchorMayIntersectViewport(
+      chart,
+      ws,
+      opts?.viewport,
+      chartGeometry,
+      frame,
+    )) continue;
+    const display = anchorDisplaySize(chart, ws, chartGeometry, opts?.cellScale ?? 1);
+    if (!display
+      || !Number.isFinite(display.width)
+      || !Number.isFinite(display.height)
+      || display.width <= 0
+      || display.height <= 0) continue;
+    const usages = collectChartImageFillUsages(chart.chart);
+    const frameWidthPt = display.width * (EMU_PER_PX / EMU_PER_PT);
+    const frameHeightPt = display.height * (EMU_PER_PX / EMU_PER_PT);
+    const targetWidthPx = opts?.effectiveDpr !== undefined
+      ? display.width * opts.effectiveDpr
+      : undefined;
+    const targetHeightPx = opts?.effectiveDpr !== undefined
+      ? display.height * opts.effectiveDpr
+      : undefined;
+    const chartFrame = {
+      widthPt: frameWidthPt,
+      heightPt: frameHeightPt,
+      targetWidthPx,
+      targetHeightPx,
+    };
+    const sizedUsages: Array<{
+      usage: ChartImageFillUsage;
+      size: ChartImageFillUsageSize;
+    }> = [];
+    let sizesAreValid = true;
+    for (const usage of usages) {
+      const size = chartImageFillUsageSize(usage, chartFrame);
+      if (!size) {
+        sizesAreValid = false;
+        break;
       }
+      sizedUsages.push({ usage, size });
+    }
+    if (!sizesAreValid) continue;
+    chartDescriptors.push({ chart, frame: chartFrame, usages: sizedUsages });
+  }
+  const allowedChartUsages = collectChartImageFillUsagesForCharts(
+    chartDescriptors.map(({ chart }) => chart.chart),
+    (usage, chartIndex) => chartImageFillUsageSize(
+      usage,
+      chartDescriptors[chartIndex]!.frame,
+    ) != null,
+  );
+  const chartEntries = new Map<string, {
+    fill: ReturnType<typeof collectChartImageFillUsages>[number]['fill'];
+    widthPt: number;
+    heightPt: number;
+    targetWidthPx?: number;
+    targetHeightPx?: number;
+    preserveNaturalSize: boolean;
+    hasSourceCrop: boolean;
+  }>();
+  for (const usage of allowedChartUsages) {
+    const { fill } = usage;
+    const key = chartImageFillKey(fill);
+    chartEntries.set(key, {
+      fill,
+      widthPt: 0,
+      heightPt: 0,
+      preserveNaturalSize: usage.preserveNaturalSize,
+      hasSourceCrop: usage.hasSourceCrop,
+    });
+  }
+  for (const descriptor of chartDescriptors) {
+    for (const { usage, size } of descriptor.usages) {
+      const { fill } = usage;
+      const key = chartImageFillKey(fill);
+      const prior = chartEntries.get(key);
+      if (!prior) continue;
+      const preserveNaturalSize = prior.preserveNaturalSize || usage.preserveNaturalSize;
+      // A chart picture can paint a marker, plot area, wall, or floor. The
+      // chart anchor is the smallest format-derived upper bound common to all
+      // consumers. Core usage factors retain every same-chart crop and
+      // stretch fillRect before identical sources are deduplicated.
+      chartEntries.set(key, {
+        ...prior,
+        widthPt: Math.max(prior.widthPt, size.widthPt),
+        heightPt: Math.max(prior.heightPt, size.heightPt),
+        targetWidthPx: preserveNaturalSize
+          ? undefined
+          : Math.max(prior.targetWidthPx ?? 0, size.targetWidthPx ?? 0) || undefined,
+        targetHeightPx: preserveNaturalSize
+          ? undefined
+          : Math.max(prior.targetHeightPx ?? 0, size.targetHeightPx ?? 0) || undefined,
+        preserveNaturalSize,
+        hasSourceCrop: prior.hasSourceCrop || usage.hasSourceCrop,
+      });
     }
   }
-  for (const fill of allowedChartFills) {
-      const target = chartTargets.get(chartImageFillKey(fill));
-      setImageRef(refs, chartImageFillKey(fill), {
-        imagePath: fill.imagePath,
-        mimeType: fill.mimeType,
-        svgImagePath: fill.svgImagePath,
-        // CSS px use the OOXML 96 dpi convention (12700 EMU/pt, 9525 EMU/px).
-        // The chart frame is a conservative bound because this source may paint
-        // an entire wall/floor rather than only a data-point marker.
-        widthPt: target ? target.widthPx * EMU_PER_PX / EMU_PER_PT : 0,
-        heightPt: target ? target.heightPx * EMU_PER_PX / EMU_PER_PT : 0,
-        srcRect: fill.srcRect ?? null,
-        duotone: fill.duotone ?? null,
-        failClosedOnDuotoneFailure: true,
-        ...(target
-          ? { targetWidthPx: target.sourceWidthPx, targetHeightPx: target.sourceHeightPx }
-          : {}),
-      });
+  for (const [key, entry] of chartEntries) {
+    const { fill, widthPt, heightPt, targetWidthPx, targetHeightPx, hasSourceCrop } = entry;
+    setImageRef(refs, key, {
+      imagePath: fill.imagePath,
+      mimeType: fill.mimeType,
+      svgImagePath: fill.svgImagePath,
+      widthPt,
+      heightPt,
+      // A zero-inset sentinel forces the raster SVG twin without applying crop
+      // twice: widthPt/heightPt already contain the post-crop metafile maxima.
+      srcRect: hasSourceCrop ? { l: 0, t: 0, r: 0, b: 0 } : null,
+      duotone: fill.duotone ?? null,
+      failClosedOnDuotoneFailure: true,
+      ...(targetWidthPx && targetHeightPx
+        ? { targetWidthPx, targetHeightPx }
+        : {}),
+    });
   }
   if (refs.size === 0) return;
   await Promise.all(

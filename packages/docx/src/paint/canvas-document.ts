@@ -5,18 +5,19 @@ import {
   isHTMLCanvas,
   isOoxmlDecodedImageLimitError,
   isTiffDecodeError,
-  metafileRasterSize,
   PT_TO_PX,
   chartImageFillKey,
-  collectChartMarkerImageFills,
-  collectChartMarkerImageFillsForCharts,
+  chartImageFillUsageSize,
+  collectChartImageFillUsages,
+  collectChartImageFillUsagesForCharts,
   getCachedSvgImageByPath,
   preferVectorBlip,
-  sourceRasterTargetSize,
 } from '@silurus/ooxml-core';
 import type { Duotone } from '@silurus/ooxml-core';
 import type { ChartThreeDRenderer, ChartRegionMapRenderer, ChartExRenderer, TiffRenderer } from '@silurus/ooxml-core';
 import type {
+  ChartPaintResourceDescriptor,
+  DeepReadonly,
   DocumentLayout,
   LayoutPage,
   PaintResourceRegistry,
@@ -197,57 +198,119 @@ export async function renderSelectedDocumentPage<TTextRun>(
     const chartImages = new Map<string, CanvasImageSource | null>();
     if (options.fetchImage) {
       const fetchImage = options.fetchImage;
-      const uniqueFills = new Map<string, ReturnType<typeof collectChartMarkerImageFills>[number]>();
-      for (const fill of collectChartMarkerImageFillsForCharts(
-        options.registry.descriptors
-          .filter(descriptor => descriptor.kind === 'chart')
-          .map(descriptor => descriptor.model as import('@silurus/ooxml-core').ChartModel),
-      )) {
-        const key = chartImageFillKey(fill);
-        if (!uniqueFills.has(key)) uniqueFills.set(key, fill);
-      }
-      const chartTargets = new Map<string, { targetWidthPx: number; targetHeightPx: number }>();
+      // A chart whose intrinsic frame or derived decode size is non-positive
+      // or non-finite cannot paint an image safely. Use one validated list for
+      // aggregate source gating and per-frame sizing so an invalid descriptor
+      // cannot suppress visible preloads or force a native-size decode.
+      const chartDescriptors: Array<{
+        descriptor: DeepReadonly<ChartPaintResourceDescriptor>;
+        frame: Parameters<typeof chartImageFillUsageSize>[1];
+        usages: Array<{
+          usage: ReturnType<typeof collectChartImageFillUsages>[number];
+          size: NonNullable<ReturnType<typeof chartImageFillUsageSize>>;
+        }>;
+      }> = [];
       for (const descriptor of options.registry.descriptors) {
-        if (descriptor.kind !== 'chart') continue;
-        for (const fill of collectChartMarkerImageFills(
+        if (descriptor.kind !== 'chart'
+          || !Number.isFinite(descriptor.intrinsicSize.widthPt)
+          || descriptor.intrinsicSize.widthPt <= 0
+          || !Number.isFinite(descriptor.intrinsicSize.heightPt)
+          || descriptor.intrinsicSize.heightPt <= 0) continue;
+        const frame = {
+          widthPt: descriptor.intrinsicSize.widthPt,
+          heightPt: descriptor.intrinsicSize.heightPt,
+          targetWidthPx: descriptor.intrinsicSize.widthPt * scale * effectiveDpr,
+          targetHeightPx: descriptor.intrinsicSize.heightPt * scale * effectiveDpr,
+        };
+        const usages = [] as typeof chartDescriptors[number]['usages'];
+        let valid = true;
+        for (const usage of collectChartImageFillUsages(
           descriptor.model as import('@silurus/ooxml-core').ChartModel,
         )) {
+          const size = chartImageFillUsageSize(usage, frame);
+          if (!size) {
+            valid = false;
+            break;
+          }
+          usages.push({ usage, size });
+        }
+        if (valid) chartDescriptors.push({ descriptor, frame, usages });
+      }
+      const chartEntries = new Map<string, {
+        fill: ReturnType<typeof collectChartImageFillUsages>[number]['fill'];
+        widthPt: number;
+        heightPt: number;
+        targetWidthPx?: number;
+        targetHeightPx?: number;
+        preserveNaturalSize: boolean;
+        hasSourceCrop: boolean;
+      }>();
+      for (const usage of collectChartImageFillUsagesForCharts(
+        chartDescriptors.map(
+          ({ descriptor }) => descriptor.model as import('@silurus/ooxml-core').ChartModel,
+        ),
+        (usage, chartIndex) => chartImageFillUsageSize(
+          usage,
+          chartDescriptors[chartIndex]!.frame,
+        ) != null,
+      )) {
+        const { fill } = usage;
+        const key = chartImageFillKey(fill);
+        if (!chartEntries.has(key)) chartEntries.set(key, {
+          fill,
+          widthPt: 0,
+          heightPt: 0,
+          preserveNaturalSize: usage.preserveNaturalSize,
+          hasSourceCrop: usage.hasSourceCrop,
+        });
+      }
+      for (const { usages } of chartDescriptors) {
+        for (const { usage, size } of usages) {
+          const { fill } = usage;
           const key = chartImageFillKey(fill);
-          if (!uniqueFills.has(key)) continue;
+          const prior = chartEntries.get(key);
+          if (!prior) continue;
+          const preserveNaturalSize = prior.preserveNaturalSize || usage.preserveNaturalSize;
           // A picture fill may cover a marker, plot area, wall, or floor. The
-          // authored chart frame is the smallest format-derived upper bound
-          // shared by all consumers, including source-crop magnification.
-          const target = sourceRasterTargetSize(
-            descriptor.intrinsicSize.widthPt * scale * effectiveDpr,
-            descriptor.intrinsicSize.heightPt * scale * effectiveDpr,
-            fill.srcRect,
-          );
-          if (!target) continue;
-          const prior = chartTargets.get(key);
-          chartTargets.set(key, {
-            targetWidthPx: Math.max(prior?.targetWidthPx ?? 0, target.width),
-            targetHeightPx: Math.max(prior?.targetHeightPx ?? 0, target.height),
+          // chart frame bounds every consumer; core usage factors retain every
+          // same-chart crop and stretch fillRect before source deduplication.
+          chartEntries.set(key, {
+            ...prior,
+            widthPt: Math.max(prior.widthPt, size.widthPt),
+            heightPt: Math.max(prior.heightPt, size.heightPt),
+            targetWidthPx: preserveNaturalSize
+              ? undefined
+              : Math.max(prior.targetWidthPx ?? 0, size.targetWidthPx ?? 0) || undefined,
+            targetHeightPx: preserveNaturalSize
+              ? undefined
+              : Math.max(prior.targetHeightPx ?? 0, size.targetHeightPx ?? 0) || undefined,
+            preserveNaturalSize,
+            hasSourceCrop: prior.hasSourceCrop || usage.hasSourceCrop,
           });
         }
       }
-      await Promise.all([...uniqueFills].map(async ([key, fill]) => {
-        const raster = metafileRasterSize(fill.mimeType, fill.srcRect, 72, 72);
-        if (!raster) {
-          chartImages.set(key, null);
-          return;
-        }
+      await Promise.all([...chartEntries].map(async ([key, entry]) => {
+        const {
+          fill, widthPt, heightPt, targetWidthPx, targetHeightPx, hasSourceCrop,
+        } = entry;
+        const target = targetWidthPx && targetHeightPx
+          ? { targetWidthPx, targetHeightPx }
+          : undefined;
         try {
           const decodeFallback = () => fill.mimeType === 'image/svg+xml'
             ? fill.duotone ? Promise.resolve(null) : getCachedSvgImageByPath(fill.imagePath, fetchImage)
             : decodeRaster(
                 fill.imagePath, fill.mimeType, undefined, fetchImage as DocxFetchImage,
-                raster.widthPt, raster.heightPt, fill.duotone, true, options.tiff,
-                chartTargets.get(key),
+                widthPt, heightPt, fill.duotone, true, options.tiff, target,
               );
           let image: CanvasImageSource | null;
-          if (!fill.duotone && preferVectorBlip(fill)) {
+          const blip = {
+            svgImagePath: fill.svgImagePath,
+            srcRect: hasSourceCrop ? true : null,
+          };
+          if (!fill.duotone && preferVectorBlip(blip)) {
             try {
-              image = await getCachedSvgImageByPath(fill.svgImagePath, fetchImage);
+              image = await getCachedSvgImageByPath(blip.svgImagePath, fetchImage);
             } catch {
               image = await decodeFallback();
             }

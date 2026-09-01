@@ -53,6 +53,22 @@ export type OoxmlDecodedImageLimitMetric =
   | 'image-pixels'
   | 'active-decoded-bytes';
 
+export interface OoxmlDecodedImageLimitDetails {
+  readonly metric: OoxmlDecodedImageLimitMetric;
+  readonly limit: number;
+  readonly observed: number;
+}
+
+function isDecodedImageLimitMetric(value: unknown): value is OoxmlDecodedImageLimitMetric {
+  return value === 'image-dimension'
+    || value === 'image-pixels'
+    || value === 'active-decoded-bytes';
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
 /** Catchable hard-quota crossing for decoded image surfaces. */
 export class OoxmlDecodedImageLimitError extends RangeError {
   readonly code = 'ooxml-decoded-image-limit' as const;
@@ -68,10 +84,50 @@ export class OoxmlDecodedImageLimitError extends RangeError {
   }
 }
 
+/**
+ * Snapshot a decoded-image quota crossing from this or another bundled core
+ * realm. Every caller-controlled property read stays inside the guard so a
+ * hostile Proxy or accessor cannot escape, and only clone-safe scalar fields
+ * leave this boundary.
+ */
+export function getOoxmlDecodedImageLimitDetails(
+  error: unknown,
+): OoxmlDecodedImageLimitDetails | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  try {
+    const candidate = error as {
+      readonly code?: unknown;
+      readonly metric?: unknown;
+      readonly limit?: unknown;
+      readonly observed?: unknown;
+    };
+    const code = candidate.code;
+    const metric = candidate.metric;
+    const limit = candidate.limit;
+    const observed = candidate.observed;
+    if (
+      code !== 'ooxml-decoded-image-limit'
+      || !isDecodedImageLimitMetric(metric)
+      || !isNonNegativeSafeInteger(limit)
+      || !isNonNegativeSafeInteger(observed)
+      || observed <= limit
+    ) {
+      return undefined;
+    }
+    return { metric, limit, observed };
+  } catch {
+    return undefined;
+  }
+}
+
 export function isOoxmlDecodedImageLimitError(
   error: unknown,
 ): error is OoxmlDecodedImageLimitError {
-  return error instanceof OoxmlDecodedImageLimitError
-    || (!!error && typeof error === 'object'
-      && (error as { code?: unknown }).code === 'ooxml-decoded-image-limit');
+  if (!getOoxmlDecodedImageLimitDetails(error)) return false;
+  try {
+    const candidate = error as { readonly name?: unknown; readonly message?: unknown };
+    return typeof candidate.name === 'string' && typeof candidate.message === 'string';
+  } catch {
+    return false;
+  }
 }
