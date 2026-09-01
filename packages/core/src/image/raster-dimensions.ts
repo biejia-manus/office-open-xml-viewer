@@ -16,7 +16,12 @@
 // to its normal path. Recognizing "too big" is a safe superset: an unrecognized
 // header simply isn't blocked here.
 
-import { MAX_RASTER_DIMENSION, MAX_RASTER_PIXELS } from './pixel-budget.js';
+import {
+  MAX_RASTER_DIMENSION,
+  MAX_RASTER_PIXELS,
+  MAX_RASTER_SOURCE_DIMENSION,
+  MAX_RASTER_SOURCE_PIXELS,
+} from './pixel-budget.js';
 import { sniffTiffDimensions } from './tiff-contract.js';
 
 /** Read a big-endian u16 at `o` (bounds already checked by the caller). */
@@ -253,6 +258,21 @@ export function rasterExceedsBudget(dims: RasterDimensions): boolean {
   // width, height ≤ MAX_RASTER_DIMENSION (≤ 32767), so the product is ≤ ~1.07e9,
   // exact in a double — a plain comparison suffices.
   return width * height > MAX_RASTER_PIXELS;
+}
+
+/**
+ * Whether an encoded raster's declared source grid is too large to hand to a
+ * browser or injected decoder, even when the retained output will be resized.
+ * This is deliberately separate from {@link rasterExceedsBudget}: the latter
+ * bounds a decoded surface retained by the renderer, while this ceiling bounds
+ * decoder input complexity and possible implementation-specific temporaries.
+ */
+export function sourceRasterExceedsBudget(dims: RasterDimensions): boolean {
+  const { width, height } = dims;
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return true;
+  if (width <= 0 || height <= 0) return true;
+  if (width > MAX_RASTER_SOURCE_DIMENSION || height > MAX_RASTER_SOURCE_DIMENSION) return true;
+  return width * height > MAX_RASTER_SOURCE_PIXELS;
 }
 
 /**
