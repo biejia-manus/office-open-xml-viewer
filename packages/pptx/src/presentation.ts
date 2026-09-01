@@ -13,6 +13,7 @@ import {
 } from './slide-nav';
 import {
   preloadGoogleFonts,
+  releaseOwnedBitmap,
   unloadGoogleFonts,
   unregisterEmbeddedFonts,
   WorkerBridge,
@@ -1090,7 +1091,12 @@ export class PptxPresentation {
         const rendered = res as Extract<RenderWorkerResponse, { kind: 'slideRendered' }>;
         // IX6 — replay the worker's run geometry to the caller's collector so the
         // selection / find overlay is built on the same path as main mode.
-        if (opts.onTextRun) for (const r of rendered.runs) opts.onTextRun(r);
+        try {
+          if (opts.onTextRun) for (const r of rendered.runs) opts.onTextRun(r);
+        } catch (error) {
+          releaseOwnedBitmap(rendered.bitmap);
+          throw error;
+        }
         return rendered.bitmap;
       }
       const off = new OffscreenCanvas(1, 1);

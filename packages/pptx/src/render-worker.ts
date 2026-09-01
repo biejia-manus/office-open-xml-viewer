@@ -27,6 +27,7 @@ import {
   serializeWorkerError,
   loadWorkerRenderers,
   isWorkerSvgDecodeResponse,
+  postOwnedImageBitmap,
   WorkerSvgDecodeClient,
   type LoadedWorkerRenderers,
   type WorkerSvgDecodeResponse,
@@ -351,7 +352,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest | WorkerSvgDecod
         }, (run) => runs.push(run));
         return { bitmap: canvas.transferToImageBitmap(), runs };
       });
-      post({ kind: 'slideRendered', id: request.id, bitmap, runs }, [bitmap]);
+      postOwnedImageBitmap(post, { kind: 'slideRendered', id: request.id, bitmap, runs });
       return;
     }
 

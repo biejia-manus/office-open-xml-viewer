@@ -2,6 +2,7 @@ import InlineWorker from './worker.ts?worker&inline';
 import wasmAssetUrl from './wasm/docx_parser_bg.wasm?url';
 import {
   preloadGoogleFonts,
+  releaseOwnedBitmap,
   unloadGoogleFonts,
   unloadLocalFontMetrics,
   unregisterEmbeddedFonts,
@@ -1698,7 +1699,12 @@ export class DocxDocument {
         (id) => ({ type: 'renderPage', id, pageIndex, opts: wireOpts }) satisfies RenderWorkerRequest,
       );
       const rendered = res as Extract<RenderWorkerResponse, { type: 'pageRendered' }>;
-      if (onTextRun) for (const r of rendered.runs) onTextRun(r);
+      try {
+        if (onTextRun) for (const r of rendered.runs) onTextRun(r);
+      } catch (error) {
+        releaseOwnedBitmap(rendered.bitmap);
+        throw error;
+      }
       return rendered.bitmap;
     }
     const off = new OffscreenCanvas(1, 1);

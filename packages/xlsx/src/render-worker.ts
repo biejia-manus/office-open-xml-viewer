@@ -26,6 +26,7 @@ import {
   serializeWorkerError,
   loadWorkerRenderers,
   isWorkerSvgDecodeResponse,
+  postOwnedImageBitmap,
   WorkerSvgDecodeClient,
   type LoadedWorkerRenderers,
   type PullSessionCommand,
@@ -271,7 +272,7 @@ self.onmessage = async (e: MessageEvent<
         svgDecodeClient.decode,
       );
       const bitmap = canvas.transferToImageBitmap();
-      post({ type: 'viewportRendered', id, bitmap }, [bitmap]);
+      postOwnedImageBitmap(post, { type: 'viewportRendered', id, bitmap });
       return;
     }
     if (req.type === 'extractImage') {

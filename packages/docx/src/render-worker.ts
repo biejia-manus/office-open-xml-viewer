@@ -27,6 +27,7 @@ import {
   serializeWorkerError,
   loadWorkerRenderers,
   isWorkerSvgDecodeResponse,
+  postOwnedImageBitmap,
   WorkerSvgDecodeClient,
   type LoadedWorkerRenderers,
   type PullSessionResponse,
@@ -387,7 +388,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
         defaultCurrentDateMs: doc.defaultCurrentDateMs,
       });
       const bitmap = canvas.transferToImageBitmap();
-      post({ type: 'pageRendered', id, bitmap, runs }, [bitmap]);
+      postOwnedImageBitmap(post, { type: 'pageRendered', id, bitmap, runs });
       return;
     }
     if (req.type === 'collectRuns') {
