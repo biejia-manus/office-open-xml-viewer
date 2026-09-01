@@ -23,7 +23,8 @@
       </div>
     </div>
     <p class="rg-caveat">
-      Raster decode is also governed uniformly. Recognized browser-decodable rasters keep their
+      Raster decode is also governed uniformly. Target-resizable rasters (browser formats and TIFF
+      when its optional codec is configured) keep their
       native decode while a complete paint fits the hard surface ceilings and the default
       <strong>128 MiB decoded budget</strong>. When native ownership would cross a boundary, they decode
       at the current canvas/DPR requirement; if those display targets still exceed the budget,
