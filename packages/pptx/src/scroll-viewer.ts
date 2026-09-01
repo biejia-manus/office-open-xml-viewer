@@ -753,6 +753,10 @@ export class PptxScrollViewer implements ZoomableViewer {
 
   private _syncCommentMarginGeometry(margin: HTMLDivElement | null): void {
     if (!margin) return;
+    // An absolutely positioned margin still contributes to native overflow even
+    // when it contains no cards. Keep it out of layout until an authoritative
+    // comment scan says the review surface exists.
+    margin.style.display = this._hasCommentMargin() ? '' : 'none';
     const zoom = this._commentZoom();
     const offset = `calc(100% + ${COMMENT_MARGIN_GAP_PX * zoom}px)`;
     margin.style.left = this._commentSide() === 'right' ? offset : '';
@@ -1690,8 +1694,11 @@ export class PptxScrollViewer implements ZoomableViewer {
         return;
       }
       const size = {
-        cssWidth: Math.round(bmp.width / dpr),
-        cssHeight: Math.round(bmp.height / dpr),
+        // The worker bitmap may be physically downscaled by the shared canvas
+        // area guard. Preserve the requested logical slide box instead of
+        // deriving CSS geometry from that reduced backing store.
+        cssWidth: Math.round(widthPx),
+        cssHeight: Math.round(this._slideHeightPx()),
       };
       // Interactive media later paints through `presentSlide()` on the same
       // pooled canvas, so that canvas must remain a 2D canvas. A browser canvas
@@ -2544,6 +2551,7 @@ export class PptxScrollViewer implements ZoomableViewer {
 
   private _redrawSlotComments(slide: number, slot: SlideSlot): void {
     if (!this._pres || !slot.commentMarkerLayer) return;
+    this._syncCommentMarginGeometry(slot.commentMargin);
     const commentUi = this._commentUi;
     if (!commentUi) {
       slot.commentMarkerLayer.replaceChildren();

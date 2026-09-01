@@ -332,6 +332,10 @@ describe('PptxScrollViewer — opt-in comment cards', () => {
       { comments: { connectors: {} } },
     );
     expect((viewer as unknown as { _commentMarginExtent(): number })._commentMarginExtent()).toBe(0);
+    const scrollHost = container.children[0]!.children[0]!;
+    const slide = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
+    const margin = slide.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
+    expect(margin.style.display).toBe('none');
     viewer.destroy();
   });
 
