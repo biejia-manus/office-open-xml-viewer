@@ -61,7 +61,7 @@ describe('getCachedBitmapByPath', () => {
     expect(globalThis.createImageBitmap as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
   });
 
-  it('keys display-sized raster variants by stable resolution bands', async () => {
+  it('reuses the smallest cached resolution that fully covers a later request', async () => {
     const png = new Uint8Array(26);
     png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
     png.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
@@ -78,22 +78,48 @@ describe('getCachedBitmapByPath', () => {
 
     const path = 'ppt/media/poster-resolution-bands.png';
     const a = await getCachedBitmapByPath(path, 'image/png', fetchImage, {
-      targetWidthPx: 1000,
-      targetHeightPx: 750,
-    });
-    const sameBand = await getCachedBitmapByPath(path, 'image/png', fetchImage, {
       targetWidthPx: 1010,
       targetHeightPx: 758,
+    });
+    const covered = await getCachedBitmapByPath(path, 'image/png', fetchImage, {
+      targetWidthPx: 1000,
+      targetHeightPx: 750,
     });
     const larger = await getCachedBitmapByPath(path, 'image/png', fetchImage, {
       targetWidthPx: 1400,
       targetHeightPx: 1050,
     });
 
-    expect(a).toBe(sameBand);
+    expect(a).toBe(covered);
     expect(larger).not.toBe(a);
     expect(fetchImage).toHaveBeenCalledTimes(2);
     expect(cib).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses one native cache entry across target bands for an in-budget raster', async () => {
+    const png = new Uint8Array(26);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    png.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+    const view = new DataView(png.buffer);
+    view.setUint32(16, 1920);
+    view.setUint32(20, 1080);
+    const fetchImage = vi.fn(async () => new Blob([png as BlobPart], { type: 'image/png' }));
+    const native = { width: 1920, height: 1080, close() {} } as unknown as ImageBitmap;
+    const cib = vi.fn(async () => native);
+    vi.stubGlobal('createImageBitmap', cib);
+
+    const first = await getCachedBitmapByPath('ppt/media/native-bands.png', 'image/png', fetchImage, {
+      targetWidthPx: 640,
+      targetHeightPx: 360,
+    });
+    const zoomed = await getCachedBitmapByPath('ppt/media/native-bands.png', 'image/png', fetchImage, {
+      targetWidthPx: 1600,
+      targetHeightPx: 900,
+    });
+
+    expect(zoomed).toBe(first);
+    expect(fetchImage).toHaveBeenCalledTimes(1);
+    expect(cib).toHaveBeenCalledTimes(1);
   });
 
   it('namespaces the cache by fetchImage — two documents sharing a zip path decode independently', async () => {

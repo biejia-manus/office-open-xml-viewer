@@ -377,10 +377,8 @@ describe('sourceRasterExceedsBudget — encoded-source hard ceiling', () => {
     expect(sourceRasterExceedsBudget({ width: 40_000, height: 2_000 })).toBe(false);
   });
 
-  it('rejects a source axis beyond the separate encoded-source limit', () => {
-    expect(sourceRasterExceedsBudget({
-      width: MAX_RASTER_SOURCE_DIMENSION + 1,
-      height: 1,
-    })).toBe(true);
+  it('does not impose JPEG\'s 16-bit axis limit on other raster formats', () => {
+    expect(MAX_RASTER_SOURCE_DIMENSION).toBe(MAX_RASTER_SOURCE_PIXELS);
+    expect(sourceRasterExceedsBudget({ width: 100_000, height: 1_000 })).toBe(false);
   });
 });

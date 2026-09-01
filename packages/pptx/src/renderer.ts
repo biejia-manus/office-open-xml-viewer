@@ -1701,6 +1701,15 @@ async function renderBackground(
     // to the white base if either the path or the byte source is missing.
     if (!fill.imagePath || !fill.mimeType || !fetchImage) return;
     try {
+      const fr = fill.fillRect ?? {};
+      const l = fr.l ?? 0;
+      const t = fr.t ?? 0;
+      const r = fr.r ?? 0;
+      const b = fr.b ?? 0;
+      const dx = l * canvasW;
+      const dy = t * canvasH;
+      const dw = canvasW * (1 - l - r);
+      const dh = canvasH * (1 - t - b);
       // Size the metafile raster from the fill box (canvasW/H are CSS px;
       // scale is px-per-EMU, so px/scale = EMU, /PT_TO_EMU = pt).
       // §20.1.8.23 duotone recolour on the raster blip (issue #889): route
@@ -1714,7 +1723,7 @@ async function renderBackground(
         {
           widthPt: canvasW / scale / PT_TO_EMU,
           heightPt: canvasH / scale / PT_TO_EMU,
-          ...(!fill.tile ? (rasterTargetOptions(canvasW, canvasH, dpr, fill.srcRect) ?? {}) : {}),
+          ...(!fill.tile ? (rasterTargetOptions(dw, dh, dpr, fill.srcRect) ?? {}) : {}),
           tiff,
         },
       );
@@ -1732,22 +1741,13 @@ async function renderBackground(
       if (fill.alpha != null) ctx.globalAlpha = fill.alpha;
       if (fill.tile) {
         // §20.1.8.58 — tiled placement: repeat the blip at its native size.
-        paintTiledBackground(ctx, bitmap, fill.tile, canvasW, canvasH, scale);
+        paintTiledBackground(ctx, bitmap, fill.tile, canvasW, canvasH, scale, fill.srcRect);
       } else {
         // §20.1.8.56 stretch into the destination rect from the §20.1.8.30
         // fillRect insets. l/t are left/top insets, r/b are right/bottom
         // insets, so the destination spans [l, 1-r] × [t, 1-b] of the box;
         // negative edges overscan past the box.
-        const fr = fill.fillRect ?? {};
-        const l = fr.l ?? 0;
-        const t = fr.t ?? 0;
-        const r = fr.r ?? 0;
-        const b = fr.b ?? 0;
-        const dx = l * canvasW;
-        const dy = t * canvasH;
-        const dw = canvasW * (1 - l - r);
-        const dh = canvasH * (1 - t - b);
-        ctx.drawImage(bitmap, dx, dy, dw, dh);
+        drawImageCropped(ctx, bitmap, fill.srcRect, dx, dy, dw, dh);
       }
       ctx.restore();
     } catch (error) {
@@ -1808,6 +1808,20 @@ export function tileAnchorOffset(
   return { ax, ay };
 }
 
+/** Native pixel extent of the §20.1.8.55 source rectangle duplicated by tile
+ * mode. The logical rectangle can be larger than the bitmap for negative
+ * outsets; that extra extent remains transparent when painted. */
+export function tileSourceExtent(
+  width: number,
+  height: number,
+  srcRect?: PictureElement['srcRect'],
+): { width: number; height: number } {
+  return {
+    width: width * (srcRect ? 1 - srcRect.l - srcRect.r : 1),
+    height: height * (srcRect ? 1 - srcRect.t - srcRect.b : 1),
+  };
+}
+
 /**
  * Paint a tiled blip background (ECMA-376 §20.1.8.58 CT_TileInfoProperties).
  *
@@ -1827,12 +1841,18 @@ function paintTiledBackground(
   canvasW: number,
   canvasH: number,
   scale: number,
+  srcRect?: PictureElement['srcRect'],
 ): void {
   // Native tile size in slide px: image px → EMU @96dpi → × sx/sy → × scale.
+  // §20.1.8.55 applies before the fill mode: for tile mode the cropped source
+  // rectangle is the content duplicated (Annex L.4.8.4.3), so its logical
+  // width/height determine the native tile extent. Negative edges retain their
+  // transparent outset through drawImageCropped below.
   // Established shape compatibility defaults remain local to the PPTX shape
   // renderer; the shared model preserves absence for spec-first chart paint.
-  const tileW = bitmap.width * EMU_PER_PX_96 * (tile.sx ?? 1) * scale;
-  const tileH = bitmap.height * EMU_PER_PX_96 * (tile.sy ?? 1) * scale;
+  const source = tileSourceExtent(bitmap.width, bitmap.height, srcRect);
+  const tileW = source.width * EMU_PER_PX_96 * (tile.sx ?? 1) * scale;
+  const tileH = source.height * EMU_PER_PX_96 * (tile.sy ?? 1) * scale;
   if (!(tileW > 0) || !(tileH > 0)) return;
 
   const flipX = tile.flip === 'x' || tile.flip === 'xy';
@@ -1852,7 +1872,7 @@ function paintTiledBackground(
     actx.save();
     actx.translate(cx + (mx ? tileW : 0), cy + (my ? tileH : 0));
     actx.scale(mx ? -1 : 1, my ? -1 : 1);
-    actx.drawImage(bitmap, 0, 0, tileW, tileH);
+    drawImageCropped(actx, bitmap, srcRect, 0, 0, tileW, tileH);
     actx.restore();
   };
   // Top-left tile is always un-mirrored; mirror the X/Y neighbours.
@@ -5211,10 +5231,9 @@ async function renderPicture(
     // A cropped metafile rasterizes at its FULL picture frame (scaled up by
     // 1/(1−crop)) so the fractional crop below lands correctly; raster blips and
     // uncropped metafiles pass through unchanged. NB: getCachedBitmapByPath is keyed by
-    // imagePath ("first size wins"), so if one path is referenced both cropped
-    // and uncropped on a slide only the first decode's raster size is kept — that
-    // affects raster SHARPNESS only; the crop fraction itself is applied per
-    // element from el.srcRect at draw time, so geometry stays correct either way.
+    // imagePath plus the required retained resolution. A previously decoded
+    // larger variant can satisfy a smaller request; a larger/crop-magnified
+    // request receives its own variant, so traversal order cannot reduce quality.
     const rasterSize = metafileRasterSize(
       el.mimeType,
       el.srcRect,
@@ -6603,9 +6622,8 @@ async function renderSlideLeased(
         void getCachedSvgImageByPath(p.imagePath, opts.fetchImage).catch(() => undefined);
       } else {
         // Pass the picture's pt size so a metafile blip warms at the same raster
-        // size the draw loop requests (the cache is path-keyed, first-wins). A
-        // cropped metafile warms at its full picture frame, matching the draw
-        // path's `metafileRasterSize` call.
+        // size the draw loop requests. A cropped metafile warms at its full
+        // picture frame, matching the draw path's `metafileRasterSize` call.
         const warm = metafileRasterSize(
           p.mimeType,
           p.srcRect,
@@ -6675,7 +6693,10 @@ async function renderSlideLeased(
     if (bulletPaths.size > 0 || chartFillMap.size > 0) {
       const bulletPromises: Promise<unknown>[] = [...bulletPaths].map((key) => {
           const [path, mime] = key.split(' ');
-          return getCachedBitmapByPath(path, mime, fetchImage, { tiff: opts.tiff }).catch((error) => {
+          return getCachedBitmapByPath(path, mime, fetchImage, {
+            tiff: opts.tiff,
+            ...(rasterTargetOptions(canvasW, canvasH, effectiveDpr) ?? {}),
+          }).catch((error) => {
             if (isOoxmlDecodedImageLimitError(error)) throw error;
             return undefined;
           });
@@ -6694,6 +6715,7 @@ async function renderSlideLeased(
                   {
                     widthPt: raster.widthPt,
                     heightPt: raster.heightPt,
+                    ...(rasterTargetOptions(96, 96, effectiveDpr, fill.srcRect) ?? {}),
                     failClosedOnDuotoneFailure: true,
                     tiff: opts.tiff,
                   },

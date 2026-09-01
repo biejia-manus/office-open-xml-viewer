@@ -1,5 +1,6 @@
 import {
   applyDuotone,
+  MAX_RASTER_PIXELS,
   dropCachedDerivedBitmapNamespace,
   getCachedBitmapByPath,
   getCachedDerivedBitmap,
@@ -8,6 +9,8 @@ import {
   metafileRasterSize,
   preferVectorBlip,
   releaseOwnedBitmap,
+  resolvedCachedBitmapVariantKey,
+  sourceRasterTargetSize,
 } from '@silurus/ooxml-core';
 import type { Duotone, TiffRenderer } from '@silurus/ooxml-core';
 import type {
@@ -28,6 +31,8 @@ interface ImageDecodeRequest {
   widthPt: number;
   heightPt: number;
   hasCrop: boolean;
+  targetWidthPx?: number;
+  targetHeightPx?: number;
 }
 
 export function imageKey(
@@ -79,16 +84,34 @@ export async function decodeRaster(
   duotone?: Duotone,
   failClosedOnDuotoneFailure = false,
   tiff?: TiffRenderer,
+  target?: Readonly<{ targetWidthPx: number; targetHeightPx: number }>,
 ): Promise<ImageBitmap | null> {
+  // Pixel effects temporarily retain more than their cached input/output:
+  // source + offscreen backing + ImageData + result = four surfaces. Chaining
+  // clrChange then duotone peaks at five (base + clr result + the latter three).
+  const effectSurfaceCount = colorReplaceFrom && duotone
+    ? 5
+    : colorReplaceFrom || duotone
+      ? 4
+      : 1;
+  const maxRetainedPixels = Math.floor(MAX_RASTER_PIXELS / effectSurfaceCount);
   const base = await getCachedBitmapByPath(imagePath, mimeType, fetchImage, {
     widthPt,
     heightPt,
     suppressBoundaryFrame: true,
     tiff,
+    ...(target ?? {}),
+    maxRetainedPixels,
   });
   if (!base) return null;
   if (!colorReplaceFrom && !duotone) return base;
-  const key = `${imageKey(imagePath, colorReplaceFrom, duotone)}${failClosedOnDuotoneFailure ? '|strict' : ''}`;
+  const resolvedBaseKey = await resolvedCachedBitmapVariantKey(
+    imagePath,
+    mimeType,
+    fetchImage,
+    { widthPt, heightPt, suppressBoundaryFrame: true, tiff, ...(target ?? {}), maxRetainedPixels },
+  );
+  const key = `${imageKey(resolvedBaseKey, colorReplaceFrom, duotone)}${failClosedOnDuotoneFailure ? '|strict' : ''}`;
   return getCachedDerivedBitmap(
     DOCX_COLOR_EFFECT_CACHE_NAMESPACE,
     key,
@@ -123,6 +146,7 @@ export async function decodeRaster(
 
 function imageDecodeRequests(
   descriptors: readonly DeepReadonly<PaintResourceDescriptor>[],
+  devicePixelsPerPoint?: number,
 ): ImageDecodeRequest[] {
   const requests = new Map<string, ImageDecodeRequest>();
   const images = descriptors
@@ -151,6 +175,17 @@ function imageDecodeRequests(
       heightPt: raster.heightPt,
       hasCrop: image.srcRect != null,
     };
+    const target = devicePixelsPerPoint === undefined
+      ? null
+      : sourceRasterTargetSize(
+          image.intrinsicSize.widthPt * devicePixelsPerPoint,
+          image.intrinsicSize.heightPt * devicePixelsPerPoint,
+          image.srcRect,
+        );
+    if (target) {
+      request.targetWidthPx = target.width;
+      request.targetHeightPx = target.height;
+    }
     const key = imageKey(request.imagePath, request.colorReplaceFrom, request.duotone);
     const existing = requests.get(key);
     if (!existing) {
@@ -159,6 +194,8 @@ function imageDecodeRequests(
       existing.widthPt = Math.max(existing.widthPt, request.widthPt);
       existing.heightPt = Math.max(existing.heightPt, request.heightPt);
       existing.hasCrop ||= request.hasCrop;
+      existing.targetWidthPx = Math.max(existing.targetWidthPx ?? 0, request.targetWidthPx ?? 0) || undefined;
+      existing.targetHeightPx = Math.max(existing.targetHeightPx ?? 0, request.targetHeightPx ?? 0) || undefined;
     }
   }
   return [...requests.values()];
@@ -168,9 +205,10 @@ export async function preloadPaintImages(
   descriptors: readonly DeepReadonly<PaintResourceDescriptor>[],
   fetchImage: DocxFetchImage | undefined,
   tiff?: TiffRenderer,
+  devicePixelsPerPoint?: number,
 ): Promise<Map<string, DecodedImage>> {
   if (!fetchImage) return new Map();
-  const entries = await Promise.all(imageDecodeRequests(descriptors).map(async (request) => {
+  const entries = await Promise.all(imageDecodeRequests(descriptors, devicePixelsPerPoint).map(async (request) => {
     const dataIsSvg = request.mimeType === 'image/svg+xml';
     const blip = { svgImagePath: request.svgImagePath, srcRect: request.hasCrop || null };
     let image: DecodedImage | null;
@@ -190,6 +228,9 @@ export async function preloadPaintImages(
               request.duotone,
               false,
               tiff,
+              request.targetWidthPx && request.targetHeightPx
+                ? { targetWidthPx: request.targetWidthPx, targetHeightPx: request.targetHeightPx }
+                : undefined,
             );
         if (!fallback) throw vectorError;
         image = fallback;
@@ -207,6 +248,9 @@ export async function preloadPaintImages(
         request.duotone,
         false,
         tiff,
+        request.targetWidthPx && request.targetHeightPx
+          ? { targetWidthPx: request.targetWidthPx, targetHeightPx: request.targetHeightPx }
+          : undefined,
       );
     }
     return image == null

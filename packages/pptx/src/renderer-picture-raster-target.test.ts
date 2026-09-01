@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Slide } from './types.js';
 
 const coreMocks = vi.hoisted(() => ({
@@ -17,13 +17,14 @@ vi.mock('@silurus/ooxml-core', async (importOriginal) => {
 
 import { renderSlide } from './renderer.js';
 
-function canvas(): HTMLCanvasElement {
+function canvas(drawImage?: ReturnType<typeof vi.fn>): HTMLCanvasElement {
   const state: Record<string, unknown> = {
     fillStyle: '', strokeStyle: '', globalAlpha: 1, lineWidth: 1,
   };
   const context = new Proxy(state, {
     get(target, property: string) {
       if (property in target) return target[property];
+      if (property === 'drawImage' && drawImage) return drawImage;
       return () => undefined;
     },
     set(target, property: string, value) {
@@ -38,6 +39,8 @@ function canvas(): HTMLCanvasElement {
 }
 
 describe('PPTX display-sized picture decode', () => {
+  beforeEach(() => coreMocks.decode.mockClear());
+
   it('derives full-source device pixels from the frame, effective DPR, and srcRect crop', async () => {
     const slide = {
       index: 0,
@@ -73,5 +76,40 @@ describe('PPTX display-sized picture decode', () => {
         targetHeightPx: 720,
       });
     }
+  });
+
+  it('applies background fillRect to both decode sizing and cropped destination paint', async () => {
+    const drawImage = vi.fn();
+    const slide = {
+      index: 0,
+      slideNumber: 1,
+      background: {
+        fillType: 'image',
+        imagePath: 'ppt/media/background.png',
+        mimeType: 'image/png',
+        srcRect: { l: 0.25, t: 0, r: 0.1, b: 0 },
+        fillRect: { l: 0.1, t: -0.1, r: 0.2, b: 0.05 },
+      },
+      elements: [],
+    } as Slide;
+
+    await renderSlide(canvas(drawImage), slide, 9_144_000, 6_858_000, {
+      width: 960,
+      dpr: 2,
+      fetchImage: vi.fn(async () => new Blob(['png'], { type: 'image/png' })),
+    });
+
+    expect(coreMocks.decode).toHaveBeenCalledWith(
+      'ppt/media/background.png',
+      'image/png',
+      undefined,
+      expect.any(Function),
+      expect.objectContaining({ targetWidthPx: 2068, targetHeightPx: 1512 }),
+    );
+    expect(drawImage).toHaveBeenCalledWith(
+      coreMocks.bitmap,
+      480, 0, 1248, 720,
+      96, -72, 672, 756,
+    );
   });
 });

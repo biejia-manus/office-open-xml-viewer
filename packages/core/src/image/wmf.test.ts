@@ -6,8 +6,8 @@ import {
   playWmf,
   renderWmfToBitmap,
   wmfRasterTarget,
-  decodeRasterOrMetafile,
 } from './wmf.js';
+import { decodeRasterOrMetafile } from './raster-or-metafile.js';
 
 // ── WMF (Windows Metafile) player unit tests ────────────────────────────────
 // The renderer falls back to this player for `.wmf`/`.emf` blips the browser
@@ -930,6 +930,58 @@ describe('decodeRasterOrMetafile', () => {
     });
   });
 
+  it('closes and rejects a decoder result that ignores a restricted retained-surface limit', async () => {
+    const sourceWidth = 10_000;
+    const sourceHeight = 1_000;
+    const png = new Uint8Array(26);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    png.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+    const view = new DataView(png.buffer);
+    view.setUint32(16, sourceWidth);
+    view.setUint32(20, sourceHeight);
+    const close = vi.fn();
+    const ignoredResize = { width: sourceWidth, height: sourceHeight, close } as unknown as ImageBitmap;
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ignoredResize));
+
+    await expect(decodeRasterOrMetafile(
+      new Blob([png as BlobPart], { type: 'image/png' }),
+      {
+        targetWidthPx: 1_000,
+        targetHeightPx: 100,
+        maxRetainedPixels: 1 << 23,
+      },
+    )).rejects.toMatchObject({
+      code: 'ooxml-decoded-image-limit',
+      metric: 'image-pixels',
+      limit: 1 << 23,
+      observed: sourceWidth * sourceHeight,
+    });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('streams JPEG metadata until SOF instead of failing open after 64 KiB', async () => {
+    const appLength = 65_535;
+    const jpeg = new Uint8Array(2 + 2 + appLength + 2 + 17);
+    let offset = 0;
+    jpeg.set([0xff, 0xd8], offset); offset += 2; // SOI
+    jpeg.set([0xff, 0xe1, 0xff, 0xff], offset); offset += 4; // APP1 incl. u16 length
+    offset += appLength - 2; // payload; SOF now lies beyond byte 65536
+    jpeg.set([0xff, 0xc0, 0x00, 0x11, 0x08, 0x23, 0x28, 0x2e, 0xe0], offset);
+    const blob = new Blob([jpeg as BlobPart], { type: 'image/jpeg' });
+    const resized = { width: 1_200, height: 900, close() {} } as unknown as ImageBitmap;
+    const cib = vi.fn(async () => resized);
+    vi.stubGlobal('createImageBitmap', cib);
+
+    await expect(decodeRasterOrMetafile(blob, {
+      targetWidthPx: 1_200,
+      targetHeightPx: 900,
+    })).resolves.toBe(resized);
+    expect(cib).toHaveBeenCalledWith(blob, {
+      resizeWidth: 1_200,
+      resizeQuality: 'high',
+    });
+  });
+
   it('downsamples a panoramic source wider than the retained-canvas axis limit', async () => {
     const png = new Uint8Array(26);
     png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
@@ -1022,26 +1074,25 @@ describe('decodeRasterOrMetafile', () => {
     expect(cib).not.toHaveBeenCalled();
   });
 
-  it('reports a source-axis crossing as a dimension limit with truthful values', async () => {
+  it('admits a non-JPEG source axis above 65,535 when total pixels and output are bounded', async () => {
     const bomb = new Uint8Array(26);
     bomb.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
     bomb.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
     const view = new DataView(bomb.buffer);
-    view.setUint32(16, 70_000);
-    view.setUint32(20, 1);
-    const cib = vi.fn();
+    view.setUint32(16, 100_000);
+    view.setUint32(20, 1_000);
+    const bitmap = { width: 1_000, height: 10, close() {} } as unknown as ImageBitmap;
+    const cib = vi.fn(async () => bitmap);
     vi.stubGlobal('createImageBitmap', cib);
 
     await expect(decodeRasterOrMetafile(
       new Blob([bomb as BlobPart], { type: 'image/png' }),
-      { targetWidthPx: 700, targetHeightPx: 1 },
-    )).rejects.toMatchObject({
-      code: 'ooxml-decoded-image-limit',
-      metric: 'image-dimension',
-      limit: 65_535,
-      observed: 70_000,
+      { targetWidthPx: 1_000, targetHeightPx: 10 },
+    )).resolves.toBe(bitmap);
+    expect(cib).toHaveBeenCalledWith(expect.any(Blob), {
+      resizeWidth: 1_000,
+      resizeQuality: 'high',
     });
-    expect(cib).not.toHaveBeenCalled();
   });
 
   it('reports a retained-axis crossing separately when no downsample target is supplied', async () => {

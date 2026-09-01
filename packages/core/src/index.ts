@@ -223,6 +223,7 @@ export {
   getCachedBitmapByPath,
   getCachedDecodedBitmap,
   getCachedDerivedBitmap,
+  resolvedCachedBitmapVariantKey,
   peekCachedBitmapByPath,
   dropDecodedBitmapCache,
   releaseOwnedBitmap,
@@ -238,9 +239,7 @@ export {
   collectChartMarkerImageFillsForCharts,
   type ChartImageLookup,
 } from './chart/image-fill';
-// Shared WMF (Windows Metafile) player + the raster/metafile decoder all three
-// renderers route through, so a WMF/EMF blip (which `createImageBitmap` cannot
-// decode) rasterizes or is skipped gracefully instead of throwing and vanishing.
+// Shared WMF (Windows Metafile) player.
 // The docx-specific cosmetic window/device-frame suppression is gated behind
 // `suppressBoundaryFrame` (default off = spec-clean).
 export {
@@ -250,9 +249,12 @@ export {
   playWmf,
   renderWmfToBitmap,
   wmfRasterTarget,
+} from './image/wmf';
+// Cross-format raster/metafile admission and decode boundary.
+export {
   decodeRasterOrMetafile,
   type DecodeRasterOptions,
-} from './image/wmf';
+} from './image/raster-or-metafile';
 export type { TiffRenderer } from './image/tiff-contract';
 // Raster pixel-dimension budget + header sniff (decode-bomb guard, RB1). Shared
 // caps live in `./image/pixel-budget`; `decodeRasterOrMetafile` uses the sniff to

@@ -5,13 +5,14 @@
 
 import {
   dropCachedDerivedBitmapNamespace,
-  cachedBitmapVariantKey,
   getCachedBitmapByPath,
   getCachedDerivedBitmap,
+  resolvedCachedBitmapVariantKey,
   type CachedBitmapOptions,
 } from './bitmap-image-by-path';
 import { applyDuotone, type Duotone, type OffscreenFactory } from './duotone';
 import { imageNaturalSize } from './crop';
+import { MAX_RASTER_PIXELS } from './pixel-budget.js';
 
 type FetchImage = (path: string, mime: string) => Promise<Blob>;
 
@@ -62,7 +63,19 @@ export async function getCachedDuotoneBitmapByPath(
     failClosedOnDuotoneFailure?: boolean;
   } = {},
 ): Promise<ImageBitmap | null> {
-  const { offscreenFactory, failClosedOnDuotoneFailure = false, ...bitmapOpts } = opts;
+  const { offscreenFactory, failClosedOnDuotoneFailure = false, ...requestedBitmapOpts } = opts;
+  const bitmapOpts = duotone
+    ? {
+        ...requestedBitmapOpts,
+        // Peak pipeline: source ImageBitmap + offscreen backing + ImageData +
+        // result ImageBitmap. Bound the base to one quarter of the document
+        // byte ceiling so transient pixel work cannot silently double it.
+        maxRetainedPixels: Math.min(
+          requestedBitmapOpts.maxRetainedPixels ?? MAX_RASTER_PIXELS,
+          Math.floor(MAX_RASTER_PIXELS / 4),
+        ),
+      }
+    : requestedBitmapOpts;
   // Base, colour-free bitmap from the shared path-keyed cache.
   const base = await getCachedBitmapByPath(imagePath, mimeType, fetchImage, bitmapOpts);
   // No duotone → return the base directly (no second-layer entry). A `null`
@@ -70,8 +83,14 @@ export async function getCachedDuotoneBitmapByPath(
   if (!duotone || !base) return base;
   // Strict and compatibility callers must not share a derived cache entry: a
   // compatibility pass-through must never make a later strict lookup succeed.
+  const resolvedBaseKey = await resolvedCachedBitmapVariantKey(
+    imagePath,
+    mimeType,
+    fetchImage,
+    bitmapOpts,
+  );
   const key = `${duotoneCacheKey(
-    cachedBitmapVariantKey(imagePath, bitmapOpts),
+    resolvedBaseKey,
     duotone,
   )}${failClosedOnDuotoneFailure ? '|strict' : ''}`;
   return getCachedDerivedBitmap(

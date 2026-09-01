@@ -14,14 +14,6 @@
 export const MAX_RASTER_DIMENSION = 32767;
 
 /**
- * Hard ceiling for one axis of an encoded raster passed to a resizing decoder.
- * This is separate from {@link MAX_RASTER_DIMENSION}: an authored source may be
- * wider than a browser canvas while its retained, display-sized result is not.
- * 65535 also matches the largest dimension representable by baseline JPEG SOF.
- */
-export const MAX_RASTER_SOURCE_DIMENSION = 65535;
-
-/**
  * Pixel budget for one decoded raster: 32 MP (2^25 px). A decoded surface is
  * `width × height × 4` bytes of RGBA, so this bounds one bitmap to 128 MiB.
  * A crafted 60000×60000 header (~3.6e9 px → ~14 GB RGBA)
@@ -41,6 +33,14 @@ export const MAX_RASTER_PIXELS = 1 << 25; // 33_554_432 px = 32 MP / 128 MiB RGB
  * leaving useful headroom for high-resolution authored assets.
  */
 export const MAX_RASTER_SOURCE_PIXELS = 1 << 27;
+
+/**
+ * Derived source-axis ceiling. A positive grid within the source-pixel budget
+ * cannot exceed this value on either axis, so this adds no format-specific
+ * magic number (in particular, JPEG's 16-bit SOF bound is not imposed on PNG
+ * or TIFF). It keeps error classification and unsafe-number checks explicit.
+ */
+export const MAX_RASTER_SOURCE_DIMENSION = MAX_RASTER_SOURCE_PIXELS;
 
 /** Maximum decoded RGBA ownership retained or leased per document. */
 export const MAX_DECODED_IMAGE_BYTES = MAX_RASTER_PIXELS * 4;

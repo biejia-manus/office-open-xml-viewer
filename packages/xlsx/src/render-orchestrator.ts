@@ -7,6 +7,7 @@ import {
   acquireBitmapCacheLease,
   preferVectorBlip,
   metafileRasterSize,
+  sourceRasterTargetSize,
   isOoxmlDecodedImageLimitError,
   EMU_PER_PT,
   EMU_PER_PX,
@@ -78,6 +79,8 @@ interface ImageRef {
   /** Chart marker effects are authored paint. If the pixel pipeline cannot
    * apply them, omit the marker instead of substituting the original image. */
   failClosedOnDuotoneFailure?: boolean;
+  targetWidthPx?: number;
+  targetHeightPx?: number;
 }
 
 interface CellAnchorRange {
@@ -92,6 +95,27 @@ interface CellAnchorRange {
   editAs?: string;
   nativeExtCx?: number;
   nativeExtCy?: number;
+}
+
+function anchorDisplaySize(
+  anchor: CellAnchorRange,
+  ws: Worksheet,
+  geometry: GridGeometry | undefined,
+  scale: number,
+): { width: number; height: number } | null {
+  const axes = geometry ?? getGridGeometryForWorksheet(ws);
+  const { col, row } = axes.axesAtScale(scale);
+  const marker = (axis: GridAxisGeometry, index: number, offset: number) =>
+    axis.offsetOf(index + 1) + (offset * scale) / EMU_PER_PX;
+  const fromX = marker(col, anchor.fromCol, anchor.fromColOff);
+  const fromY = marker(row, anchor.fromRow, anchor.fromRowOff);
+  const toX = usesNativeOneCellExtent(anchor)
+    ? fromX + ((anchor.nativeExtCx as number) * scale) / EMU_PER_PX
+    : marker(col, anchor.toCol, anchor.toColOff);
+  const toY = usesNativeOneCellExtent(anchor)
+    ? fromY + ((anchor.nativeExtCy as number) * scale) / EMU_PER_PX
+    : marker(row, anchor.toRow, anchor.toRowOff);
+  return toX > fromX && toY > fromY ? { width: toX - fromX, height: toY - fromY } : null;
 }
 
 function anchorMayIntersectViewport(
@@ -204,6 +228,7 @@ export async function decodeImageSource(
   offscreenFactory?: OffscreenFactory,
   failClosedOnDuotoneFailure = false,
   tiff?: TiffRenderer,
+  target?: Readonly<{ targetWidthPx: number; targetHeightPx: number }>,
 ): Promise<CanvasImageSource | null> {
   const dataIsSvg = mimeType === 'image/svg+xml';
   // SVG pixels are not exposed to the shared bitmap effect pipeline. Without
@@ -211,8 +236,8 @@ export async function decodeImageSource(
   if (dataIsSvg && duotone) return null;
   // A cropped metafile must rasterize at its FULL picture frame, not the visible
   // sub-rect, so the fractional crop lands correctly; raster blips and uncropped
-  // metafiles pass the box through unchanged. The shared base cache is path-keyed
-  // ("first size wins"), matching pptx/docx.
+  // metafiles pass the box through unchanged. The shared base cache retains
+  // exact required-resolution variants and reuses a larger sufficient one.
   const sized = metafileRasterSize(mimeType, srcRect, widthPt, heightPt);
   if (!sized) return null;
   const decodeRaster = (): Promise<ImageBitmap | null> =>
@@ -222,6 +247,7 @@ export async function decodeImageSource(
       offscreenFactory,
       failClosedOnDuotoneFailure,
       tiff,
+      ...(target ?? {}),
     });
   // Shared vector-vs-raster gate (see core preferVectorBlip). When it returns
   // true, `blip.svgImagePath` is narrowed to string.
@@ -284,6 +310,7 @@ export async function prefetchImages(
     freezeRows?: number;
     freezeCols?: number;
     tiff?: TiffRenderer;
+    effectiveDpr?: number;
   },
 ): Promise<void> {
   // This map is only the synchronous lookup for the current frame. Never keep
@@ -325,6 +352,17 @@ export async function prefetchImages(
         // and, for a metafile, the full-frame raster size.
         srcRect: img.srcRect ?? null,
         duotone: img.duotone ?? null,
+        ...(() => {
+          const display = anchorDisplaySize(img, ws, geometry, opts?.cellScale ?? 1);
+          const target = display && opts?.effectiveDpr
+            ? sourceRasterTargetSize(
+                display.width * opts.effectiveDpr,
+                display.height * opts.effectiveDpr,
+                img.srcRect,
+              )
+            : null;
+          return target ? { targetWidthPx: target.width, targetHeightPx: target.height } : {};
+        })(),
       });
     }
   }
@@ -350,24 +388,78 @@ export async function prefetchImages(
             // and, for a metafile, the full-frame raster size.
             srcRect: shape.geom.srcRect ?? null,
             duotone: shape.geom.duotone ?? null,
+            ...(() => {
+              const display = anchorDisplaySize(grp, ws, geometry, opts?.cellScale ?? 1);
+              const target = display && opts?.effectiveDpr
+                ? sourceRasterTargetSize(
+                    display.width * shape.w * opts.effectiveDpr,
+                    display.height * shape.h * opts.effectiveDpr,
+                    shape.geom.srcRect,
+                  )
+                : null;
+              return target ? { targetWidthPx: target.width, targetHeightPx: target.height } : {};
+            })(),
           });
         }
       }
     }
   }
-  const visibleChartModels = (ws.charts ?? [])
-    .filter(chart => anchorMayIntersectViewport(chart, ws, opts?.viewport, geometry, frame))
-    .map(chart => chart.chart);
-  for (const fill of collectChartMarkerImageFillsForCharts(visibleChartModels)) {
+  const visibleCharts = (ws.charts ?? [])
+    .filter(chart => anchorMayIntersectViewport(chart, ws, opts?.viewport, geometry, frame));
+  const allowedChartFills = collectChartMarkerImageFillsForCharts(
+    visibleCharts.map(chart => chart.chart),
+  );
+  const allowedChartFillKeys = new Set(allowedChartFills.map(chartImageFillKey));
+  const chartTargets = new Map<string, {
+    widthPx: number;
+    heightPx: number;
+    sourceWidthPx: number;
+    sourceHeightPx: number;
+  }>();
+  if (opts?.effectiveDpr) {
+    for (const chart of visibleCharts) {
+      const display = anchorDisplaySize(chart, ws, geometry, opts.cellScale ?? 1);
+      if (!display) continue;
+      for (const fill of collectChartMarkerImageFills(chart.chart)) {
+        const key = chartImageFillKey(fill);
+        if (!allowedChartFillKeys.has(key)) continue;
+        // A chart picture can paint a marker, plot area, wall, or floor. The
+        // chart anchor is the smallest format-derived upper bound common to all
+        // of those consumers; it avoids an empirical marker-size constant while
+        // keeping decoder admission proportional to the actual viewport paint.
+        const source = sourceRasterTargetSize(
+          display.width * opts.effectiveDpr,
+          display.height * opts.effectiveDpr,
+          fill.srcRect,
+        );
+        if (!source) continue;
+        const prior = chartTargets.get(key);
+        chartTargets.set(key, {
+          widthPx: Math.max(prior?.widthPx ?? 0, display.width),
+          heightPx: Math.max(prior?.heightPx ?? 0, display.height),
+          sourceWidthPx: Math.max(prior?.sourceWidthPx ?? 0, source.width),
+          sourceHeightPx: Math.max(prior?.sourceHeightPx ?? 0, source.height),
+        });
+      }
+    }
+  }
+  for (const fill of allowedChartFills) {
+      const target = chartTargets.get(chartImageFillKey(fill));
       refs.set(chartImageFillKey(fill), {
         imagePath: fill.imagePath,
         mimeType: fill.mimeType,
         svgImagePath: fill.svgImagePath,
-        widthPt: 72,
-        heightPt: 72,
+        // CSS px use the OOXML 96 dpi convention (12700 EMU/pt, 9525 EMU/px).
+        // The chart frame is a conservative bound because this source may paint
+        // an entire wall/floor rather than only a data-point marker.
+        widthPt: target ? target.widthPx * EMU_PER_PX / EMU_PER_PT : 0,
+        heightPt: target ? target.heightPx * EMU_PER_PX / EMU_PER_PT : 0,
         srcRect: fill.srcRect ?? null,
         duotone: fill.duotone ?? null,
         failClosedOnDuotoneFailure: true,
+        ...(target
+          ? { targetWidthPx: target.sourceWidthPx, targetHeightPx: target.sourceHeightPx }
+          : {}),
       });
   }
   if (refs.size === 0) return;
@@ -390,6 +482,9 @@ export async function prefetchImages(
           opts?.offscreenFactory,
           ref.failClosedOnDuotoneFailure ?? false,
           opts?.tiff,
+          ref.targetWidthPx && ref.targetHeightPx
+            ? { targetWidthPx: ref.targetWidthPx, targetHeightPx: ref.targetHeightPx }
+            : undefined,
         );
         // Record the resolved drawable (INCLUDING a null for an unsupported
         // metafile, so the renderer skips a falsy source without a re-fetch).
@@ -488,6 +583,9 @@ async function renderWorksheetViewportLeased(
   const rawH = isHTMLCanvas(target) ? (target.clientHeight || 600) : target.height;
   const width = opts.width ?? rawW;
   const height = opts.height ?? rawH;
+  const dpr = opts.dpr ?? defaultDpr();
+  const clamped = clampCanvasSize(width * dpr, height * dpr);
+  const effectiveDpr = clamped.clamped ? dpr * clamped.scale : dpr;
   // Frame-local synchronous lookup only. Core owns decoded reuse/eviction;
   // retaining this map across frames would accumulate stale closed references.
   const imageCache = new Map<string, CanvasImageSource | null>();
@@ -513,6 +611,7 @@ async function renderWorksheetViewportLeased(
     freezeRows: opts.freezeRows,
     freezeCols: opts.freezeCols,
     tiff: deps.tiff,
+    effectiveDpr,
   });
 
   // ── Step 1b: Pre-rasterize equations in shapes BEFORE the canvas resize,
@@ -531,7 +630,6 @@ async function renderWorksheetViewportLeased(
   if ((opts as GuardedRenderViewportOptions)[XLSX_RENDER_COMMIT_GUARD]?.() === false) return;
 
   // ── Step 2: Resize + draw, all synchronous from here.
-  const dpr = opts.dpr ?? defaultDpr();
   // Resize only when the backing store dimensions actually change. Assigning
   // canvas.width/height re-allocates (and clears) the GPU backing store, so on a
   // steady-state scroll/zoom stream — where width/height/dpr are unchanged frame
@@ -546,8 +644,6 @@ async function renderWorksheetViewportLeased(
   // axes by one factor (≤ 1) so the aspect ratio is kept; we fold that factor
   // into the effective dpr, keep the CSS box at the requested size, and the
   // browser stretches the (slightly lower-res) backing store to fill it.
-  const clamped = clampCanvasSize(width * dpr, height * dpr);
-  const effectiveDpr = clamped.clamped ? dpr * clamped.scale : dpr;
   const bw = clamped.width;
   const bh = clamped.height;
   if (target.width !== bw) target.width = bw;

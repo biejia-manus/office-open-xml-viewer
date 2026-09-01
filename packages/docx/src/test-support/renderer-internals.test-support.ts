@@ -46,9 +46,10 @@ export async function preloadImages(
   doc: DocxDocumentModel,
   fetchImage: DocxFetchImage | undefined,
   services?: LayoutServices,
+  devicePixelsPerPoint?: number,
 ): Promise<Map<string, DecodedImage>> {
   const registry = services
     ? paintResourceRegistryOf(services)
     : layoutSourceStore(doc).paintResources;
-  return preloadPaintImages(registry.descriptors, fetchImage);
+  return preloadPaintImages(registry.descriptors, fetchImage, undefined, devicePixelsPerPoint);
 }
