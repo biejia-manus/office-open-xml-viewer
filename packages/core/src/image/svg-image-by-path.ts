@@ -11,9 +11,16 @@
 
 import { getCachedBitmapByPath } from './bitmap-image-by-path.js';
 import { withDecodedImageSlot } from './decode-gate.js';
+import type { SvgBlobDecoder } from '../worker/svg-decode-bridge.js';
 
 type FetchImage = (path: string, mimeType: string) => Promise<Blob>;
 export type SvgImageSource = HTMLImageElement | ImageBitmap;
+
+export interface SvgImageDecodeOptions {
+  readonly targetWidthPx?: number;
+  readonly targetHeightPx?: number;
+  readonly workerDecoder?: SvgBlobDecoder;
+}
 
 interface SvgCacheEntry {
   promise: Promise<SvgImageSource>;
@@ -40,13 +47,18 @@ function docCacheFor(fetchImage: FetchImage): DocCache {
 export function getCachedSvgImageByPath(
   svgImagePath: string,
   fetchImage: FetchImage,
+  options: SvgImageDecodeOptions = {},
 ): Promise<SvgImageSource> {
   // Dedicated Workers and Node have no HTMLImageElement. Route SVG bytes
   // through the same decoded owner as raster blips; browser/Node
   // createImageBitmap support (or the injected Node factory) determines
   // decodability, and the shared decoder validates the resulting dimensions.
   if (typeof Image === 'undefined') {
-    return getCachedBitmapByPath(svgImagePath, 'image/svg+xml', fetchImage).then((bitmap) => {
+    return getCachedBitmapByPath(svgImagePath, 'image/svg+xml', fetchImage, {
+      targetWidthPx: options.targetWidthPx,
+      targetHeightPx: options.targetHeightPx,
+      svgDecoder: options.workerDecoder,
+    }).then((bitmap) => {
       if (!bitmap) throw new Error(`svg decode failed: ${svgImagePath}`);
       return bitmap;
     });

@@ -19,6 +19,7 @@ import {
   type SrcRect,
   type Duotone,
   type OffscreenFactory,
+  type SvgBlobDecoder,
   chartImageFillKey,
   collectChartMarkerImageFills,
   collectChartMarkerImageFillsForCharts,
@@ -229,6 +230,7 @@ export async function decodeImageSource(
   failClosedOnDuotoneFailure = false,
   tiff?: TiffRenderer,
   target?: Readonly<{ targetWidthPx: number; targetHeightPx: number }>,
+  svgDecoder?: SvgBlobDecoder,
 ): Promise<CanvasImageSource | null> {
   const dataIsSvg = mimeType === 'image/svg+xml';
   // SVG pixels are not exposed to the shared bitmap effect pipeline. Without
@@ -260,15 +262,20 @@ export async function decodeImageSource(
     // duotone applies only to the raster fallback — an SVG vector original has no
     // readable pixel grid (matches docx/pptx).
     try {
-      return await getCachedSvgImageByPath(blip.svgImagePath, fetchImage);
+      return await getCachedSvgImageByPath(blip.svgImagePath, fetchImage, {
+        ...target,
+        workerDecoder: svgDecoder,
+      });
     } catch {
-      return dataIsSvg ? getCachedSvgImageByPath(imagePath, fetchImage) : decodeRaster();
+      return dataIsSvg
+        ? getCachedSvgImageByPath(imagePath, fetchImage, { ...target, workerDecoder: svgDecoder })
+        : decodeRaster();
     }
   }
   if (dataIsSvg) {
     // svg-only picture with no separate `svgImagePath` field (defensive): the
     // raster decoder (createImageBitmap) can't rasterize SVG.
-    return getCachedSvgImageByPath(imagePath, fetchImage);
+    return getCachedSvgImageByPath(imagePath, fetchImage, { ...target, workerDecoder: svgDecoder });
   }
   return decodeRaster();
 }
@@ -311,6 +318,7 @@ export async function prefetchImages(
     freezeCols?: number;
     tiff?: TiffRenderer;
     effectiveDpr?: number;
+    svgDecoder?: SvgBlobDecoder;
   },
 ): Promise<void> {
   // This map is only the synchronous lookup for the current frame. Never keep
@@ -485,6 +493,7 @@ export async function prefetchImages(
           ref.targetWidthPx && ref.targetHeightPx
             ? { targetWidthPx: ref.targetWidthPx, targetHeightPx: ref.targetHeightPx }
             : undefined,
+          opts?.svgDecoder,
         );
         // Record the resolved drawable (INCLUDING a null for an unsupported
         // metafile, so the renderer skips a falsy source without a re-fetch).
@@ -558,10 +567,11 @@ export async function renderWorksheetViewport(
   target: HTMLCanvasElement | OffscreenCanvas,
   viewport: ViewportRange,
   opts: RenderViewportOptions = {},
+  svgDecoder?: SvgBlobDecoder,
 ): Promise<void> {
   const releaseLease = opts.fetchImage ? acquireBitmapCacheLease(opts.fetchImage) : undefined;
   try {
-    await renderWorksheetViewportLeased(deps, target, viewport, opts);
+    await renderWorksheetViewportLeased(deps, target, viewport, opts, svgDecoder);
   } finally {
     releaseLease?.();
   }
@@ -574,6 +584,7 @@ async function renderWorksheetViewportLeased(
   target: HTMLCanvasElement | OffscreenCanvas,
   viewport: ViewportRange,
   opts: RenderViewportOptions = {},
+  svgDecoder?: SvgBlobDecoder,
 ): Promise<void> {
   const styles = deps.styles;
   const measurementCtx = target.getContext('2d') as CanvasRenderingContext2D | null;
@@ -612,6 +623,7 @@ async function renderWorksheetViewportLeased(
     freezeCols: opts.freezeCols,
     tiff: deps.tiff,
     effectiveDpr,
+    svgDecoder,
   });
 
   // ── Step 1b: Pre-rasterize equations in shapes BEFORE the canvas resize,

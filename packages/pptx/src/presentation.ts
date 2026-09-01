@@ -45,6 +45,7 @@ import {
   readLatestOoxmlResourceMetrics,
   parseResourceLimitError,
   PULL_SESSION_PROTOCOL,
+  respondToWorkerSvgDecodeRequest,
   type NormalizedOoxmlResourcePolicy,
   type PullSessionResponse,
   type WorkerRendererDescriptors,
@@ -692,6 +693,12 @@ export class PptxPresentation {
   private _onWorkerLayoutPush(
     response: PptxWorkerResponse | RenderWorkerResponse | PullSessionResponse<ArrayBuffer, number>,
   ): void {
+    if (respondToWorkerSvgDecodeRequest(
+      (message, transfer) => (
+        this._worker.postMessage as (value: unknown, transfer?: Transferable[]) => void
+      )(message, transfer),
+      response,
+    )) return;
     if (
       !('kind' in response) ||
       response.kind !== 'presentationLayoutPartial' ||

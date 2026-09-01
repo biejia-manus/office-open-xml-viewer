@@ -45,6 +45,7 @@ export interface CanvasDocumentPaintOptions<TTextRun> {
   readonly dpr?: number;
   readonly defaultTextColor?: string;
   readonly fetchImage?: DocxFetchImage;
+  readonly svgDecoder?: import('@silurus/ooxml-core').SvgBlobDecoder;
   readonly parseError: boolean;
   readonly registry: PaintResourceRegistry;
   readonly privateResources?: PrivatePaintResourceLookup;
@@ -185,6 +186,7 @@ export async function renderSelectedDocumentPage<TTextRun>(
         options.fetchImage,
         options.tiff,
         scale * effectiveDpr,
+        options.svgDecoder,
       );
     } catch (error) {
       if (superseded()) return;
@@ -212,7 +214,11 @@ export async function renderSelectedDocumentPage<TTextRun>(
         }
         try {
           const decodeFallback = () => fill.mimeType === 'image/svg+xml'
-            ? fill.duotone ? Promise.resolve(null) : getCachedSvgImageByPath(fill.imagePath, fetchImage)
+            ? fill.duotone ? Promise.resolve(null) : options.svgDecoder
+              ? getCachedSvgImageByPath(fill.imagePath, fetchImage, {
+                  workerDecoder: options.svgDecoder,
+                })
+              : getCachedSvgImageByPath(fill.imagePath, fetchImage)
             : decodeRaster(
                 fill.imagePath, fill.mimeType, undefined, fetchImage as DocxFetchImage,
                 raster.widthPt, raster.heightPt, fill.duotone, true, options.tiff,
@@ -220,7 +226,11 @@ export async function renderSelectedDocumentPage<TTextRun>(
           let image: CanvasImageSource | null;
           if (!fill.duotone && preferVectorBlip(fill)) {
             try {
-              image = await getCachedSvgImageByPath(fill.svgImagePath, fetchImage);
+              image = await (options.svgDecoder
+                ? getCachedSvgImageByPath(fill.svgImagePath, fetchImage, {
+                    workerDecoder: options.svgDecoder,
+                  })
+                : getCachedSvgImageByPath(fill.svgImagePath, fetchImage));
             } catch {
               image = await decodeFallback();
             }

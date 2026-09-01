@@ -31,6 +31,7 @@ import {
   type PullSessionResponse,
   HARD_MAX_RAW_PART_CACHE_BYTES,
   HARD_MAX_RAW_PART_CACHE_ENTRIES,
+  respondToWorkerSvgDecodeRequest,
 } from '@silurus/ooxml-core/worker';
 import { BoundedRawPartCache } from '@silurus/ooxml-core/internal/bounded-raw-part-cache';
 import type { ParsedWorkbook, Worksheet, ViewportRange, RenderViewportOptions, XlsxRenderViewportOptions, WorkerRequest, WorkerResponse, Cell, SheetVisibility, XlsxComment } from './types.js';
@@ -184,6 +185,14 @@ export class XlsxWorkbook {
       // historical rejection behavior.
       toError: (res) =>
         'type' in res && res.type === 'error' ? deserializeWorkerError(res) : undefined,
+      onUnsolicited: (res) => {
+        respondToWorkerSvgDecodeRequest(
+          (message, transfer) => (
+            this.worker.postMessage as (value: unknown, transfer?: Transferable[]) => void
+          )(message, transfer),
+          res,
+        );
+      },
     });
     // Default: the parser WASM emitted next to this bundle, resolved relative to
     // the document URL. `wasmUrl` overrides it (CDN / self-hosted copy); a

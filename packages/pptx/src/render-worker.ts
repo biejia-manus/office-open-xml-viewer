@@ -26,7 +26,10 @@ import {
   resourcePolicyForWasm,
   serializeWorkerError,
   loadWorkerRenderers,
+  isWorkerSvgDecodeResponse,
+  WorkerSvgDecodeClient,
   type LoadedWorkerRenderers,
+  type WorkerSvgDecodeResponse,
 } from '@silurus/ooxml-core/worker';
 import { BoundedRawPartCache } from '@silurus/ooxml-core/internal/bounded-raw-part-cache';
 import type {
@@ -90,8 +93,10 @@ function reservePresentationParse(): void {
   presentationState = 'opening';
 }
 
-const post = (message: RenderWorkerResponse, transfer?: Transferable[]) =>
+const rawPost = (message: unknown, transfer?: Transferable[]) =>
   (self.postMessage as (value: unknown, transfer?: Transferable[]) => void)(message, transfer);
+const post = (message: RenderWorkerResponse, transfer?: Transferable[]) => rawPost(message, transfer);
+const svgDecodeClient = new WorkerSvgDecodeClient(rawPost);
 
 function requirePreflight(): PresentationPreflight {
   if (preflight) return preflight;
@@ -277,8 +282,12 @@ function executeArchiveFromNew(
   });
 }
 
-self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
+self.onmessage = async (event: MessageEvent<RenderWorkerRequest | WorkerSvgDecodeResponse>) => {
   const request = event.data;
+  if (isWorkerSvgDecodeResponse(request)) {
+    svgDecodeClient.accept(request);
+    return;
+  }
   if (request.kind === 'init') {
     host.setWasmInput(decodeDataUrl(request.wasmUrl) ?? request.wasmUrl);
     return;
@@ -331,6 +340,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
           embeddedFontAuthoredFamilies,
           fetchMedia: getMedia,
           fetchImage: getImage,
+          svgDecoder: svgDecodeClient.decode,
           skipMediaControls: request.skipMediaControls,
           dim: request.dim,
           math: renderers.math,
@@ -362,6 +372,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
           embeddedFontAuthoredFamilies,
           fetchMedia: getMedia,
           fetchImage: getImage,
+          svgDecoder: svgDecodeClient.decode,
           math: renderers.math,
           threeD: renderers.threeD,
           regionMap: renderers.regionMap,

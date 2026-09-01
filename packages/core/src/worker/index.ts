@@ -96,6 +96,18 @@ export {
 } from './resource-policy.generated.js';
 export { disposeRejectedLoad } from './rejected-load.js';
 export {
+  WorkerSvgDecodeClient,
+  boundedSvgRasterSize,
+  decodeSvgBlobOnMainThread,
+  isWorkerSvgDecodeRequest,
+  isWorkerSvgDecodeResponse,
+  respondToWorkerSvgDecodeRequest,
+  type SvgBlobDecoder,
+  type SvgDecodeTarget,
+  type WorkerSvgDecodeRequest,
+  type WorkerSvgDecodeResponse,
+} from './svg-decode-bridge.js';
+export {
   BoundedPullSession,
   DEFAULT_PULL_CANCEL_GRACE_MS,
   PULL_SESSION_PROTOCOL,
