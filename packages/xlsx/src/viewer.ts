@@ -204,6 +204,8 @@ function sameChromeColors(left: XlsxChromeColors, right: XlsxChromeColors): bool
 }
 
 export interface XlsxSheetViewerOptions extends LoadOptions {
+  /** Adaptive decoded-raster memory policy for visible worksheet paints. */
+  imageResources?: import('@silurus/ooxml-core').ImageResourceOptions;
   /** Scale factor for cell/header dimensions (default 1). 0.5 = half size. */
   cellScale?: number;
   /**
@@ -4940,6 +4942,7 @@ class XlsxViewerEngine implements ZoomableViewer {
       width: w,
       height: h,
       dpr,
+      imageResources: this.opts.imageResources,
       cellScale: cs,
       scrollOffsetX: offsetX,
       scrollOffsetY: offsetY,

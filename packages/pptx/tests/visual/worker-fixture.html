@@ -57,10 +57,15 @@
       document.body.dataset.navMain = JSON.stringify(probe(main));
       document.body.dataset.navWorker = JSON.stringify(probe(wk));
 
-      window.addEventListener('pagehide', () => {
+      let destroyed = false;
+      const destroy = () => {
+        if (destroyed) return;
+        destroyed = true;
         main.destroy();
         wk.destroy();
-      }, { once: true });
+      };
+      window.destroyPptxWorkerVrt = destroy;
+      window.addEventListener('pagehide', destroy, { once: true });
 
       document.body.dataset.status = 'ready';
     } catch (err) {

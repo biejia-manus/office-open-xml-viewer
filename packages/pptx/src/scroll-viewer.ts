@@ -86,7 +86,7 @@ type InternalPptxScrollViewerOptions = PptxScrollViewerOptions & {
  * render knobs apply to this virtualized Viewer; it owns text-run collection,
  * media controls, and hidden-slide dimming itself.
  */
-export interface PptxScrollViewerOptions extends Pick<RenderSlideOptions, 'width' | 'dpr'>, LoadOptions {
+export interface PptxScrollViewerOptions extends Pick<RenderSlideOptions, 'width' | 'dpr' | 'imageResources'>, LoadOptions {
   /** Base fit width in CSS px → base zoom scale. Default: the container's width
    *  at first non-zero layout (design §7/§11 zero-width deferral). */
   width?: number;
@@ -1333,6 +1333,7 @@ export class PptxScrollViewer implements ZoomableViewer {
     return this._trackSlotLoading(i, slot, renderGeneration, renderPptxFocusedSlide(this._pres, canvas, i, 'main', {
       width: widthPx, // this slide's own px width → uniform px-per-EMU scale (§7)
       dpr,
+      imageResources: this._opts.imageResources,
       onTextRun,
     })
       .then(() => {
@@ -1536,6 +1537,7 @@ export class PptxScrollViewer implements ZoomableViewer {
       .presentSlide(slot.canvas, i, {
         width: widthPx,
         dpr,
+        imageResources: this._opts.imageResources,
         onTextRun,
         onError: (error) => {
           if (generation === slot.presentationGeneration) this._reportRenderError(error);
@@ -1676,6 +1678,7 @@ export class PptxScrollViewer implements ZoomableViewer {
       const bmp = await renderPptxFocusedSlide(this._pres!, canvas, i, 'worker', {
         width: widthPx,
         dpr,
+        imageResources: this._opts.imageResources,
         onTextRun: wantRuns ? (r) => runs.push(r) : undefined,
       });
       // Stale if EITHER (a) the epoch moved (a setScale rescaled mid-flight, so

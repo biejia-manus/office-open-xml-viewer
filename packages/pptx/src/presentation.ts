@@ -30,6 +30,7 @@ import {
   type ChartRegionMapRenderer,
   type ChartExRenderer,
   type TiffRenderer,
+  type ImageResourceOptions,
   type OoxmlResourceMetrics,
   workerRendererDescriptors,
 } from '@silurus/ooxml-core';
@@ -153,6 +154,8 @@ export interface RenderSlideToBitmapOptions {
   width?: number;
   /** Device pixel ratio. Defaults to window.devicePixelRatio (workers have none). */
   dpr?: number;
+  /** Adaptive decoded-raster memory policy for this render pass. */
+  imageResources?: ImageResourceOptions;
   /**
    * Skip the static media play-badge so a live overlay can draw its own
    * controls. Used internally by {@link PptxPresentation.presentSlide}.
@@ -177,6 +180,8 @@ export interface RenderSlideOptions {
   width?: number;
   /** Device pixel ratio. Defaults to window.devicePixelRatio or 1. */
   dpr?: number;
+  /** Adaptive decoded-raster memory policy for this render pass. */
+  imageResources?: ImageResourceOptions;
   /** Called for each rendered text segment. Used to build a transparent text selection overlay. */
   onTextRun?: TextRunCallback;
   /**
@@ -1055,6 +1060,7 @@ export class PptxPresentation {
             regionMap: this._regionMap,
             chartEx: this._chartEx,
             tiff: this._tiff,
+            imageResources: opts.imageResources,
           },
           opts.onTextRun,
         );
@@ -1085,7 +1091,16 @@ export class PptxPresentation {
       const dpr = opts.dpr ?? defaultDpr();
       if (this._mode === 'worker') {
         const res = await this._bridge.request(
-          (id) => ({ kind: 'renderSlide', id, slideIndex, width, dpr, skipMediaControls: opts.skipMediaControls, dim: opts.dim }) satisfies RenderWorkerRequest,
+          (id) => ({
+            kind: 'renderSlide',
+            id,
+            slideIndex,
+            width,
+            dpr,
+            imageResources: opts.imageResources,
+            skipMediaControls: opts.skipMediaControls,
+            dim: opts.dim,
+          }) satisfies RenderWorkerRequest,
         );
         const rendered = res as Extract<RenderWorkerResponse, { kind: 'slideRendered' }>;
         // IX6 — replay the worker's run geometry to the caller's collector so the
@@ -1097,6 +1112,7 @@ export class PptxPresentation {
       await this.renderSlide(off, slideIndex, {
         width,
         dpr,
+        imageResources: opts.imageResources,
         skipMediaControls: opts.skipMediaControls,
         dim: opts.dim,
         onTextRun: opts.onTextRun,
@@ -1340,6 +1356,7 @@ export class PptxPresentation {
               const bmp = await this.renderSlideToBitmap(slideIndex, {
                 width,
                 dpr,
+                imageResources: opts.imageResources,
                 skipMediaControls: true,
                 dim: opts.dim,
                 onTextRun: opts.onTextRun,
@@ -1355,6 +1372,7 @@ export class PptxPresentation {
               this.renderSlide(canvas, slideIndex, {
                 width,
                 dpr,
+                imageResources: opts.imageResources,
                 skipMediaControls: true,
                 dim: opts.dim,
                 onTextRun: opts.onTextRun,

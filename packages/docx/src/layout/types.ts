@@ -949,6 +949,10 @@ export interface PagePaintCapabilities {
    * Canvas paint must therefore use an element-backed context when available,
    * because OffscreenCanvas cannot apply the proven feature. */
   readonly requiresElementBackedVerticalGlyphPaint: boolean;
+  /** Resource identities reachable from this page's retained paint graph, in
+   * stable retained-graph order. Paint uses this immutable projection to prepare only
+   * resources the selected page can consume. */
+  readonly resourceKeys?: readonly string[];
 }
 
 export interface PageLayers {

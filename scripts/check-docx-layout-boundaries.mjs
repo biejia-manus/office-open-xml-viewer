@@ -128,6 +128,11 @@ const SHARED_PAINT_IMPORTS = new Map([
     ['getCachedBitmapByPath', 'value'],
     ['getCachedDerivedBitmap', 'value'],
     ['getCachedSvgImageByPath', 'value'],
+    // Header inspection reuses the document-owned byte profile to decide
+    // whether browser target-resize is available. Both predicates remain
+    // paint-resource admission and cannot affect acquired layout geometry.
+    ['inspectCachedRasterSource', 'value'],
+    ['isDecodeTargetResizableRasterFormat', 'value'],
     ['isOoxmlDecodedImageLimitError', 'value'],
     ['isTiffDecodeError', 'value'],
     ['HyperlinkTarget', 'type'],
@@ -142,6 +147,11 @@ const SHARED_PAINT_IMPORTS = new Map([
     // DPR to choose a retained decode. These resource-policy primitives neither
     // measure nor feed geometry back into DocumentLayout.
     ['MAX_RASTER_PIXELS', 'value'],
+    // Decoded-image policy is shared across all format painters. DOCX supplies
+    // immutable paint demands and consumes the returned target plan; neither
+    // operation may feed measurement or pagination.
+    ['normalizeImageResourceOptions', 'value'],
+    ['planDecodedImageTargets', 'value'],
     ['paintDrawingMLShape', 'value'],
     ['withVertFeature', 'value'],
     ['preferVectorBlip', 'value'],
@@ -155,6 +165,9 @@ const SHARED_PAINT_IMPORTS = new Map([
     ['recolorSvg', 'value'],
     ['renderChart', 'value'],
     ['withDrawingMLShapeTransform', 'value'],
+    // Serial admission and bitmap pinning are document-owned paint-resource
+    // lifecycle concerns, not layout acquisition.
+    ['withBitmapCacheLease', 'value'],
     // Optional renderers and image codecs are paint-only capabilities threaded
     // into existing shared painters. Their erased contracts do not expose
     // layout acquisition or permit a renderer back-edge.
@@ -163,6 +176,7 @@ const SHARED_PAINT_IMPORTS = new Map([
     ['ChartExRenderer', 'type'],
     ['ChartImageLookup', 'type'],
     ['Duotone', 'type'],
+    ['ImageResourceOptions', 'type'],
     ['MathRenderer', 'type'],
     ['TiffRenderer', 'type'],
   ])],

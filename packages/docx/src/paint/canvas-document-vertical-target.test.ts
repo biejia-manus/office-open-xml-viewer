@@ -106,16 +106,35 @@ describe('vertical OpenType paint target projection', () => {
       intrinsicSize: { widthPt: 100, heightPt: 60 },
       model,
     };
+    const hiddenChartDescriptor = {
+      ...chartDescriptor,
+      resourceKey: 'chart:other-page:picture',
+      model: {
+        ...model,
+        series: [{
+          ...model.series[0],
+          markerFillPaint: {
+            ...model.series[0]!.markerFillPaint,
+            imagePath: 'word/media/other-page.png',
+          },
+        }],
+      } as ChartModel,
+    };
     const chartRegistry: PaintResourceRegistry = {
-      keys: [chartDescriptor.resourceKey],
-      descriptors: [chartDescriptor],
-      resolve() { return chartDescriptor as never; },
+      keys: [chartDescriptor.resourceKey, hiddenChartDescriptor.resourceKey],
+      descriptors: [chartDescriptor, hiddenChartDescriptor],
+      resolve(key) {
+        return (key === chartDescriptor.resourceKey ? chartDescriptor : hiddenChartDescriptor) as never;
+      },
     };
     const directPage: LayoutPage = {
       ...page,
       layers: {
         ...page.layers,
-        capabilities: { requiresElementBackedVerticalGlyphPaint: false },
+        capabilities: {
+          requiresElementBackedVerticalGlyphPaint: false,
+          resourceKeys: [chartDescriptor.resourceKey],
+        },
       },
     };
 
@@ -135,6 +154,7 @@ describe('vertical OpenType paint target projection', () => {
       'word/media/chart-marker-prefetch.svg',
       expect.anything(),
     );
+    expect(fetchImage).not.toHaveBeenCalledWith('word/media/other-page.png', expect.anything());
   });
 
   it.each([
@@ -287,8 +307,8 @@ describe('vertical OpenType paint target projection', () => {
       },
     )).rejects.toBe(failure);
     expect(renderTiff).toHaveBeenCalledWith(expect.any(Uint8Array), expect.objectContaining({
-      targetWidthPx: 134,
-      targetHeightPx: 80,
+      targetWidthPx: undefined,
+      targetHeightPx: undefined,
     }));
   });
 

@@ -47,9 +47,18 @@ export async function preloadImages(
   fetchImage: DocxFetchImage | undefined,
   services?: LayoutServices,
   devicePixelsPerPoint?: number,
+  imageResources?: import('@silurus/ooxml-core').ImageResourceOptions,
+  tiff?: import('@silurus/ooxml-core').TiffRenderer,
 ): Promise<Map<string, DecodedImage>> {
   const registry = services
     ? paintResourceRegistryOf(services)
     : layoutSourceStore(doc).paintResources;
-  return preloadPaintImages(registry.descriptors, fetchImage, undefined, devicePixelsPerPoint);
+  return preloadPaintImages(
+    registry.descriptors,
+    fetchImage,
+    tiff,
+    devicePixelsPerPoint,
+    undefined,
+    imageResources,
+  );
 }

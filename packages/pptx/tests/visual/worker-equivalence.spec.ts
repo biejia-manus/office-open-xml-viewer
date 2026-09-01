@@ -12,6 +12,17 @@ import pixelmatch from 'pixelmatch';
 const SLIDES = [0, 1, 2];
 const MAX_DIFF_PCT = [0.1, 0.1, 0.1];
 
+test.afterEach(async ({ page }) => {
+  await page.evaluate(() => {
+    const destroy = (globalThis as unknown as {
+      destroyPptxWorkerVrt?: () => void;
+    }).destroyPptxWorkerVrt;
+    destroy?.();
+  }).catch(() => {
+    // Navigation or a load failure may already have disposed the page.
+  });
+});
+
 for (const slide of SLIDES) {
   test(`worker mode matches main mode › demo/sample-1 slide ${slide + 1}`, async ({ page }) => {
     await page.goto(`/tests/visual/worker-fixture.html?pptx=demo/sample-1&slide=${slide}`);
