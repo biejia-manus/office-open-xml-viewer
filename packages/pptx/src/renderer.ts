@@ -18,6 +18,7 @@ import type {
   Glow,
   RenderOptions,
   DimOptions,
+  BlipBullet,
 } from './types';
 import { asBullet } from './types';
 import {
@@ -111,6 +112,8 @@ import type {
   ChartRegionMapRenderer,
   ChartExRenderer,
   TiffRenderer,
+  SvgBlobDecoder,
+  SvgImageSource,
 } from '@silurus/ooxml-core';
 import type { HyperlinkTarget } from '@silurus/ooxml-core';
 import { paintDistanceAwareReflectionBlur } from './reflection-blur';
@@ -159,12 +162,13 @@ export interface RenderContext {
    */
   smartArtFallbackTextColor?: string | null;
   /**
-   * Picture-bullet bitmaps prepared for this render pass. Display-sized image
-   * decodes use a resolution-specific core cache key, so synchronous text
-   * paint consumes the exact prefetch result rather than peeking only the
-   * native-resolution key. The render-pass bitmap lease owns their lifetime.
+   * Picture-bullet image sources prepared for this render pass. Display-sized
+   * bitmap decodes use a resolution-specific core cache key, so synchronous
+   * text paint consumes the exact prefetch result rather than peeking only the
+   * native-resolution key. The render-pass lease owns bitmap lifetime; Window
+   * SVG bullets remain count-bounded HTMLImageElements in the SVG cache.
    */
-  pictureBulletImages?: ReadonlyMap<string, ImageBitmap | null>;
+  pictureBulletImages?: ReadonlyMap<string, SvgImageSource | null>;
 }
 
 /** Information about a rendered text segment for building a transparent selection overlay. */
@@ -776,6 +780,28 @@ function paragraphHasBullet(para: Paragraph): boolean {
     para.bullet.type === 'autoNum' ||
     asBullet(para.bullet).type === 'blip'
   );
+}
+
+/** Authored picture-bullet height before Canvas scale and normAutofit shrink.
+ * Shared by preload and text layout so their cache target cannot drift from the
+ * marker geometry. ECMA-376 §21.1.2.4.10 absolute size wins over §21.1.2.4.9
+ * percentage; with neither, §21.1.2.4.13 inherits the first run/default size. */
+function pictureBulletSizePt(
+  body: TextBody,
+  para: Paragraph,
+  bullet: BlipBullet,
+): number {
+  let firstRunSizePt: number | null = null;
+  for (const run of para.runs) {
+    if (run.type === 'text' && run.fontSize != null) {
+      firstRunSizePt = run.fontSize;
+      break;
+    }
+  }
+  const baseSizePt = firstRunSizePt ?? para.defFontSize ?? body.defaultFontSize ?? 18;
+  return bullet.sizePts != null
+    ? bullet.sizePts
+    : baseSizePt * ((bullet.sizePct ?? 100) / 100);
 }
 
 /** First-line indent (ECMA-376 §21.1.2.2.7 `a:pPr@indent`) resolved to the px
@@ -1699,6 +1725,7 @@ async function renderBackground(
   fetchImage?: (path: string, mime: string) => Promise<Blob>,
   tiff?: TiffRenderer,
   dpr = 1,
+  svgDecoder?: SvgBlobDecoder,
 ) {
   // ECMA-376 §20.1.8.14 — image (blipFill) background. Paint an opaque white
   // base first so a partially transparent image (alphaModFix) composites over
@@ -1734,6 +1761,7 @@ async function renderBackground(
           heightPt: canvasH / scale / PT_TO_EMU,
           ...(!fill.tile ? (rasterTargetOptions(dw, dh, dpr, fill.srcRect) ?? {}) : {}),
           tiff,
+          svgDecoder,
         },
       );
       if (superseded()) return;
@@ -3826,8 +3854,9 @@ export function renderTextBody(
     bulletColor: string;
     bulletX: number;      // canvas X for bullet
     // Picture bullet (`<a:buBlip>`, §21.1.2.4.2): the resolved image + its
-    // drawn size in px (square, scaled by buSzPct). null when this paragraph
-    // has no picture bullet. Only set on the paragraph's first line.
+    // authored height in px (scaled by buSzPct); painting preserves the source
+    // aspect ratio. null when this paragraph has no picture bullet. Only set on
+    // the paragraph's first line.
     bulletImage: { imagePath: string; mimeType: string; sizePx: number } | null;
     textX: number;        // canvas X for text
     textMaxW: number;     // max wrap width
@@ -3869,15 +3898,13 @@ export function renderTextBody(
     // lvl1pPr defRPr fallback, typically 18pt) oversizes the bullet so a
     // hanging indent calibrated against the run (12pt) can't contain it —
     // that's why the em-dash was overlapping the text.
-    const firstRunSizePt = (() => {
+    const bulletBaseSizePt = (() => {
       for (const r of para.runs) {
         if (r.type === 'text' && r.fontSize != null) return r.fontSize;
       }
-      return null;
+      return para.defFontSize ?? body.defaultFontSize ?? 18;
     })();
-    const bulletBaseSizePx = firstRunSizePt != null
-      ? firstRunSizePt * PT_TO_EMU * scale * fontScale
-      : paraDefaultFontSizePx;
+    const bulletBaseSizePx = bulletBaseSizePt * PT_TO_EMU * scale * fontScale;
 
     // ECMA-376 §21.1.2.4.4 (CT_TextCharBullet) / §21.1.2.4.10 (buClrTx): when
     // no explicit `<a:buClr>` is present, the bullet inherits the *first run*'s
@@ -3955,19 +3982,15 @@ export function renderTextBody(
       // (§21.1.2.4.5 — the inherited first-run colour).
       bulletColor = bullet.color ? hexToRgba(bullet.color) : bulletInheritedColor;
     } else if (bullet.type === 'blip') {
-      // ECMA-376 §21.1.2.4.2 picture bullet. The bitmap is drawn as a square
-      // sized to the text (the bullet's em box), scaled by `<a:buSzPct>`
+      // ECMA-376 §21.1.2.4.2 picture bullet. Its height follows the text's em
+      // box, scaled by `<a:buSzPct>`, while paint preserves the source aspect
       // (§21.1.2.4.9; default 100%). It's not a glyph, so there is no label —
       // an empty paragraph still draws no marker (bulletLabel stays '' and the
       // draw site gates the image on the first line having content).
       // §21.1.2.4.10 (buSzPts): an absolute point size overrides the §21.1.2.4.9
       // percentage, matching the char-bullet branch above.
       const b = bullet;
-      const sizePx = b.sizePts != null
-        ? b.sizePts * PT_TO_EMU * scale * fontScale
-        : b.sizePct != null
-          ? bulletBaseSizePx * (b.sizePct / 100)
-          : bulletBaseSizePx;
+      const sizePx = pictureBulletSizePt(body, para, b) * PT_TO_EMU * scale * fontScale;
       bulletImage = { imagePath: b.imagePath, mimeType: b.mimeType, sizePx };
     }
 
@@ -4396,7 +4419,7 @@ export function renderTextBody(
     // the text baseline at the same gutter x a char bullet uses. The image was
     // warmed by renderSlide's prefetch pass; if its decode hasn't resolved yet
     // (or fetchImage is absent), draw nothing — the marker simply appears once
-    // the bitmap is ready, never blocking the frame.
+    // the image source is ready, never blocking the frame.
     if (bulletImage && fetchImage) {
       if (bulletBmp) {
         // The bullet HEIGHT is the text-derived size (× buSzPct); the WIDTH is
@@ -5200,12 +5223,13 @@ export function getPosterBitmap(
   bitmapOwner: PosterFetchImage = posterFetchImage(fetchMedia),
   tiff?: TiffRenderer,
   target?: { targetWidthPx: number; targetHeightPx: number },
+  svgDecoder?: SvgBlobDecoder,
 ): Promise<ImageBitmap> {
   return getCachedBitmapByPath(
     el.posterPath,
     el.posterMimeType || 'application/octet-stream',
     bitmapOwner,
-    { tiff, ...(target ?? {}) },
+    { tiff, svgDecoder, ...(target ?? {}) },
   ).then((bitmap) => {
     if (!bitmap) throw new Error('Media poster could not be decoded');
     return bitmap;
@@ -5220,6 +5244,7 @@ async function renderPicture(
   fetchImage?: (path: string, mime: string) => Promise<Blob>,
   tiff?: TiffRenderer,
   dpr = 1,
+  svgDecoder?: SvgBlobDecoder,
 ) {
   // No byte source → nothing to draw (the lazy pipeline always supplies one in
   // both render modes; this guards the rare misconfiguration).
@@ -5257,6 +5282,7 @@ async function renderPicture(
       dpr,
       el.srcRect,
     );
+    const svgOptions = { ...(target ?? {}), workerDecoder: svgDecoder };
     // `null` is reachable when the raster path resolves to an unsupported
     // metafile (a true EMF, or a WMF with no geometry); guarded below.
     let bitmap: ImageBitmap | HTMLImageElement | null;
@@ -5272,12 +5298,12 @@ async function renderPicture(
       // when only the SVG exists the `dataIsSvg` branch below still draws it
       // (uncropped is the overwhelmingly common case for icons).
       try {
-        bitmap = await getCachedSvgImageByPath(el.svgImagePath, fetchImage);
+        bitmap = await getCachedSvgImageByPath(el.svgImagePath, fetchImage, svgOptions);
       } catch {
         // §20.1.8.23 duotone recolour applies only to the raster fallback — an
         // SVG vector original has no readable pixel grid (matches xlsx).
         bitmap = dataIsSvg
-          ? await getCachedSvgImageByPath(el.imagePath, fetchImage)
+          ? await getCachedSvgImageByPath(el.imagePath, fetchImage, svgOptions)
           : await getCachedDuotoneBitmapByPath(el.imagePath, el.mimeType, el.duotone, fetchImage, {
               widthPt,
               heightPt,
@@ -5290,7 +5316,7 @@ async function renderPicture(
       // because no svgImagePath was surfaced): decode through the SVG path since
       // createImageBitmap can't. A duotone on a vector picture is a rare edge
       // case left un-recoloured (no readable pixel grid), matching xlsx.
-      bitmap = await getCachedSvgImageByPath(el.imagePath, fetchImage);
+      bitmap = await getCachedSvgImageByPath(el.imagePath, fetchImage, svgOptions);
     } else {
       // §20.1.8.23 duotone recolour on the raster blip (once, at decode time,
       // cached under a colour-suffixed key). No duotone ⇒ this is exactly the
@@ -5715,6 +5741,7 @@ async function renderMedia(
   bitmapOwner?: PosterFetchImage,
   tiff?: TiffRenderer,
   dpr = 1,
+  svgDecoder?: SvgBlobDecoder,
 ) {
   const x = emuToPx(el.x, scale);
   const y = emuToPx(el.y, scale);
@@ -5727,7 +5754,7 @@ async function renderMedia(
       // Poster is cached (and prefetched by renderSlide); do not close it here —
       // it is reused across renders of the same slide.
       const target = rasterTargetOptions(w, h, dpr);
-      poster = await getPosterBitmap(el, fetchMedia, bitmapOwner, tiff, target);
+      poster = await getPosterBitmap(el, fetchMedia, bitmapOwner, tiff, target, svgDecoder);
     } catch (error) {
       if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
       // fall through to plain fill
@@ -6360,6 +6387,7 @@ export type SlideRenderOptions = RenderOptions & {
 type InternalSlideRenderOptions = SlideRenderOptions & {
   embeddedFontAliases?: ReadonlyMap<string, string>;
   embeddedFontAuthoredFamilies?: ReadonlyMap<string, string>;
+  svgDecoder?: SvgBlobDecoder;
 };
 
 /**
@@ -6573,7 +6601,7 @@ async function renderSlideLeased(
     ? `#${opts.defaultTextColor}`
     : '#000000';
 
-  const pictureBulletImages = new Map<string, ImageBitmap | null>();
+  const pictureBulletImages = new Map<string, SvgImageSource | null>();
   const rc: RenderContext = {
     themeMajorFont: opts.majorFont ?? null,
     themeMinorFont: opts.minorFont ?? null,
@@ -6599,6 +6627,7 @@ async function renderSlideLeased(
     opts.fetchImage,
     opts.tiff,
     effectiveDpr,
+    opts.svgDecoder,
   );
   if (superseded()) return canvas;
 
@@ -6627,10 +6656,19 @@ async function renderSlideLeased(
       // failure, so the raster stays cold only in that rare case.)
       const p = el as PictureElement;
       const pDataIsSvg = p.mimeType === 'image/svg+xml';
+      const svgOptions = {
+        ...(rasterTargetOptions(
+          emuToPx(p.width, scale),
+          emuToPx(p.height, scale),
+          effectiveDpr,
+          p.srcRect,
+        ) ?? {}),
+        workerDecoder: opts.svgDecoder,
+      };
       if (preferVectorBlip(p)) {
-        void getCachedSvgImageByPath(p.svgImagePath, opts.fetchImage).catch(() => undefined);
+        void getCachedSvgImageByPath(p.svgImagePath, opts.fetchImage, svgOptions).catch(() => undefined);
       } else if (pDataIsSvg) {
-        void getCachedSvgImageByPath(p.imagePath, opts.fetchImage).catch(() => undefined);
+        void getCachedSvgImageByPath(p.imagePath, opts.fetchImage, svgOptions).catch(() => undefined);
       } else {
         // Pass the picture's pt size so a metafile blip warms at the same raster
         // size the draw loop requests. A cropped metafile warms at its full
@@ -6655,6 +6693,7 @@ async function renderSlideLeased(
             p.srcRect,
           ) ?? {}),
           tiff: opts.tiff,
+          svgDecoder: opts.svgDecoder,
         }).catch(() => undefined);
       }
     } else if (el.type === 'media') {
@@ -6670,6 +6709,7 @@ async function renderSlideLeased(
             emuToPx(m.height, scale),
             effectiveDpr,
           ),
+          opts.svgDecoder,
         ).catch(() => undefined);
       }
     }
@@ -6684,7 +6724,7 @@ async function renderSlideLeased(
   // Missing/failed decodes resolve to null and the marker is simply skipped.
   if (opts.fetchImage) {
     const fetchImage = opts.fetchImage;
-    const bulletPaths = new Map<string, string>();
+    const bulletPaths = new Map<string, { mimeType: string; targetHeightPx?: number }>();
     // A chart whose frame or derived decode size is non-positive or non-finite
     // cannot paint an image safely. Exclude it before aggregate source gating
     // so it cannot suppress visible preloads or force a native-size decode.
@@ -6779,19 +6819,44 @@ async function renderSlideLeased(
       if (el.type !== 'shape' || !el.textBody) continue;
       for (const para of el.textBody.paragraphs) {
         const b = asBullet(para.bullet);
-        if (b.type === 'blip' && !bulletPaths.has(b.imagePath)) {
-          bulletPaths.set(b.imagePath, b.mimeType);
+        if (b.type === 'blip') {
+          // normAutofit never enlarges text, so the unshrunk authored marker
+          // height is a sufficient preload target even when layout later picks
+          // a smaller fontScale. Aggregate the largest use of a shared part.
+          const targetHeightPx = pictureBulletSizePt(el.textBody, para, b)
+            * PT_TO_EMU * scale * effectiveDpr;
+          const existing = bulletPaths.get(b.imagePath);
+          if (!existing) {
+            bulletPaths.set(b.imagePath, {
+              mimeType: b.mimeType,
+              ...(Number.isFinite(targetHeightPx) && targetHeightPx > 0
+                ? { targetHeightPx }
+                : {}),
+            });
+          } else if (Number.isFinite(targetHeightPx) && targetHeightPx > 0) {
+            existing.targetHeightPx = Math.max(existing.targetHeightPx ?? 0, targetHeightPx);
+          }
         }
       }
     }
     if (bulletPaths.size > 0 || chartFillMap.size > 0) {
-      const bulletPromises: Promise<void>[] = [...bulletPaths].map(async ([path, mime]) => {
+      const bulletPromises: Promise<void>[] = [...bulletPaths].map(async (
+        [path, { mimeType, targetHeightPx }],
+      ) => {
         try {
-          const bitmap = await getCachedBitmapByPath(path, mime, fetchImage, {
-            tiff: opts.tiff,
-            ...(rasterTargetOptions(canvasW, canvasH, effectiveDpr) ?? {}),
-          });
-          pictureBulletImages.set(path, bitmap);
+          const target = targetHeightPx === undefined
+            ? {}
+            : { targetWidthPx: 1, targetHeightPx };
+          const image = mimeType === 'image/svg+xml'
+            ? await getCachedSvgImageByPath(path, fetchImage, {
+                ...target,
+                workerDecoder: opts.svgDecoder,
+              })
+            : await getCachedBitmapByPath(path, mimeType, fetchImage, {
+                tiff: opts.tiff,
+                ...target,
+              });
+          pictureBulletImages.set(path, image);
         } catch (error) {
           if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
           pictureBulletImages.set(path, null);
@@ -6806,7 +6871,10 @@ async function renderSlideLeased(
           : undefined;
         try {
           const decodeFallback = () => fill.mimeType === 'image/svg+xml'
-            ? fill.duotone ? Promise.resolve(null) : getCachedSvgImageByPath(fill.imagePath, fetchImage)
+            ? fill.duotone ? Promise.resolve(null) : getCachedSvgImageByPath(fill.imagePath, fetchImage, {
+                ...(target ?? {}),
+                workerDecoder: opts.svgDecoder,
+              })
             : getCachedDuotoneBitmapByPath(
                 fill.imagePath, fill.mimeType, fill.duotone, fetchImage,
                 {
@@ -6824,7 +6892,10 @@ async function renderSlideLeased(
           };
           if (!fill.duotone && preferVectorBlip(blip)) {
             try {
-              bitmap = await getCachedSvgImageByPath(blip.svgImagePath, fetchImage);
+              bitmap = await getCachedSvgImageByPath(blip.svgImagePath, fetchImage, {
+                ...(target ?? {}),
+                workerDecoder: opts.svgDecoder,
+              });
             } catch {
               bitmap = await decodeFallback();
             }
@@ -6856,7 +6927,16 @@ async function renderSlideLeased(
         : undefined;
       renderShape(ctx, el, scale, themeDefaultColor, slideNumber, rc, elementTextRun, opts.fetchImage);
     } else if (el.type === 'picture') {
-      await renderPicture(ctx, el, scale, superseded, opts.fetchImage, opts.tiff, effectiveDpr);
+      await renderPicture(
+        ctx,
+        el,
+        scale,
+        superseded,
+        opts.fetchImage,
+        opts.tiff,
+        effectiveDpr,
+        opts.svgDecoder,
+      );
     } else if (el.type === 'table') {
       const elementTextRun: TextRunCallback | undefined = onTextRun
         ? (run) => onTextRun({
@@ -6877,6 +6957,7 @@ async function renderSlideLeased(
         opts.fetchImage,
         opts.tiff,
         effectiveDpr,
+        opts.svgDecoder,
       );
     } else if (el.type === 'chart') {
       // OOXML: 1pt = 12700 EMU. The slide renderer's `scale` is px-per-EMU,

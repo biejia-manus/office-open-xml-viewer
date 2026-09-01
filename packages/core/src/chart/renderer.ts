@@ -11656,6 +11656,7 @@ function renderRadarChart(
     legendSideReserveFrac: 0.22,
     legendReserve: leg,
     radialGapFrac: 0.02,
+    honorPlotAreaManualLayout: true,
   });
   const titleFontPx = frame.title.fontPx;
   drawChartTitleForLayout(ctx, chart, x, y, w, h, y + frame.title.topPad, titleFontPx);

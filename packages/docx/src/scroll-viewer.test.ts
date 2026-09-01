@@ -513,6 +513,10 @@ describe('DocxScrollViewer — opt-in comment cards', () => {
     );
     await vi.waitFor(() => expect(engine.renderCalls).toHaveLength(1));
     expect((viewer as unknown as { _commentMarginExtent(): number })._commentMarginExtent()).toBe(0);
+    const scrollHost = container.children[0]!.children[0]!;
+    const page = scrollHost.children.find((child) => child !== scrollHost.children[0])!;
+    const margin = page.children.find((child) => child.style.cssText.includes('overflow-y:auto'))!;
+    expect(margin.style.display).toBe('none');
     viewer.destroy();
   });
 

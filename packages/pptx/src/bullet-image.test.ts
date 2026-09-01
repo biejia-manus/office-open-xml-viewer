@@ -1,13 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderSlide, renderTextBody, getCachedBitmap, dropImageBitmapCache } from './renderer.js';
+import {
+  renderSlide,
+  renderSlideWithEmbeddedFonts,
+  renderTextBody,
+  getCachedBitmap,
+  dropImageBitmapCache,
+} from './renderer.js';
 import type { Slide, TextBody, Paragraph, BlipBullet } from './types';
 import type { TextRunData } from '@silurus/ooxml-core';
 
 /**
  * Picture bullets (`<a:buBlip>`, ECMA-376 §21.1.2.4.2) are drawn inside the
- * synchronous text-body layout. The renderer warms the bitmap cache up front
- * (renderSlide's prefetch pass), then the draw reads the settled bitmap via
- * `peekCachedBitmap` and paints it with `ctx.drawImage`. These tests drive
+ * synchronous text-body layout. The renderer warms the image cache up front
+ * (renderSlide's prefetch pass), then the draw reads the prepared source (or a
+ * directly warmed bitmap in focused tests) and paints it with `ctx.drawImage`.
+ * These tests drive
  * `renderTextBody` directly against a mock 2D context that records `drawImage`,
  * mirroring the mock-ctx approach in text-highlight.test.ts / tabular-text.test.ts.
  *
@@ -273,6 +280,172 @@ describe('renderTextBody — picture bullet (buBlip) draws the bitmap', () => {
     // synchronous bullet paint must use that exact prepared result rather than
     // peeking only the absent native-resolution cache key.
     expect(draws).toContain(SENTINEL);
+    expect(globalThis.createImageBitmap).toHaveBeenCalledWith(expect.any(Blob), {
+      resizeWidth: 54,
+      resizeQuality: 'high',
+    });
+  });
+
+  it('routes SVG picture bullets through the worker bridge at their marker height', async () => {
+    const path = 'ppt/media/svg-picture-bullet.svg';
+    const svg = new Blob([
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 8"><rect width="16" height="8"/></svg>',
+    ], { type: 'image/svg+xml' });
+    fetchImage = vi.fn(async () => svg) as FetchImageFn;
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => {
+      throw new Error('Chromium workers cannot decode this SVG Blob');
+    }));
+    let bridgedBitmap: ImageBitmap | undefined;
+    const svgDecoder = vi.fn(async (
+      _blob: Blob,
+      target: { targetWidthPx?: number; targetHeightPx?: number } = {},
+    ) => {
+      const height = target.targetHeightPx ?? 0;
+      bridgedBitmap = {
+        width: height * 2,
+        height,
+        close: () => {},
+      } as unknown as ImageBitmap;
+      return bridgedBitmap;
+    });
+    const slide = {
+      index: 0,
+      slideNumber: 1,
+      background: null,
+      elements: [{
+        type: 'shape',
+        x: 0,
+        y: 0,
+        width: 4_572_000,
+        height: 2_286_000,
+        rotation: 0,
+        flipH: false,
+        flipV: false,
+        geometry: 'rect',
+        fill: null,
+        stroke: null,
+        textBody: bodyWithBullet(blipBullet({ imagePath: path, mimeType: 'image/svg+xml' })),
+      }],
+    } as Slide;
+    const draws: unknown[] = [];
+
+    await renderSlideWithEmbeddedFonts(slideCanvas(draws), slide, 9_144_000, 6_858_000, {
+      width: 960,
+      dpr: 2,
+      fetchImage,
+      svgDecoder,
+    });
+
+    expect(svgDecoder).toHaveBeenCalledWith(svg, {
+      targetWidthPx: 1,
+      targetHeightPx: 54,
+    });
+    expect(bridgedBitmap).toMatchObject({ width: 108, height: 54 });
+    expect(draws).toContain(bridgedBitmap);
+  });
+
+  it('loads an SVG picture bullet through HTMLImageElement in Window mode', async () => {
+    const path = 'ppt/media/window-svg-picture-bullet.svg';
+    const svg = new Blob([
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 8"><rect width="16" height="8"/></svg>',
+    ], { type: 'image/svg+xml' });
+    fetchImage = vi.fn(async () => svg) as FetchImageFn;
+    const createImageBitmap = vi.fn(async () => {
+      throw new DOMException('The source image could not be decoded', 'InvalidStateError');
+    });
+    vi.stubGlobal('createImageBitmap', createImageBitmap);
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn(() => 'blob:window-svg-picture-bullet'),
+      revokeObjectURL: vi.fn(),
+    });
+    class FakeSvgImage {
+      width = 16;
+      height = 8;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      decode = vi.fn(async () => undefined);
+      set src(_value: string) { queueMicrotask(() => this.onload?.()); }
+    }
+    vi.stubGlobal('Image', FakeSvgImage);
+    const slide = {
+      index: 0,
+      slideNumber: 1,
+      background: null,
+      elements: [{
+        type: 'shape',
+        x: 0,
+        y: 0,
+        width: 4_572_000,
+        height: 2_286_000,
+        rotation: 0,
+        flipH: false,
+        flipV: false,
+        geometry: 'rect',
+        fill: null,
+        stroke: null,
+        textBody: bodyWithBullet(blipBullet({ imagePath: path, mimeType: 'image/svg+xml' })),
+      }],
+    } as Slide;
+    const draws: unknown[] = [];
+
+    await renderSlide(slideCanvas(draws), slide, 9_144_000, 6_858_000, {
+      width: 960,
+      dpr: 1,
+      fetchImage,
+    });
+
+    expect(draws).toHaveLength(1);
+    expect(draws[0]).toBeInstanceOf(FakeSvgImage);
+    expect(createImageBitmap).not.toHaveBeenCalled();
+  });
+
+  it('dedupes a shared SVG bullet at the largest authored marker height', async () => {
+    const path = 'ppt/media/shared-svg-picture-bullet.svg';
+    const svg = new Blob([
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 8"><rect width="16" height="8"/></svg>',
+    ], { type: 'image/svg+xml' });
+    fetchImage = vi.fn(async () => svg) as FetchImageFn;
+    const svgDecoder = vi.fn(async () => SENTINEL);
+    const shape = (y: number, sizePts?: number) => ({
+      type: 'shape' as const,
+      x: 0,
+      y,
+      width: 4_572_000,
+      height: 2_286_000,
+      rotation: 0,
+      flipH: false,
+      flipV: false,
+      geometry: 'rect',
+      fill: null,
+      stroke: null,
+      textBody: bodyWithBullet(blipBullet({
+        imagePath: path,
+        mimeType: 'image/svg+xml',
+        ...(sizePts === undefined ? {} : { sizePts }),
+      })),
+    });
+    const slide = {
+      index: 0,
+      slideNumber: 1,
+      background: null,
+      elements: [shape(0), shape(2_286_000, 40)],
+    } as Slide;
+    const draws: unknown[] = [];
+
+    await renderSlideWithEmbeddedFonts(slideCanvas(draws), slide, 9_144_000, 6_858_000, {
+      width: 960,
+      dpr: 2,
+      fetchImage,
+      svgDecoder,
+    });
+
+    expect(svgDecoder).toHaveBeenCalledOnce();
+    expect(svgDecoder).toHaveBeenCalledWith(svg, {
+      targetWidthPx: 1,
+      // 40pt × 96 CSS px/in ÷ 72pt/in × DPR 2, rounded up by the cache.
+      targetHeightPx: 107,
+    });
+    expect(draws.filter((image) => image === SENTINEL)).toHaveLength(2);
   });
 
   it('scales the bullet by buSzPct (§21.1.2.4.9)', async () => {

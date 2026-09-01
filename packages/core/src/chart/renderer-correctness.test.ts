@@ -14820,6 +14820,32 @@ describe('authored minor tick marks are painted between major ticks', () => {
 });
 
 describe('radar value-axis planning', () => {
+  it('honors the authored inner plot-area layout', () => {
+    const rec = recordingCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'radar', radarStyle: 'standard',
+      categories: ['A', 'B', 'C', 'D'],
+      series: [series({ values: [8, 6, 2, 1] })],
+      plotAreaBg: 'ABCDEF',
+      plotAreaManualLayout: {
+        layoutTarget: 'inner',
+        xMode: 'edge', yMode: 'edge',
+        x: 0.2,
+        y: 0.25,
+        w: 0.5,
+        h: 0.4,
+      },
+    }), RECT, 1);
+
+    expect(rec.rects.find(rect => rect.fs === '#ABCDEF')).toEqual({
+      x: RECT.w * 0.2,
+      y: RECT.h * 0.25,
+      w: RECT.w * 0.5,
+      h: RECT.h * 0.4,
+      fs: '#ABCDEF',
+    });
+  });
+
   it('honors an explicit minimum and paints minor gridlines without minor ticks', () => {
     const rec = segRecordingCtx();
     renderChart(rec.ctx, baseModel({

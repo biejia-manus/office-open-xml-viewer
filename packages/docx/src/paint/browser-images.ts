@@ -263,18 +263,26 @@ export async function preloadPaintImages(
   fetchImage: DocxFetchImage | undefined,
   tiff?: TiffRenderer,
   devicePixelsPerPoint?: number,
+  svgDecoder?: import('@silurus/ooxml-core').SvgBlobDecoder,
 ): Promise<Map<string, DecodedImage>> {
   if (!fetchImage) return new Map();
+  const decodeSvg = (path: string, request: ImageDecodeRequest) => svgDecoder
+    ? getCachedSvgImageByPath(path, fetchImage, {
+        targetWidthPx: request.targetWidthPx,
+        targetHeightPx: request.targetHeightPx,
+        workerDecoder: svgDecoder,
+      })
+    : getCachedSvgImageByPath(path, fetchImage);
   const entries = await Promise.all(imageDecodeRequests(descriptors, devicePixelsPerPoint).map(async (request) => {
     const dataIsSvg = request.mimeType === 'image/svg+xml';
     const blip = { svgImagePath: request.svgImagePath, srcRect: request.hasCrop || null };
     let image: DecodedImage | null;
     if (preferVectorBlip(blip)) {
       try {
-        image = await getCachedSvgImageByPath(blip.svgImagePath, fetchImage);
+        image = await decodeSvg(blip.svgImagePath, request);
       } catch (vectorError) {
         const fallback = dataIsSvg
-          ? await getCachedSvgImageByPath(request.imagePath, fetchImage)
+          ? await decodeSvg(request.imagePath, request)
           : await decodeRaster(
               request.imagePath,
               request.mimeType,
@@ -293,7 +301,7 @@ export async function preloadPaintImages(
         image = fallback;
       }
     } else if (dataIsSvg) {
-      image = await getCachedSvgImageByPath(request.imagePath, fetchImage);
+      image = await decodeSvg(request.imagePath, request);
     } else {
       image = await decodeRaster(
         request.imagePath,

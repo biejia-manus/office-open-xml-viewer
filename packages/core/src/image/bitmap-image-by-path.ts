@@ -51,6 +51,7 @@ import {
 } from './pixel-budget.js';
 import type { TiffRenderer } from './tiff-contract.js';
 import { wmfRasterTarget } from './wmf.js';
+import type { SvgBlobDecoder } from '../worker/svg-decode-bridge.js';
 
 type FetchImage = (path: string, mime: string) => Promise<Blob>;
 export type DecodedBitmapCacheOwner = object;
@@ -195,8 +196,14 @@ function rasterProfileFor(
   }
   const existing = profiles.get(imagePath);
   if (existing) return existing;
-  const promise = fetchImage(imagePath, mimeType)
-    .then(async (blob) => ({ inspection: await inspectRasterBlob(blob), initialBlob: blob }))
+  // Source inspection fetches and retains the initial blob before the decoder
+  // cache entry exists. Charge that work to the same per-document gate as SVG
+  // loading and bitmap decode so metafile classification cannot bypass the
+  // shared concurrency ceiling.
+  const promise = withDecodedImageSlot(owner, async () => {
+    const blob = await fetchImage(imagePath, mimeType);
+    return { inspection: await inspectRasterBlob(blob), initialBlob: blob };
+  })
     .catch((error) => {
       profiles?.delete(imagePath);
       throw error;
@@ -385,6 +392,8 @@ export interface CachedBitmapOptions {
   targetHeightPx?: number;
   /** Retained base-surface pixel ceiling for multi-surface effect pipelines. */
   maxRetainedPixels?: number;
+  /** Worker-only SVG decoder. Window renderers use HTMLImageElement instead. */
+  svgDecoder?: SvgBlobDecoder;
 }
 
 function normalizedRasterTarget(value: number | undefined): number | undefined {
@@ -804,7 +813,22 @@ export function getCachedBitmapByPath(
     targetWidthPx,
     targetHeightPx,
     maxRetainedPixels,
+    svgDecoder,
   } = normalized;
+  if (mimeType === 'image/svg+xml' && svgDecoder) {
+    return getCachedDecodedBitmap(
+      BASE_CACHE_NAMESPACE,
+      cachedBitmapVariantKey(imagePath, normalized),
+      fetchImage,
+      async () => ({
+        bitmap: await svgDecoder(await fetchImage(imagePath, mimeType), {
+          targetWidthPx,
+          targetHeightPx,
+        }),
+        owned: true,
+      }),
+    );
+  }
   const decode = (cacheKey: string, initial?: RasterSourceProfile) => {
     const initialBlob = initial?.initialBlob;
     if (initial) initial.initialBlob = undefined;

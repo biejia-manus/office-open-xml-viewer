@@ -25,9 +25,12 @@ import {
   resourcePolicyForWasm,
   serializeWorkerError,
   loadWorkerRenderers,
+  isWorkerSvgDecodeResponse,
+  WorkerSvgDecodeClient,
   type LoadedWorkerRenderers,
   type PullSessionCommand,
   type PullSessionResponse,
+  type WorkerSvgDecodeResponse,
 } from '@silurus/ooxml-core/worker';
 import { renderWorksheetViewport } from './render-orchestrator.js';
 import { workerRenderDeps } from './worker-render-deps.js';
@@ -42,6 +45,7 @@ import {
 import type { ParsedWorkbook, Worksheet } from './types.js';
 import { WorksheetViewProjectionCache } from './worker-protocol.js';
 import { GridGeometry } from './internal/grid-geometry.js';
+import { readXlsxArchiveBootstrap } from './internal/archive-bootstrap.js';
 import type { RenderWorkerRequest, RenderWorkerResponse } from './worker-protocol.js';
 import { isWorksheetPullCommand, WorksheetPullWorker } from './worksheet-pull-worker.js';
 
@@ -112,8 +116,11 @@ const worksheetPull = new WorksheetPullWorker(
   },
 );
 
-const post = (msg: RenderWorkerResponse | PullSessionResponse<ArrayBuffer, number>, transfer?: Transferable[]) =>
+const rawPost = (msg: unknown, transfer?: Transferable[]) =>
   (self.postMessage as (m: unknown, t?: Transferable[]) => void)(msg, transfer);
+const post = (msg: RenderWorkerResponse | PullSessionResponse<ArrayBuffer, number>, transfer?: Transferable[]) =>
+  rawPost(msg, transfer);
+const svgDecodeClient = new WorkerSvgDecodeClient(rawPost);
 
 /** In-worker image-byte loader (twin of the docx render-worker `getImage`). The
  *  orchestrator's `fetchImage` routes here in worker mode, so image bytes are
@@ -128,8 +135,14 @@ function getImage(path: string, mimeType: string): Promise<Blob> {
   });
 }
 
-self.onmessage = async (e: MessageEvent<RenderWorkerRequest | PullSessionCommand<number>>) => {
+self.onmessage = async (e: MessageEvent<
+  RenderWorkerRequest | PullSessionCommand<number> | WorkerSvgDecodeResponse
+>) => {
   const req = e.data;
+  if (isWorkerSvgDecodeResponse(req)) {
+    svgDecodeClient.accept(req);
+    return;
+  }
   if (isWorksheetPullCommand(req)) {
     await worksheetPull.dispatchSafely(req, post);
     return;
@@ -196,16 +209,20 @@ self.onmessage = async (e: MessageEvent<RenderWorkerRequest | PullSessionCommand
       // prior handle first — the re-parse dispose. `parse()` returns UTF-8 JSON
       // bytes (Result<Vec<u8>, JsValue>); decode + parse the workbook index here
       // (consumed in-worker, then a light copy is sent to the proxy as an object).
-      workbook = host.run(() => {
-        const archive = new XlsxArchive(
-          new Uint8Array(req.data),
-          maxEntry,
-          maxTotal,
-          maxEntries,
-        );
-        host.setArchive(archive);
-        return JSON.parse(new TextDecoder().decode(archive.parse())) as ParsedWorkbook;
-      });
+      const bootstrap = readXlsxArchiveBootstrap(
+        () => host.run(() => {
+          const archive = new XlsxArchive(
+            new Uint8Array(req.data),
+            maxEntry,
+            maxTotal,
+            maxEntries,
+          );
+          host.setArchive(archive);
+          return JSON.parse(new TextDecoder().decode(archive.parse())) as ParsedWorkbook;
+        }),
+        () => host.run(() => host.archive!.resource_usage()),
+      );
+      workbook = bootstrap.workbook;
       if (req.useGoogleFonts) {
         // Mirror XlsxWorkbook._load exactly: queue Google Fonts substitutes for
         // every styled font name, plus the generic Arabic fallbacks. Fonts must
@@ -213,10 +230,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerRequest | PullSessionCommand
         // and await it in the renderViewport handler.
         fontsLoaded = preloadGoogleFonts(xlsxFontPreloadNames(workbook), XLSX_GOOGLE_FONTS);
       }
-      const usage = host.run(() => decodeOoxmlResourceUsage(
-        host.archive!.resource_usage(),
-      ));
-      post({ type: 'parsed', id, workbook, usage });
+      post({ type: 'parsed', id, workbook, usage: bootstrap.usage });
       return;
     }
     if (req.type === 'renderViewport') {
@@ -254,6 +268,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerRequest | PullSessionCommand
         // Supply the in-worker byte loader so embedded images decode straight
         // from the retained archive (no main-thread round-trip).
         { ...renderOpts, fetchImage: getImage },
+        svgDecodeClient.decode,
       );
       const bitmap = canvas.transferToImageBitmap();
       post({ type: 'viewportRendered', id, bitmap }, [bitmap]);

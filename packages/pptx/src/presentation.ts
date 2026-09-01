@@ -45,6 +45,7 @@ import {
   readLatestOoxmlResourceMetrics,
   parseResourceLimitError,
   PULL_SESSION_PROTOCOL,
+  respondToWorkerSvgDecodeRequest,
   type NormalizedOoxmlResourcePolicy,
   type PullSessionResponse,
   type WorkerRendererDescriptors,
@@ -692,6 +693,12 @@ export class PptxPresentation {
   private _onWorkerLayoutPush(
     response: PptxWorkerResponse | RenderWorkerResponse | PullSessionResponse<ArrayBuffer, number>,
   ): void {
+    if (respondToWorkerSvgDecodeRequest(
+      (message, transfer) => (
+        this._worker.postMessage as (value: unknown, transfer?: Transferable[]) => void
+      )(message, transfer),
+      response,
+    )) return;
     if (
       !('kind' in response) ||
       response.kind !== 'presentationLayoutPartial' ||
@@ -1310,43 +1317,54 @@ export class PptxPresentation {
       if (!this._preflight) {
         throw new Error('Presentation not loaded');
       }
-    const dpr = opts.dpr ?? defaultDpr();
-    const width = opts.width ?? (canvas.offsetWidth || 960);
+      const dpr = opts.dpr ?? defaultDpr();
+      const width = opts.width ?? (canvas.offsetWidth || 960);
+      // `width` is the logical CSS-pixel contract. The renderer may clamp the
+      // physical backing store when `width × dpr` exceeds the canvas-area budget;
+      // that reduced bitmap resolution must never shrink the on-screen slide.
+      // Keep logical layout and physical raster size as separate quantities.
+      const logicalHeight = this.slideWidth > 0
+        ? (width * this.slideHeight) / this.slideWidth
+        : 0;
+      canvas.style.width = `${Math.round(width)}px`;
+      canvas.style.height = `${Math.round(logicalHeight)}px`;
+      if (!canvas.style.display) canvas.style.display = 'block';
 
-    const drawBase =
-      this._mode === 'worker'
-        ? async () => {
-            // Whole slide rendered off-thread; the handle snapshots this paint
-            // into its own base copy, so the bitmap can be closed right after.
-            // IX6 — the run geometry rides back beside the bitmap, so a media
-            // slide is as selectable/searchable in worker mode as in main mode.
-            const bmp = await this.renderSlideToBitmap(slideIndex, { width, dpr, skipMediaControls: true, dim: opts.dim, onTextRun: opts.onTextRun });
-            canvas.width = bmp.width;
-            canvas.height = bmp.height;
-            // Set only the CSS width and let height follow the intrinsic aspect
-            // ratio — mirrors the main renderer (renderer.ts), which avoids an
-            // explicit style.height that could fight the ratio.
-            canvas.style.width = `${Math.round(bmp.width / dpr)}px`;
-            if (!canvas.style.display) canvas.style.display = 'block';
-            const ctx = canvas.getContext('2d');
-            if (!ctx) throw new Error('2D context not available');
-            ctx.drawImage(bmp, 0, 0);
-            bmp.close();
-          }
-        : () =>
-            this.renderSlide(canvas, slideIndex, {
-              width,
-              dpr,
-              skipMediaControls: true,
-              dim: opts.dim,
-              onTextRun: opts.onTextRun,
-            });
+      const drawBase =
+        this._mode === 'worker'
+          ? async () => {
+              // Whole slide rendered off-thread; the handle snapshots this paint
+              // into its own base copy, so the bitmap can be closed right after.
+              // IX6 — the run geometry rides back beside the bitmap, so a media
+              // slide is as selectable/searchable in worker mode as in main mode.
+              const bmp = await this.renderSlideToBitmap(slideIndex, {
+                width,
+                dpr,
+                skipMediaControls: true,
+                dim: opts.dim,
+                onTextRun: opts.onTextRun,
+              });
+              canvas.width = bmp.width;
+              canvas.height = bmp.height;
+              const ctx = canvas.getContext('2d');
+              if (!ctx) throw new Error('2D context not available');
+              ctx.drawImage(bmp, 0, 0);
+              bmp.close();
+            }
+          : () =>
+              this.renderSlide(canvas, slideIndex, {
+                width,
+                dpr,
+                skipMediaControls: true,
+                dim: opts.dim,
+                onTextRun: opts.onTextRun,
+              });
 
-    const mediaElements = this._preflight.slides[slideIndex]?.mediaElements ?? [];
+      const mediaElements = this._preflight.slides[slideIndex]?.mediaElements ?? [];
 
       return await createPresentationHandle(canvas, mediaElements, {
         width,
-        dpr,
+        height: logicalHeight,
         slideWidthEmu: this.slideWidth,
         fetchMedia: this._fetchMedia,
         fetchImage: this._fetchImage,

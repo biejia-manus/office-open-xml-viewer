@@ -48,6 +48,7 @@ export interface CanvasDocumentPaintOptions<TTextRun> {
   readonly dpr?: number;
   readonly defaultTextColor?: string;
   readonly fetchImage?: DocxFetchImage;
+  readonly svgDecoder?: import('@silurus/ooxml-core').SvgBlobDecoder;
   readonly parseError: boolean;
   readonly registry: PaintResourceRegistry;
   readonly privateResources?: PrivatePaintResourceLookup;
@@ -188,6 +189,7 @@ export async function renderSelectedDocumentPage<TTextRun>(
         options.fetchImage,
         options.tiff,
         scale * effectiveDpr,
+        options.svgDecoder,
       );
     } catch (error) {
       if (superseded()) return;
@@ -297,8 +299,14 @@ export async function renderSelectedDocumentPage<TTextRun>(
           ? { targetWidthPx, targetHeightPx }
           : undefined;
         try {
+          const decodeSvg = (path: string) => options.svgDecoder
+            ? getCachedSvgImageByPath(path, fetchImage, {
+                ...(target ?? {}),
+                workerDecoder: options.svgDecoder,
+              })
+            : getCachedSvgImageByPath(path, fetchImage);
           const decodeFallback = () => fill.mimeType === 'image/svg+xml'
-            ? fill.duotone ? Promise.resolve(null) : getCachedSvgImageByPath(fill.imagePath, fetchImage)
+            ? fill.duotone ? Promise.resolve(null) : decodeSvg(fill.imagePath)
             : decodeRaster(
                 fill.imagePath, fill.mimeType, undefined, fetchImage as DocxFetchImage,
                 widthPt, heightPt, fill.duotone, true, options.tiff, target,
@@ -310,7 +318,7 @@ export async function renderSelectedDocumentPage<TTextRun>(
           };
           if (!fill.duotone && preferVectorBlip(blip)) {
             try {
-              image = await getCachedSvgImageByPath(blip.svgImagePath, fetchImage);
+              image = await decodeSvg(blip.svgImagePath);
             } catch {
               image = await decodeFallback();
             }
