@@ -251,7 +251,7 @@ async function renderSelectedDocumentPageLeased<TTextRun>(
           size: NonNullable<ReturnType<typeof chartImageFillUsageSize>>;
         }>;
       }> = [];
-      for (const descriptor of options.registry.descriptors) {
+      for (const descriptor of descriptors) {
         if (descriptor.kind !== 'chart'
           || !Number.isFinite(descriptor.intrinsicSize.widthPt)
           || descriptor.intrinsicSize.widthPt <= 0
