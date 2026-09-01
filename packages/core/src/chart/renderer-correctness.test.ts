@@ -14846,6 +14846,58 @@ describe('radar value-axis planning', () => {
     });
   });
 
+  it('inscribes maximum radar values in an authored inner plot area', () => {
+    const rec = strokedPolylineCtx();
+    renderChart(rec.ctx, baseModel({
+      chartType: 'radar', radarStyle: 'standard',
+      categories: ['A', 'B', 'C', 'D'],
+      series: [series({ values: [8, 8, 8, 8], lineColor: '123456' })],
+      valMin: 0,
+      valMax: 8,
+      valAxisMajorUnit: 8,
+      valAxisMajorGridlines: false,
+      plotAreaManualLayout: {
+        layoutTarget: 'inner',
+        xMode: 'edge', yMode: 'edge',
+        x: 0.2,
+        y: 0.25,
+        w: 0.5,
+        h: 0.4,
+      },
+    }), RECT, 1);
+
+    expect(rec.strokes.find(stroke => stroke.ss === '#123456')?.points).toEqual([
+      { x: 288, y: 90 },
+      { x: 360, y: 162 },
+      { x: 288, y: 234 },
+      { x: 216, y: 162 },
+    ]);
+  });
+
+  it('keeps the automatic radar radius when an inner layout size is absent or invalid', () => {
+    const points = (layout: 'none' | 'position-only' | 'invalid-size') => {
+      const rec = strokedPolylineCtx();
+      renderChart(rec.ctx, baseModel({
+        chartType: 'radar', radarStyle: 'standard',
+        categories: ['A', 'B', 'C', 'D'],
+        series: [series({ values: [8, 8, 8, 8], lineColor: '123456' })],
+        valMin: 0,
+        valMax: 8,
+        valAxisMajorUnit: 8,
+        valAxisMajorGridlines: false,
+        plotAreaManualLayout: layout === 'position-only'
+          ? { layoutTarget: 'inner', x: 0, y: 0 }
+          : layout === 'invalid-size'
+            ? { layoutTarget: 'inner', x: 0, y: 0, w: -1, h: 0.4 }
+            : undefined,
+      }), RECT, 1);
+      return rec.strokes.find(stroke => stroke.ss === '#123456')?.points;
+    };
+
+    expect(points('position-only')).toEqual(points('none'));
+    expect(points('invalid-size')).toEqual(points('none'));
+  });
+
   it('honors an explicit minimum and paints minor gridlines without minor ticks', () => {
     const rec = segRecordingCtx();
     renderChart(rec.ctx, baseModel({
