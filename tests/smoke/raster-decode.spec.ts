@@ -41,7 +41,11 @@ function posterPng(width: number, height: number): Buffer {
 }
 
 test('decodes the reported 109,571,670-pixel poster at display resolution', async ({ page }) => {
-  const png = posterPng(12_090, 9_063);
+  const sourceWidth = 12_090;
+  const sourceHeight = 9_063;
+  const targetWidth = 960;
+  const targetHeight = 720;
+  const png = posterPng(sourceWidth, sourceHeight);
   expect(png.byteLength).toBeLessThan(100_000);
   await page.goto('/iframe.html?id=internal-raster-decode-smoke--harness&viewMode=story');
   await expect(page.locator('[data-raster-decode-ready="true"]')).toHaveCount(1);
@@ -72,9 +76,12 @@ test('decodes the reported 109,571,670-pixel poster at display resolution', asyn
   }, png.toString('base64'));
 
   expect(result).not.toBeNull();
-  expect(result?.width).toBeGreaterThan(0);
-  expect(result?.width).toBeLessThanOrEqual(960);
-  expect(result?.height).toBeGreaterThan(0);
-  expect(result?.height).toBeLessThanOrEqual(720);
+  const scale = Math.max(targetWidth / sourceWidth, targetHeight / sourceHeight);
+  const retainedWidth = Math.ceil(sourceWidth * scale);
+  const retainedHeight = Math.ceil(sourceHeight * retainedWidth / sourceWidth);
+  expect(result?.width).toBe(retainedWidth);
+  // Engines may round the aspect-derived axis to the nearest pixel or upward.
+  expect(result?.height).toBeGreaterThanOrEqual(targetHeight);
+  expect(result?.height).toBeLessThanOrEqual(retainedHeight);
   expect(result?.pixel).toEqual([17, 34, 51, 255]);
 });

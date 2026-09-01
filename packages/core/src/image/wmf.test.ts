@@ -934,6 +934,36 @@ describe('decodeRasterOrMetafile', () => {
     });
   });
 
+  it('rounds an aspect-preserving decode up to cover both integer target axes', async () => {
+    const sourceWidth = 12_090;
+    const sourceHeight = 9_063;
+    const png = new Uint8Array(26);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    png.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+    const view = new DataView(png.buffer);
+    view.setUint32(16, sourceWidth);
+    view.setUint32(20, sourceHeight);
+    const blob = new Blob([png as BlobPart], { type: 'image/png' });
+    const cib = vi.fn(async (_blob: Blob, options?: ImageBitmapOptions) => {
+      const width = options?.resizeWidth ?? sourceWidth;
+      return {
+        width,
+        height: Math.ceil(sourceHeight * width / sourceWidth),
+        close() {},
+      } as unknown as ImageBitmap;
+    });
+    vi.stubGlobal('createImageBitmap', cib);
+
+    await expect(decodeRasterOrMetafile(blob, {
+      targetWidthPx: 960,
+      targetHeightPx: 720,
+    })).resolves.toMatchObject({ width: 961, height: 721 });
+    expect(cib).toHaveBeenCalledWith(blob, {
+      resizeWidth: 961,
+      resizeQuality: 'high',
+    });
+  });
+
   it('closes and rejects a decoder result that ignores a restricted retained-surface limit', async () => {
     const sourceWidth = 10_000;
     const sourceHeight = 1_000;
