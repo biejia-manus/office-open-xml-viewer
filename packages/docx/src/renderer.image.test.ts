@@ -546,11 +546,12 @@ describe('docx lazy image bytes', () => {
 
     await expect(preloadImages(doc, fetchImage, undefined, 1)).resolves.toHaveLength(3);
     const resizeWidths = (globalThis.createImageBitmap as ReturnType<typeof vi.fn>).mock.calls
-      .map(([, options]) => (options as ImageBitmapOptions | undefined)?.resizeWidth);
+      .map(([, options]) => (options as ImageBitmapOptions | undefined)?.resizeWidth)
+      .filter((width): width is number => typeof width === 'number');
     expect(resizeWidths).toHaveLength(3);
-    expect(resizeWidths.every((width) => typeof width === 'number' && width < 4096)).toBe(true);
+    expect(resizeWidths.every((width) => width < 4096)).toBe(true);
     expect(resizeWidths.reduce(
-      (bytes, width) => bytes + (width as number) ** 2 * 4,
+      (bytes, width) => bytes + width ** 2 * 4,
       0,
     )).toBeLessThanOrEqual(128 * 1024 * 1024);
   });
