@@ -17,6 +17,7 @@ import type {
   DeepReadonly,
   ImagePaintResourceDescriptor,
   PaintResourceDescriptor,
+  RasterPaintOccurrence,
 } from '../layout/types.js';
 
 export type DecodedImage = ImageBitmap | HTMLImageElement;
@@ -203,9 +204,24 @@ export async function decodeRaster(
 
 function imageDecodeRequests(
   descriptors: readonly DeepReadonly<PaintResourceDescriptor>[],
+  rasterPaintOccurrences: readonly DeepReadonly<RasterPaintOccurrence>[],
   devicePixelsPerPoint?: number,
 ): ImageDecodeRequest[] {
   const requests = new Map<string, ImageDecodeRequest>();
+  const demandByResource = new Map<string, { widthPt: number; heightPt: number }>();
+  for (const occurrence of rasterPaintOccurrences) {
+    if (occurrence.resourceKind !== 'image' && occurrence.resourceKind !== 'picture-bullet') {
+      continue;
+    }
+    if (!Number.isFinite(occurrence.widthPt) || occurrence.widthPt <= 0
+      || !Number.isFinite(occurrence.heightPt) || occurrence.heightPt <= 0) continue;
+    const key = `${occurrence.resourceKind}:${occurrence.resourceKey}`;
+    const prior = demandByResource.get(key);
+    demandByResource.set(key, {
+      widthPt: Math.max(prior?.widthPt ?? 0, occurrence.widthPt),
+      heightPt: Math.max(prior?.heightPt ?? 0, occurrence.heightPt),
+    });
+  }
   const images = descriptors
     .filter((descriptor): descriptor is DeepReadonly<ImagePaintResourceDescriptor> => (
       descriptor.kind === 'image' || descriptor.kind === 'picture-bullet'
@@ -215,11 +231,13 @@ function imageDecodeRequests(
       - (right.documentOrder ?? Number.MAX_SAFE_INTEGER)
     ));
   for (const image of images) {
+    const demand = demandByResource.get(`${image.kind}:${image.resourceKey}`);
+    if (!demand) continue;
     const raster = metafileRasterSize(
       image.mimeType,
       image.srcRect,
-      image.intrinsicSize.widthPt,
-      image.intrinsicSize.heightPt,
+      demand.widthPt,
+      demand.heightPt,
     );
     if (!raster) continue;
     const request: ImageDecodeRequest = {
@@ -235,8 +253,8 @@ function imageDecodeRequests(
     const target = devicePixelsPerPoint === undefined
       ? null
       : sourceRasterTargetSize(
-          image.intrinsicSize.widthPt * devicePixelsPerPoint,
-          image.intrinsicSize.heightPt * devicePixelsPerPoint,
+          demand.widthPt * devicePixelsPerPoint,
+          demand.heightPt * devicePixelsPerPoint,
           image.srcRect,
         );
     if (target) {
@@ -260,6 +278,7 @@ function imageDecodeRequests(
 
 export async function preloadPaintImages(
   descriptors: readonly DeepReadonly<PaintResourceDescriptor>[],
+  rasterPaintOccurrences: readonly DeepReadonly<RasterPaintOccurrence>[],
   fetchImage: DocxFetchImage | undefined,
   tiff?: TiffRenderer,
   devicePixelsPerPoint?: number,
@@ -273,7 +292,11 @@ export async function preloadPaintImages(
         workerDecoder: svgDecoder,
       })
     : getCachedSvgImageByPath(path, fetchImage);
-  const entries = await Promise.all(imageDecodeRequests(descriptors, devicePixelsPerPoint).map(async (request) => {
+  const entries = await Promise.all(imageDecodeRequests(
+    descriptors,
+    rasterPaintOccurrences,
+    devicePixelsPerPoint,
+  ).map(async (request) => {
     const dataIsSvg = request.mimeType === 'image/svg+xml';
     const blip = { svgImagePath: request.svgImagePath, srcRect: request.hasCrop || null };
     let image: DecodedImage | null;

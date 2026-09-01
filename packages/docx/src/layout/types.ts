@@ -503,6 +503,16 @@ export interface ResourcePlacement {
   readonly advancePt: number;
 }
 
+/** One raster-backed paint occurrence projected onto its final physical-page
+ * axes. The source descriptor supplies bytes/effects; these retained dimensions
+ * alone own display-resolution decode demand. */
+export interface RasterPaintOccurrence {
+  readonly resourceKey: string;
+  readonly resourceKind: 'image' | 'chart' | 'picture-bullet';
+  readonly widthPt: number;
+  readonly heightPt: number;
+}
+
 export interface DrawingPlacement {
   readonly kind: 'drawing';
   readonly range: TextRange;

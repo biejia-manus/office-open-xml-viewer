@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildPageLayers } from '../layout/page-graph.js';
+import { rasterPaintOccurrencesForPage } from '../layout/text-index.js';
 import type { DocumentLayout, LayoutPage, PaintResourceRegistry } from '../layout/types.js';
 import { renderSelectedDocumentPage } from './canvas-document.js';
 import { TiffDecodeError, type ChartModel, type TiffRenderOptions } from '@silurus/ooxml-core';
@@ -86,6 +87,79 @@ const registry: PaintResourceRegistry = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('vertical OpenType paint target projection', () => {
+  it('sizes a grouped image decode from its final retained paint frame', async () => {
+    const resourceKey = 'image:body:grouped';
+    const finalFrame = { xPt: 20, yPt: 10, widthPt: 8, heightPt: 9 };
+    const drawing = {
+      kind: 'drawing' as const,
+      id: 'grouped-image-drawing',
+      source: { story: 'body' as const, storyInstance: 'body', path: [0, 1] },
+      flowDomainId: 'body:domain',
+      flowBounds: finalFrame,
+      inkBounds: finalFrame,
+      advancePt: 0,
+      ordinaryFlow: false,
+      commands: [{
+        kind: 'resource' as const,
+        resourceKind: 'image' as const,
+        resourceKey,
+        rect: finalFrame,
+      }],
+    };
+    const imageDescriptor = {
+      kind: 'image' as const,
+      resourceKey,
+      partPath: 'word/media/grouped.tiff',
+      mimeType: 'image/tiff',
+      // The authored child extent precedes grouped/relative anchor scaling.
+      intrinsicSize: { widthPt: 4, heightPt: 3 },
+    };
+    const imageRegistry: PaintResourceRegistry = {
+      keys: [resourceKey],
+      descriptors: [imageDescriptor],
+      resolve() { return imageDescriptor as never; },
+    };
+    const directPage: LayoutPage = {
+      ...page,
+      layers: buildPageLayers([{ layer: 'body', node: drawing }]),
+    };
+    const directLayout: DocumentLayout = { pages: [directPage], diagnostics: [] };
+    const rasterPaintOccurrences = rasterPaintOccurrencesForPage(directLayout, 0);
+    const renderTiff = vi.fn(async () => ({
+      width: 11, height: 12, close() {},
+    }) as unknown as ImageBitmap);
+    const fetchImage = vi.fn(async () => new Blob([
+      new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]) as BlobPart,
+    ], { type: 'image/tiff' }));
+
+    await renderSelectedDocumentPage(
+      directLayout,
+      directPage,
+      new WorkerCanvas() as unknown as OffscreenCanvas,
+      {
+        dpr: 1,
+        parseError: false,
+        registry: imageRegistry,
+        rasterPaintOccurrences,
+        textRuns: [],
+        fetchImage,
+        tiff: { render: renderTiff },
+      },
+    );
+
+    expect(renderTiff).toHaveBeenCalledWith(expect.any(Uint8Array), expect.objectContaining({
+      // 8x9 pt at the 96-dpi default paint scale, rounded outward.
+      targetWidthPx: 11,
+      targetHeightPx: 12,
+    }));
+    expect(rasterPaintOccurrences).toEqual([{
+      resourceKey,
+      resourceKind: 'image',
+      widthPt: 8,
+      heightPt: 9,
+    }]);
+  });
+
   it('prefetches one relationship-backed chart picture marker before synchronous paint', async () => {
     const fetchImage = vi.fn(async () => new Blob(['png'], { type: 'image/png' }));
     vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 8, height: 8 })));
@@ -123,7 +197,19 @@ describe('vertical OpenType paint target projection', () => {
       { pages: [directPage], diagnostics: [] },
       directPage,
       new WorkerCanvas() as unknown as OffscreenCanvas,
-      { dpr: 1, parseError: false, registry: chartRegistry, textRuns: [], fetchImage },
+      {
+        dpr: 1,
+        parseError: false,
+        registry: chartRegistry,
+        rasterPaintOccurrences: [{
+          resourceKey: chartDescriptor.resourceKey,
+          resourceKind: 'chart',
+          widthPt: 100,
+          heightPt: 60,
+        }],
+        textRuns: [],
+        fetchImage,
+      },
     );
 
     expect(fetchImage).toHaveBeenCalledTimes(1);
@@ -135,6 +221,64 @@ describe('vertical OpenType paint target projection', () => {
       'word/media/chart-marker-prefetch.svg',
       expect.anything(),
     );
+  });
+
+  it('keeps a valid chart occurrence when another retained use has an invalid frame', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 8, height: 8 })));
+    const imagePath = 'word/media/chart-valid-occurrence.png';
+    const fetchImage = vi.fn(async () => new Blob(['png'], { type: 'image/png' }));
+    const chartDescriptor = {
+      kind: 'chart' as const,
+      resourceKey: 'chart:body:mixed-occurrences',
+      intrinsicSize: { widthPt: 1, heightPt: 1 },
+      model: {
+        chartType: 'line', categories: ['A'],
+        series: [{
+          name: 'Picture', values: [1], markerFillPaint: {
+            fillType: 'image', stretch: true, imagePath, mimeType: 'image/png',
+          },
+        }],
+      } as ChartModel,
+    };
+    const chartRegistry: PaintResourceRegistry = {
+      keys: [chartDescriptor.resourceKey],
+      descriptors: [chartDescriptor],
+      resolve() { return chartDescriptor as never; },
+    };
+    const directPage: LayoutPage = {
+      ...page,
+      layers: {
+        ...page.layers,
+        capabilities: { requiresElementBackedVerticalGlyphPaint: false },
+      },
+    };
+
+    await renderSelectedDocumentPage(
+      { pages: [directPage], diagnostics: [] },
+      directPage,
+      new WorkerCanvas() as unknown as OffscreenCanvas,
+      {
+        dpr: 1,
+        parseError: false,
+        registry: chartRegistry,
+        rasterPaintOccurrences: [{
+          resourceKey: chartDescriptor.resourceKey,
+          resourceKind: 'chart',
+          widthPt: 100,
+          heightPt: 60,
+        }, {
+          resourceKey: chartDescriptor.resourceKey,
+          resourceKind: 'chart',
+          widthPt: Number.NaN,
+          heightPt: 60,
+        }],
+        textRuns: [],
+        fetchImage,
+      },
+    );
+
+    expect(fetchImage).toHaveBeenCalledTimes(1);
+    expect(fetchImage).toHaveBeenCalledWith(imagePath, 'image/png');
   });
 
   it.each([
@@ -151,7 +295,7 @@ describe('vertical OpenType paint target projection', () => {
       { l: 0.5, t: 0, r: 0.4999999999999999, b: 0 },
     ],
   ] as const)(
-    'excludes %s chart descriptors before aggregate source gating and preload',
+    'excludes %s retained chart occurrences before aggregate source gating and preload',
     async (_case, invalidWidthPt, invalidHeightPt, overflowCrop) => {
       vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 8, height: 8 })));
       const fetchImage = vi.fn(async () => new Blob(['png'], { type: 'image/png' }));
@@ -200,7 +344,7 @@ describe('vertical OpenType paint target projection', () => {
       const invalidDescriptor = {
         kind: 'chart' as const,
         resourceKey: `chart:body:invalid-${_case}`,
-        intrinsicSize: { widthPt: invalidWidthPt, heightPt: invalidHeightPt },
+        intrinsicSize: { widthPt: 100, heightPt: 60 },
         model: invalidChart,
       };
       const chartRegistry: PaintResourceRegistry = {
@@ -228,6 +372,17 @@ describe('vertical OpenType paint target projection', () => {
           dpr: 1,
           parseError: false,
           registry: chartRegistry,
+          rasterPaintOccurrences: [{
+            resourceKey: visibleDescriptor.resourceKey,
+            resourceKind: 'chart',
+            widthPt: 100,
+            heightPt: 60,
+          }, {
+            resourceKey: invalidDescriptor.resourceKey,
+            resourceKind: 'chart',
+            widthPt: invalidWidthPt,
+            heightPt: invalidHeightPt,
+          }],
           textRuns: [],
           fetchImage,
         },
@@ -281,6 +436,12 @@ describe('vertical OpenType paint target projection', () => {
         dpr: 1,
         parseError: false,
         registry: chartRegistry,
+        rasterPaintOccurrences: [{
+          resourceKey: chartDescriptor.resourceKey,
+          resourceKind: 'chart',
+          widthPt: 100,
+          heightPt: 60,
+        }],
         textRuns: [],
         fetchImage,
         tiff: { render: renderTiff },
@@ -350,6 +511,12 @@ describe('vertical OpenType paint target projection', () => {
         dpr: 2,
         parseError: false,
         registry: chartRegistry,
+        rasterPaintOccurrences: [{
+          resourceKey: chartDescriptor.resourceKey,
+          resourceKind: 'chart',
+          widthPt: 200,
+          heightPt: 120,
+        }],
         textRuns: [],
         fetchImage,
         tiff: { render: renderTiff },
@@ -387,7 +554,7 @@ describe('vertical OpenType paint target projection', () => {
       page,
       target as unknown as OffscreenCanvas,
       {
-        dpr: 1, parseError: false, registry, textRuns: [],
+        dpr: 1, parseError: false, registry, rasterPaintOccurrences: [], textRuns: [],
       },
     );
 
@@ -422,7 +589,7 @@ describe('vertical OpenType paint target projection', () => {
     const target = new ElementCanvas();
 
     await renderSelectedDocumentPage(layout, page, target as unknown as HTMLCanvasElement, {
-      dpr: 1, parseError: false, registry, textRuns: [],
+      dpr: 1, parseError: false, registry, rasterPaintOccurrences: [], textRuns: [],
     });
 
     expect(target.isConnected).toBe(false);
@@ -453,7 +620,7 @@ describe('vertical OpenType paint target projection', () => {
     target.isConnected = true;
 
     await renderSelectedDocumentPage(layout, page, target as unknown as HTMLCanvasElement, {
-      dpr: 1, parseError: false, registry, textRuns: [],
+      dpr: 1, parseError: false, registry, rasterPaintOccurrences: [], textRuns: [],
     });
 
     expect(created).toEqual([]);
@@ -489,7 +656,7 @@ describe('vertical OpenType paint target projection', () => {
       layout,
       page,
       target as unknown as OffscreenCanvas,
-      { dpr: 1, parseError: false, registry, textRuns: [] },
+      { dpr: 1, parseError: false, registry, rasterPaintOccurrences: [], textRuns: [] },
     )).rejects.toThrow('2D canvas is unavailable for DOCX paint projection');
 
     expect(created).toHaveLength(1);
@@ -531,7 +698,7 @@ describe('vertical OpenType paint target projection', () => {
     target.ownerDocument = foreignDocument;
 
     await renderSelectedDocumentPage(layout, page, target as unknown as HTMLCanvasElement, {
-      dpr: 1, parseError: false, registry, textRuns: [],
+      dpr: 1, parseError: false, registry, rasterPaintOccurrences: [], textRuns: [],
     });
 
     expect(created).toHaveLength(1);
@@ -551,7 +718,7 @@ describe('vertical OpenType paint target projection', () => {
       layout,
       page,
       target as unknown as OffscreenCanvas,
-      { dpr: 1, parseError: true, registry, textRuns: [] },
+      { dpr: 1, parseError: true, registry, rasterPaintOccurrences: [], textRuns: [] },
     );
 
     expect(target.context.operations).toContain('clearRect');

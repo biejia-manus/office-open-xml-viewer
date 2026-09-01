@@ -5,6 +5,7 @@ export type { DocxTextRunInfo } from './types';
 import { bodyMathOccurrences } from './layout/resources.js';
 import { paintResourceRegistryOf, privateResourceLookupOf } from './layout/runtime-state.js';
 import { selectDocumentLayoutPage } from './layout/document-layout-variants.js';
+import { rasterPaintOccurrencesForPage } from './layout/text-index.js';
 import { textRunsForPage } from './text-run-projection.js';
 import { dropBrowserImageCache } from './paint/browser-images.js';
 import { canvasPageScale, renderSelectedDocumentPage } from './paint/canvas-document.js';
@@ -124,6 +125,7 @@ function normalizeRenderOptions(
       svgDecoder: options.svgDecoder,
       parseError: source.fatalParse !== null,
       registry: paintResourceRegistryOf(services),
+      rasterPaintOccurrences: rasterPaintOccurrencesForPage(selection.layout, pageIndex),
       privateResources: privateResourceLookupOf<CanvasImageSource>(services),
       textRuns: options.onTextRun
         ? textRunsForPage(selection.layout, pageIndex, { scale })

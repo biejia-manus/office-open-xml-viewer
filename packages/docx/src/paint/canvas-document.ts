@@ -21,6 +21,7 @@ import type {
   DocumentLayout,
   LayoutPage,
   PaintResourceRegistry,
+  RasterPaintOccurrence,
 } from '../layout/types.js';
 import { decodeRaster, preloadPaintImages, imageKey, type DocxFetchImage } from './browser-images.js';
 import {
@@ -51,6 +52,8 @@ export interface CanvasDocumentPaintOptions<TTextRun> {
   readonly svgDecoder?: import('@silurus/ooxml-core').SvgBlobDecoder;
   readonly parseError: boolean;
   readonly registry: PaintResourceRegistry;
+  /** Final retained raster/chart frames for this selected page. */
+  readonly rasterPaintOccurrences: readonly DeepReadonly<RasterPaintOccurrence>[];
   readonly privateResources?: PrivatePaintResourceLookup;
   readonly textRuns: readonly TTextRun[];
   readonly onTextRun?: (run: TTextRun) => void;
@@ -186,6 +189,7 @@ export async function renderSelectedDocumentPage<TTextRun>(
     try {
       images = await preloadPaintImages(
         options.registry.descriptors,
+        options.rasterPaintOccurrences,
         options.fetchImage,
         options.tiff,
         scale * effectiveDpr,
@@ -200,11 +204,21 @@ export async function renderSelectedDocumentPage<TTextRun>(
     const chartImages = new Map<string, CanvasImageSource | null>();
     if (options.fetchImage) {
       const fetchImage = options.fetchImage;
-      // A chart whose intrinsic frame or derived decode size is non-positive
-      // or non-finite cannot paint an image safely. Use one validated list for
-      // aggregate source gating and per-frame sizing so an invalid descriptor
-      // cannot suppress visible preloads or force a native-size decode.
-      const chartDescriptors: Array<{
+      const chartOccurrencesByResource = new Map<string, DeepReadonly<RasterPaintOccurrence>[]>();
+      for (const occurrence of options.rasterPaintOccurrences) {
+        if (occurrence.resourceKind !== 'chart') continue;
+        const prior = chartOccurrencesByResource.get(occurrence.resourceKey) ?? [];
+        if (!chartOccurrencesByResource.has(occurrence.resourceKey)) {
+          chartOccurrencesByResource.set(occurrence.resourceKey, prior);
+        }
+        prior.push(occurrence);
+      }
+      // A retained chart occurrence whose frame or derived decode size is
+      // non-positive or non-finite cannot paint an image safely. Keep every
+      // valid occurrence/frame pairing through source gating; different uses of
+      // one chart can have different final aspect ratios before their decoded
+      // picture sources are deduplicated.
+      const chartOccurrences: Array<{
         descriptor: DeepReadonly<ChartPaintResourceDescriptor>;
         frame: Parameters<typeof chartImageFillUsageSize>[1];
         usages: Array<{
@@ -213,30 +227,32 @@ export async function renderSelectedDocumentPage<TTextRun>(
         }>;
       }> = [];
       for (const descriptor of options.registry.descriptors) {
-        if (descriptor.kind !== 'chart'
-          || !Number.isFinite(descriptor.intrinsicSize.widthPt)
-          || descriptor.intrinsicSize.widthPt <= 0
-          || !Number.isFinite(descriptor.intrinsicSize.heightPt)
-          || descriptor.intrinsicSize.heightPt <= 0) continue;
-        const frame = {
-          widthPt: descriptor.intrinsicSize.widthPt,
-          heightPt: descriptor.intrinsicSize.heightPt,
-          targetWidthPx: descriptor.intrinsicSize.widthPt * scale * effectiveDpr,
-          targetHeightPx: descriptor.intrinsicSize.heightPt * scale * effectiveDpr,
-        };
-        const usages = [] as typeof chartDescriptors[number]['usages'];
-        let valid = true;
-        for (const usage of collectChartImageFillUsages(
-          descriptor.model as import('@silurus/ooxml-core').ChartModel,
-        )) {
-          const size = chartImageFillUsageSize(usage, frame);
-          if (!size) {
-            valid = false;
-            break;
+        if (descriptor.kind !== 'chart') continue;
+        for (const occurrence of chartOccurrencesByResource.get(descriptor.resourceKey) ?? []) {
+          if (!Number.isFinite(occurrence.widthPt)
+            || occurrence.widthPt <= 0
+            || !Number.isFinite(occurrence.heightPt)
+            || occurrence.heightPt <= 0) continue;
+          const frame = {
+            widthPt: occurrence.widthPt,
+            heightPt: occurrence.heightPt,
+            targetWidthPx: occurrence.widthPt * scale * effectiveDpr,
+            targetHeightPx: occurrence.heightPt * scale * effectiveDpr,
+          };
+          const usages = [] as typeof chartOccurrences[number]['usages'];
+          let valid = true;
+          for (const usage of collectChartImageFillUsages(
+            descriptor.model as import('@silurus/ooxml-core').ChartModel,
+          )) {
+            const size = chartImageFillUsageSize(usage, frame);
+            if (!size) {
+              valid = false;
+              break;
+            }
+            usages.push({ usage, size });
           }
-          usages.push({ usage, size });
+          if (valid) chartOccurrences.push({ descriptor, frame, usages });
         }
-        if (valid) chartDescriptors.push({ descriptor, frame, usages });
       }
       const chartEntries = new Map<string, {
         fill: ReturnType<typeof collectChartImageFillUsages>[number]['fill'];
@@ -248,12 +264,12 @@ export async function renderSelectedDocumentPage<TTextRun>(
         hasSourceCrop: boolean;
       }>();
       for (const usage of collectChartImageFillUsagesForCharts(
-        chartDescriptors.map(
+        chartOccurrences.map(
           ({ descriptor }) => descriptor.model as import('@silurus/ooxml-core').ChartModel,
         ),
         (usage, chartIndex) => chartImageFillUsageSize(
           usage,
-          chartDescriptors[chartIndex]!.frame,
+          chartOccurrences[chartIndex]!.frame,
         ) != null,
       )) {
         const { fill } = usage;
@@ -266,7 +282,7 @@ export async function renderSelectedDocumentPage<TTextRun>(
           hasSourceCrop: usage.hasSourceCrop,
         });
       }
-      for (const { usages } of chartDescriptors) {
+      for (const { usages } of chartOccurrences) {
         for (const { usage, size } of usages) {
           const { fill } = usage;
           const key = chartImageFillKey(fill);
