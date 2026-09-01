@@ -651,12 +651,21 @@ export async function prefetchImages(
     };
   }))).filter((demand): demand is NonNullable<typeof demand> => demand !== null);
   const plan = planDecodedImageTargets(demands, policy);
-  for (const [key, target] of plan.targets) {
-    const ref = refs.get(key);
-    if (!ref) continue;
-    ref.targetWidthPx = target.width;
-    ref.targetHeightPx = target.height;
-    ref.plannedPixelLimit = target.retainedPixels;
+  for (const [key, ref] of refs) {
+    const usesVector = ref.mimeType === 'image/svg+xml' || (!ref.duotone
+      && preferVectorBlip({
+        svgImagePath: ref.svgImagePath,
+        srcRect: ref.srcRect,
+      }));
+    // SVG rasterization remains display-targeted. Raster/metafile effects,
+    // natural-size fills, and formats not admitted by the shared planner keep
+    // their authored source grid; forwarding the raw geometry target would
+    // silently turn a semantic exclusion into an unplanned downsample.
+    if (usesVector) continue;
+    const target = plan.targets.get(key);
+    ref.targetWidthPx = target?.width;
+    ref.targetHeightPx = target?.height;
+    ref.plannedPixelLimit = target?.retainedPixels;
   }
   await Promise.all(
     [...refs.entries()].map(async ([key, ref]) => {

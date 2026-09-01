@@ -1952,7 +1952,6 @@ async function renderBackground(
   superseded: () => boolean,
   fetchImage?: (path: string, mime: string) => Promise<Blob>,
   tiff?: TiffRenderer,
-  dpr = 1,
   svgDecoder?: SvgBlobDecoder,
   imagePlan?: DecodedImageTargetPlan,
 ) {
@@ -1980,7 +1979,7 @@ async function renderBackground(
       // §20.1.8.23 duotone recolour on the raster blip (issue #889): route
       // through the shared duotone cache (keyed by path + colours). No duotone ⇒
       // this is exactly the former `getCachedBitmapByPath` decode, byte-identical.
-      const planned = imagePlan
+      const planned = imagePlan && !fill.duotone
         ? plannedRasterOptions(imagePlan, imagePlanKey(fill.imagePath, fill.duotone))
         : undefined;
       const sourceInspection = fill.tile
@@ -1994,7 +1993,7 @@ async function renderBackground(
         {
           widthPt: canvasW / scale / PT_TO_EMU,
           heightPt: canvasH / scale / PT_TO_EMU,
-          ...(planned ?? (!fill.tile ? (rasterTargetOptions(dw, dh, dpr, fill.srcRect) ?? {}) : {})),
+          ...(planned ?? {}),
           tiff,
           svgDecoder,
         },
@@ -5535,12 +5534,14 @@ async function renderPicture(
       el.srcRect,
     );
     const vector = preferVectorBlip(el) || dataIsSvg;
-    const target = (imagePlan
-      ? plannedRasterOptions(
+    const target = vector
+      ? rawTarget
+      : imagePlan && !el.duotone
+        ? plannedRasterOptions(
           imagePlan,
           imagePlanKey(pictureResourcePath(el), vector ? undefined : el.duotone),
         )
-      : undefined) ?? rawTarget;
+        : undefined;
     const svgPixelLimit = target && 'maxRetainedPixels' in target
       ? target.maxRetainedPixels as number
       : undefined;
@@ -6023,9 +6024,11 @@ async function renderMedia(
     try {
       // Poster is cached (and prefetched by renderSlide); do not close it here —
       // it is reused across renders of the same slide.
-      const target = (imagePlan
-        ? plannedRasterOptions(imagePlan, imagePlanKey(el.posterPath))
-        : undefined) ?? rasterTargetOptions(w, h, dpr);
+      const target = el.posterMimeType === 'image/svg+xml'
+        ? rasterTargetOptions(w, h, dpr)
+        : imagePlan
+          ? plannedRasterOptions(imagePlan, imagePlanKey(el.posterPath))
+          : undefined;
       poster = await getPosterBitmap(el, fetchMedia, bitmapOwner, tiff, target, svgDecoder);
     } catch (error) {
       if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
@@ -6912,7 +6915,6 @@ async function renderSlideLeased(
     superseded,
     opts.fetchImage,
     opts.tiff,
-    effectiveDpr,
     opts.svgDecoder,
     imagePlan,
   );
@@ -6944,17 +6946,19 @@ async function renderSlideLeased(
       const p = el as PictureElement;
       const pDataIsSvg = p.mimeType === 'image/svg+xml';
       const pVector = preferVectorBlip(p) || pDataIsSvg;
-      const planned = plannedRasterOptions(
-        imagePlan,
-        imagePlanKey(pictureResourcePath(p), pVector ? undefined : p.duotone),
-      );
+      const planned = !pVector && !p.duotone
+        ? plannedRasterOptions(
+            imagePlan,
+            imagePlanKey(pictureResourcePath(p), p.duotone),
+          )
+        : undefined;
       const rawTarget = rasterTargetOptions(
         emuToPx(p.width, scale),
         emuToPx(p.height, scale),
         effectiveDpr,
         p.srcRect,
       );
-      const target = planned ?? rawTarget;
+      const target = pVector ? rawTarget : planned;
       const svgPixelLimit = target && 'maxRetainedPixels' in target
         ? target.maxRetainedPixels as number
         : undefined;
@@ -7000,12 +7004,13 @@ async function renderSlideLeased(
           opts.fetchMedia,
           bitmapOwner,
           opts.tiff,
-          plannedRasterOptions(imagePlan, imagePlanKey(m.posterPath))
-            ?? rasterTargetOptions(
-              emuToPx(m.width, scale),
-              emuToPx(m.height, scale),
-              effectiveDpr,
-            ),
+          m.posterMimeType === 'image/svg+xml'
+            ? rasterTargetOptions(
+                emuToPx(m.width, scale),
+                emuToPx(m.height, scale),
+                effectiveDpr,
+              )
+            : plannedRasterOptions(imagePlan, imagePlanKey(m.posterPath)),
           opts.svgDecoder,
         ).catch(() => undefined);
       }
@@ -7094,9 +7099,15 @@ async function renderSlideLeased(
         // is shared by key, any tiled consumer makes the whole shared entry
         // native-sized, even when another chart stretches the same blip.
         const preserveNaturalSize = prior.preserveNaturalSize || usage.preserveNaturalSize;
-        const planned = preserveNaturalSize
+        const hasSourceCrop = prior.hasSourceCrop || usage.hasSourceCrop;
+        const planned = preserveNaturalSize || fill.duotone
           ? undefined
           : plannedRasterOptions(imagePlan, imagePlanKey(fill.imagePath, fill.duotone));
+        const vector = !fill.duotone
+          && (fill.mimeType === 'image/svg+xml' || preferVectorBlip({
+            svgImagePath: fill.svgImagePath,
+            srcRect: hasSourceCrop ? true : null,
+          }));
         // A picture fill may cover a marker, chart/plot area, wall, or floor.
         // The owning chart frame is the smallest format-derived upper bound
         // common to all consumers. Core has already aggregated each same-chart
@@ -7108,14 +7119,18 @@ async function renderSlideLeased(
           targetWidthPx: preserveNaturalSize
             ? undefined
             : planned?.targetWidthPx
-              ?? (Math.max(prior.targetWidthPx ?? 0, size.targetWidthPx ?? 0) || undefined),
+              ?? (vector
+                ? Math.max(prior.targetWidthPx ?? 0, size.targetWidthPx ?? 0) || undefined
+                : undefined),
           targetHeightPx: preserveNaturalSize
             ? undefined
             : planned?.targetHeightPx
-              ?? (Math.max(prior.targetHeightPx ?? 0, size.targetHeightPx ?? 0) || undefined),
-          maxRetainedPixels: planned?.maxRetainedPixels ?? prior.maxRetainedPixels,
+              ?? (vector
+                ? Math.max(prior.targetHeightPx ?? 0, size.targetHeightPx ?? 0) || undefined
+                : undefined),
+          maxRetainedPixels: planned?.maxRetainedPixels,
           preserveNaturalSize,
-          hasSourceCrop: prior.hasSourceCrop || usage.hasSourceCrop,
+          hasSourceCrop,
         });
       }
     }
@@ -7148,10 +7163,11 @@ async function renderSlideLeased(
         [path, { mimeType, targetHeightPx }],
       ) => {
         try {
-          const target = plannedRasterOptions(imagePlan, imagePlanKey(path))
-            ?? (targetHeightPx === undefined
+          const target = mimeType === 'image/svg+xml'
+            ? targetHeightPx === undefined
               ? {}
-              : { targetWidthPx: 1, targetHeightPx });
+              : { targetWidthPx: 1, targetHeightPx }
+            : plannedRasterOptions(imagePlan, imagePlanKey(path)) ?? {};
           const image = mimeType === 'image/svg+xml'
             ? await getCachedSvgImageByPath(path, fetchImage, {
                 ...target,

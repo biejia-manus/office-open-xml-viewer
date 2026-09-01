@@ -370,6 +370,39 @@ describe('docx lazy image bytes', () => {
     expect(globalThis.createImageBitmap).toHaveBeenCalledWith(blob);
   });
 
+  it('keeps DrawingML pixel effects on the authored source grid during preload', async () => {
+    stubOffscreen();
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    png.set([0x49, 0x48, 0x44, 0x52], 12);
+    new DataView(png.buffer).setUint32(16, 800);
+    new DataView(png.buffer).setUint32(20, 600);
+    const fetchImage = vi.fn(async () =>
+      new Blob([png as BlobPart], { type: 'image/png' }));
+    const doc = {
+      body: [{
+        type: 'paragraph',
+        runs: [{
+          type: 'image',
+          imagePath: 'word/media/duotone.png',
+          mimeType: 'image/png',
+          widthPt: 100,
+          heightPt: 75,
+          duotone: { clr1: '000000', clr2: 'FFFFFF' },
+        }],
+      }],
+      headers: {},
+      footers: {},
+    } as unknown as DocxDocumentModel;
+
+    await preloadImages(doc, fetchImage, undefined, 2);
+
+    const decode = globalThis.createImageBitmap as ReturnType<typeof vi.fn>;
+    expect(decode).toHaveBeenCalledTimes(2);
+    expect(decode.mock.calls[0]).toHaveLength(1);
+    expect(decode.mock.calls[1]).toHaveLength(1);
+  });
+
   it('does not apply a display-sized pixel cap to a TIFF codec result', async () => {
     const bytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]);
     const bitmap = { width: 1000, height: 1000, close() {} } as unknown as ImageBitmap;

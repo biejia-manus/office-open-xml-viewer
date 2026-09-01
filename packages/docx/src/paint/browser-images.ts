@@ -397,11 +397,21 @@ export async function preloadPaintImages(
   }))).filter((demand): demand is NonNullable<typeof demand> => demand !== null);
   const plan = planDecodedImageTargets(demands, policy);
   for (const request of requests) {
+    const dataIsSvg = request.mimeType === 'image/svg+xml';
+    const usesVector = dataIsSvg || (!request.colorReplaceFrom && !request.duotone
+      && preferVectorBlip({
+        svgImagePath: request.svgImagePath,
+        srcRect: request.hasCrop || null,
+      }));
+    // Vector rasterization is inherently target-sized. Raster/metafile effects,
+    // natural-size consumers, and formats not admitted by the shared planner
+    // must retain their authored source grid instead of inheriting the raw
+    // display target collected above.
+    if (usesVector) continue;
     const target = plan.targets.get(requestKey(request));
-    if (!target) continue;
-    request.targetWidthPx = target.width;
-    request.targetHeightPx = target.height;
-    request.plannedPixelLimit = target.retainedPixels;
+    request.targetWidthPx = target?.width;
+    request.targetHeightPx = target?.height;
+    request.plannedPixelLimit = target?.retainedPixels;
   }
   const entries = await Promise.all(requests.map(async (request) => {
     const dataIsSvg = request.mimeType === 'image/svg+xml';

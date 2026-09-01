@@ -18,6 +18,16 @@ vi.mock('@silurus/ooxml-core', async (importOriginal) => {
 
 import { renderSlide } from './renderer.js';
 
+function pngHeader(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(26);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  bytes.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(16, width);
+  view.setUint32(20, height);
+  return bytes;
+}
+
 function canvas(drawImage?: ReturnType<typeof vi.fn>): HTMLCanvasElement {
   const state: Record<string, unknown> = {
     fillStyle: '', strokeStyle: '', globalAlpha: 1, lineWidth: 1,
@@ -87,12 +97,13 @@ describe('PPTX display-sized picture decode', () => {
         rotation: 0,
         flipH: false,
         flipV: false,
-        imagePath: 'ppt/media/108mp-poster.jpg',
-        mimeType: 'image/jpeg',
+        imagePath: 'ppt/media/108mp-poster.png',
+        mimeType: 'image/png',
         srcRect: { l: 0.25, t: 0, r: 0.25, b: 0 },
       }],
     } as Slide;
-    const fetchImage = vi.fn(async () => new Blob(['jpeg'], { type: 'image/jpeg' }));
+    const fetchImage = vi.fn(async () =>
+      new Blob([pngHeader(12_090, 9_063) as BlobPart], { type: 'image/png' }));
 
     await renderSlide(canvas(), slide, 9_144_000, 6_858_000, {
       width: 960,
@@ -128,7 +139,8 @@ describe('PPTX display-sized picture decode', () => {
     await renderSlide(canvas(drawImage), slide, 9_144_000, 6_858_000, {
       width: 960,
       dpr: 2,
-      fetchImage: vi.fn(async () => new Blob(['png'], { type: 'image/png' })),
+      fetchImage: vi.fn(async () =>
+        new Blob([pngHeader(12_090, 8_838) as BlobPart], { type: 'image/png' })),
     });
 
     expect(coreMocks.decode).toHaveBeenCalledWith(
@@ -143,5 +155,46 @@ describe('PPTX display-sized picture decode', () => {
       480, 0, 1248, 720,
       96, -72, 672, 756,
     );
+  });
+
+  it('keeps DrawingML pixel effects and metafiles on their authored source grid', async () => {
+    const slide = {
+      index: 0,
+      slideNumber: 1,
+      background: {
+        fillType: 'image',
+        imagePath: 'ppt/media/background.png',
+        mimeType: 'image/png',
+        duotone: { clr1: '000000', clr2: 'FFFFFF' },
+      },
+      elements: [{
+        type: 'picture',
+        x: 0,
+        y: 0,
+        width: 598_125,
+        height: 689_458,
+        rotation: 0,
+        flipH: false,
+        flipV: false,
+        imagePath: 'ppt/media/icon.wmf',
+        mimeType: 'image/wmf',
+        duotone: { clr1: '112233', clr2: 'FFFFFF' },
+      }],
+    } as Slide;
+    const fetchImage = vi.fn(async (path: string) => path.endsWith('.png')
+      ? new Blob([pngHeader(1_600, 1_200) as BlobPart], { type: 'image/png' })
+      : new Blob([new Uint8Array([0xd7, 0xcd, 0xc6, 0x9a]) as BlobPart], { type: 'image/wmf' }));
+
+    await renderSlide(canvas(), slide, 9_144_000, 6_858_000, {
+      width: 960,
+      dpr: 2,
+      fetchImage,
+    });
+
+    expect(coreMocks.decode).toHaveBeenCalled();
+    for (const call of coreMocks.decode.mock.calls) {
+      expect(call[4]).not.toHaveProperty('targetWidthPx');
+      expect(call[4]).not.toHaveProperty('targetHeightPx');
+    }
   });
 });
