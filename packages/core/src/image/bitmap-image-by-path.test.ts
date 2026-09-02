@@ -8,6 +8,7 @@ import {
   dropCachedDerivedBitmapNamespace,
   acquireBitmapCacheLease,
   inspectCachedRasterSource,
+  releaseOwnedBitmap,
   withBitmapCacheLease,
 } from './bitmap-image-by-path';
 import {
@@ -872,6 +873,19 @@ describe('getCachedBitmapByPath', () => {
   });
 });
 
+describe('releaseOwnedBitmap', () => {
+  it('treats ImageBitmap.close failures as best-effort cleanup', () => {
+    const bitmap = {
+      close: vi.fn(() => {
+        throw new Error('cleanup failed');
+      }),
+    } as unknown as ImageBitmap;
+
+    expect(() => releaseOwnedBitmap(bitmap)).not.toThrow();
+    expect(bitmap.close).toHaveBeenCalledTimes(1);
+  });
+});
+
 /**
  * Render-pass lease (`acquireBitmapCacheLease`): a renderer resolves EVERY image
  * a page/sheet/slide references and then draws from those references. Without a
@@ -1062,7 +1076,7 @@ describe('acquireBitmapCacheLease (render-pass liveness)', () => {
     expect(closeDerived).toHaveBeenCalledTimes(2);
   });
 
-  it('honours a caller-configured aggregate budget above the strict default', async () => {
+  it('honours a caller-configured aggregate budget above the adaptive default', async () => {
     const width = 4096;
     const height = 4096; // 64 MiB per RGBA surface; three need 192 MiB.
     vi.stubGlobal(

@@ -3,8 +3,7 @@ import { DocxDocument } from './document.js';
 import { attachDocumentLayoutRuntime } from './layout/runtime-state.js';
 import type { DocxTextRunInfo } from './renderer.js';
 
-function ownedBitmap() {
-  const close = vi.fn();
+function ownedBitmap(close = vi.fn()) {
   const bitmap = { width: 4, height: 3, close } as unknown as ImageBitmap;
   return { bitmap, close };
 }
@@ -51,5 +50,19 @@ describe('DocxDocument worker bitmap callback ownership', () => {
 
     expect(onTextRun).toHaveBeenCalledWith(runs[0]);
     expect(close).not.toHaveBeenCalled();
+  });
+
+  it('preserves the callback failure when bitmap cleanup also throws', async () => {
+    const cleanupFailure = new Error('bitmap cleanup failed');
+    const close = vi.fn(() => { throw cleanupFailure; });
+    const { bitmap } = ownedBitmap(close);
+    const callbackFailure = new Error('text-run callback failed');
+    const document = workerDocument(bitmap, [{ text: 'run' }] as DocxTextRunInfo[]);
+
+    await expect(document.renderPageToBitmap(0, {
+      dpr: 1,
+      onTextRun: () => { throw callbackFailure; },
+    })).rejects.toBe(callbackFailure);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });

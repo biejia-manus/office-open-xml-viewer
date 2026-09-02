@@ -356,10 +356,15 @@ function closeBitmapOnce(bmp: ImageBitmap | null | undefined): void {
   closeImageBitmapIfSupported(bmp);
 }
 
-/** Release a document-owned decoded surface once. Browser ImageBitmap exposes
- * `close()`; Node canvas backends may rely on native GC and omit it. */
+/** Release a document-owned decoded surface once. Cleanup is best-effort and
+ * never replaces the operation failure that led here. Browser ImageBitmap
+ * exposes `close()`; Node canvas backends may rely on native GC and omit it. */
 export function releaseOwnedBitmap(bitmap: ImageBitmap | null | undefined): void {
-  closeBitmapOnce(bitmap);
+  try {
+    closeBitmapOnce(bitmap);
+  } catch {
+    // Resource release must not mask a post, callback, or draw failure.
+  }
 }
 
 /**

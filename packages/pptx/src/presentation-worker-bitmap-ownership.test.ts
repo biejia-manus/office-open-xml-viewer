@@ -2,8 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PptxPresentation } from './presentation.js';
 import type { PptxTextRunInfo } from './renderer.js';
 
-function ownedBitmap() {
-  const close = vi.fn();
+function ownedBitmap(close = vi.fn()) {
   const bitmap = { width: 4, height: 3, close } as unknown as ImageBitmap;
   return { bitmap, close };
 }
@@ -122,6 +121,24 @@ describe('PptxPresentation worker bitmap ownership', () => {
     })).rejects.toBe(failure);
 
     expect(drawImage).toHaveBeenCalledWith(bitmap, 0, 0);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves a presentSlide draw failure when bitmap cleanup also throws', async () => {
+    const cleanupFailure = new Error('bitmap cleanup failed');
+    const close = vi.fn(() => { throw cleanupFailure; });
+    const { bitmap } = ownedBitmap(close);
+    const drawFailure = new Error('draw failed');
+    const presentation = workerPresentation(bitmap, []);
+    const canvas = canvasWithContexts(
+      {} as CanvasRenderingContext2D,
+      { drawImage: () => { throw drawFailure; } } as unknown as CanvasRenderingContext2D,
+    );
+
+    await expect(presentation.presentSlide(canvas, 0, {
+      width: 320,
+      dpr: 1,
+    })).rejects.toBe(drawFailure);
     expect(close).toHaveBeenCalledTimes(1);
   });
 

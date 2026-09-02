@@ -11,14 +11,13 @@ export type DecodedImageBudgetStrategy = 'adaptive' | 'strict';
 /** Format-neutral raster-memory policy used by DOCX, PPTX and XLSX paints. */
 export interface ImageResourceOptions {
   /**
-   * Aggregate budget for decoded RGBA surfaces owned by one document paint.
-   * Adaptive paints lower raster resolution to remain within it; strict paints
-   * preserve requested targets and surface the typed quota error.
+   * Soft aggregate budget for decoded RGBA surfaces owned by one document
+   * paint. Adaptive paints lower raster resolution to remain within it; strict
+   * paints preserve requested targets and surface the typed quota error.
    * Defaults to 128 MiB and cannot exceed the internal 512 MiB hard ceiling.
    */
   decodedByteBudget?: number;
-  /** Default `strict`: preserve requested display resolution and reject an
-   * aggregate crossing. Select `adaptive` explicitly to reduce quality. */
+  /** Default `adaptive`: preserve the document by reducing raster resolution. */
   strategy?: DecodedImageBudgetStrategy;
 }
 
@@ -42,7 +41,7 @@ export function normalizeImageResourceOptions(
       `imageResources.decodedByteBudget must be a safe integer from 4 to ${HARD_MAX_DECODED_IMAGE_BYTES} bytes`,
     );
   }
-  const strategy = options?.strategy ?? 'strict';
+  const strategy = options?.strategy ?? 'adaptive';
   if (strategy !== 'adaptive' && strategy !== 'strict') {
     throw new TypeError("imageResources.strategy must be 'adaptive' or 'strict'");
   }

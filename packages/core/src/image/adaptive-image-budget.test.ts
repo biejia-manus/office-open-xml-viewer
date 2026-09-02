@@ -9,10 +9,10 @@ import {
 } from './adaptive-image-budget.js';
 
 describe('normalizeImageResourceOptions', () => {
-  it('defaults to strict display-target preservation under the standard decoded-byte budget', () => {
+  it('defaults to adaptive quality under the standard decoded-byte budget', () => {
     expect(normalizeImageResourceOptions()).toEqual({
       decodedByteBudget: MAX_DECODED_IMAGE_BYTES,
-      strategy: 'strict',
+      strategy: 'adaptive',
     });
   });
 
@@ -36,18 +36,16 @@ describe('normalizeImageResourceOptions', () => {
 });
 
 describe('planDecodedImageTargets', () => {
-  it('rejects a default aggregate crossing before reducing display resolution', () => {
+  it('reduces display resolution for a default aggregate crossing', () => {
     const policy = normalizeImageResourceOptions();
-    expect(() => planDecodedImageTargets([
+    const plan = planDecodedImageTargets([
       { key: 'a', targetWidthPx: 4096, targetHeightPx: 4096 },
       { key: 'b', targetWidthPx: 4096, targetHeightPx: 4096 },
       { key: 'c', targetWidthPx: 4096, targetHeightPx: 4096 },
-    ], policy)).toThrow(expect.objectContaining({
-      code: 'ooxml-decoded-image-limit',
-      metric: 'active-decoded-bytes',
-      limit: MAX_DECODED_IMAGE_BYTES,
-      observed: 4096 * 4096 * 4 * 3,
-    }));
+    ], policy);
+
+    expect(plan.degraded).toBe(true);
+    expect(plan.plannedBytes).toBeLessThanOrEqual(MAX_DECODED_IMAGE_BYTES);
   });
 
   it('keeps display-resolution targets unchanged when they fit', () => {

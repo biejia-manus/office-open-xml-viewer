@@ -28,6 +28,15 @@ describe('postOwnedImageBitmap', () => {
     expect(() => postOwnedImageBitmap(post, { bitmap })).toThrow(failure);
     expect(close).toHaveBeenCalledTimes(1);
   });
+
+  it('preserves the post failure when bitmap cleanup also throws', () => {
+    const cleanupFailure = new Error('bitmap cleanup failed');
+    const bitmap = bitmapWithClose(vi.fn(() => { throw cleanupFailure; }));
+    const postFailure = new DOMException('worker already terminated', 'InvalidStateError');
+    const post = vi.fn(() => { throw postFailure; });
+
+    expect(() => postOwnedImageBitmap(post, { bitmap })).toThrow(postFailure);
+  });
 });
 
 describe('render-worker bitmap transfer ownership', () => {
