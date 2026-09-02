@@ -183,8 +183,8 @@ export async function renderFile(stage: HTMLElement, file: File): Promise<Render
   };
   const viewer = new DocxScrollViewer(host, viewerOptions);
   // As with PPTX, the viewer-owned width fit is the initial zoom contract for
-  // Try Yours. It can go below zoomMin when necessary to admit a wide page;
-  // zoomMin remains the floor for subsequent user-driven zoom operations.
+  // Try Yours. When it falls below zoomMin, that fit stays reachable as the
+  // effective floor for subsequent user-driven zoom operations.
   try {
     await viewer.load(buffer);
   } catch (error) {
