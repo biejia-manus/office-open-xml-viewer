@@ -16,7 +16,7 @@ describe('v0.85 large-image and rendering announcement', () => {
 
   it('leads with user outcomes, gives bounded migration guidance and leaves technical detail last', () => {
     expect(announcement).toMatchObject({
-      label: 'Upcoming release',
+      label: 'Release note',
       version: 'v0.85.0',
       title: 'Larger images and steadier rendering in v0.85.0',
     });
@@ -33,7 +33,8 @@ describe('v0.85 large-image and rendering announcement', () => {
       expect(userFacingText).toContain(outcome);
     }
     expect(userFacingText).toContain('Most applications can upgrade without code changes');
-    expect(userFacingText).toContain('TiffDecodeError');
+    expect(userFacingText).toContain('the rest of the document remains viewable');
+    expect(userFacingText).not.toContain('TiffDecodeError');
     expect(userFacingText).not.toMatch(/RGBA|cache eviction|header inspection|module initialization|ESM|\b(?:KB|KiB|MiB|MP|gzip)\b/i);
   });
 });
@@ -201,11 +202,11 @@ describe('stable documentation boundaries', () => {
   it('keeps the current bundle measurements on one stable page', () => {
     expect(bundleSizePage).toContain('Current production assets for v0.85.0');
     expect(bundleSizePage).toContain('DOCX static JavaScript');
-    expect(bundleSizePage).toMatch(/<td>1,964 KiB<\/td>\s*<td>477 KiB<\/td>/);
+    expect(bundleSizePage).toMatch(/<td>1,966 KiB<\/td>\s*<td>478 KiB<\/td>/);
     expect(bundleSizePage).toContain('XLSX static JavaScript');
-    expect(bundleSizePage).toMatch(/<td>1,279 KiB<\/td>\s*<td>305 KiB<\/td>/);
+    expect(bundleSizePage).toMatch(/<td>1,281 KiB<\/td>\s*<td>306 KiB<\/td>/);
     expect(bundleSizePage).toContain('PPTX static JavaScript');
-    expect(bundleSizePage).toMatch(/<td>1,325 KiB<\/td>\s*<td>309 KiB<\/td>/);
+    expect(bundleSizePage).toMatch(/<td>1,327 KiB<\/td>\s*<td>310 KiB<\/td>/);
     expect(bundleSizePage).toContain('<tr><th>DOCX parser WASM</th><td>1,786 KiB</td><td>741 KiB</td></tr>');
     expect(bundleSizePage).toContain('<tr><th>PPTX parser WASM</th><td>1,648 KiB</td><td>649 KiB</td></tr>');
     expect(bundleSizePage).toContain('ChartEx');

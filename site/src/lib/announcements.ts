@@ -38,7 +38,7 @@ export const announcements: readonly Announcement[] = [
   {
     slug: 'v085-large-images-and-rendering',
     date: '2026-09-02',
-    label: 'Upcoming release',
+    label: 'Release note',
     version: 'v0.85.0',
     title: 'Larger images and steadier rendering in v0.85.0',
     summary: 'v0.85.0 opens more Office files with large images, broadens TIFF support and improves rendering stability in worker mode and during PowerPoint zoom.',
@@ -67,7 +67,7 @@ export const announcements: readonly Announcement[] = [
         title: 'Upgrading',
         paragraphs: [
           'Most applications can upgrade without code changes. The new image policy is automatic, and applications with a specific memory or image-quality requirement can optionally adjust imageResources.',
-          'One TIFF behavior is now explicit: when a recognized TIFF image is present but no compatible TIFF codec is configured, the viewer reports TiffDecodeError instead of silently leaving the image blank. Applications that intentionally omit TIFF support should allow that diagnostic in onError, or add the optional @silurus/ooxml/tiff module to display the image.',
+          'TIFF support remains optional. Without the TIFF module, the affected image is shown as unavailable while the rest of the document remains viewable. Add @silurus/ooxml/tiff only when those images need to be displayed.',
         ],
       },
       {

@@ -135,6 +135,11 @@ const SHARED_PAINT_IMPORTS = new Map([
     ['isDecodeTargetResizableRasterFormat', 'value'],
     ['isOoxmlDecodedImageLimitError', 'value'],
     ['isTiffDecodeError', 'value'],
+    // Missing optional image codecs are contained at paint-resource acquisition;
+    // the placeholder consumes only the already-retained authored bounds.
+    ['isOptionalImageCodecUnavailableError', 'value'],
+    ['paintOptionalImagePlaceholder', 'value'],
+    ['OptionalImageCodecUnavailableError', 'type'],
     ['HyperlinkTarget', 'type'],
     ['imageNaturalSize', 'value'],
     ['isHTMLCanvas', 'value'],

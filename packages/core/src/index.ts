@@ -279,6 +279,13 @@ export {
   type TiffRenderer,
   type TiffRenderOptions,
 } from './image/tiff-contract';
+export {
+  OptionalImageCodecUnavailableError,
+  isOptionalImageCodecUnavailableError,
+  paintOptionalImagePlaceholder,
+  type OptionalImageCodec,
+  type OptionalImagePlaceholderBounds,
+} from './image/optional-image-fallback';
 // Raster pixel-dimension budget + header sniff (decode-bomb guard, RB1). Shared
 // caps live in `./image/pixel-budget`; `decodeRasterOrMetafile` uses the sniff to
 // refuse an over-budget PNG/JPEG/GIF/BMP/WEBP before `createImageBitmap`.

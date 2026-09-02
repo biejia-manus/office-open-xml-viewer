@@ -11,6 +11,7 @@ import {
   type OffscreenFactory,
   type TiffRenderOptions,
 } from '@silurus/ooxml-core';
+import { isOptionalImageUnavailable } from './internal/optional-image-fallback.js';
 
 /**
  * The render orchestrator decodes embedded images lazily by zip path:
@@ -898,6 +899,26 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     expect(cache.size).toBe(0);
   });
 
+  it('marks a TIFF image unavailable instead of failing when the optional codec is absent', async () => {
+    const fetchImage = vi.fn(async () =>
+      new Blob([tiffHeader(32, 24) as BlobPart], { type: 'image/tiff' }));
+    const ws = worksheetWithImages();
+    ws.images = [{
+      fromCol: 0, fromColOff: 0, fromRow: 0, fromRowOff: 0,
+      toCol: 2, toColOff: 0, toRow: 2, toRowOff: 0,
+      nativeExtCx: 0, nativeExtCy: 0,
+      imagePath: 'xl/media/optional.tiff',
+      mimeType: 'image/tiff',
+    } as ImageAnchor];
+    ws.shapeGroups = [];
+    const cache = new Map<string, CanvasImageSource | null>();
+
+    await expect(prefetchImages(ws, cache, fetchImage)).resolves.toBeUndefined();
+
+    expect(cache.get('xl/media/optional.tiff')).toBeNull();
+    expect(isOptionalImageUnavailable(cache, 'xl/media/optional.tiff', 'tiff')).toBe(true);
+  });
+
   it('decodeImageSource forces the raster (not the SVG vector) when the picture is cropped', async () => {
     // A cropped picture (a non-null `srcRect`) with an svgBlip vector original
     // must decode the RASTER fallback: the renderer's `<a:srcRect>` crop math
@@ -1268,11 +1289,12 @@ describe('render-pass lease: >cap prefetch never draws a closed bitmap', () => {
   /** A fake HTMLCanvas + proxy 2D context whose drawImage records the closed
    *  state of every image it is handed AT DRAW TIME. All other context members
    *  no-op (the resize-test pattern). */
-  function makeRecordingCanvas(drawn: { closedAtDraw: boolean[] }) {
+  function makeRecordingCanvas(drawn: { closedAtDraw: boolean[]; texts?: string[] }) {
     const target: Record<string, unknown> = {
       drawImage: (img: unknown) => {
         drawn.closedAtDraw.push(Boolean((img as { closed?: boolean }).closed));
       },
+      fillText: (text: string) => drawn.texts?.push(text),
       measureText: (s: string) => ({ width: [...String(s)].length * 7 }),
       createLinearGradient: () => ({ addColorStop() {} }),
       createPattern: () => null,
@@ -1303,6 +1325,35 @@ describe('render-pass lease: >cap prefetch never draws a closed bitmap', () => {
   const STYLES = {
     fonts: [], fills: [], borders: [], cellXfs: [], numFmts: {},
   } as unknown as ParsedWorkbook['styles'];
+
+  it('renders the missing-codec TIFF placeholder without blanking the worksheet', async () => {
+    const fetchImage = vi.fn(async () =>
+      new Blob([tiffHeader(32, 24) as BlobPart], { type: 'image/tiff' }));
+    const ws = {
+      name: 'S', rows: [], colWidths: {}, rowHeights: {},
+      defaultColWidth: 64, defaultRowHeight: 20,
+      mergeCells: [], freezeRows: 0, freezeCols: 0,
+      conditionalFormats: [], charts: [], shapeGroups: [],
+      images: [{
+        fromCol: 0, fromColOff: 0, fromRow: 0, fromRowOff: 0,
+        toCol: 2, toColOff: 0, toRow: 2, toRowOff: 0,
+        nativeExtCx: 0, nativeExtCy: 0,
+        imagePath: 'xl/media/optional.tiff',
+        mimeType: 'image/tiff',
+      } as ImageAnchor],
+    } as unknown as Worksheet;
+    const drawn = { closedAtDraw: [] as boolean[], texts: [] as string[] };
+
+    await expect(renderWorksheetViewport(
+      { ws, styles: STYLES },
+      makeRecordingCanvas(drawn),
+      { row: 1, col: 1, rows: 10, cols: 10 },
+      { fetchImage, width: 800, height: 600, dpr: 1 },
+    )).resolves.toBeUndefined();
+
+    expect(drawn.texts).toContain('TIFF image unavailable');
+    expect(drawn.closedAtDraw).toEqual([]);
+  });
 
   it('draws 300 images (cap 256) in one pass with every bitmap still open; evicted ones close after the pass', async () => {
     // Each decode yields a bitmap with a live `closed` flag the recording
