@@ -1515,9 +1515,27 @@ function* paginateBodyPassSteps(
           chargePt: acquired.blockExtentPt + notes.reservePt,
         });
         const seenCandidates = new Set<string>();
+        // The region extent and the fragment charge reconstruct the same
+        // authored boundary through different arithmetic, so the comparison
+        // must tolerate single-ULP drift exactly like the invariant layer
+        // (invariants.ts atMostWithinFloatingPrecision, mirrored inline here
+        // because the layout-boundary gate pins this module's invariants
+        // import to exactly assertAndDeepFreezeDocumentLayout): a fragment
+        // whose charge exceeds the region only within floating-point
+        // precision is already placed, and with an unchanged footnote
+        // reserve the retry request would be identical to the first — a
+        // raw `>` here could never converge and would trip the fingerprint
+        // guard below on floating-point dust.
+        const fitsWithinFloatingPrecision = (chargePt: number, heightPt: number): boolean =>
+          chargePt <= heightPt
+          || chargePt - heightPt
+            <= Number.EPSILON * Math.max(1, Math.abs(chargePt), Math.abs(heightPt));
         while (
           !acquired.requiresFreshFlowRegion
-          && acquired.blockExtentPt + notes.reservePt > location.availableBounds.heightPt
+          && !fitsWithinFloatingPrecision(
+            acquired.blockExtentPt + notes.reservePt,
+            location.availableBounds.heightPt,
+          )
         ) {
           const fingerprint = JSON.stringify({
             advancePt: acquired.blockExtentPt,
