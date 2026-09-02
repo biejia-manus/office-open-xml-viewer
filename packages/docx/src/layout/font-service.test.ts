@@ -236,8 +236,9 @@ describe('font layout services', () => {
         themeFontPresence,
         slot,
       } as Parameters<typeof service.resolve>[0]);
+      const generic = slot === 'eastAsia' ? 'sans-serif' : 'serif';
       expect(resolved, slot).toMatchObject({
-        source: 'generic', requestedFamily: 'serif', genericFamily: 'serif',
+        source: 'generic', requestedFamily: generic, genericFamily: generic,
       });
     }
   });

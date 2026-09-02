@@ -453,7 +453,7 @@ describe('production layout service integration', () => {
     });
   });
 
-  it('uses a serif consumer default only when no rFonts slot resolves', () => {
+  it('uses bounded consumer defaults only when no rFonts slot resolves', () => {
     const services = createLayoutServices(model(), { measureContext: measureContext() });
 
     expect(services.text.shape({
@@ -466,6 +466,12 @@ describe('production layout service integration', () => {
       text: 'Header 1', fontSizePt: 10, fonts: { ascii: 'Arial' },
     }).spans[0]?.font).toMatchObject({
       source: 'native', requestedFamily: 'Arial', genericFamily: 'sans-serif',
+    });
+    expect(services.text.shape({
+      text: '漢字', fontSizePt: 10, fonts: {},
+    }).spans[0]?.font).toMatchObject({
+      source: 'generic', requestedFamily: 'sans-serif', genericFamily: 'sans-serif',
+      route: { familyList: 'sans-serif', scope: 'generic' },
     });
   });
 

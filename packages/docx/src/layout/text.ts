@@ -386,6 +386,15 @@ export function classifyDocxFontGeneric(
   return inferred === 'mono' ? 'monospace' : inferred === 'serif' ? 'serif' : 'sans-serif';
 }
 
+/** Consumer choice at the §17.3.2.26 boundary where no font slot resolves.
+ * Keep the established East Asian fallback stable; Word-produced evidence for
+ * this change covers Latin and complex-script text only. */
+function defaultGenericForSlot(
+  slot: FontScriptSlot,
+): 'serif' | 'sans-serif' {
+  return slot === 'eastAsia' ? 'sans-serif' : 'serif';
+}
+
 const LOCAL_METRIC_SNAPSHOT = Symbol('docx.localMetricSnapshot');
 type LocalMetricSnapshot = Readonly<Record<string, Readonly<ResolvedLocalFontMetric>>> & {
   readonly [LOCAL_METRIC_SNAPSHOT]: true;
@@ -552,10 +561,10 @@ export function createTextLayoutService(input: TextLayoutServiceInput): TextLayo
         ?? request.genericFamily
         ?? 'sans-serif'
       // ECMA-376 §17.3.2.26 deliberately leaves the consumer's supported
-      // default font unspecified when no rFonts slot resolves. This is our
-      // bounded DOCX consumer policy for that otherwise-unspecified case;
-      // every authored direct/theme face remains authoritative above.
-      : request.genericFamily ?? 'serif';
+      // default font unspecified when no rFonts slot resolves. This bounded
+      // consumer policy changes only the script classes covered by Word output
+      // evidence; every authored direct/theme face remains authoritative above.
+      : request.genericFamily ?? defaultGenericForSlot(request.slot);
     return input.fonts.resolve({
       requestedFamily: authoredFamily,
       genericFamily,
