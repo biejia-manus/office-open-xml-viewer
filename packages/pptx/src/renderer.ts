@@ -107,6 +107,8 @@ import {
   warpGlyphTransform,
   followPathUScale,
   fillDoubleBorder,
+  isOptionalImageCodecUnavailableError,
+  paintOptionalImagePlaceholder,
 } from '@silurus/ooxml-core';
 import type {
   DecodedBitmapCacheOwner,
@@ -2035,6 +2037,12 @@ async function renderBackground(
       }
       ctx.restore();
     } catch (error) {
+      if (isOptionalImageCodecUnavailableError(error, 'tiff')) {
+        paintOptionalImagePlaceholder(ctx, 'tiff', {
+          x: 0, y: 0, width: canvasW, height: canvasH,
+        });
+        return;
+      }
       if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
       // Decode failed — the white base painted above remains as the fallback.
     }
@@ -5490,6 +5498,30 @@ export function getPosterBitmap(
   });
 }
 
+function paintUnavailablePicture(
+  ctx: CanvasRenderingContext2D,
+  el: PictureElement,
+  scale: number,
+): void {
+  const x = emuToPx(el.x, scale);
+  const y = emuToPx(el.y, scale);
+  const w = emuToPx(el.width, scale);
+  const h = emuToPx(el.height, scale);
+  ctx.save();
+  try {
+    if (el.alpha != null) ctx.globalAlpha *= el.alpha;
+    if (el.rotation !== 0 || el.flipH || el.flipV) {
+      ctx.translate(x + w / 2, y + h / 2);
+      ctx.rotate((el.rotation * Math.PI) / 180);
+      ctx.scale(el.flipH ? -1 : 1, el.flipV ? -1 : 1);
+      ctx.translate(-(x + w / 2), -(y + h / 2));
+    }
+    paintOptionalImagePlaceholder(ctx, 'tiff', { x, y, width: w, height: h });
+  } finally {
+    ctx.restore();
+  }
+}
+
 async function renderPicture(
   ctx: CanvasRenderingContext2D,
   el: PictureElement,
@@ -6000,6 +6032,10 @@ async function renderPicture(
     ctx.restore();
     // bitmap is owned by getCachedBitmapByPath's cache — do not close it here.
   } catch (error) {
+    if (isOptionalImageCodecUnavailableError(error, 'tiff')) {
+      if (!superseded()) paintUnavailablePicture(ctx, el, scale);
+      return;
+    }
     if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
     // silently skip broken images
   }
@@ -6024,6 +6060,7 @@ async function renderMedia(
   const h = emuToPx(el.height, scale);
 
   let poster: ImageBitmap | undefined;
+  let posterCodecUnavailable = false;
   if (el.posterPath && fetchMedia) {
     try {
       // Poster is cached (and prefetched by renderSlide); do not close it here —
@@ -6035,8 +6072,12 @@ async function renderMedia(
           : undefined;
       poster = await getPosterBitmap(el, fetchMedia, bitmapOwner, tiff, target, svgDecoder);
     } catch (error) {
-      if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
-      // fall through to plain fill
+      if (isOptionalImageCodecUnavailableError(error, 'tiff')) {
+        posterCodecUnavailable = true;
+      } else {
+        if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
+        // fall through to plain fill
+      }
     }
   }
 
@@ -6051,6 +6092,9 @@ async function renderMedia(
   } else {
     ctx.fillStyle = el.mediaKind === 'video' ? '#111' : '#f0f0f0';
     ctx.fillRect(x, y, w, h);
+    if (posterCodecUnavailable) {
+      paintOptionalImagePlaceholder(ctx, 'tiff', { x, y, width: w, height: h });
+    }
   }
 
   if (!skipControls) drawPlayBadge(ctx, x + w / 2, y + h / 2, w, h, 'paused');
@@ -7207,6 +7251,10 @@ async function renderSlideLeased(
               });
           pictureBulletImages.set(path, image);
         } catch (error) {
+          if (isOptionalImageCodecUnavailableError(error, 'tiff')) {
+            pictureBulletImages.set(path, null);
+            return;
+          }
           if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
           pictureBulletImages.set(path, null);
         }
@@ -7258,6 +7306,10 @@ async function renderSlideLeased(
           }
           chartMarkerImages.set(key, bitmap);
         } catch (error) {
+          if (isOptionalImageCodecUnavailableError(error, 'tiff')) {
+            chartMarkerImages.set(key, null);
+            return;
+          }
           if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
           chartMarkerImages.set(key, null);
         }

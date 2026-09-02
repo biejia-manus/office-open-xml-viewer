@@ -959,8 +959,10 @@ Stable failures can be narrowed without parsing message strings:
   active decoded-byte ceiling. Its `metric`, `limit`, and `observed` properties
   are stable.
 - `TiffDecodeError` (`code === 'ooxml-tiff-decode'`) — a recognized TIFF part
-  has no configured codec, is malformed, or uses a class the configured codec
-  does not support. Its message is diagnostic rather than a stable subtype.
+  is malformed, uses a class the configured codec does not support, or fails
+  during bitmap handoff. Its message is diagnostic rather than a stable subtype.
+  Omitting the optional TIFF codec is not an error; the affected image is shown
+  as an unavailable-image placeholder while the rest of the document renders.
 - An otherwise ordinary `Error` may carry `code === 'parser-crashed'` for a
   recognized WASM trap. This does not mean “OOM”: panic, allocation failure,
   stack overflow, and other traps can be indistinguishable at the current WASM

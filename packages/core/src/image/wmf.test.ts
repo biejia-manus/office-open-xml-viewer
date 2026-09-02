@@ -9,6 +9,7 @@ import {
 } from './wmf.js';
 import { decodeRasterOrMetafile } from './raster-or-metafile.js';
 import { TiffDecodeError } from './tiff-contract.js';
+import { isOptionalImageCodecUnavailableError } from './optional-image-fallback.js';
 
 // ── WMF (Windows Metafile) player unit tests ────────────────────────────────
 // The renderer falls back to this player for `.wmf`/`.emf` blips the browser
@@ -1298,17 +1299,15 @@ describe('decodeRasterOrMetafile', () => {
     expect(cib).not.toHaveBeenCalled();
   });
 
-  it('a recognized TIFF fails clearly without a codec or when its codec returns null', async () => {
+  it('distinguishes a missing optional TIFF codec from a configured codec failure', async () => {
     const bytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 1, 2, 3, 4]);
     const blob = new Blob([bytes as BlobPart], { type: 'image/tiff' });
     const browserDecode = vi.fn();
     vi.stubGlobal('createImageBitmap', browserDecode);
 
-    await expect(decodeRasterOrMetafile(blob)).rejects.toMatchObject({
-      name: 'TiffDecodeError',
-      code: 'ooxml-tiff-decode',
-      message: expect.stringMatching(/TIFF.*codec/i),
-    });
+    await expect(decodeRasterOrMetafile(blob)).rejects.toSatisfy(
+      error => isOptionalImageCodecUnavailableError(error, 'tiff'),
+    );
     expect(browserDecode).not.toHaveBeenCalled();
 
     const emptyRender = vi.fn(async () => null);

@@ -32,9 +32,9 @@ improving rendering fidelity and stability across regular and worker modes.
   Word-compatible default font intent for Latin and complex-script text while
   preserving authored and font-table choices.
 - **compatibility:** no existing option or method is removed or renamed. Most
-  applications require no source changes. Applications that intentionally omit
-  the optional TIFF codec should allow the now-explicit `TiffDecodeError`
-  diagnostic, or enable `@silurus/ooxml/tiff` to display recognized TIFF images.
+  applications require no source changes. When the optional TIFF codec is not
+  enabled, the document remains viewable and the affected image is shown as an
+  unavailable-image placeholder.
 
 ## 0.84.1 — 2026-09-01
 

@@ -67,7 +67,7 @@ export const announcements: readonly Announcement[] = [
         title: 'Upgrading',
         paragraphs: [
           'Most applications can upgrade without code changes. The new image policy is automatic, and applications with a specific memory or image-quality requirement can optionally adjust imageResources.',
-          'One TIFF behavior is now explicit: when a recognized TIFF image is present but no compatible TIFF codec is configured, the viewer reports TiffDecodeError instead of silently leaving the image blank. Applications that intentionally omit TIFF support should allow that diagnostic in onError, or add the optional @silurus/ooxml/tiff module to display the image.',
+          'TIFF support remains optional. Without the TIFF module, the affected image is shown as unavailable while the rest of the document remains viewable. Add @silurus/ooxml/tiff only when those images need to be displayed.',
         ],
       },
       {

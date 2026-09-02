@@ -24,6 +24,7 @@ import {
   TiffDecodeError,
   type TiffRenderer,
 } from './tiff-contract.js';
+import { OptionalImageCodecUnavailableError } from './optional-image-fallback.js';
 import { isEmf, isWmf, renderWmfToBitmap, wmfRasterTarget } from './wmf.js';
 
 export interface DecodeRasterOptions {
@@ -167,7 +168,7 @@ export async function decodeRasterOrMetafileWithInspection(
     throw rasterLimitError(plan.retainedDimensions, MAX_RASTER_DIMENSION, retainedPixelLimit);
   }
   if (tiffInput) {
-    if (!tiff) throw new TiffDecodeError('TIFF image requires an opt-in TIFF codec');
+    if (!tiff) throw new OptionalImageCodecUnavailableError('tiff');
     let bitmap: ImageBitmap | null;
     try {
       bitmap = await tiff.render(new Uint8Array(await data.arrayBuffer()), {

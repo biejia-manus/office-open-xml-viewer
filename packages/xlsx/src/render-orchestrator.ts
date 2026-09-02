@@ -14,6 +14,7 @@ import {
   sourceRasterTargetSize,
   isOoxmlDecodedImageLimitError,
   isTiffDecodeError,
+  isOptionalImageCodecUnavailableError,
   EMU_PER_PT,
   EMU_PER_PX,
   type MathRenderer,
@@ -48,6 +49,10 @@ import {
 } from './renderer.js';
 import { GridGeometry, type GridAxisGeometry } from './internal/grid-geometry.js';
 import { usesNativeOneCellExtent } from './internal/cell-anchor-geometry.js';
+import {
+  clearOptionalImageUnavailable,
+  markOptionalImageUnavailable,
+} from './internal/optional-image-fallback.js';
 
 /** Internal viewer-to-renderer commit latch. It is intentionally not re-exported
  * from the package API: standalone renderer callers do not own viewer lifecycle. */
@@ -382,8 +387,9 @@ export async function decodeImageSource(
  *  renderer skip a falsy source without a re-fetch.
  *
  *  A no-op when `fetchImage` is absent (no byte source). Ordinary per-image
- *  failures are swallowed so one broken picture doesn't sink the grid; decoded
- *  image quota and recognized-TIFF codec diagnostics remain actionable. */
+ *  failures are swallowed so one broken picture doesn't sink the grid. A
+ *  missing optional TIFF codec is retained as a frame-local placeholder mark;
+ *  decoded-image quota and actual TIFF codec failures remain actionable. */
 export async function prefetchImages(
   ws: Worksheet,
   imageCache: Map<string, CanvasImageSource | null>,
@@ -409,6 +415,7 @@ export async function prefetchImages(
   // entries from another worksheet/frame: their shared-cache owners may have
   // evicted and closed the underlying drawable in the meantime.
   imageCache.clear();
+  clearOptionalImageUnavailable(imageCache);
   if (!fetchImage) return;
   const fetch = fetchImage;
   const refs = new Map<string, ImageRef>();
@@ -696,6 +703,11 @@ export async function prefetchImages(
         // metafile, so the renderer skips a falsy source without a re-fetch).
         imageCache.set(key, src);
       } catch (error) {
+        if (isOptionalImageCodecUnavailableError(error, 'tiff')) {
+          imageCache.set(key, null);
+          markOptionalImageUnavailable(imageCache, key, 'tiff');
+          return;
+        }
         if (isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
         // Transient failure: DELETE any prior lookup entry rather than leaving
         // it. A prior entry is re-resolved precisely because its shared-cache
