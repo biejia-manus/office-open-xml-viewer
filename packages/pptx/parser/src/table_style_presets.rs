@@ -351,7 +351,6 @@ fn medium_style_1(theme: &HashMap<String, String>, accent_idx: Option<u8>) -> Ta
         last_row_border_t: Some(double_stroke(&a)),
         whole_text: TableTextStyle {
             color: Some(dk.clone()),
-            bold: Some(true),
             ..Default::default()
         },
         first_row_text: TableTextStyle {
@@ -360,7 +359,15 @@ fn medium_style_1(theme: &HashMap<String, String>, accent_idx: Option<u8>) -> Ta
             ..Default::default()
         },
         last_row_text: TableTextStyle {
-            color: Some(dk),
+            color: Some(dk.clone()),
+            bold: Some(true),
+            ..Default::default()
+        },
+        first_col_text: TableTextStyle {
+            bold: Some(true),
+            ..Default::default()
+        },
+        last_col_text: TableTextStyle {
             bold: Some(true),
             ..Default::default()
         },
@@ -985,9 +992,10 @@ mod tests {
         assert_eq!(style.last_col.text.bold, Some(true));
     }
 
-    /// Built-in Medium Style 1 is not serialized into tableStyles.xml. Current
-    /// PowerPoint applies bold text throughout, light text on the header, and a
-    /// compound double separator above a flagged total row.
+    /// Built-in Medium Style 1 is not serialized into tableStyles.xml. An
+    /// Office-produced flag matrix shows regular whole-table text, bold text on
+    /// flagged header/total/first-column/last-column parts, light header text,
+    /// and a compound double separator above a flagged total row.
     #[test]
     fn medium_style_1_accent_1_carries_text_and_total_row_formatting() {
         let theme = HashMap::from([
@@ -999,11 +1007,15 @@ mod tests {
             .expect("known PowerPoint table style");
 
         assert_eq!(style.whole_tbl.text.color.as_deref(), Some("10263F"));
-        assert_eq!(style.whole_tbl.text.bold, Some(true));
+        assert_eq!(style.whole_tbl.text.bold, None);
         assert_eq!(style.first_row.text.color.as_deref(), Some("F9F9F9"));
         assert_eq!(style.first_row.text.bold, Some(true));
         assert_eq!(style.last_row.text.color.as_deref(), Some("10263F"));
         assert_eq!(style.last_row.text.bold, Some(true));
+        assert_eq!(style.first_col.text.color, None);
+        assert_eq!(style.first_col.text.bold, Some(true));
+        assert_eq!(style.last_col.text.color, None);
+        assert_eq!(style.last_col.text.bold, Some(true));
         let TableLineStyle::Stroke(total_separator) = &style.last_row.borders.top else {
             panic!("last-row top separator");
         };

@@ -3134,6 +3134,7 @@ fn produce_slide_unit_with_journal(
         let build_parsed_layout = |lx: &str, zip: &mut PptxZip| -> ParsedLayout {
             parse_layout(
                 lx,
+                &bundle.master_placeholder_types,
                 &bundle.master_font_sizes,
                 &bundle.master_font_families,
                 &bundle.master_level_font_sizes,
@@ -6210,6 +6211,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &master_indents,
             &HashMap::new(),
             &HashMap::new(),
@@ -6281,6 +6283,7 @@ mod tests {
             let mut zip = PptxZip::new(cursor).unwrap();
             parse_layout(
                 layout,
+                &HashMap::new(),
                 &m_f64,
                 &m_str,
                 &m_lfs,
