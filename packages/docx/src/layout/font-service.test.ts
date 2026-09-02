@@ -236,7 +236,9 @@ describe('font layout services', () => {
         themeFontPresence,
         slot,
       } as Parameters<typeof service.resolve>[0]);
-      expect(resolved, slot).toMatchObject({ source: 'generic', requestedFamily: 'sans-serif' });
+      expect(resolved, slot).toMatchObject({
+        source: 'generic', requestedFamily: 'serif', genericFamily: 'serif',
+      });
     }
   });
 
