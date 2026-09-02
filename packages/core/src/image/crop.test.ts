@@ -158,7 +158,7 @@ describe('sourceRasterTargetSize', () => {
     expect(sourceRasterTargetSize(
       Number.MAX_VALUE,
       900,
-      { l: 0.5, t: 0, r: 0.4999999999999999, b: 0 },
+      { l: 1 - Number.EPSILON, t: 0, r: 0, b: 0 },
     )).toBeNull();
   });
 });
