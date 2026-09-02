@@ -38,7 +38,7 @@ export const announcements: readonly Announcement[] = [
   {
     slug: 'v085-large-images-and-rendering',
     date: '2026-09-02',
-    label: 'Upcoming release',
+    label: 'Release note',
     version: 'v0.85.0',
     title: 'Larger images and steadier rendering in v0.85.0',
     summary: 'v0.85.0 opens more Office files with large images, broadens TIFF support and improves rendering stability in worker mode and during PowerPoint zoom.',

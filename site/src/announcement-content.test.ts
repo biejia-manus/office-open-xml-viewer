@@ -16,7 +16,7 @@ describe('v0.85 large-image and rendering announcement', () => {
 
   it('leads with user outcomes, gives bounded migration guidance and leaves technical detail last', () => {
     expect(announcement).toMatchObject({
-      label: 'Upcoming release',
+      label: 'Release note',
       version: 'v0.85.0',
       title: 'Larger images and steadier rendering in v0.85.0',
     });

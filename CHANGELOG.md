@@ -7,6 +7,35 @@ the corresponding minor release.
 
 ## Unreleased
 
+## 0.85.0 — 2026-09-02
+
+Compatible minor release making image-heavy Office files more reliable while
+improving rendering fidelity and stability across regular and worker modes.
+
+- **large images:** open DOCX, XLSX and PPTX files whose high-resolution source
+  images would previously exceed the decoded-image limit. Oversized rasters are
+  prepared for the current display size, and zooming can request a sharper
+  result without retaining unnecessary source pixels.
+- **configurable image policy:** add the shared `imageResources` option for
+  applications that need a different decoded-image budget or strict rejection.
+  Non-disableable source, dimension and per-image safety limits remain in place.
+- **broader TIFF support:** render bounded bilevel, grayscale, RGB, RGBA,
+  process-CMYK and CCITT Group 4 TIFF images through the existing optional TIFF
+  entry, including display-sized output for Office image paints.
+- **worker reliability:** keep SVG images, PowerPoint text and styled Excel
+  sheets consistent between regular and worker rendering, with clearer image
+  and worksheet diagnostics.
+- **PowerPoint viewing:** keep the visible slide anchored while zoom settles,
+  including at maximum zoom, and improve placeholder formatting, built-in table
+  styles and several chart layouts.
+- **Word fidelity:** retain page-dependent fields without cached results and use
+  Word-compatible default font intent for Latin and complex-script text while
+  preserving authored and font-table choices.
+- **compatibility:** no existing option or method is removed or renamed. Most
+  applications require no source changes. Applications that intentionally omit
+  the optional TIFF codec should allow the now-explicit `TiffDecodeError`
+  diagnostic, or enable `@silurus/ooxml/tiff` to display recognized TIFF images.
+
 ## 0.84.1 — 2026-09-01
 
 Compatible patch release tightening the Word compatibility boundaries introduced
