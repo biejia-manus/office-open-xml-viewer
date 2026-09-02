@@ -266,14 +266,14 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     await expect(run([small, large])).resolves.toEqual(largeOnly);
   });
 
-  it('preserves native decoding for an ordinary visible raster that fits', async () => {
+  it('preserves native decoding for an ordinary visible raster by default', async () => {
     const png = new Uint8Array(24);
     png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     png.set([0x49, 0x48, 0x44, 0x52], 12);
     new DataView(png.buffer).setUint32(16, 800);
     new DataView(png.buffer).setUint32(20, 600);
     const blob = new Blob([png as BlobPart], { type: 'image/png' });
-    const decode = vi.fn(async () => new FakeBitmap('native'));
+    const decode = vi.fn(async () => new FakeBitmap('display'));
     vi.stubGlobal('createImageBitmap', decode);
     const fetchImage = vi.fn(async () => blob);
     const ws = worksheetWithImages();
@@ -282,6 +282,31 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     await prefetchImages(ws, new Map(), fetchImage, { effectiveDpr: 1 });
 
     expect(decode).toHaveBeenCalledWith(blob);
+  });
+
+  it('decodes an ordinary visible raster at its bounded display grid when requested', async () => {
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    png.set([0x49, 0x48, 0x44, 0x52], 12);
+    new DataView(png.buffer).setUint32(16, 800);
+    new DataView(png.buffer).setUint32(20, 600);
+    const blob = new Blob([png as BlobPart], { type: 'image/png' });
+    const decode = vi.fn(async () => new FakeBitmap('display'));
+    vi.stubGlobal('createImageBitmap', decode);
+    const fetchImage = vi.fn(async () => blob);
+    const ws = worksheetWithImages();
+    ws.shapeGroups = [];
+
+    await prefetchImages(ws, new Map(), fetchImage, {
+      effectiveDpr: 1,
+      imageResources: { resolution: 'display' },
+    });
+
+    expect(decode).toHaveBeenCalledWith(blob, {
+      resizeWidth: 800,
+      resizeHeight: 54,
+      resizeQuality: 'high',
+    });
   });
 
   it('keeps DrawingML pixel effects on the authored source grid during prefetch', async () => {
@@ -379,9 +404,7 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     view.setUint32(20, 1000);
     const decode = vi.fn(async (_source: unknown, options?: ImageBitmapOptions) => ({
       width: options?.resizeWidth ?? 3200,
-      height: options?.resizeWidth
-        ? Math.ceil(1000 * options.resizeWidth / 3200)
-        : 1000,
+      height: options?.resizeHeight ?? 1000,
       close() {},
     }) as unknown as ImageBitmap);
     vi.stubGlobal('createImageBitmap', decode);
@@ -395,9 +418,7 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     expect(decode).toHaveBeenCalledTimes(2);
     const targets = decode.mock.calls.map((call) => ({
       width: call[1]?.resizeWidth as number,
-      height: call[1]?.resizeWidth
-        ? Math.ceil(1000 * call[1].resizeWidth / 3200)
-        : 1000,
+      height: call[1]?.resizeHeight as number,
     }));
     expect(targets[0]).toEqual(targets[1]);
     expect(targets[0].width * targets[0].height * 4 * targets.length)
@@ -446,8 +467,9 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     expect(decode).toHaveBeenCalledOnce();
     expect(decode.mock.calls[0]?.[1]).toMatchObject({
       // Four authored 64-character columns resolve to 2048 CSS px in this
-      // fixture; at DPR 2 the full chart-bound source request is 4096 px wide.
-      resizeWidth: 4_096,
+      // fixture; DPR 2 needs 4096 px, and the available geometry share retains
+      // up to 2× that display grid.
+      resizeWidth: 8_192,
       resizeQuality: 'high',
     });
     expect(cache.has(chartImageFillKey({
@@ -591,7 +613,7 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     expect(fetchImage).toHaveBeenCalledWith('xl/media/visible-overflow-gate.png', 'image/png');
     expect(decode).toHaveBeenCalledOnce();
     expect(decode.mock.calls[0]?.[1]).toMatchObject({
-      resizeWidth: 2_048,
+      resizeWidth: 4_096,
       resizeQuality: 'high',
     });
     expect(cache.size).toBe(1);

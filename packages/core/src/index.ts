@@ -242,6 +242,7 @@ export {
   type CachedBitmapOptions,
 } from './image/bitmap-image-by-path';
 export {
+  isBrowserResizableRasterMimeType,
   isDecodeTargetResizableRasterFormat,
   type RasterBlobInspection,
   type RasterFormat,

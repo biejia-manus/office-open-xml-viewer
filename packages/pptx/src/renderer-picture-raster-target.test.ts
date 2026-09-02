@@ -171,9 +171,10 @@ describe('PPTX display-sized picture decode', () => {
     expect(coreMocks.decode).toHaveBeenCalled();
     for (const call of coreMocks.decode.mock.calls) {
       expect(call[4]).toMatchObject({
-        // 480 CSS px × DPR 2, then / 50% visible source width.
-        targetWidthPx: 1920,
-        targetHeightPx: 720,
+        // 480 CSS px × DPR 2, then / 50% visible source width, retained at
+        // 2× that display grid while the geometry share has room.
+        targetWidthPx: 3840,
+        targetHeightPx: 1440,
       });
     }
   });
@@ -205,7 +206,7 @@ describe('PPTX display-sized picture decode', () => {
       'image/png',
       undefined,
       expect.any(Function),
-      expect.objectContaining({ targetWidthPx: 2068, targetHeightPx: 1512 }),
+      expect.objectContaining({ targetWidthPx: 4136, targetHeightPx: 3024 }),
     );
     expect(drawImage).toHaveBeenCalledWith(
       coreMocks.bitmap,

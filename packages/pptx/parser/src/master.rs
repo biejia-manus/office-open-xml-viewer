@@ -94,8 +94,12 @@ pub(crate) struct LayoutPlaceholders {
     /// Default run reflection per placeholder type, inherited from layout or
     /// master `lvl1pPr/defRPr/effectLst`.
     pub(crate) by_type_reflection: HashMap<String, Reflection>,
-    /// Vertical anchor ("t"/"ctr"/"b") per placeholder type, from layout/master bodyPr
+    /// Vertical anchor ("t"/"ctr"/"b") per placeholder idx/type, from
+    /// layout/master bodyPr. The idx tier prevents one of several same-type
+    /// layout slots from leaking its alignment into its siblings.
+    pub(crate) by_idx_anchor: HashMap<u32, String>,
     pub(crate) by_type_anchor: HashMap<String, String>,
+    pub(crate) by_type_master_anchor: HashMap<String, String>,
     /// Per-placeholder layout `bodyPr` text insets (`lIns`, `tIns`, `rIns`,
     /// `bIns`). Each component stays optional so an omitted layout attribute
     /// can continue through the theme/spec fallback instead of being replaced
@@ -464,10 +468,42 @@ impl LayoutPlaceholders {
         })
     }
 
-    /// Look up inherited vertical anchor for this placeholder type.
-    pub(crate) fn lookup_anchor(&self, ph_type: &str) -> Option<String> {
+    /// Look up inherited vertical anchor for this placeholder. An anchor on the
+    /// exact idx-matched layout slot wins. PowerPoint otherwise retains the
+    /// layout's type-level placeholder fallback before consulting the master;
+    /// this preserves layouts whose first same-type slot carries the shared
+    /// anchor while still preventing it from overriding an explicitly authored
+    /// anchor on a later idx.
+    pub(crate) fn lookup_anchor(&self, ph_type: &str, ph_idx: Option<u32>) -> Option<String> {
+        let master = || {
+            self.by_type_master_anchor
+                .get(ph_type)
+                .cloned()
+                .or_else(|| {
+                    if ph_type == "body" || ph_type == "obj" {
+                        self.by_type_master_anchor.get("").cloned()
+                    } else {
+                        None
+                    }
+                })
+        };
+        if let Some(i) = ph_idx {
+            return self
+                .by_idx_anchor
+                .get(&i)
+                .cloned()
+                .or_else(|| self.by_type_anchor.get(ph_type).cloned())
+                .or_else(|| {
+                    if ph_type == "body" || ph_type == "obj" {
+                        self.by_type_anchor.get("").cloned()
+                    } else {
+                        None
+                    }
+                })
+                .or_else(master);
+        }
         self.by_type_anchor.get(ph_type).cloned().or_else(|| {
-            if ph_type == "body" {
+            if ph_type == "body" || ph_type == "obj" {
                 self.by_type_anchor.get("").cloned()
             } else {
                 None
@@ -1437,6 +1473,7 @@ pub(crate) fn parse_layout_placeholders(
         by_type_master_level_sizes: master_level_font_sizes.clone(),
         by_type_master_level_indents: master_level_indents.clone(),
         by_type_master_level_bullets: master_level_bullets.clone(),
+        by_type_master_anchor: master_anchors.clone(),
         by_type_master_alignment: master_alignments.clone(),
         by_type_master_ea_ln_brk: master_ea_ln_brk.clone(),
         by_type_master_space_before: master_space_before.clone(),
@@ -1691,6 +1728,15 @@ pub(crate) fn parse_layout_placeholders(
                     .or_else(|| master_alignments.get(&ph_type).cloned());
                 if let Some(a) = idx_algn {
                     lph.by_idx_alignment.entry(idx).or_insert(a);
+                }
+                // ECMA-376 §19.3.1.36: idx binds the slide placeholder to this
+                // exact layout slot. Preserve its vertical anchor independently
+                // from same-type siblings; fall back to the master for this type.
+                let idx_anchor = layout_anchor
+                    .clone()
+                    .or_else(|| master_anchors.get(&ph_type).cloned());
+                if let Some(a) = idx_anchor {
+                    lph.by_idx_anchor.entry(idx).or_insert(a);
                 }
             }
             let effective_fs =
@@ -2576,6 +2622,79 @@ mod placeholder_geometry_tests {
         assert_eq!(body.t_ins, 72_000);
         assert_eq!(body.r_ins, 216_000);
         assert_eq!(body.b_ins, 72_000);
+    }
+
+    #[test]
+    fn slide_placeholder_inherits_vertical_anchor_from_matching_layout_idx() {
+        let placeholders = parse_layout_geometry(
+            r#"
+              <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="Bottom body"/><p:cNvSpPr/>
+                  <p:nvPr><p:ph type="body" idx="1"/></p:nvPr>
+                </p:nvSpPr>
+                <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000" cy="1000"/></a:xfrm></p:spPr>
+                <p:txBody><a:bodyPr anchor="b"/><a:lstStyle/><a:p/></p:txBody>
+              </p:sp>
+              <p:sp>
+                <p:nvSpPr><p:cNvPr id="3" name="Top body"/><p:cNvSpPr/>
+                  <p:nvPr><p:ph type="body" idx="2"/></p:nvPr>
+                </p:nvSpPr>
+                <p:spPr><a:xfrm><a:off x="0" y="1000"/><a:ext cx="1000" cy="1000"/></a:xfrm></p:spPr>
+                <p:txBody><a:bodyPr anchor="t"/><a:lstStyle/><a:p/></p:txBody>
+              </p:sp>"#,
+        );
+        let shape = parse_slide_shape(
+            r#"
+              <p:nvSpPr><p:cNvPr id="4" name="Top body instance"/><p:cNvSpPr/>
+                <p:nvPr><p:ph type="body" idx="2"/></p:nvPr>
+              </p:nvSpPr>
+              <p:spPr/>
+              <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Top</a:t></a:r></a:p></p:txBody>"#,
+            &placeholders,
+        );
+
+        assert_eq!(
+            shape
+                .text_body
+                .expect("placeholder text body")
+                .vertical_anchor,
+            "t",
+        );
+
+        let master_only = LayoutPlaceholders {
+            by_type_master_anchor: HashMap::from([("".to_owned(), "b".to_owned())]),
+            ..LayoutPlaceholders::default()
+        };
+        assert_eq!(
+            master_only.lookup_anchor("obj", Some(99)).as_deref(),
+            Some("b"),
+        );
+    }
+
+    #[test]
+    fn idx_placeholder_without_anchor_retains_layout_type_fallback() {
+        let placeholders = parse_layout_geometry(
+            r#"
+              <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="Shared body anchor"/><p:cNvSpPr/>
+                  <p:nvPr><p:ph type="body" idx="1"/></p:nvPr>
+                </p:nvSpPr>
+                <p:spPr/>
+                <p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p/></p:txBody>
+              </p:sp>
+              <p:sp>
+                <p:nvSpPr><p:cNvPr id="3" name="Body instance"/><p:cNvSpPr/>
+                  <p:nvPr><p:ph type="body" idx="10"/></p:nvPr>
+                </p:nvSpPr>
+                <p:spPr/>
+                <p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>
+              </p:sp>"#,
+        );
+
+        assert_eq!(
+            placeholders.lookup_anchor("body", Some(10)).as_deref(),
+            Some("ctr"),
+        );
     }
 
     const LAYOUT_ELLIPSE: &str = r#"
