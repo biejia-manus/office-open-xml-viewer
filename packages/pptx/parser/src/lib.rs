@@ -4743,6 +4743,26 @@ mod tests {
         assert!(!r_n.strikethrough && !r_n.strike_double);
     }
 
+    /// CT_TextCharacterProperties is a sequence: the EG_TextRunProperties fill
+    /// choice precedes latin/ea/cs. PowerPoint ignores a solidFill serialized
+    /// after those font children instead of accepting the out-of-order value.
+    /// A valid fill in its schema position must continue to resolve normally.
+    #[test]
+    fn test_parse_run_ignores_out_of_order_text_fill() {
+        let valid = r#"<r xmlns="http://schemas.openxmlformats.org/drawingml/2006/main"><rPr><solidFill><schemeClr val="accent1"/></solidFill><latin typeface="Aptos"/><ea typeface=""/><cs typeface=""/></rPr><t>valid</t></r>"#;
+        let invalid = r#"<r xmlns="http://schemas.openxmlformats.org/drawingml/2006/main"><rPr><latin typeface="Aptos"/><ea typeface=""/><cs typeface=""/><solidFill><schemeClr val="accent1"/></solidFill></rPr><t>invalid</t></r>"#;
+        let theme = HashMap::from([("accent1".to_owned(), "1D6FA8".to_owned())]);
+        let rels = HashMap::new();
+
+        let valid_doc = roxmltree::Document::parse(valid).unwrap();
+        let valid_run = parse_run(valid_doc.root_element(), None, &theme, &rels).unwrap();
+        assert_eq!(valid_run.color.as_deref(), Some("1D6FA8"));
+
+        let invalid_doc = roxmltree::Document::parse(invalid).unwrap();
+        let invalid_run = parse_run(invalid_doc.root_element(), None, &theme, &rels).unwrap();
+        assert_eq!(invalid_run.color, None);
+    }
+
     /// ECMA-376 §21.1.2.3.9; ST_TextCapsType §20.1.10.64 — cap="all" /
     /// "small" are passed through;
     /// cap="none" or omitted yields None so the field stays absent in JSON.
