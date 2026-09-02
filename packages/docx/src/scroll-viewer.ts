@@ -170,7 +170,8 @@ export interface DocxScrollViewerOptions extends Omit<RenderPageOptions, 'onText
   onContextMenu?: (event: ViewerContextMenuEvent<DocxSelectionContext>) => void;
   /** CSS backgrounds for ordinary and active in-document search matches. */
   findHighlightColors?: FindHighlightColors;
-  /** Minimum zoom scale (px-per-pt multiplier floor). Default 0.1. */
+  /** Minimum zoom scale (px-per-pt multiplier floor). A smaller width-fit base
+   * remains reachable as the effective minimum. Default 0.1. */
   zoomMin?: number;
   /** Maximum zoom scale. Default 4. */
   zoomMax?: number;
@@ -298,7 +299,7 @@ export class DocxScrollViewer implements ZoomableViewer {
    *  loading, `opts.mode` decides and `load()` passes it to `DocxDocument.load`. */
   private _mode: 'main' | 'worker';
 
-  /** px-per-pt zoom multiplier. Base fit maps the first page's width to the
+  /** px-per-pt zoom multiplier. Base fit maps the widest page's width to the
    *  container width (or opts.width). Zoom multiplies this (design §7). */
   private _scale = 1;
   /** Whether the base fit scale has been established. Set true the first time
@@ -999,15 +1000,29 @@ export class DocxScrollViewer implements ZoomableViewer {
     margin.dataset.ooxmlCommentZoom = String(zoom);
   }
 
-  /** Base scale: first page's width fit to the fit-width. Returns 0 when the
+  /** Widest authored page width. DOCX sections may differ by a fraction of a
+   * point or switch orientation, and fit-width must cover the same extent as the
+   * horizontal spacer. */
+  private _widestPageWidthPt(): number {
+    if (!this._doc) return 0;
+    let widthPt = 0;
+    const pageCount = this._presentedPageCount || this._doc.pageCount;
+    for (let i = 0; i < pageCount; i++) {
+      const pageWidthPt = this._doc.pageSize(i).widthPt;
+      if (pageWidthPt > widthPt) widthPt = pageWidthPt;
+    }
+    return widthPt;
+  }
+
+  /** Base scale: widest page's width fit to the fit-width. Returns 0 when the
    *  container has no width yet (deferral). */
   private _baseScale(): number {
     if (!this._doc || this._doc.pageCount === 0) return 0;
     const w = this._fitWidthPx();
     if (w <= 0) return 0;
-    const firstWpt = this._doc.pageSize(0).widthPt;
-    if (firstWpt <= 0) return 0;
-    return w / (firstWpt * PT_TO_PX);
+    const widestWpt = this._widestPageWidthPt();
+    if (widestWpt <= 0) return 0;
+    return w / (widestWpt * PT_TO_PX);
   }
 
   /**
@@ -1066,6 +1081,16 @@ export class DocxScrollViewer implements ZoomableViewer {
         }
       } else {
         return; // container has no width yet — retry on the next resize
+      }
+    } else {
+      // Progressive pagination or a layout-view switch can reveal a page wider
+      // than the one(s) used for the previous base. Re-fit even when the
+      // container itself did not resize, preserving the user's zoom multiplier.
+      const base = this._baseScale();
+      if (base > 0 && base !== this._prevBase) {
+        const mult = this._prevBase > 0 ? this._scale / this._prevBase : 1;
+        this._prevBase = base;
+        this.setScale(base * mult);
       }
     }
     this._recomputeHeights();
@@ -1791,14 +1816,13 @@ export class DocxScrollViewer implements ZoomableViewer {
    * `[0, totalHeight' − viewportHeight]`. Because a page's height scales linearly
    * with `_scale`, the same fractional position maps exactly to the new geometry.
    *
-   * CAVEAT — base fit below the floor: `relayout()` sets `_scale = base` WITHOUT
-   * clamping to `[zoomMin, zoomMax]`. If the base fit is below `zoomMin` (a wide
-   * page in a narrow container), the initial scale sits under the floor, but once
-   * the user zooms via `setScale` the clamp pins the minimum to `zoomMin`, so they
-   * can no longer return below the floor to the original base fit through this API.
+   * When the width-fit base is below `zoomMin` (for example a poster-sized page
+   * in a narrow container), that fit becomes the effective floor. The opening
+   * view already permits the smaller scale, so keeping it reachable avoids a
+   * one-way zoom ratchet after the user zooms in.
    */
   setScale(scale: number): void {
-    const zoomMin = this._opts.zoomMin ?? 0.1;
+    const zoomMin = this._effectiveZoomMin();
     const zoomMax = this._opts.zoomMax ?? 4;
     const next = Math.min(zoomMax, Math.max(zoomMin, scale));
     // Consume the gesture-only pointer anchor (Ctrl/⌘+wheel set it just above)
@@ -1937,15 +1961,25 @@ export class DocxScrollViewer implements ZoomableViewer {
 
   /** IX9 {@link ZoomableViewer} — step down to the next lower ladder rung. */
   zoomOut(): void {
-    this.setScale(prevZoomStep(this.getScale()));
+    this.setScale(prevZoomStep(this.getScale(), this._effectiveZoomMin()));
+  }
+
+  /** The configured floor, extended down to the current width fit when needed.
+   * Before layout establishes there is no fit exception, so pre-load requests
+   * retain the documented `[zoomMin, zoomMax]` clamp. */
+  private _effectiveZoomMin(): number {
+    const configured = this._opts.zoomMin ?? 0.1;
+    return this._scaleEstablished && this._prevBase > 0
+      ? Math.min(configured, this._prevBase)
+      : configured;
   }
 
   /**
    * IX9 {@link ZoomableViewer} — fit a page's WIDTH to the container (the classic
    * continuous-scroll "fit width"). Sets the scale to the width-fit base for the
-   * current container, then re-anchors + re-renders via {@link setScale}. Defers
-   * (no-op) while the container is unlaid-out. Note the `zoomMin`/`zoomMax` clamp
-   * still applies, so a fit below `zoomMin` pins to `zoomMin`.
+   * current container and the widest page, then re-anchors + re-renders via
+   * {@link setScale}. Defers (no-op) while the container is unlaid-out. A width
+   * fit below `zoomMin` becomes the effective floor so it remains reachable.
    */
   fitWidth(): void {
     this._fit('width');
@@ -1954,23 +1988,24 @@ export class DocxScrollViewer implements ZoomableViewer {
   /**
    * IX9 {@link ZoomableViewer} — fit a WHOLE page (width and height) inside the
    * container so one page is visible without scrolling; takes the tighter of the
-   * width/height fit. Uses the FIRST page's size (the continuous viewer's fit
-   * reference, matching the base-fit convention). Defers while unlaid-out.
+   * width/height fit. Uses the FIRST page's size; unlike document-wide
+   * `fitWidth()`, this is a one-page fit target. Defers while unlaid-out.
    */
   fitPage(): void {
     this._fit('page');
   }
 
-  /** Shared fit for {@link fitWidth}/{@link fitPage}: the width-fit factor is the
-   *  established base (`_baseScale`); the page-fit additionally bounds by the
-   *  container height against the first page's height. Applies via {@link setScale}
-   *  so the flicker-free re-anchor / settle path and `onScaleChange` all run. */
+  /** Shared fit for {@link fitWidth}/{@link fitPage}: width fit uses the widest
+   *  page so it agrees with the horizontal spacer; page fit continues to target
+   *  the first page's own width and height. Applies via {@link setScale} so the
+   *  flicker-free re-anchor / settle path and `onScaleChange` all run. */
   private _fit(mode: 'width' | 'page'): void {
     if (!this._doc || this._doc.pageCount === 0) return;
     const size = this._doc.pageSize(0);
+    const widthPt = mode === 'width' ? this._widestPageWidthPt() : size.widthPt;
     const scale = fitScale(
       {
-        contentWidth: size.widthPt * PT_TO_PX,
+        contentWidth: widthPt * PT_TO_PX,
         contentHeight: size.heightPt * PT_TO_PX,
         containerWidth: this._fitWidthPx(),
         containerHeight: this._scrollHost.clientHeight,
@@ -2796,15 +2831,9 @@ export class DocxScrollViewer implements ZoomableViewer {
     // Route through setScale so the epoch bumps and the re-anchor/force-re-render
     // path runs identically to a zoom.
     //
-    // zoomMin RATCHET (design §8.1 caveat, see setScale JSDoc): `zoomMin`/`zoomMax`
-    // are ABSOLUTE px-per-pt bounds, but the re-fit base (`newBase × mult`) is
-    // computed UNCLAMPED. A resize that transits the scale below `zoomMin × pageWidth`
-    // (a wide page in a container that briefly narrows) is clamped UP by `setScale`,
-    // which permanently inflates the implied multiplier even with zero user zoom —
-    // the next re-fit reads back the clamped `_scale` as `mult`. This is bounded and
-    // converges (the clamp floor is fixed), but it means the preserved multiplier can
-    // drift above 1 purely from resize transits below the floor. Accepted consequence
-    // of using absolute bounds (§8.1) with an unclamped relayout base.
+    // `_prevBase` is updated before `setScale`, so a newly smaller width fit also
+    // becomes the effective floor for this resize. That preserves the multiplier
+    // without ratcheting an initially fitted oversized page up to zoomMin.
     this.setScale(newBase * mult);
     // `setScale` no-ops when the clamped scale is unchanged (e.g. already pinned at
     // a clamp boundary), which would skip its preview + settle. A width+height
