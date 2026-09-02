@@ -7,6 +7,23 @@ the corresponding minor release.
 
 ## Unreleased
 
+## 0.85.1 — 2026-09-02
+
+Compatible patch release restoring fitted viewing after zoom and preventing a
+floating-point edge case from rejecting Word tables that fit on the page.
+
+- **fitted zoom:** after zooming into poster-sized PPTX slides or DOCX pages,
+  zooming out can return to the original fit-to-viewport scale even when that
+  scale is below the configured manual zoom minimum.
+- **mixed Word page sizes:** fit-to-width uses the widest page in the document,
+  and progressive rendering refits when a wider page becomes available, without
+  leaving an avoidable horizontal scrollbar.
+- **Word table stability:** tolerate single-ULP arithmetic drift when a table
+  fragment exactly meets a page boundary, avoiding a false non-convergence
+  error while retaining strict handling for genuine overflow.
+- **compatibility:** no existing option or method is removed or renamed, and no
+  application changes are required.
+
 ## 0.85.0 — 2026-09-02
 
 Compatible minor release making image-heavy Office files more reliable while

@@ -311,10 +311,11 @@ await viewer.load('/deck.pptx');
 ```
 
 The container must have a bounded height (e.g. `height: 100vh` or a flex child)
-so the viewer can size its scroll host to it. Base zoom fits the first page/slide
-width to the container width and re-fits on resize; a `0`-width container defers
-layout until it has width. Call `destroy()` to tear down (a self-loaded engine is
-destroyed with it; a borrowed one is not — see below).
+so the viewer can size its scroll host to it. Base zoom fits the widest available
+DOCX page, or the PPTX slide width, to the container and re-fits on resize. A
+progressively loaded DOCX re-fits if a wider page appears; a `0`-width container
+defers layout until it has width. Call `destroy()` to tear down (a self-loaded
+engine is destroyed with it; a borrowed one is not — see below).
 
 Pass `refitOnResize: false` when the viewport must not determine the document's
 physical display size. An explicit pre-load `setScale(1)` then keeps the same
@@ -343,7 +344,9 @@ sheet sits inside a uniform desk margin; pass `0` for a flush edge.
 bare-wheel still scrolls natively. Zoom is flicker-free — a rapid gesture shows a
 CSS preview and settles into a crisp re-render when it pauses. Bounds are the
 absolute scale factors `zoomMin` / `zoomMax` (default `0.1` / `4`), and
-`setScale(scale)` sets it programmatically. Pass `enableZoom: false` to disable.
+`setScale(scale)` sets it programmatically. When fitting needs a scale below
+`zoomMin`, that fitted scale becomes the effective minimum so users can zoom in
+and still return to the original fit. Pass `enableZoom: false` to disable.
 
 **Text selection and find.** Pass `enableTextSelection: true` to overlay a
 transparent, selectable text layer per page/slide for native copy. It works in
