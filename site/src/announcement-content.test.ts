@@ -200,15 +200,15 @@ describe('v0.81 ChartEx migration guide', () => {
 
 describe('stable documentation boundaries', () => {
   it('keeps the current bundle measurements on one stable page', () => {
-    expect(bundleSizePage).toContain('Current production assets for v0.85.1');
+    expect(bundleSizePage).toContain('Current production assets for v0.85.2');
     expect(bundleSizePage).toContain('DOCX static JavaScript');
-    expect(bundleSizePage).toMatch(/<td>1,966 KiB<\/td>\s*<td>478 KiB<\/td>/);
+    expect(bundleSizePage).toMatch(/<td>1,967 KiB<\/td>\s*<td>479 KiB<\/td>/);
     expect(bundleSizePage).toContain('XLSX static JavaScript');
-    expect(bundleSizePage).toMatch(/<td>1,281 KiB<\/td>\s*<td>306 KiB<\/td>/);
+    expect(bundleSizePage).toMatch(/<td>1,283 KiB<\/td>\s*<td>306 KiB<\/td>/);
     expect(bundleSizePage).toContain('PPTX static JavaScript');
-    expect(bundleSizePage).toMatch(/<td>1,327 KiB<\/td>\s*<td>310 KiB<\/td>/);
+    expect(bundleSizePage).toMatch(/<td>1,329 KiB<\/td>\s*<td>311 KiB<\/td>/);
     expect(bundleSizePage).toContain('<tr><th>DOCX parser WASM</th><td>1,786 KiB</td><td>741 KiB</td></tr>');
-    expect(bundleSizePage).toContain('<tr><th>PPTX parser WASM</th><td>1,648 KiB</td><td>649 KiB</td></tr>');
+    expect(bundleSizePage).toContain('<tr><th>PPTX parser WASM</th><td>1,650 KiB</td><td>649 KiB</td></tr>');
     expect(bundleSizePage).toContain('ChartEx');
     expect(bundleSizePage.match(/<th>TIFF image codec<\/th>/g)).toHaveLength(1);
     expect(bundleSizePage).toContain('<td>22.2 KiB</td><td>6.7 KiB</td>');

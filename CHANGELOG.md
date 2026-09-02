@@ -7,6 +7,30 @@ the corresponding minor release.
 
 ## Unreleased
 
+## 0.85.2 — 2026-09-03
+
+Patch release restoring smooth progressive viewing in worker mode and fixing
+large-image decoding, PowerPoint placeholder alignment, and provisional Word
+pagination.
+
+- **responsive progressive viewing:** Try Yours continues loading later pages
+  while idle, updates page totals as pages arrive, and starts image decoding
+  without waiting for whole-document raster inspection.
+- **large-image reliability and clarity:** decoded raster dimensions now match
+  the two-axis resource plan, avoiding false decoded-image-limit failures for
+  poster-sized slides while preserving native image detail when it fits the
+  configured budget.
+- **PowerPoint text placement:** placeholder text boxes inherit their vertical
+  anchor from the matching layout placeholder, preventing top-aligned text from
+  appearing at the bottom of large slides.
+- **stable Word pagination:** documents whose header or footer reserve is still
+  converging no longer publish a transient page assignment that can briefly
+  place the next page's content on the previous page.
+- **Try Yours defaults:** comments are hidden in the public file preview.
+- **compatibility:** no existing option or method is removed or renamed, and no
+  application changes are required. The optional image resolution policy can be
+  set to `display`; its default remains `native-if-fit`.
+
 ## 0.85.1 — 2026-09-02
 
 Compatible patch release restoring fitted viewing after zoom and preventing a
