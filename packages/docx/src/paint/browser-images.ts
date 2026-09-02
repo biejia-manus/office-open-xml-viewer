@@ -8,6 +8,7 @@ import {
   getCachedDerivedBitmap,
   getCachedSvgImageByPath,
   inspectCachedRasterSource,
+  isBrowserResizableRasterMimeType,
   isDecodeTargetResizableRasterFormat,
   metafileRasterSize,
   preferVectorBlip,
@@ -189,7 +190,11 @@ export async function decodeRaster(
     suppressBoundaryFrame: true,
     tiff,
     maxRetainedPixels,
-    ...(colorReplaceFrom || duotone ? {} : target ?? {}),
+    // The shared decoder preserves the native grid while it fits the explicit
+    // effect working-set ceiling. Supplying the display target as a fallback
+    // lets adaptive mode downsample an oversized effect source before the four
+    // source/offscreen/ImageData/result surfaces would cross that ceiling.
+    ...(target ?? {}),
   };
   const base = await getCachedBitmapByPath(imagePath, mimeType, fetchImage, {
     ...sourceBitmapOptions,
@@ -210,7 +215,10 @@ export async function decodeRaster(
     target?.targetWidthPx,
     target?.targetHeightPx,
   );
-  const key = `${imageKey(resolvedBaseKey, colorReplaceFrom, duotone)}${resizeOptions ? `|resize-width:${resizeOptions.resizeWidth}` : ''}${failClosedOnDuotoneFailure ? '|strict' : ''}`;
+  const resizeKey = resizeOptions
+    ? `|resize:${resizeOptions.resizeWidth}x${resizeOptions.resizeHeight}`
+    : '';
+  const key = `${imageKey(resolvedBaseKey, colorReplaceFrom, duotone)}${resizeKey}${failClosedOnDuotoneFailure ? '|strict' : ''}`;
   return getCachedDerivedBitmap(
     DOCX_COLOR_EFFECT_CACHE_NAMESPACE,
     key,
@@ -418,6 +426,15 @@ export async function preloadPaintImages(
     const dataIsSvg = request.mimeType === 'image/svg+xml';
     const blip = { svgImagePath: request.svgImagePath, srcRect: request.hasCrop || null };
     if (dataIsSvg || preferVectorBlip(blip)) return null;
+    if (isBrowserResizableRasterMimeType(request.mimeType)
+      && (policy.resolution === 'display' || policy.strategy === 'adaptive')) {
+      return {
+        key: requestKey(request),
+        targetWidthPx: request.targetWidthPx,
+        targetHeightPx: request.targetHeightPx,
+        retainedSurfaceCount: 1,
+      };
+    }
     const inspection = await inspectCachedRasterSource(
       request.imagePath,
       request.mimeType,
@@ -450,7 +467,7 @@ export async function preloadPaintImages(
     const target = plan.targets.get(requestKey(request));
     request.targetWidthPx = target?.width;
     request.targetHeightPx = target?.height;
-    request.plannedPixelLimit = target?.retainedPixels;
+    request.plannedPixelLimit = target?.maxRetainedPixels;
   }
   const entries = await Promise.all(requests.map(async (request) => {
     try {

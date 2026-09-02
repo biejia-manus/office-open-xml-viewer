@@ -88,6 +88,7 @@ import {
   planDecodedImageTargets,
   duotoneCacheKey,
   inspectCachedRasterSource,
+  isBrowserResizableRasterMimeType,
   isDecodeTargetResizableRasterFormat,
   peekCachedBitmapByPath,
   dropDecodedBitmapCache,
@@ -294,7 +295,7 @@ function plannedRasterOptions(
     targetHeightPx: target.height,
     // A restricted variant key prevents a larger cached zoom level from being
     // substituted into a pass whose aggregate plan charged only this surface.
-    maxRetainedPixels: target.retainedPixels,
+    maxRetainedPixels: target.maxRetainedPixels,
   } : undefined;
 }
 
@@ -345,6 +346,8 @@ async function planSlideImages(
   bitmapOwner?: DecodedBitmapCacheOwner,
   tiff?: TiffRenderer,
 ): Promise<DecodedImageTargetPlan> {
+  const policy = normalizeImageResourceOptions(imageResources);
+  const demands: DecodedImageTargetDemand[] = [];
   const pending: Array<Promise<DecodedImageTargetDemand | null>> = [];
   const push = (
     key: string,
@@ -356,6 +359,16 @@ async function planSlideImages(
     owner: DecodedBitmapCacheOwner | undefined = loader,
   ) => {
     if (!target || !loader) return;
+    // Common browser rasters have a bounded, axis-wise display target already.
+    // Admit that target immediately so each source inspection can pipeline into
+    // its decode instead of placing an all-slide inspection barrier before the
+    // first bitmap. The decode boundary still sniffs the bytes and enforces all
+    // non-configurable source, dimension, and per-surface ceilings.
+    if (isBrowserResizableRasterMimeType(mimeType)
+      && (policy.resolution === 'display' || policy.strategy === 'adaptive')) {
+      demands.push({ key, ...target, retainedSurfaceCount });
+      return;
+    }
     pending.push(inspectCachedRasterSource(imagePath, mimeType, loader, owner)
       .then((inspection) => inspection.dimensions
         && isDecodeTargetResizableRasterFormat(inspection.format, tiff !== undefined)
@@ -473,9 +486,9 @@ async function planSlideImages(
       }
     }
   }
-  const demands = (await Promise.all(pending))
-    .filter((demand): demand is DecodedImageTargetDemand => demand !== null);
-  return planDecodedImageTargets(demands, normalizeImageResourceOptions(imageResources));
+  demands.push(...(await Promise.all(pending))
+    .filter((demand): demand is DecodedImageTargetDemand => demand !== null));
+  return planDecodedImageTargets(demands, policy);
 }
 
 function slideMayDecodeImages(slide: Slide): boolean {

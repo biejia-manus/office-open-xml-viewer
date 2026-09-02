@@ -174,6 +174,21 @@ describe('preview pages match the final layout', () => {
     }
   }, 300_000);
 
+  it('does not expose seed pages before header/footer reserve convergence', async () => {
+    const previews: ProgressiveLayoutPreview[] = [];
+    const testCase = open('header-footer', 200, { headerFooterFontSize: 64 });
+    await layoutDocumentProgressively(
+      testCase.source.bodyLayoutInput,
+      testCase.services,
+      testCase.options,
+      {
+        onPreview: (preview) => { previews.push(preview); },
+      },
+    );
+
+    expect(previews).toEqual([]);
+  }, 300_000);
+
   it('keeps a keepNext chain beyond the checkpoint in the canonical lookahead', async () => {
     // Paragraphs 44-47 form a keepNext chain whose terminal block (48) crossed
     // the old truncated-preview boundary. A resumable checkpoint sees the full

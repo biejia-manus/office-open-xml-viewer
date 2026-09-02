@@ -78,11 +78,10 @@ function decodePlan(
   );
   if (!target) return native;
   const resizeWidth = target.width;
-  // One axis lets the HTML algorithm preserve the oriented source aspect ratio
-  // (including EXIF rotation) instead of imposing the coded header's W×H.
+  const resizeHeight = target.height;
   return {
     retainedDimensions: target,
-    resizeOptions: { resizeWidth, resizeQuality: 'high' },
+    resizeOptions: { resizeWidth, resizeHeight, resizeQuality: 'high' },
   };
 }
 

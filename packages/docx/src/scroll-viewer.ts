@@ -340,14 +340,8 @@ export class DocxScrollViewer implements ZoomableViewer {
    *  Failed and stale acquisitions never replace it, so they cannot revoke the
    *  retained document's authority to publish background layout progress. */
   private _layoutUnsubscribe: (() => void) | null = null;
-  /** Page prefix currently represented by the native scroll extent. A
-   * progressive document may already expose a larger pageCount; later
-   * provisional publications are coalesced until the reader reaches this
-   * presented tail, so background pagination cannot resize the scrollbar under
-   * an otherwise idle viewport. */
+  /** Page prefix currently represented by the native scroll extent. */
   private _presentedPageCount = 0;
-  /** Newest provisional publication not yet admitted to scroll geometry. */
-  private _pendingLayoutPublication: DocxLayoutPublication | null = null;
   private _scrollListener: (() => void) | null = null;
   private _selectionChangeListener: (() => void) | null = null;
   private _selectionContextKey = 'null';
@@ -753,7 +747,6 @@ export class DocxScrollViewer implements ZoomableViewer {
     this._unbindLayoutDocument();
     this._layoutViewPublicationGeneration = 0;
     this._presentedPageCount = doc.pageCount;
-    this._pendingLayoutPublication = null;
     const unsubscribeView = subscribeDocxLayoutView(
       doc,
       (publication) => this._onLayoutViewPublication(doc, publication),
@@ -786,7 +779,6 @@ export class DocxScrollViewer implements ZoomableViewer {
     this._layoutUnsubscribe?.();
     this._layoutUnsubscribe = null;
     this._presentedPageCount = 0;
-    this._pendingLayoutPublication = null;
   }
 
   private _onLayoutPublication(doc: DocxDocument, publication: DocxLayoutPublication): void {
@@ -800,32 +792,9 @@ export class DocxScrollViewer implements ZoomableViewer {
     }
     this._find.invalidate();
     this._refreshCommentSurface();
-    if (!publication.complete) {
-      // Keep only the newest background prefix. pageCount and callbacks still
-      // report what the document can serve, but the native scrollbar stays on
-      // the prefix the reader has actually been shown until they reach its end.
-      // This turns many pagination checkpoints into one demand-driven extent
-      // update without guessing the eventual number of pages.
-      this._pendingLayoutPublication = publication;
-      if (this._lastRange) this._emitVisiblePageChange(this._lastRange);
-      // The first non-empty prefix has no existing scroll geometry to preserve,
-      // and a shrinking prefix cannot leave now-invalid pages mounted.
-      if (
-        this._presentedPageCount === 0 ||
-        publication.pageCount < this._presentedPageCount
-      ) {
-        this._pendingLayoutPublication = null;
-        this._applyLayoutPublication(publication);
-        return;
-      }
-      // If the reader is already looking at the presented tail, waiting for a
-      // future `scroll` event can strand them there: attempting to wheel past a
-      // native scroll maximum does not necessarily emit one. Reveal immediately
-      // in that case; this is reader-driven growth, not background churn.
-      this._revealPendingLayoutAtPresentedTail();
-      return;
-    }
-    this._pendingLayoutPublication = null;
+    // Publish every paintable prefix immediately. Atomic canvas replacement
+    // below prevents blank frames while an existing page refreshes, so there is
+    // no need to hide scroll growth until the reader reaches the old tail.
     this._applyLayoutPublication(publication);
   }
 
@@ -844,7 +813,6 @@ export class DocxScrollViewer implements ZoomableViewer {
     this._showTrackedChanges = publication.view.showTrackedChanges;
     this._currentDate = publication.view.currentDate;
     this._find.invalidate();
-    this._pendingLayoutPublication = null;
     this._applyLayoutPublication({
       pageCount: doc.pageCount,
       exact: true,
@@ -875,30 +843,6 @@ export class DocxScrollViewer implements ZoomableViewer {
       if (page >= this._presentedPageCount || this._slots.get(page) !== slot) continue;
       this._refreshSlotAtomically(page, slot);
     }
-  }
-
-  private _revealPendingLayoutAtPresentedTail(): void {
-    const publication = this._pendingLayoutPublication;
-    if (!publication || this._presentedPageCount === 0) return;
-    const visible = computeVisibleWindow(
-      this._scrollGeometry,
-      this._scrollHost.scrollTop,
-      this._scrollHost.clientHeight,
-      0,
-    );
-    if (visible.end < this._presentedPageCount - 1) return;
-    this._pendingLayoutPublication = null;
-    this._applyLayoutPublication(publication);
-  }
-
-  /** Admit a coalesced prefix before an explicit navigation targets one of its
-   * pages. Background growth stays geometry-neutral, but a caller asking for an
-   * already-published page must not be clamped to the old presented tail. */
-  private _revealPendingLayoutThroughPage(page: number): void {
-    const publication = this._pendingLayoutPublication;
-    if (!publication || page < this._presentedPageCount) return;
-    this._pendingLayoutPublication = null;
-    this._applyLayoutPublication(publication);
   }
 
   /** CSS px width of page `i` at the current scale. */
@@ -1049,7 +993,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     // Non-progressive/authoritative engines have no pending prefix boundary.
     // Keep the historical relayout escape hatch able to observe an injected
     // engine whose final page count changed between calls.
-    if (this._doc.layoutComplete !== false && this._pendingLayoutPublication === null) {
+    if (this._doc.layoutComplete !== false) {
       this._presentedPageCount = this._doc.pageCount;
     }
     // Establish the base fit scale on the first layout that has a positive
@@ -1217,7 +1161,6 @@ export class DocxScrollViewer implements ZoomableViewer {
 
   private _onScroll(): void {
     if (!this._doc || !this._scaleEstablished) return;
-    this._revealPendingLayoutAtPresentedTail();
     this._mountVisible(undefined, false);
   }
 
@@ -2276,7 +2219,6 @@ export class DocxScrollViewer implements ZoomableViewer {
     // spacer and mount window all follow the new page count, and a shrinking
     // document must recycle slots that are now out of range rather than ask for
     // pages that no longer exist.
-    this._pendingLayoutPublication = null;
     this._applyLayoutPublication({
       pageCount: doc?.pageCount ?? 0,
       exact: true,
@@ -2306,7 +2248,6 @@ export class DocxScrollViewer implements ZoomableViewer {
   scrollToPage(index: number, opts?: { behavior?: 'auto' | 'smooth' }): void {
     if (!this._doc || this._doc.pageCount === 0 || !this._scaleEstablished) return;
     const clamped = Math.max(0, Math.min(index, this._doc.pageCount - 1));
-    this._revealPendingLayoutThroughPage(clamped);
     // Recompute offsets from the current heights (independent of scrollTop).
     const r = computeVisibleWindow(
       this._scrollGeometry,
@@ -2333,7 +2274,6 @@ export class DocxScrollViewer implements ZoomableViewer {
     target: Readonly<{ x: number; y: number; w: number; h: number }>,
     opts?: { behavior?: 'auto' | 'smooth' },
   ): void {
-    this._revealPendingLayoutThroughPage(page);
     const range = computeVisibleWindow(
       this._scrollGeometry,
       0,

@@ -5,6 +5,7 @@ import {
   getCachedSvgImageByPath,
   getCachedDuotoneBitmapByPath,
   inspectCachedRasterSource,
+  isBrowserResizableRasterMimeType,
   isDecodeTargetResizableRasterFormat,
   withBitmapCacheLease,
   normalizeImageResourceOptions,
@@ -641,6 +642,15 @@ export async function prefetchImages(
       srcRect: ref.srcRect,
     });
     if (usesVector) return null;
+    if (isBrowserResizableRasterMimeType(ref.mimeType)
+      && (policy.resolution === 'display' || policy.strategy === 'adaptive')) {
+      return {
+        key,
+        targetWidthPx: ref.targetWidthPx,
+        targetHeightPx: ref.targetHeightPx,
+        retainedSurfaceCount: 1,
+      };
+    }
     const inspection = await inspectCachedRasterSource(
       ref.imagePath,
       ref.mimeType,
@@ -672,7 +682,7 @@ export async function prefetchImages(
     const target = plan.targets.get(key);
     ref.targetWidthPx = target?.width;
     ref.targetHeightPx = target?.height;
-    ref.plannedPixelLimit = target?.retainedPixels;
+    ref.plannedPixelLimit = target?.maxRetainedPixels;
   }
   await Promise.all(
     [...refs.entries()].map(async ([key, ref]) => {
