@@ -2377,30 +2377,20 @@ export function* paginateBodySteps(
   const owners = ownerMap(input);
   let nextPublicationPages = 1;
   let publicationFailed = false;
-  let publicationUnsafe = false;
   const passObserver: BodyPaginationPassObserver | undefined = observer
     ? {
         shouldPublish: (committedPages) => (
-          !publicationFailed && !publicationUnsafe && committedPages >= nextPublicationPages
+          !publicationFailed && committedPages >= nextPublicationPages
         ),
         publish: (pass, processedEntries) => {
           try {
-            // The seed pass starts without header/footer body reserves. If a
-            // story already overflows its margin allowance, publishing any of
-            // those pages would expose geometry that reserve convergence must
-            // later replace. Stop previewing this document instead of showing
-            // content briefly on the wrong page.
-            if (headerFooterReserves(pass, owners).some(
-              (reserve) => reserve.top > 0 || reserve.bottom > 0,
-            )) {
-              publicationUnsafe = true;
-              return;
-            }
             const composed = composeBodyPaginationResult(pass, input, owners, options, false);
             // The newest committed page still owns the live transition edge:
             // section-region and page-final composition can change when the
             // following page becomes committed. Keep one page as the checkpoint
-            // guard and publish only the stable prefix before it.
+            // guard and publish only the prefix before it. This publication is
+            // deliberately provisional: header/footer and pagination-field
+            // convergence may replace it, and consumers receive `exact:false`.
             const publishable = Object.freeze({
               ...composed,
               pages: Object.freeze(composed.pages.slice(0, -1)),
