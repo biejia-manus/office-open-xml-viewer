@@ -600,9 +600,9 @@ function sameDashPattern(
  * by the precision of both operands; this is not a visible layout tolerance. */
 function sameCoordinateWithinFloatingPrecision(left: number, right: number): boolean {
   if (left === right) return true;
-  const combinedPrecision = Number.EPSILON
+  const roundoffBound = Number.EPSILON
     * Math.max(1, Math.abs(left) + Math.abs(right));
-  return Math.abs(left - right) <= combinedPrecision;
+  return Math.abs(left - right) <= roundoffBound;
 }
 
 function sameContinuousDecoration(
